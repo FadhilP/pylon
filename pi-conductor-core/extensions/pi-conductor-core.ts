@@ -1,9 +1,10 @@
 import { constants } from "node:fs";
-import { access, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   parseToolMessage,
+  PROTOCOL_VERSION,
   reconcileTools,
   type ToolPolicy,
 } from "../src/tools.ts";
@@ -112,8 +113,11 @@ export default function (pi: ExtensionAPI) {
     managedByOwner.clear();
   });
 
-  const doctor = async () => {
-    const knownTools = new Set([...baseline, ...managedTools(), ...pi.getActiveTools()]);
+  const doctor = async (ctx: any) => {
+    const apiNames = ["getActiveTools", "setActiveTools", "on", "registerCommand"] as const;
+    const missingApi = apiNames.filter((name) => typeof pi[name] !== "function");
+    const activeTools = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
+    const knownTools = new Set([...baseline, ...managedTools(), ...activeTools]);
     const surfaces = [
       ["Advisor", ["advisor"]],
       ["Continuity", ["continuity_update"]],
@@ -125,12 +129,23 @@ export default function (pi: ExtensionAPI) {
       const found = tools.filter((tool) => knownTools.has(tool));
       return `${name}: ${found.length === tools.length ? "registered" : found.length ? `partial (${found.join(", ")})` : "not observed"}`;
     });
-    const apiNames = ["getActiveTools", "setActiveTools", "on", "registerCommand"] as const;
-    const missingApi = apiNames.filter((name) => typeof pi[name] !== "function");
     const [major, minor] = process.versions.node.split(".").map(Number);
     const nodeCompatible = major > 22 || (major === 22 && minor >= 18);
+    const executables = await Promise.all([
+      ["Git", "git", true],
+      ["ripgrep", "rg", false],
+      ["fd", "fd", false],
+    ].map(async ([label, command, required]) => {
+      try {
+        const result = await pi.exec(command as string, ["--version"], { timeout: 3_000 });
+        return { label, required, available: result.code === 0 };
+      } catch {
+        return { label, required, available: false };
+      }
+    }));
     const agentDir = getAgentDir();
     let stateStatus = "missing (created on first persisted setting)";
+    let stateWarning = false;
     let oldLocks: string[] = [];
     try {
       await access(agentDir, constants.W_OK);
@@ -142,18 +157,69 @@ export default function (pi: ExtensionAPI) {
         const info = await stat(join(continuityDir, name)).catch(() => undefined);
         return info && now - info.mtimeMs > 30_000 ? name : undefined;
       }))).filter((name): name is string => Boolean(name));
-    } catch {}
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") {
+        stateStatus = "inaccessible";
+        stateWarning = true;
+      }
+    }
+    const quarantined: string[] = [];
+    for (const name of ["pi-advisor", "pi-scout", "pi-continuity"]) {
+      const entries = await readdir(join(agentDir, name), { recursive: true }).catch(() => [] as string[]);
+      for (const entry of entries)
+        if (entry.includes(".corrupt-") && quarantined.length < 8)
+          quarantined.push(join(name, entry));
+    }
+    const configured: Array<[string, string]> = [];
+    let configWarning = false;
+    for (const [name, file, select] of [
+      ["Advisor", join(agentDir, "pi-advisor", "config.json"), (value: any) => [["Advisor", value.advisorModel]]],
+      ["Scout", join(agentDir, "pi-scout", "config.json"), (value: any) => [["Scout", value.model]]],
+      ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model]]],
+    ] as const) {
+      try {
+        const value = JSON.parse(await readFile(file, "utf8"));
+        for (const [label, model] of select(value))
+          if (typeof model === "string" && model.trim()) configured.push([label, model]);
+      } catch (error: any) {
+        if (error?.code !== "ENOENT") {
+          configured.push([name, "<invalid config>"]);
+          configWarning = true;
+        }
+      }
+    }
+    const thinking = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    const modelLines = configured.length ? configured.map(([label, reference]) => {
+      if (reference === "<invalid config>") return `${label}: invalid config JSON`;
+      const slash = reference.indexOf("/");
+      const colon = reference.lastIndexOf(":");
+      const suffix = reference.slice(colon + 1);
+      const idEnd = colon > slash && thinking.has(suffix) ? colon : undefined;
+      const provider = slash > 0 ? reference.slice(0, slash) : "";
+      const id = slash > 0 ? reference.slice(slash + 1, idEnd) : "";
+      const model = provider && id ? ctx.modelRegistry?.find?.(provider, id) : undefined;
+      const available = Boolean(model && ctx.modelRegistry?.hasConfiguredAuth?.(model));
+      if (!provider || !id) configWarning = true;
+      else if (!available) configWarning = true;
+      return `${label}: ${reference} (${!provider || !id ? "invalid reference" : !model ? "model unavailable" : available ? "available" : "credentials unavailable"})`;
+    }) : ["none configured"];
     return {
       lines: [
         `Node: ${process.versions.node} (${nodeCompatible ? "compatible" : "requires >=22.18.0"})`,
         `Pi API: ${missingApi.length ? `missing ${missingApi.join(", ")}` : "compatible"}`,
+        `Policy protocol: v${PROTOCOL_VERSION} (${policies.size} registered, ${rejected.length} rejected)`,
+        "Executables:",
+        ...executables.map(({ label, required, available }) => `${label}: ${available ? "available" : `missing${required ? "" : " (optional)"}`}`),
         `State root: ${agentDir} (${stateStatus})`,
         `Locks older than 30s: ${oldLocks.join(", ") || "none"}`,
+        `Quarantined state: ${quarantined.join(", ") || "none"}`,
+        "Configured child models:",
+        ...modelLines,
         "Tool surfaces:",
         ...surfaceLines,
         "Command-only surfaces (Focus, Guard, Timeline): not observable through ExtensionAPI",
       ],
-      warning: !nodeCompatible || missingApi.length > 0,
+      warning: !nodeCompatible || missingApi.length > 0 || executables.some((item) => item.required && !item.available) || stateWarning || oldLocks.length > 0 || quarantined.length > 0 || configWarning,
     };
   };
 
@@ -169,7 +235,7 @@ export default function (pi: ExtensionAPI) {
       const missing = ["pi-advisor", "pi-scout", "pi-continuity"].filter(
         (owner) => !policies.has(owner),
       );
-      const diagnosis = args.trim().toLowerCase() === "doctor" ? await doctor() : undefined;
+      const diagnosis = args.trim().toLowerCase() === "doctor" ? await doctor(ctx) : undefined;
       const lines = [
         ...(diagnosis ? ["Conductor doctor", ...diagnosis.lines, ""] : []),
         `Baseline: ${[...baseline].join(", ") || "none"}`,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import {
   getAgentDir,
   type ExtensionAPI,
@@ -80,8 +80,29 @@ export default function (pi: ExtensionAPI) {
     lastPrompt = "",
     tasksVisible = true,
     currentCwd = "",
-    latestVerification: any;
+    latestVerification: any,
+    recentCalls = new Map<string, number[]>();
   const modelName = (model: any) => `${model.provider}/${model.id}`;
+  const tripsCircuitBreaker = (params: unknown) => {
+    const now = Date.now(), cutoff = now - 30_000;
+    for (const [key, times] of recentCalls) {
+      const fresh = times.filter((time) => time > cutoff);
+      if (fresh.length) recentCalls.set(key, fresh);
+      else recentCalls.delete(key);
+    }
+    const key = JSON.stringify([
+      params,
+      latestVerification?.state,
+      work?.mode,
+      work?.currentTodoId,
+      work?.todos.map((todo) => [todo.id, todo.status]),
+    ]);
+    const times = [...(recentCalls.get(key) ?? []), now];
+    recentCalls.set(key, times);
+    if (times.length < 3) return false;
+    recentCalls.delete(key);
+    return true;
+  };
   const configuredModel = async (
     ctx: any,
     profile: ModelProfile | undefined,
@@ -227,6 +248,7 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_e, ctx) => {
     currentCwd = ctx.cwd;
+    recentCalls.clear();
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
@@ -351,11 +373,19 @@ export default function (pi: ExtensionAPI) {
     description:
       "Update plan, todos, state, clarification, or durable-memory candidate.",
     promptGuidelines: [
-      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification. Before final response, update every todo touched this turn and set completion true when none remain. Call successful completion at most once per turn: after a result says work completed or already completed, make no more continuity_update calls and respond to the user immediately. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
+      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification. Before successful completion, update every todo touched this turn, write the final user-facing response in the same assistant message, then call continuity_update with completion true alone as the final tool call. Successful completion terminates the turn; do not expect or request another model call. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
-    renderResult: () => new Container(),
+    renderResult: (result, _options, theme) => {
+      const item = result.content.find((content) => content.type === "text");
+      const text = item?.type === "text" ? item.text : undefined;
+      if (text?.startsWith("Continuity circuit breaker"))
+        return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
+      return text?.startsWith("Work completed") || text?.startsWith("Work already completed")
+        ? new Text(theme.fg("success", "✓ Task completed"), 0, 0)
+        : new Container();
+    },
     parameters: Type.Object(
       {
         action: Action,
@@ -395,6 +425,14 @@ export default function (pi: ExtensionAPI) {
       { additionalProperties: false },
     ),
     async execute(_i, p, _s, _u, ctx): Promise<any> {
+      if (tripsCircuitBreaker(p)) {
+        ctx.abort();
+        return {
+          content: [{ type: "text", text: "Continuity circuit breaker stopped 3 identical calls within 30 seconds." }],
+          details: { circuitBreaker: true },
+          terminate: true,
+        };
+      }
       if (p.action === "clarify") {
         if (work?.mode !== "planning")
           return {
@@ -533,6 +571,7 @@ export default function (pi: ExtensionAPI) {
               content: [
                 { type: "text", text: "Work already completed. No further continuity updates needed." },
               ],
+              terminate: true,
             };
           if (hasRemainingTodos(work))
             return {
@@ -565,6 +604,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               { type: "text", text: "Work completed. No further continuity updates needed." },
             ],
+            terminate: true,
           };
         }
       }

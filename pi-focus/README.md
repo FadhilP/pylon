@@ -24,10 +24,12 @@ Or select `focus-dark` through `/settings`.
 /ui comfortable
 /ui disable
 /ui enable
+/ui bell on
+/ui bell off
 /ui theme
 ```
 
-`compact` uses one-line header/footer. `comfortable` adds secondary key hints on terminals at least 80 columns wide. Unicode and ANSI-styled labels are measured by terminal cell width. `disable` restores built-in header, footer, editor, and working indicator for current runtime. Package can be disabled persistently through `pi config`.
+`compact` uses one-line header/footer. `comfortable` adds secondary key hints on terminals at least 80 columns wide. Unicode and ANSI-styled labels are measured by terminal cell width. `bell on` enables an opt-in terminal bell after each settled agent run for current runtime; `bell off` disables it. `disable` restores built-in header, footer, editor, and working indicator for current runtime. Package can be disabled persistently through `pi config`.
 
 ## Changes
 

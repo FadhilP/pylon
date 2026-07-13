@@ -55,8 +55,61 @@ function runtime() {
 test("completion guidance makes a successful update terminal", () => {
   const app = runtime();
   const guidance = app.tools.get("continuity_update").promptGuidelines.join("\n");
-  assert.match(guidance, /successful completion at most once per turn/i);
-  assert.match(guidance, /make no more continuity_update calls and respond to the user immediately/i);
+  assert.match(guidance, /write the final user-facing response in the same assistant message/i);
+  assert.match(guidance, /completion true alone as the final tool call/i);
+  assert.match(guidance, /terminates the turn/i);
+});
+
+test("TUI keeps ordinary continuity updates hidden but shows terminal outcomes", () => {
+  const tool = runtime().tools.get("continuity_update");
+  const theme = { fg: (_color: string, text: string) => text };
+  const render = (text: string) => tool.renderResult(
+    { content: [{ type: "text", text }] },
+    {},
+    theme,
+  ).render(80).join("\n");
+  assert.equal(render("Continuity state updated."), "");
+  assert.match(render("Work completed. No further continuity updates needed."), /Task completed/);
+  assert.match(render("Continuity circuit breaker stopped 3 identical calls within 30 seconds."), /loop stopped/);
+});
+
+test("circuit breaker aborts the third identical call within 30 seconds", async () => {
+  const tool = runtime().tools.get("continuity_update");
+  let aborts = 0;
+  const ctx = { abort: () => { aborts++; } };
+  const params = { action: "state", completion: true };
+  const first = await tool.execute("call-1", params, undefined, undefined, ctx);
+  const second = await tool.execute("call-2", params, undefined, undefined, ctx);
+  const third = await tool.execute("call-3", params, undefined, undefined, ctx);
+  assert.equal(first.terminate, undefined);
+  assert.equal(second.terminate, undefined);
+  assert.equal(third.terminate, true);
+  assert.equal(third.details.circuitBreaker, true);
+  assert.match(third.content[0].text, /3 identical calls within 30 seconds/);
+  assert.equal(aborts, 1);
+});
+
+test("circuit breaker ignores distinct or expired calls", async () => {
+  const oldNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now;
+  try {
+    const tool = runtime().tools.get("continuity_update");
+    let aborts = 0;
+    const ctx = { abort: () => { aborts++; } };
+    await tool.execute("call-1", { action: "state", currentTodoId: "todo_1" }, undefined, undefined, ctx);
+    await tool.execute("call-2", { action: "state", currentTodoId: "todo_2" }, undefined, undefined, ctx);
+    await tool.execute("call-3", { action: "state", currentTodoId: "todo_3" }, undefined, undefined, ctx);
+    const repeated = { action: "state", completion: true };
+    await tool.execute("call-4", repeated, undefined, undefined, ctx);
+    await tool.execute("call-5", repeated, undefined, undefined, ctx);
+    now += 30_001;
+    const expired = await tool.execute("call-6", repeated, undefined, undefined, ctx);
+    assert.equal(expired.terminate, undefined);
+    assert.equal(aborts, 0);
+  } finally {
+    Date.now = oldNow;
+  }
 });
 
 test("set_plan creates executing todos without explicit plan mode", async () => {
@@ -108,14 +161,18 @@ test("execution completion requires a qualifying Verify result", async () => {
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
     await tool.execute("call", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
-    await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    const updated = await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    assert.equal(updated.terminate, undefined);
     const blocked = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
+    assert.equal(blocked.terminate, undefined);
     app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "run", results: [] });
     const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
+    assert.equal(completed.terminate, true);
     const repeated = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(repeated.content[0].text, /already completed.*No further continuity updates needed/);
+    assert.equal(repeated.terminate, true);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

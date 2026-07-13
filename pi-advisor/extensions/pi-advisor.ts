@@ -413,7 +413,7 @@ export default function (pi: ExtensionAPI) {
       else if (!details.failureCode && details.durationMs)
         text += ` · ~${details.snapshotEstimatedTokens} input · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (!expanded && body?.text)
-        text += `\n${body.text.split("\n").slice(0, 8).join("\n")}`;
+        text += `\n${body.text.split("\n").slice(0, 16).join("\n")}`;
       if (expanded && body?.text)
         text += `\n\n${body.text}\n\nredactions: ${details.redactionCount} · truncated: ${details.truncated}`;
       return new Text(text, 0, 0);

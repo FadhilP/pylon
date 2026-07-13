@@ -17,14 +17,24 @@ import {
   type Density,
 } from "../src/layout.ts";
 
+export function ringCompletionBell(
+  mode: string,
+  write: (text: string) => unknown = (text) => process.stdout.write(text),
+) {
+  if (mode === "tui") write("\x07");
+}
+
 class FocusEditor extends CustomEditor {
+  private readonly label: () => string;
+
   constructor(
     tui: any,
     editorTheme: any,
     keybindings: any,
-    private readonly label: () => string,
+    label: () => string,
   ) {
     super(tui, editorTheme, keybindings);
+    this.label = label;
   }
 
   render(width: number): string[] {
@@ -64,6 +74,7 @@ function usage(ctx: any): string {
 export default function (pi: ExtensionAPI) {
   let enabled = true;
   let density: Density = "compact";
+  let completionBell = false;
   let state = "READY";
   let activeChild: "SCOUT" | "ADVISOR" | undefined;
   const clearChild = (ctx: any) => {
@@ -151,6 +162,7 @@ export default function (pi: ExtensionAPI) {
     state = "READY";
     clearChild(ctx);
     if (enabled) ctx.ui.setStatus("focus-state", undefined);
+    if (enabled && completionBell) ringCompletionBell(ctx.mode);
   });
   pi.on("tool_execution_start", (event, ctx) => {
     if (
@@ -180,7 +192,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("ui", {
     description:
-      "Configure focused TUI: enable, disable, compact, comfortable, theme, status",
+      "Configure focused TUI: enable, disable, compact, comfortable, bell, theme, status",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "disable") {
@@ -202,6 +214,11 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`UI density: ${density}`, "info");
         return;
       }
+      if (action === "bell on" || action === "bell off") {
+        completionBell = action === "bell on";
+        ctx.ui.notify(`Completion bell: ${completionBell ? "enabled" : "disabled"}`, "info");
+        return;
+      }
       if (action === "theme") {
         const result = ctx.ui.setTheme("focus-dark");
         ctx.ui.notify(
@@ -214,13 +231,13 @@ export default function (pi: ExtensionAPI) {
       }
       if (action === "status") {
         ctx.ui.notify(
-          `UI: ${enabled ? "enabled" : "disabled"}\nDensity: ${density}\nTheme: run /ui theme to apply focus-dark`,
+          `UI: ${enabled ? "enabled" : "disabled"}\nDensity: ${density}\nCompletion bell: ${completionBell ? "enabled" : "disabled"}\nTheme: run /ui theme to apply focus-dark`,
           "info",
         );
         return;
       }
       ctx.ui.notify(
-        "Usage: /ui enable|disable|compact|comfortable|theme|status",
+        "Usage: /ui enable|disable|compact|comfortable|bell on|bell off|theme|status",
         "info",
       );
     },

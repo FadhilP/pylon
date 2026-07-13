@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import extension from "../extensions/pi-conductor-core.ts";
 
 class Bus {
@@ -30,6 +33,7 @@ function harness() {
     },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
+    exec: async (command: string) => ({ code: command === "git" ? 0 : 1, stdout: "", stderr: "" }),
   };
   extension(pi as any);
   return {
@@ -69,15 +73,49 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.match(diagnostic, /Effective:/);
   assert.match(diagnostic, /Rejected: 1/);
   assert.match(diagnostic, /Guard authority: blocked: destructive Git command/);
-  await runtime.commands.get("conductor").handler("doctor", { ui: { notify: (text: string) => { diagnostic = text; } } });
+  await runtime.commands.get("conductor").handler("doctor", {
+    modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+    ui: { notify: (text: string) => { diagnostic = text; } },
+  });
   assert.match(diagnostic, /Conductor doctor/);
   assert.match(diagnostic, /Node: .*compatible/);
   assert.match(diagnostic, /Pi API: compatible/);
+  assert.match(diagnostic, /Policy protocol: v1/);
+  assert.match(diagnostic, /Git: available/);
+  assert.match(diagnostic, /ripgrep: missing \(optional\)/);
   assert.match(diagnostic, /Tool surfaces:/);
   assert.match(diagnostic, /Advisor: registered/);
   for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
   assert.equal(runtime.events.count("pi-conductor:tool-policy"), 0);
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
+});
+
+test("doctor reports quarantined state and unavailable configured models", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "pi-conductor-doctor-"));
+  process.env.PI_CODING_AGENT_DIR = root;
+  try {
+    await mkdir(join(root, "pi-advisor"), { recursive: true });
+    await mkdir(join(root, "pi-scout"), { recursive: true });
+    await writeFile(join(root, "pi-advisor", "config.json"), JSON.stringify({ schemaVersion: 1, advisorModel: "openai/test-model" }));
+    await writeFile(join(root, "pi-scout", "config.json.corrupt-test"), "bad");
+    const runtime = harness();
+    let diagnostic = "";
+    let severity = "";
+    await runtime.commands.get("conductor").handler("doctor", {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai" && id === "test-model" ? { provider, id } : undefined,
+        hasConfiguredAuth: () => false,
+      },
+      ui: { notify: (text: string, level: string) => { diagnostic = text; severity = level; } },
+    });
+    assert.match(diagnostic, /Quarantined state: .*config\.json\.corrupt-test/);
+    assert.match(diagnostic, /Advisor: openai\/test-model \(credentials unavailable\)/);
+    assert.equal(severity, "warning");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });
 
 test("acknowledges policy only after successful reconcile", () => {
