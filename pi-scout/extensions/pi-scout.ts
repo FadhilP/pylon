@@ -30,7 +30,7 @@ const searchToolsExtension = join(extensionDir, "search-tools.ts");
 function modelName(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
-function usageText(run: ScoutRun): string {
+export function usageText(run: ScoutRun): string {
   const u = run.usage;
   return `${run.turns.length} turn${run.turns.length === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
 }
@@ -365,10 +365,15 @@ export default function (pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
+      const callNumber = (context.state.callNumber as number | undefined) ?? repoRuns + 1;
+      context.state.callNumber = callNumber;
+      const prompt = args.task.trim().replace(/\s+/g, " ");
+      const truncatedPrompt = prompt.length > 256 ? `${prompt.slice(0, 253)}...` : prompt;
       return new Text(
-        theme.fg("toolTitle", theme.bold("Repo Scout ")) +
-          theme.fg("dim", args.task),
+        theme.fg("toolTitle", theme.bold("Scout")) +
+          theme.fg("muted", ` · ${callNumber}/∞`) +
+          `\n${theme.fg("dim", truncatedPrompt)}`,
         0,
         0,
       );
@@ -378,7 +383,7 @@ export default function (pi: ExtensionAPI) {
       const body = result.content.find((c: any) => c.type === "text") as any;
       let text = theme.fg(
         details?.failureCode ? "warning" : "success",
-        `Scout · ${details?.model ?? "unavailable"}${details?.callNumber ? ` · call ${details.callNumber}` : ""}`,
+        `Scout · ${details?.model ?? "Unavailable"}`,
       );
       if (details?.usage)
         text += ` · ${usageText({ usage: details.usage, turns: details.turns ?? [], durationMs: details.durationMs, text: "", stderr: "", truncated: false, exitCode: 0, activity: details.activity ?? [] } as ScoutRun)}`;

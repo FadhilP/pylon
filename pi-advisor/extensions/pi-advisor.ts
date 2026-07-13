@@ -68,6 +68,7 @@ function errorCode(
 
 export default function (pi: ExtensionAPI) {
   let calls = 0;
+  let originalPrompt = "";
   let previousAdvice: string | undefined;
   const configuredModel = async (ctx: any): Promise<Model<any> | undefined> => {
     const config = await loadConfig();
@@ -96,6 +97,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", (event) => {
     if (event.source !== "extension") {
       calls = 0;
+      originalPrompt = event.text.trim();
       previousAdvice = undefined;
     }
   });
@@ -367,9 +369,12 @@ export default function (pi: ExtensionAPI) {
       const callNumber = (context.state.callNumber as number | undefined) ??
         Math.min(calls + 1, ADVISOR_MAX_CALLS);
       context.state.callNumber = callNumber;
+      const prompt = originalPrompt.replace(/\s+/g, " ");
+      const truncatedPrompt = prompt.length > 256 ? `${prompt.slice(0, 253)}...` : prompt;
       return new Text(
-        theme.fg("toolTitle", theme.bold("Advisor ")) +
-          theme.fg("muted", `call ${callNumber}/${ADVISOR_MAX_CALLS}`),
+        theme.fg("toolTitle", theme.bold("Advisor")) +
+          theme.fg("muted", ` · ${callNumber}/${ADVISOR_MAX_CALLS}`) +
+          (truncatedPrompt ? `\n${theme.fg("dim", truncatedPrompt)}` : ""),
         0,
         0,
       );
@@ -382,7 +387,7 @@ export default function (pi: ExtensionAPI) {
       if (!details) return new Text(body?.text ?? "Advisor", 0, 0);
       let text = theme.fg(
         details.failureCode ? "warning" : "success",
-        `Advisor · ${details.advisorModel ?? "unavailable"} · call ${details.callNumber}/${ADVISOR_MAX_CALLS}`, 
+        `Advisor · ${details.advisorModel ?? "Unavailable"}`,
       );
       if (!details.failureCode)
         text += theme.fg(
