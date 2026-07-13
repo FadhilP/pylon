@@ -7,6 +7,7 @@ const MAX_INPUT_TOKENS = 32_000;
 const USER_TOKENS = 8_000;
 const EVIDENCE_TOKENS = 8_192;
 const CONTINUITY_TOKENS = 4_000;
+const VERIFICATION_TOKENS = 1_000;
 const SUMMARY_TOKENS = 8_000;
 const ASSISTANT_TOKENS = 4_000;
 const SYSTEM_TOKENS = 4_000;
@@ -79,19 +80,21 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
 
   const evidence = messages.filter(message => message?.role === "custom" && message.customType === "advisor-evidence").map(serializeMessage).join("\n\n");
   const continuity = messages.filter(message => message?.role === "custom" && message.customType === "pi-continuity").map(serializeMessage).join("\n\n");
+  const verification = messages.filter(message => message?.role === "custom" && message.customType === "pi-verify-result").map(serializeMessage).slice(-1).join("\n\n");
   const summaries = messages.filter(message => message?.role === "compactionSummary" || message?.role === "branchSummary").map(serializeMessage).reverse().join("\n\n");
   const latestUser = [...messages].reverse().find(message => message?.role === "user");
   const latestAssistant = [...messages].reverse().find(message => message?.role === "assistant" && assistantText(message.content));
 
   add("explicit-evidence", evidence, EVIDENCE_TOKENS);
   add("continuity-state", continuity, CONTINUITY_TOKENS);
+  add("latest-verification", verification, VERIFICATION_TOKENS);
   add("session-summaries-newest-first", summaries, SUMMARY_TOKENS);
   add("latest-user-request", latestUser ? serializeMessage(latestUser) : "", USER_TOKENS);
   add("latest-assistant-judgment", latestAssistant ? `[ASSISTANT]\n${assistantText(latestAssistant.content)}` : "", ASSISTANT_TOKENS);
   add("executor-system-prompt", systemPrompt, SYSTEM_TOKENS);
 
   const selected = new Set([latestUser, latestAssistant].filter(Boolean));
-  if (messages.some(message => !selected.has(message) && !(message?.role === "custom" && (message.customType === "advisor-evidence" || message.customType === "pi-continuity")) && message?.role !== "compactionSummary" && message?.role !== "branchSummary")) truncated = true;
+  if (messages.some(message => !selected.has(message) && !(message?.role === "custom" && (message.customType === "advisor-evidence" || message.customType === "pi-continuity" || message.customType === "pi-verify-result")) && message?.role !== "compactionSummary" && message?.role !== "branchSummary")) truncated = true;
   const marker = truncated ? "\n\n[Non-priority, earlier, or oversized executor context omitted.]" : "";
   let raw = `${sections.join("\n\n")}${marker}`;
   if (raw.length > charBudget) { raw = headTail(raw, charBudget, "advisor snapshot"); truncated = true; }

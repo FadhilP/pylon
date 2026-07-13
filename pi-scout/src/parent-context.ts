@@ -39,6 +39,18 @@ export function buildParentContext(
       items.push(`Earlier context summary: ${entry.summary}`);
     } else if (entry?.type === "branch_summary" && entry.summary) {
       items.push(`Branch summary: ${entry.summary}`);
+    } else if (
+      entry?.type === "custom" &&
+      ["pi-prompt-checkpoint", "pi-verify-result"].includes(entry.customType)
+    ) {
+      try {
+        const data = { ...entry.data };
+        delete data.worktreeRef;
+        delete data.indexRef;
+        items.push(`Repository state (${entry.customType}): ${JSON.stringify(data).slice(0, 1200)}`);
+      } catch {
+        items.push(`Repository state (${entry.customType}): [unserializable]`);
+      }
     }
   }
   const bounded = items.slice(-maxItems).map((item) => item.slice(0, 1200));

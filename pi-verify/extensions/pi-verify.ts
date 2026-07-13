@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   truncateTail,
@@ -15,9 +16,58 @@ type Result = {
   truncated: boolean;
   durationMs: number;
 };
-type Details = { scope: "changed" | "project"; skipped?: string; results: Result[] };
+type VerificationState = "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
+type Details = {
+  scope: "changed" | "project";
+  runId: string;
+  state: VerificationState;
+  worktreeId?: string;
+  initialWorktreeId?: string;
+  startedAt: string;
+  finishedAt: string;
+  skipped?: string;
+  results: Result[];
+};
 
 export default function (pi: ExtensionAPI) {
+  let latestContext: any;
+  const worktreeId = async (cwd: string, signal?: AbortSignal) => {
+    const [head, status] = await Promise.all([
+      pi.exec("git", ["rev-parse", "HEAD"], { cwd, signal, timeout: 15_000 }),
+      pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, signal, timeout: 15_000 }),
+    ]);
+    const value = `${head.code === 0 ? head.stdout.trim() : "no-head"}\n${status.code === 0 ? status.stdout : "unknown"}`;
+    if (head.code !== 0 || status.code !== 0) return undefined;
+    return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  };
+  const publish = (details: Details, cwd: string) => {
+    const event = { version: 1 as const, cwd, ...details };
+    pi.events.emit("pi-verify:result", event);
+    pi.events.emit("pi-verify:lifecycle", event);
+    latestContext = {
+      ...event,
+      results: details.results.map(({ output: _output, ...result }) => result),
+    };
+    pi.appendEntry("pi-verify-result", {
+      ...event,
+      results: details.results.map(({ output: _output, ...result }) => result),
+    });
+  };
+  pi.on("session_start", (_event, ctx) => {
+    latestContext = ([...(ctx.sessionManager.getEntries?.() ?? [])]
+      .reverse()
+      .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
+      ?.data;
+  });
+  pi.on("context", (event) => latestContext ? {
+    messages: [...event.messages, {
+      role: "custom",
+      customType: "pi-verify-result",
+      content: JSON.stringify(latestContext),
+      display: false,
+      timestamp: Date.now(),
+    }],
+  } : undefined);
   pi.registerTool({
     name: "verify",
     label: "Verify",
@@ -32,6 +82,13 @@ export default function (pi: ExtensionAPI) {
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, onUpdate, ctx) {
+      const runId = randomUUID();
+      const startedAt = new Date().toISOString();
+      const initialIdentity = await worktreeId(ctx.cwd, signal);
+      if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "verify: running");
+      pi.events.emit("pi-verify:lifecycle", {
+        version: 1, runId, cwd: ctx.cwd, scope: params.scope, state: "running", worktreeId: initialIdentity, startedAt,
+      });
       if (params.scope === "changed") {
         const status = await pi.exec("git", ["status", "--porcelain"], {
           cwd: ctx.cwd,
@@ -40,10 +97,12 @@ export default function (pi: ExtensionAPI) {
         });
         if (status.code === 0 && !status.stdout.trim()) {
           const details: Details = {
-            scope: params.scope,
-            skipped: "Git worktree is clean.",
-            results: [],
+            scope: params.scope, runId, state: "clean", worktreeId: initialIdentity,
+            initialWorktreeId: initialIdentity, startedAt, finishedAt: new Date().toISOString(),
+            skipped: "Git worktree is clean.", results: [],
           };
+          publish(details, ctx.cwd);
+          if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "verify: clean · not verified");
           return { content: [{ type: "text" as const, text: details.skipped! }], details };
         }
       }
@@ -51,19 +110,27 @@ export default function (pi: ExtensionAPI) {
       const checks = await detectChecks(ctx.cwd);
       if (!checks.length) {
         const details: Details = {
-          scope: params.scope,
-          skipped: "No declared verification commands detected.",
-          results: [],
+          scope: params.scope, runId, state: "no_checks", worktreeId: initialIdentity,
+          initialWorktreeId: initialIdentity, startedAt, finishedAt: new Date().toISOString(),
+          skipped: "No declared verification commands detected.", results: [],
         };
+        publish(details, ctx.cwd);
+        if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "verify: no checks");
         return { content: [{ type: "text" as const, text: details.skipped! }], details };
       }
 
       const results: Result[] = [];
       for (const [index, check] of checks.entries()) {
         if (signal?.aborted) break;
+        const progress = `verify: running ${index + 1}/${checks.length}`;
+        if (ctx.hasUI) ctx.ui.setStatus("pi-verify", progress);
+        pi.events.emit("pi-verify:lifecycle", {
+          version: 1, runId, cwd: ctx.cwd, scope: params.scope, state: "running",
+          worktreeId: initialIdentity, startedAt, completed: index, total: checks.length,
+        });
         onUpdate?.({
           content: [{ type: "text", text: `Running ${index + 1}/${checks.length}: ${check.label}` }],
-          details: { scope: params.scope, results },
+          details: { scope: params.scope, runId, state: "running", worktreeId: initialIdentity, startedAt, results },
         });
         const started = Date.now();
         const execution = await pi.exec(check.command, check.args, {
@@ -88,9 +155,24 @@ export default function (pi: ExtensionAPI) {
       const summary = results
         .map((result) => `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)${result.output ? `\n${result.output}` : ""}${result.truncated ? "\n[output truncated]" : ""}`)
         .join("\n\n");
-      const details: Details = { scope: params.scope, results };
+      const finalIdentity = await worktreeId(ctx.cwd, signal);
+      const state: VerificationState = signal?.aborted
+        ? "cancelled"
+        : !initialIdentity || !finalIdentity
+          ? "error"
+          : initialIdentity !== finalIdentity
+            ? "stale"
+            : passed
+              ? "passed"
+              : "failed";
+      const details: Details = {
+        scope: params.scope, runId, state, worktreeId: finalIdentity,
+        initialWorktreeId: initialIdentity, startedAt, finishedAt: new Date().toISOString(), results,
+      };
+      publish(details, ctx.cwd);
+      if (ctx.hasUI) ctx.ui.setStatus("pi-verify", `verify: ${state}`);
       return {
-        content: [{ type: "text" as const, text: `${passed ? "Verification passed." : "Verification failed."}\n\n${summary}` }],
+        content: [{ type: "text" as const, text: `${state === "passed" ? "Verification passed." : state === "cancelled" ? "Verification cancelled." : "Verification failed."}\n\n${summary}` }],
         details,
       };
     },
@@ -105,8 +187,8 @@ export default function (pi: ExtensionAPI) {
       const details = result.details as Details | undefined;
       if (!details) return new Text("Verify", 0, 0);
       if (details.skipped) return new Text(theme.fg("muted", details.skipped), 0, 0);
-      const failed = details.results.find((item) => item.code !== 0);
-      let text = theme.fg(failed ? "error" : "success", failed ? "Verification failed" : "Verification passed");
+      const failed = details.state !== "passed";
+      let text = theme.fg(failed ? "error" : "success", `Verification ${details.state}`);
       text += theme.fg("dim", ` · ${details.results.length} check(s)`);
       if (expanded)
         text += `\n${details.results.map((item) => `${item.code === 0 ? "PASS" : "FAIL"} ${item.command}${item.output ? `\n${item.output}` : ""}`).join("\n\n")}`;

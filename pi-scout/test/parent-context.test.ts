@@ -37,6 +37,17 @@ test("parent context carries current request and bounded plan intent safely", ()
   assert.ok(context.length <= 6000);
 });
 
+test("parent context includes bounded verification and checkpoint archaeology", () => {
+  const context = buildParentContext([
+    { type: "custom", customType: "pi-verify-result", data: { state: "failed", scope: "changed", results: [{ command: "npm test" }] } },
+    { type: "custom", customType: "pi-prompt-checkpoint", data: { createdAt: "2026-01-01", worktreeRef: "secret-ref", indexRef: "secret-index" } },
+  ]);
+  assert.match(context, /pi-verify-result/);
+  assert.match(context, /npm test/);
+  assert.match(context, /pi-prompt-checkpoint/);
+  assert.doesNotMatch(context, /secret-ref|secret-index/);
+});
+
 test("parent context omits recursive scout calls and caps output", () => {
   const context = buildParentContext(
     Array.from({ length: 20 }, (_, i) => ({

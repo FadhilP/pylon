@@ -8,4 +8,4 @@ Install: `pi install C:\Users\FadhilP\.pi\packages\pi-verify`, then `/reload`.
 
 `changed` skips verification when Git reports a clean worktree. `project` always runs detected checks. Both verify the current working directory; V1 does not infer monorepo package boundaries.
 
-Use after edits before completion. Extensions execute with full user permissions.
+Use after edits before completion. Verify publishes versioned `pi-verify:lifecycle` and `pi-verify:result` events containing bounded check metadata and a worktree identity; it also stores a log-free `pi-verify-result` session entry. Focus, Continuity, Timeline, Advisor, and Scout can consume this metadata. Clean worktrees are reported as `clean`, not falsely treated as verified. Extensions execute with full user permissions.

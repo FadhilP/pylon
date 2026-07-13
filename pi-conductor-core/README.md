@@ -8,7 +8,7 @@ Optional runtime tool coordination for local Pi packages. Packages remain fully 
 pi install /absolute/path/to/pi-conductor-core
 ```
 
-Then `/reload`. `/conductor` shows registered package policies.
+Then `/reload`. `/conductor` shows registered package policies plus latest bounded Guard decision. Guard remains independent final safety authority; Conductor never approves or weakens it.
 
 ## V1 scope
 

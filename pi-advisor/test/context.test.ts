@@ -36,6 +36,15 @@ test("snapshot prioritizes evidence, continuity, summaries, user, then assistant
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
 });
 
+test("snapshot includes latest bounded verification metadata", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "pi-verify-result", content: "failed: npm test" },
+    { role: "user", content: "help recover" },
+  ], 20_000);
+  assert.match(snapshot.text, /latest-verification/);
+  assert.match(snapshot.text, /failed: npm test/);
+});
+
 test("snapshot excludes raw tool and bash output", () => {
   const snapshot = buildSnapshot("system", [
     { role: "user", content: "question" },

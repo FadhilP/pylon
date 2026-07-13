@@ -79,7 +79,9 @@ export default function (pi: ExtensionAPI) {
     savedTools: string[] | undefined,
     lastPrompt = "",
     lastOfferedPlan = "",
-    selectionOpen = false;
+    selectionOpen = false,
+    currentCwd = "",
+    latestVerification: any;
   const modelName = (model: any) => `${model.provider}/${model.id}`;
   const configuredModel = async (
     ctx: any,
@@ -200,7 +202,36 @@ export default function (pi: ExtensionAPI) {
       savedTools = undefined;
     }
   };
+  const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
+    if (event?.version !== 1 || event.cwd !== currentCwd) return;
+    latestVerification = event;
+    if (work && event.state === "failed") {
+      work.latestFailure = `Verification failed (${event.results?.find((item: any) => item.code !== 0)?.command ?? "unknown check"}).`;
+      work.nextAction = "Inspect bounded verification failure; use Scout then Advisor if root cause or approach remains unclear.";
+      work.updatedAt = new Date().toISOString();
+      void saveWork();
+    }
+  });
+  const disposeHeartbeat = pi.events.on("pi-heartbeat:job", (event: any) => {
+    if (event?.version !== 1 || event.cwd !== currentCwd || !event.todoId || !work) return;
+    const todo = work.todos.find((item) => item.id === event.todoId);
+    if (!todo) return;
+    if (event.state === "running") updateTodo(work, todo.id, "in_progress");
+    else if (event.state === "completed") updateTodo(work, todo.id, "done");
+    else if (["failed", "cancelled", "timed_out"].includes(event.state)) {
+      updateTodo(work, todo.id, "blocked");
+      work.latestFailure = `Background job ${event.id} ${event.state}.`;
+      work.nextAction = "Inspect heartbeat status and retry or revise task.";
+    }
+    work.updatedAt = new Date().toISOString();
+    void saveWork();
+  });
   pi.on("session_start", async (_e, ctx) => {
+    currentCwd = ctx.cwd;
+    latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
+      .reverse()
+      .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
+      ?.data;
     const reg = await registerWorkspace(root, ctx.cwd);
     workspace = reg.workspace;
     all = reg.all;
@@ -262,6 +293,8 @@ export default function (pi: ExtensionAPI) {
     refresh(ctx);
   });
   pi.on("session_shutdown", () => {
+    disposeVerify();
+    disposeHeartbeat();
     pi.events.emit("pi-conductor:tool-policy", {
       version: 1,
       kind: "unregister",
@@ -307,6 +340,8 @@ export default function (pi: ExtensionAPI) {
     }
   });
   pi.on("tool_call", (event) => {
+    if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
+      latestVerification = undefined;
     if (blocked(work?.mode === "planning", event.toolName))
       return {
         block: true,
@@ -381,6 +416,7 @@ export default function (pi: ExtensionAPI) {
         currentTodoId: Type.Optional(Type.String()),
         latestFailure: Type.Optional(Type.String({ maxLength: 1000 })),
         nextAction: Type.Optional(Type.String({ maxLength: 1000 })),        completion: Type.Optional(Type.Boolean()),
+        allowUnverified: Type.Optional(Type.Boolean({ description: "Explicitly allow completion only when Verify reports clean or no declared checks." })),
         key: Type.Optional(Type.String({ maxLength: 200 })),        kind: Type.Optional(Kind),
         text: Type.Optional(Type.String({ maxLength: 1000 })),
         source: Type.Optional(Type.String({ maxLength: 500 })),        confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
@@ -527,6 +563,20 @@ export default function (pi: ExtensionAPI) {
                 { type: "text", text: "Cannot complete while todos remain." },
               ],
             };
+          if (latestVerification?.state !== "passed") {
+            const explicitlyAllowed = p.allowUnverified && ["clean", "no_checks"].includes(latestVerification?.state);
+            if (!explicitlyAllowed)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: ["clean", "no_checks"].includes(latestVerification?.state)
+                      ? "Verification is unavailable for this worktree. Repeat completion with allowUnverified only after reviewing that limitation."
+                      : "Cannot complete until current-session verification passes.",
+                  },
+                ],
+              };
+          }
           work.mode = "completed";
           work.currentTodoId = undefined;
           work.completedAt = new Date().toISOString();
@@ -543,6 +593,21 @@ export default function (pi: ExtensionAPI) {
     description: "Start, approve, cancel, or inspect plan",
     handler: async (args, ctx) => {
       const value = args.trim();
+      if (value === "review") {
+        if (!work?.runId)
+          return void ctx.ui.notify("No active conductor run.", "error");
+        pi.appendEntry(RUN_ENTRY_TYPE, {
+          version: 1,
+          runId: work.runId,
+          role: "reviewer",
+          parentSessionId: ctx.sessionManager.getSessionId(),
+          createdAt: new Date().toISOString(),
+        } satisfies RunEntry);
+        pi.sendUserMessage(
+          "Review completed implementation. Inspect Verify result, Scout evidence, changed files, and Timeline checkpoints. Use Advisor only for consequential unresolved findings.",
+        );
+        return;
+      }
       if (value === "approve-current") {
         if (!work?.planSummary)
           return void ctx.ui.notify("No stored plan.", "error");

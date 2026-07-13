@@ -46,6 +46,9 @@ function runtime() {
     sent,
     selectedModel: () => selectedModel,
     thinking: () => thinking,
+    emit: (channel: string, value: unknown) => {
+      for (const listener of listeners.get(channel) ?? []) listener(value);
+    },
   };
 }
 
@@ -76,6 +79,34 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
     assert.match(context.messages.at(-1).content, /Work: executing/);
     assert.match(context.messages.at(-1).content, /Todo todo_1 \[pending\]: Implement/);
     assert.match(context.messages.at(-1).content, /Todo todo_2 \[pending\]: Verify/);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("execution completion requires a qualifying Verify result", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
+    sessionManager: { getSessionId: () => "verify-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("call", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
+    await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    const blocked = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(blocked.content[0].text, /Cannot complete until/);
+    app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "run", results: [] });
+    const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(completed.content[0].text, /state updated/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

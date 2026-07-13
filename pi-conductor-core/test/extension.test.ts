@@ -55,6 +55,9 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
     allowOnly: ["read", "advisor", "continuity_update"],
   });
   runtime.events.emit("pi-conductor:tool-policy", { version: 99 });
+  runtime.events.emit("pi-guard:decision", {
+    version: 1, decision: "blocked", reason: "destructive Git command", blocked: 1, confirmed: 0,
+  });
   assert.equal(acknowledged, true);
   assert.deepEqual(new Set(runtime.active()), new Set(["read", "advisor", "continuity_update"]));
   runtime.events.emit("pi-conductor:tool-policy", {
@@ -65,8 +68,10 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   await runtime.commands.get("conductor").handler("", { ui: { notify: (text: string) => { diagnostic = text; } } });
   assert.match(diagnostic, /Effective:/);
   assert.match(diagnostic, /Rejected: 1/);
+  assert.match(diagnostic, /Guard authority: blocked: destructive Git command/);
   for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
   assert.equal(runtime.events.count("pi-conductor:tool-policy"), 0);
+  assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
 
 test("acknowledges policy only after successful reconcile", () => {

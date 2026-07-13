@@ -12,7 +12,7 @@ Run `/advisor` in TUI or `/advisor provider/model-id[:thinking]` in any mode. Ex
 
 Disable whole extension through `pi config`. Disable all extensions for one run with `pi --no-extensions`.
 
-Selecting model consents to sending that model/provider a redacted bounded snapshot of current Pi conversation. Input is prioritized as explicit workspace evidence, pi-continuity state, compaction/branch summaries, latest user request, latest non-empty assistant text, then system instructions. Raw tool and bash results are excluded. Latest user request is capped at an estimated 8k tokens using head-and-tail retention. Explicit non-TUI command and manually edited config also count as consent.
+Selecting model consents to sending that model/provider a redacted bounded snapshot of current Pi conversation. Input is prioritized as explicit workspace evidence, pi-continuity state, latest bounded Verify metadata, compaction/branch summaries, latest user request, latest non-empty assistant text, then system instructions. Raw tool and bash results are excluded. Latest user request is capped at an estimated 8k tokens using head-and-tail retention. Explicit non-TUI command and manually edited config also count as consent.
 
 ## Use
 

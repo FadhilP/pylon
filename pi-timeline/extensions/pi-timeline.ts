@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   SessionManager,
   type ExtensionAPI,
@@ -19,6 +20,13 @@ type RecordV3 = Snapshot & {
   ownerSessionId: string;
   continuationEntryId: string;
   createdAt: string;
+  verification?: {
+    runId: string;
+    state: "passed";
+    scope: "changed" | "project";
+    worktreeId: string;
+    checks: string[];
+  };
 };
 type Bound = {
   record: RecordV3;
@@ -38,8 +46,20 @@ export default function (pi: ExtensionAPI) {
     paired = false,
     namingDecided = false,
     pendingContext = "",
-    activeRun: RunEntry | undefined;
+    activeRun: RunEntry | undefined,
+    latestVerification: any,
+    lastCtx: any;
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
+  const worktreeId = async (cwd: string) => {
+    const [head, status] = await Promise.all([
+      git(cwd, ["rev-parse", "HEAD"]),
+      git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]),
+    ]);
+    return createHash("sha256")
+      .update(`${head}\n${status}`)
+      .digest("hex")
+      .slice(0, 16);
+  };
   const loadEntries = (
     entries: readonly any[],
     sessionId: string,
@@ -142,6 +162,16 @@ export default function (pi: ExtensionAPI) {
     const continuation = ctx.sessionManager.getLeafId();
     try {
       const snap = await capture(ctx.cwd, ctx.sessionManager.getSessionId()),
+        identity = await worktreeId(ctx.cwd),
+        verification = latestVerification?.worktreeId === identity && latestVerification.state === "passed"
+          ? {
+              runId: latestVerification.runId,
+              state: latestVerification.state,
+              scope: latestVerification.scope,
+              worktreeId: identity,
+              checks: (latestVerification.results ?? []).map((item: any) => item.label).slice(0, 6),
+            }
+          : undefined,
         record: RecordV3 = {
           version: 3,
           kind: "pi-prompt-checkpoint",
@@ -150,6 +180,7 @@ export default function (pi: ExtensionAPI) {
           continuationEntryId: continuation,
           ...snap,
           createdAt: new Date().toISOString(),
+          ...(verification ? { verification } : {}),
         };
       pi.appendEntry("pi-prompt-checkpoint", record);
       const checkpointEntryId = ctx.sessionManager.getLeafId()!;
@@ -169,13 +200,26 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Timeline checkpoint skipped: ${e.message}`, "warning");
     }
   }
+  const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
+    if (event?.version === 1 && event.cwd === lastCtx?.cwd) latestVerification = event;
+  });
+  const disposeCheckpoint = pi.events.on("pi-timeline:checkpoint-request", (event: any) => {
+    if (event?.version === 1 && lastCtx && typeof event.respond === "function")
+      event.respond(checkpoint(lastCtx));
+  });
   pi.on("session_start", async (_e, ctx) => {
+    lastCtx = ctx;
+    latestVerification = undefined;
     await load(ctx);
     paired = false;
     namingDecided = ctx.sessionManager
       .getEntries()
       .some((entry: any) => entry.type === "session_info");
     refresh(ctx);
+  });
+  pi.on("session_shutdown", () => {
+    disposeVerify();
+    disposeCheckpoint();
   });
   pi.on("session_info_changed", () => {
     namingDecided = true;
@@ -235,7 +279,7 @@ export default function (pi: ExtensionAPI) {
           [...records]
             .map(
               ([id, bound]) =>
-                `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.preview}`,
+                `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? `[verified:${bound.record.verification.scope}] ` : ""}${bound.preview}`,
             )
             .join("\n") ||
             "No checkpoints.",
@@ -282,7 +326,7 @@ export default function (pi: ExtensionAPI) {
           "Checkpoint",
           [...records].map(
             ([id, bound]) =>
-              `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.preview}`,
+              `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? "[verified] " : ""}${bound.preview}`,
           ),
         );
         id = id?.split(" ")[0];

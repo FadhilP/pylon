@@ -10,9 +10,26 @@ import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
 export default function (pi: ExtensionAPI) {
   let manager: JobManager | undefined, lastCtx: any;
+  const announced = new Map<string, string>();
+  const jobMeta = new Map<string, { todoId?: string; purpose?: string }>();
   const refresh = () => {
     if (!manager || !lastCtx) return;
     const running = manager.running();
+    for (const job of manager.jobs.values()) {
+      if (announced.get(job.id) === job.state) continue;
+      announced.set(job.id, job.state);
+      pi.events.emit("pi-heartbeat:job", {
+        version: 1,
+        id: job.id,
+        cwd: job.cwd,
+        label: job.label,
+        state: job.state,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        exitCode: job.exitCode,
+        ...jobMeta.get(job.id),
+      });
+    }
     if (lastCtx.hasUI)
       lastCtx.ui.setStatus(
         "pi-heartbeat",
@@ -85,6 +102,8 @@ export default function (pi: ExtensionAPI) {
         timeoutMs: Type.Optional(
           Type.Number({ minimum: 1000, maximum: 7200000 }),
         ),
+        todoId: Type.Optional(Type.String({ maxLength: 120 })),
+        purpose: Type.Optional(StringEnum(["verification", "build", "other"] as const)),
       },
       { additionalProperties: false },
     ),
@@ -96,6 +115,9 @@ export default function (pi: ExtensionAPI) {
         };
       if (!manager) throw Error("Heartbeat unavailable.");
       const j = await manager.start(p.command, ctx.cwd, p.label, p.timeoutMs);
+      jobMeta.set(j.id, { todoId: p.todoId, purpose: p.purpose });
+      announced.delete(j.id);
+      refresh();
       return {
         content: [
           {

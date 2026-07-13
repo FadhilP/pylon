@@ -13,6 +13,7 @@ export default function (pi: ExtensionAPI) {
   let initialized = false;
   let lastError: string | undefined;
   let lastAcknowledgeError: string | undefined;
+  let guardDiagnostic: string | undefined;
 
   const hasGate = () => [...policies.values()].some((policy) => policy.allowOnly);
   const managedTools = () =>
@@ -92,6 +93,10 @@ export default function (pi: ExtensionAPI) {
     "pi-conductor:tool-policy",
     handlePolicy,
   );
+  const disposeGuardListener = pi.events.on("pi-guard:decision", (event: any) => {
+    if (event?.version === 1)
+      guardDiagnostic = `${event.decision}: ${event.reason} (blocked ${event.blocked}, confirmed ${event.confirmed})`;
+  });
 
   pi.on("session_start", () => {
     captureBaseline();
@@ -99,6 +104,7 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", () => {
     disposePolicyListener();
+    disposeGuardListener();
     policies.clear();
     managedByOwner.clear();
   });
@@ -123,6 +129,7 @@ export default function (pi: ExtensionAPI) {
         `Rejected: ${rejected.length}${rejected.length ? ` (${rejected.at(-1)})` : ""}`,
         `Last reconcile error: ${lastError ?? "none"}`,
         `Last acknowledge error: ${lastAcknowledgeError ?? "none"}`,
+        `Guard authority: ${guardDiagnostic ?? "active independently; no decision this session"}`,
       ];
       ctx.ui.notify(
         lines.join("\n"),
