@@ -120,6 +120,7 @@ export default function (pi: ExtensionAPI) {
             width,
             density,
             shortWorkspace(ctx.cwd),
+            footerData.getGitBranch(),
             pi.getSessionName() ?? "unnamed session",
             currentState,
             usage(ctx),
