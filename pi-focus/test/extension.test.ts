@@ -63,11 +63,11 @@ test("focused chrome shows current session name and Git branch", () => {
       },
     },
   );
-  assert.match(footer.render(120)[0], /^Renamed session · \{pi-conductor:feature\/footer\} · READY/);
+  assert.match(footer.render(120)[0], /^Renamed session · pi-conductor:feature\/footer · READY/);
   branch = null;
   branchChange();
   assert.equal(renders, 1);
-  assert.match(footer.render(120)[0], /^Renamed session · \{pi-conductor\} · READY/);
+  assert.match(footer.render(120)[0], /^Renamed session · pi-conductor · READY/);
 });
 
 test("ui command toggles and reports completion bell", async () => {

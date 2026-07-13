@@ -20,7 +20,7 @@ test("footer keeps session name visible with room", () => {
   assert.match(row, /usage$/);
   assert.match(
     footerRows(120, "compact", "workspace", null, "Named session", "READY", "usage")[0]!,
-    /^Named session · \{workspace\} · READY/,
+    /^Named session · workspace · READY/,
   );
 });
 

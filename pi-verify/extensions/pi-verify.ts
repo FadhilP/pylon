@@ -282,7 +282,7 @@ export default function (pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme) {
       const details = result.details as Details | undefined;
       if (!details) return new Text("Verify", 0, 0);
-      if (details.skipped) return new Text(theme.fg("muted", `${details.skipped}${details.hygiene ? " · hygiene passed" : ""}`), 0, 0);
+      if (details.skipped) return new Text(theme.fg("muted", `${details.skipped}${details.hygiene ? " · Hygiene passed" : ""}`), 0, 0);
       const failed = details.state !== "passed";
       let text = theme.fg(failed ? "error" : "success", `Verification ${details.state}`);
       text += theme.fg("dim", ` · ${details.results.length} check(s)${details.unrunChecks?.length ? ` · ${details.unrunChecks.length} not run` : ""}${details.omittedChecks?.length ? ` · ${details.omittedChecks.length} capped` : ""}`);
