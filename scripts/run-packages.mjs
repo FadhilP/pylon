@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mapLimit } from "./run-packages-lib.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packages = [
@@ -20,15 +21,33 @@ if (!scripts.every((script) => script === "check" || script === "test")) {
   console.error("Usage: node scripts/run-packages.mjs verify|check|test");
   process.exit(2);
 }
-for (const script of scripts) {
-  for (const name of packages) {
-    console.log(`\n=== ${name}: ${script} ===`);
+
+const concurrency = 3;
+const run = (name, script) =>
+  new Promise((resolve) => {
     const npmCli = process.env.npm_execpath;
-    const result = spawnSync(npmCli ? process.execPath : "npm", npmCli ? [npmCli, "run", script] : ["run", script], {
-      cwd: join(root, name),
-      stdio: "inherit",
-      shell: !npmCli && process.platform === "win32",
-    });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    const child = spawn(
+      npmCli ? process.execPath : "npm",
+      npmCli ? [npmCli, "run", script] : ["run", script],
+      {
+        cwd: join(root, name),
+        shell: !npmCli && process.platform === "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    child.on("error", (error) => resolve({ name, code: 1, output: `${output}${error.message}\n` }));
+    child.on("close", (code) => resolve({ name, code: code ?? 1, output }));
+  });
+
+for (const script of scripts) {
+  const results = await mapLimit(packages, concurrency, (name) => run(name, script));
+  for (const result of results) {
+    console.log(`\n=== ${result.name}: ${script} ===`);
+    process.stdout.write(result.output);
   }
+  const failed = results.find((result) => result.code !== 0);
+  if (failed) process.exit(failed.code);
 }

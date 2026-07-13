@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { footerRows, fitPair, plainText, shortWorkspace } from "../src/layout.ts";
+import { composeStatuses, footerRows, fitPair, plainText, shortWorkspace } from "../src/layout.ts";
 
 test("layouts never exceed terminal width", () => {
   for (const width of [0, 1, 24, 40, 79, 80, 120]) {
@@ -23,6 +23,14 @@ test("pair preserves right status under pressure", () => {
 
 test("status ANSI cannot leak color into rest of footer", () => {
   assert.equal(plainText("\x1b[33mWORKING\x1b[39m"), "WORKING");
+});
+
+test("extension statuses compose instead of replacing each other", () => {
+  assert.equal(
+    composeStatuses(["Checkpoints: 2 · Session: Paired", "Verify: passed"], "READY"),
+    "Checkpoints: 2 · Session: Paired · Verify: passed",
+  );
+  assert.equal(composeStatuses([], "READY"), "READY");
 });
 
 test("theme defines required visual groups", async () => {

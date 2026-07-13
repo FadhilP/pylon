@@ -11,12 +11,14 @@ test("verify publishes bounded result metadata and session entry", async () => {
   const tools = new Map<string, any>();
   const events: Array<{ channel: string; value: any }> = [];
   const entries: Array<{ type: string; data: any }> = [];
+  const gitCalls: string[] = [];
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     on: () => {},
     events: { emit: (channel: string, value: any) => events.push({ channel, value }) },
     appendEntry: (type: string, data: any) => entries.push({ type, data }),
     exec: async (command: string, args: string[]) => {
+      if (command === "git") gitCalls.push(args.join(" "));
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git") return { code: 0, stdout: " M file.ts\n", stderr: "" };
       return { code: 0, stdout: "ok\n", stderr: "" };
@@ -29,6 +31,12 @@ test("verify publishes bounded result metadata and session entry", async () => {
   );
   assert.equal(result.details.state, "passed");
   assert.match(result.details.worktreeId, /^[a-f0-9]{16}$/);
+  assert.deepEqual(gitCalls, [
+    "rev-parse HEAD",
+    "status --porcelain=v1 --untracked-files=all",
+    "rev-parse HEAD",
+    "status --porcelain=v1 --untracked-files=all",
+  ]);
   const published = events.find((event) => event.channel === "pi-verify:result")?.value;
   assert.equal(published.state, "passed");
   assert.equal(entries[0]?.type, "pi-verify-result");

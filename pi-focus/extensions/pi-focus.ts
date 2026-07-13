@@ -10,6 +10,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  composeStatuses,
   footerRows,
   plainText,
   shortWorkspace,
@@ -103,7 +104,7 @@ export default function (pi: ExtensionAPI) {
           const statuses = [...footerData.getExtensionStatuses().values()]
             .filter(Boolean)
             .map(plainText);
-          const currentState = activeChild ?? statuses.at(-1) ?? state;
+          const currentState = activeChild ?? composeStatuses(statuses, state);
           return footerRows(
             width,
             density,

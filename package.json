@@ -1,6 +1,6 @@
 {
   "name": "pi-conductor",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "Complete Pi Conductor package with all extensions and themes.",
   "type": "module",
@@ -12,7 +12,7 @@
   },
   "scripts": {
     "verify": "npm run test:bundle && node scripts/run-packages.mjs verify",
-    "test:bundle": "node --experimental-transform-types --test test/bundle.test.ts",
+    "test:bundle": "node --experimental-transform-types --test-isolation=none --test-force-exit --test test/bundle.test.ts",
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test"
   },

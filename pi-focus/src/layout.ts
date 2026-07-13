@@ -6,6 +6,10 @@ export function plainText(value: string): string {
   return value.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+export function composeStatuses(statuses: string[], fallback: string): string {
+  return statuses.length ? statuses.join(" · ") : fallback;
+}
+
 export function fitPair(left: string, right: string, width: number): string {
   if (width <= 0) return "";
   const rightWidth = visibleWidth(right);

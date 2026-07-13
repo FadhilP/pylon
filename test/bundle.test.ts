@@ -14,6 +14,21 @@ import scout from "../pi-scout/extensions/pi-scout.ts";
 import scoutCheckpoint from "../pi-scout/extensions/scout-checkpoint.ts";
 import timeline from "../pi-timeline/extensions/pi-timeline.ts";
 import verify from "../pi-verify/extensions/pi-verify.ts";
+import { mapLimit } from "../scripts/run-packages-lib.mjs";
+
+test("package runner bounds concurrency and preserves result order", async () => {
+  let active = 0;
+  let peak = 0;
+  const results = await mapLimit([30, 5, 20, 1], 2, async (delay) => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    active--;
+    return delay;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results, [30, 5, 20, 1]);
+});
 
 class Bus {
   handlers = new Map<string, Set<(value: unknown) => void>>();
