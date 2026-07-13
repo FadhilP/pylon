@@ -1,6 +1,6 @@
 {
   "name": "pi-conductor",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "private": true,
   "description": "Complete Pi Conductor package with all extensions and themes.",
   "type": "module",
@@ -24,6 +24,7 @@
       "./pi-focus/extensions/pi-focus.ts",
       "./pi-guard/extensions/pi-guard.ts",
       "./pi-heartbeat/extensions/pi-heartbeat.ts",
+      "./pi-helios/extensions/pi-helios.ts",
       "./pi-scout/extensions/search-tools.ts",
       "./pi-scout/extensions/pi-scout.ts",
       "./pi-scout/extensions/scout-checkpoint.ts",

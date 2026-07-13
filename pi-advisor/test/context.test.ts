@@ -23,16 +23,17 @@ test("small budget marks truncation and keeps newest user", () => {
   assert.match(snapshot.text, /omitted/);
 });
 
-test("snapshot prioritizes evidence, continuity, summaries, user, then assistant", () => {
+test("snapshot prioritizes advisor request, evidence, continuity, summaries, user, then assistant", () => {
   const snapshot = buildSnapshot("system", [
     { role: "assistant", content: "assistant judgment" },
     { role: "user", content: "review finding" },
+    { role: "custom", customType: "advisor-request", content: "Which approach has less migration risk?" },
     { role: "branchSummary", summary: "branch state" },
     { role: "compactionSummary", summary: "compacted state" },
     { role: "custom", customType: "pi-continuity", content: "durable state" },
     { role: "custom", customType: "advisor-evidence", content: "source evidence" },
   ], 40_000);
-  const positions = ["source evidence", "durable state", "compacted state", "review finding", "assistant judgment"].map(value => snapshot.text.indexOf(value));
+  const positions = ["Which approach has less migration risk?", "source evidence", "durable state", "compacted state", "review finding", "assistant judgment"].map(value => snapshot.text.indexOf(value));
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
 });
 
@@ -60,6 +61,16 @@ test("latest user request has an 8k-token head-tail cap", () => {
   assert.match(snapshot.text, /-END/);
   assert.doesNotMatch(snapshot.text, /-MIDDLE-/);
   assert.match(snapshot.text, /latest-user-request truncated: middle omitted/);
+});
+
+test("snapshot redacts advisor request", () => {
+  const snapshot = buildSnapshot(
+    "system",
+    [{ role: "custom", customType: "advisor-request", content: "Review token=sk-proj-abcdefghijklmnopqrstuvwxyz" }],
+    20_000,
+  );
+  assert.match(snapshot.text, /advisor-request/);
+  assert.doesNotMatch(snapshot.text, /abcdefghijklmnopqrstuvwxyz/);
 });
 
 test("snapshot includes and redacts high-priority evidence", () => {

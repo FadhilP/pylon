@@ -9,6 +9,7 @@ import continuity from "../pi-continuity/extensions/pi-continuity.ts";
 import focus from "../pi-focus/extensions/pi-focus.ts";
 import guard from "../pi-guard/extensions/pi-guard.ts";
 import heartbeat from "../pi-heartbeat/extensions/pi-heartbeat.ts";
+import helios from "../pi-helios/extensions/pi-helios.ts";
 import searchTools from "../pi-scout/extensions/search-tools.ts";
 import scout from "../pi-scout/extensions/pi-scout.ts";
 import scoutCheckpoint from "../pi-scout/extensions/scout-checkpoint.ts";
@@ -55,6 +56,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./pi-focus/extensions/pi-focus.ts",
     "./pi-guard/extensions/pi-guard.ts",
     "./pi-heartbeat/extensions/pi-heartbeat.ts",
+    "./pi-helios/extensions/pi-helios.ts",
     "./pi-scout/extensions/search-tools.ts",
     "./pi-scout/extensions/pi-scout.ts",
     "./pi-scout/extensions/scout-checkpoint.ts",
@@ -90,14 +92,14 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, conductor, continuity, focus, guard, heartbeat, searchTools, scout, scoutCheckpoint, timeline, verify]
+    [advisor, conductor, continuity, focus, guard, heartbeat, helios, searchTools, scout, scoutCheckpoint, timeline, verify]
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
       "advisor", "conductor", "continuity", "guard", "heartbeat", "memory", "plan", "scout", "timeline", "todos", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "continuity_update", "fd", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "repo_scout", "rg", "scout_checkpoint", "verify",
+      "advisor", "continuity_update", "fd", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_capture", "repo_scout", "rg", "scout_checkpoint", "verify",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 

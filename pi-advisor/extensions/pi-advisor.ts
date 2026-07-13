@@ -69,7 +69,6 @@ function errorCode(
 
 export default function (pi: ExtensionAPI) {
   let calls = 0;
-  let originalPrompt = "";
   let previousAdvice: string | undefined;
   const configuredModel = async (ctx: any): Promise<Model<any> | undefined> => {
     const config = await loadConfig();
@@ -98,7 +97,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", (event) => {
     if (event.source !== "extension") {
       calls = 0;
-      originalPrompt = event.text.trim();
       previousAdvice = undefined;
     }
   });
@@ -117,14 +115,19 @@ export default function (pi: ExtensionAPI) {
     name: "advisor",
     label: "Advisor",
     description:
-      "Consult configured tool-free strategic advisor using a redacted bounded snapshot of current executor context plus optional high-priority workspace file ranges. Maximum three calls per original user prompt.",
+      "Send configured tool-free strategic advisor a concrete request using a redacted bounded snapshot of current executor context plus optional high-priority workspace file ranges. Maximum three calls per original user prompt.",
     promptSnippet:
       "Consult selected strategic model for difficult planning, review, or failure recovery",
     promptGuidelines: [
-      "Use advisor for consequential non-local decisions, difficult planning, review, or failure recovery; skip trivial, local, or single-turn work. First call: after focused reads or repo_scout establish evidence, before choosing an approach. Second call: use when implementation, competing evidence, or review changes the decision; do not wait for completion. Third call: reserve for material new evidence, contradictions, or test/failure results that leave the decision unresolved. Pass only highest-priority cited file ranges through evidence so Advisor can inspect primary source. Advisor critiques evidence, reasoning, risks, and proposed direction; Scout gathers evidence, main model owns the final decision. Advisor recommends; verify evidence and perform tools yourself.",
+      "Use advisor for consequential non-local decisions, difficult planning, review, or failure recovery; skip trivial, local, or single-turn work. State a concrete request naming the decision, risk, or approach to review. First call: after focused reads or repo_scout establish evidence, before choosing an approach. Second call: use when implementation, competing evidence, or review changes the decision; do not wait for completion. Third call: reserve for material new evidence, contradictions, or test/failure results that leave the decision unresolved. Pass only highest-priority cited file ranges through evidence so Advisor can inspect primary source. Advisor critiques evidence, reasoning, risks, and proposed direction; Scout gathers evidence, main model owns the final decision. Advisor recommends; verify evidence and perform tools yourself.",
     ],
     parameters: Type.Object(
       {
+        request: Type.String({
+          minLength: 1,
+          maxLength: 2_000,
+          description: "Concrete decision, risk, or approach for the advisor to review",
+        }),
         evidence: Type.Optional(
           Type.Array(
             Type.Object(
@@ -202,6 +205,11 @@ export default function (pi: ExtensionAPI) {
       const messages: any[] = ctx.sessionManager
         .buildContextEntries()
         .flatMap(sessionEntryToContextMessages);
+      messages.push({
+        role: "custom",
+        customType: "advisor-request",
+        content: params.request.trim(),
+      });
       const evidence = await loadEvidence(ctx.cwd, params.evidence);
       if (evidence)
         messages.push({
@@ -376,16 +384,16 @@ export default function (pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", undefined);
       }
     },
-    renderCall(_args, theme, context) {
+    renderCall(args, theme, context) {
       const callNumber = (context.state.callNumber as number | undefined) ??
         Math.min(calls + 1, ADVISOR_MAX_CALLS);
       context.state.callNumber = callNumber;
-      const prompt = originalPrompt.replace(/\s+/g, " ");
-      const truncatedPrompt = prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt;
+      const request = args.request?.trim().replace(/\s+/g, " ") ?? "";
+      const truncatedRequest = request.length > 512 ? `${request.slice(0, 509)}...` : request;
       return new Text(
         theme.fg("toolTitle", theme.bold("Advisor")) +
           theme.fg("muted", ` · ${callNumber}/${ADVISOR_MAX_CALLS}`) +
-          (truncatedPrompt ? `\n${theme.fg("dim", truncatedPrompt)}` : ""),
+          (truncatedRequest ? `\n${theme.fg("dim", truncatedRequest)}` : ""),
         0,
         0,
       );

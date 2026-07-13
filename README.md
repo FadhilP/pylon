@@ -12,6 +12,7 @@ Installing this repository loads every extension listed below plus the `focus-da
 - **[pi-focus](./pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme through `/ui` commands.
 - **[pi-guard](./pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks writes outside safe workspace paths.
 - **[pi-heartbeat](./pi-heartbeat)** — Runs bounded background shell jobs while other work continues, with tools for starting, checking, and cancelling jobs.
+- **[pi-helios](./pi-helios)** — Captures consented Windows-window or browser-viewport screenshots for vision-based debugging, without whole-desktop capture, input control, or background monitoring.
 - **[pi-scout](./pi-scout)** — Performs bounded, read-only repository reconnaissance with exact source citations; also supports explicit searches across Pi sessions.
 - **[pi-timeline](./pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts, then supports listing, restoring, forking, or clearing them.
 - **[pi-verify](./pi-verify)** — Detects and runs existing project checks with bounded time and output, either for changed work or the whole project.

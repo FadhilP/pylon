@@ -11,6 +11,7 @@ const packages = [
   "pi-focus",
   "pi-guard",
   "pi-heartbeat",
+  "pi-helios",
   "pi-scout",
   "pi-timeline",
   "pi-verify",
