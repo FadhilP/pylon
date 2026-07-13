@@ -78,8 +78,6 @@ export default function (pi: ExtensionAPI) {
     candidates: Candidate[] = [],
     savedTools: string[] | undefined,
     lastPrompt = "",
-    lastOfferedPlan = "",
-    selectionOpen = false,
     tasksVisible = true,
     currentCwd = "",
     latestVerification: any;
@@ -310,39 +308,6 @@ export default function (pi: ExtensionAPI) {
     tasksVisible = false;
     hideTasks(ctx);
     await compactMemory();
-    if (
-      ctx.mode !== "tui" ||
-      selectionOpen ||
-      work?.mode !== "planning" ||
-      !work.planSummary ||
-      !work.todos.length
-    )
-      return;
-    const fingerprint = JSON.stringify([
-      work.planSummary,
-      work.todos.map((todo) => todo.text),
-    ]);
-    if (fingerprint === lastOfferedPlan) return;
-    lastOfferedPlan = fingerprint;
-    selectionOpen = true;
-    try {
-      const choice = await ctx.ui.select("Plan ready", [
-        "Approve — fresh executor session",
-        "Approve — continue current session",
-        "Request changes",
-      ]);
-      if (choice === "Approve — fresh executor session")
-        pi.sendUserMessage("/plan approve");
-      else if (choice === "Approve — continue current session")
-        pi.sendUserMessage("/plan approve-current");
-      else if (choice === "Request changes") {
-        const feedback = await ctx.ui.editor("Plan feedback", "");
-        if (feedback?.trim())
-          pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
-      }
-    } finally {
-      selectionOpen = false;
-    }
   });
   pi.on("tool_call", (event) => {
     if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
@@ -386,7 +351,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Update plan, todos, state, clarification, or durable-memory candidate.",
     promptGuidelines: [
-      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification. Before final response, update every todo touched this turn and set completion true when none remain. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
+      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification. Before final response, update every todo touched this turn and set completion true when none remain. Call successful completion at most once per turn: after a result says work completed or already completed, make no more continuity_update calls and respond to the user immediately. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -563,6 +528,12 @@ export default function (pi: ExtensionAPI) {
         if (p.latestFailure !== undefined) work.latestFailure = p.latestFailure;
         if (p.nextAction !== undefined) work.nextAction = p.nextAction;
         if (p.completion) {
+          if (work.mode === "completed")
+            return {
+              content: [
+                { type: "text", text: "Work already completed. No further continuity updates needed." },
+              ],
+            };
           if (hasRemainingTodos(work))
             return {
               content: [
@@ -587,6 +558,14 @@ export default function (pi: ExtensionAPI) {
           work.currentTodoId = undefined;
           work.completedAt = new Date().toISOString();
           gate(false);
+          work.updatedAt = new Date().toISOString();
+          await saveWork();
+          refresh(ctx);
+          return {
+            content: [
+              { type: "text", text: "Work completed. No further continuity updates needed." },
+            ],
+          };
         }
       }
       work.updatedAt = new Date().toISOString();
@@ -595,9 +574,9 @@ export default function (pi: ExtensionAPI) {
       return { content: [{ type: "text", text: "Continuity state updated." }] };
     },
   });
-  pi.registerCommand("plan", {
+  const planCommand = {
     description: "Start, approve, cancel, or inspect plan",
-    handler: async (args, ctx) => {
+    handler: async (args: string, ctx: any) => {
       const value = args.trim();
       if (value === "review") {
         if (!work?.runId)
@@ -679,7 +658,7 @@ export default function (pi: ExtensionAPI) {
         const thinking = config.executor?.thinking ?? work.baseThinking;
         const result = await ctx.newSession({
           parentSession: sourceSessionFile,
-          setup: async (sessionManager) => {
+          setup: async (sessionManager: any) => {
             sessionManager.appendModelChange(executor.provider, executor.id);
             if (thinking) sessionManager.appendThinkingLevelChange(thinking);
             sessionManager.appendCustomEntry(RUN_ENTRY_TYPE, run);
@@ -690,7 +669,7 @@ export default function (pi: ExtensionAPI) {
               ...(thinking ? { thinking } : {}),
             });
           },
-          withSession: async (fresh) => {
+          withSession: async (fresh: any) => {
             if (
               fresh.model?.provider !== executor.provider ||
               fresh.model?.id !== executor.id
@@ -761,12 +740,35 @@ export default function (pi: ExtensionAPI) {
       gate(true);
       await saveWork();
       refresh(ctx);
-      if (value)
-        pi.sendUserMessage(
-          `Plan this task without modifying project files: ${value}`,
-        );
+      if (!value) return;
+      pi.sendUserMessage(
+        `Plan this task without modifying project files: ${value}`,
+      );
+      if (ctx.mode !== "tui") return;
+      await ctx.waitForIdle();
+      if (
+        work?.mode !== "planning" ||
+        !work.planSummary ||
+        !work.todos.length
+      )
+        return;
+      const choice = await ctx.ui.select("Plan ready", [
+        "Approve — fresh executor session",
+        "Approve — continue current session",
+        "Request changes",
+      ]);
+      if (choice === "Approve — fresh executor session")
+        await planCommand.handler("approve", ctx);
+      else if (choice === "Approve — continue current session")
+        await planCommand.handler("approve-current", ctx);
+      else if (choice === "Request changes") {
+        const feedback = await ctx.ui.editor("Plan feedback", "");
+        if (feedback?.trim())
+          pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
+      }
     },
-  });
+  };
+  pi.registerCommand("plan", planCommand);
   pi.registerCommand("continuity", {
     description: "Configure planner/executor models or show status",
     handler: async (args, ctx) => {

@@ -54,6 +54,7 @@ const emptyUsage = () => ({
 const modelName = (model: { provider: string; id: string }) =>
   `${model.provider}/${model.id}`;
 const ADVISOR_TIMEOUT_MS = 15 * 60 * 1000;
+const HEARTBEAT_MS = 1_000;
 function errorCode(
   error: unknown,
   aborted: boolean,
@@ -225,10 +226,11 @@ export default function (pi: ExtensionAPI) {
           "pi-advisor",
           `advisor: consulting ${modelName(model)}…`,
         );
+      const { usage: _usage, ...runningDetails } = base;
       onUpdate?.({
         content: [{ type: "text", text: `Consulting ${modelName(model)}…` }],
         details: {
-          ...base,
+          ...runningDetails,
           snapshotEstimatedTokens: snapshot.estimatedTokens,
           redactionCount: snapshot.redactionCount,
           truncated: snapshot.truncated,
@@ -243,6 +245,14 @@ export default function (pi: ExtensionAPI) {
         timedOut = true;
         controller.abort();
       }, ADVISOR_TIMEOUT_MS);
+      const heartbeat = setInterval(() => {
+        const durationMs = Date.now() - started;
+        onUpdate?.({
+          content: [{ type: "text", text: `${(durationMs / 1000).toFixed(0)}s` }],
+          details: { ...runningDetails },
+        });
+      }, HEARTBEAT_MS);
+      heartbeat.unref();
       try {
         const userMessage: Message = {
           role: "user",
@@ -332,7 +342,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Advisor guidance ready.\n\n${advice.text}`,
+              text: `\n\n${advice.text}`,
             },
           ],
           details,
@@ -361,6 +371,7 @@ export default function (pi: ExtensionAPI) {
         };
       } finally {
         clearTimeout(timeout);
+        clearInterval(heartbeat);
         signal?.removeEventListener("abort", abort);
         if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", undefined);
       }
@@ -390,14 +401,11 @@ export default function (pi: ExtensionAPI) {
         `Advisor · ${details.advisorModel ?? "Unavailable"}`,
       );
       if (!details.failureCode && details.usage)
-        text += theme.fg(
-          "dim",
-          ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`,
-        );
-      const recommendation = body?.text?.match(
-        /## Recommended approach\s*\n([^\n]+)/i,
-      )?.[1];
-      if (!expanded && recommendation) text += `\n${recommendation}`;
+        text += ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`;
+      else if (!details.failureCode && details.durationMs)
+        text += ` · ~${details.snapshotEstimatedTokens} input · ${(details.durationMs / 1000).toFixed(0)}s`;
+      if (!expanded && body?.text)
+        text += `\n${body.text.split("\n").slice(0, 8).join("\n")}`;
       if (expanded && body?.text)
         text += `\n\n${body.text}\n\nredactions: ${details.redactionCount} · truncated: ${details.truncated}`;
       return new Text(text, 0, 0);

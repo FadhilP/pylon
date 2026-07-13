@@ -27,6 +27,7 @@ import {
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const checkpointExtension = join(extensionDir, "scout-checkpoint.ts");
 const searchToolsExtension = join(extensionDir, "search-tools.ts");
+const HEARTBEAT_MS = 1_000;
 function modelName(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
@@ -283,6 +284,19 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text: "Scout searching repository…" }],
         details: { model: modelName(model), state: "running" },
       });
+      const started = Date.now();
+      let lastUpdateAt = started;
+      let activity: readonly ScoutActivity[] = [];
+      const heartbeat = setInterval(() => {
+        const now = Date.now();
+        if (now - lastUpdateAt < HEARTBEAT_MS) return;
+        lastUpdateAt = now;
+        onUpdate?.({
+          content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }],
+          details: { model: modelName(model), state: "running", durationMs: now - started, activity },
+        });
+      }, HEARTBEAT_MS);
+      heartbeat.unref();
       try {
         const parentContext = buildParentContext(
           ctx.sessionManager.buildContextEntries(),
@@ -320,7 +334,9 @@ export default function (pi: ExtensionAPI) {
             signal,
             timeoutMs: repoTimeoutMs(),
             env: { PI_SCOUT_CHECKPOINT_PATH: checkpointPath },
-            onActivity: (_item, all) =>
+            onActivity: (_item, all) => {
+              lastUpdateAt = Date.now();
+              activity = all;
               onUpdate?.({
                 content: [
                   {
@@ -331,9 +347,11 @@ export default function (pi: ExtensionAPI) {
                 details: {
                   model: modelName(model),
                   state: "running",
+                  durationMs: lastUpdateAt - started,
                   activity: all,
                 },
-              }),
+              });
+            },
           });
           const checkpoint =
             run.error === "Scout timed out."
@@ -362,6 +380,7 @@ export default function (pi: ExtensionAPI) {
           await rm(dir, { recursive: true, force: true });
         }
       } finally {
+        clearInterval(heartbeat);
         if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
       }
     },
@@ -387,6 +406,8 @@ export default function (pi: ExtensionAPI) {
       );
       if (details?.usage)
         text += ` · ${usageText({ usage: details.usage, turns: details.turns ?? [], durationMs: details.durationMs, text: "", stderr: "", truncated: false, exitCode: 0, activity: details.activity ?? [] } as ScoutRun)}`;
+      else if (details?.durationMs)
+        text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && details?.activity?.length)
         text += `\n\nChild activity:\n${activityText(details.activity)}`;
       if (expanded && body?.text) text += `\n\nScout report:\n${body.text}`;

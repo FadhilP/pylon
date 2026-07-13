@@ -52,6 +52,13 @@ function runtime() {
   };
 }
 
+test("completion guidance makes a successful update terminal", () => {
+  const app = runtime();
+  const guidance = app.tools.get("continuity_update").promptGuidelines.join("\n");
+  assert.match(guidance, /successful completion at most once per turn/i);
+  assert.match(guidance, /make no more continuity_update calls and respond to the user immediately/i);
+});
+
 test("set_plan creates executing todos without explicit plan mode", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-todos-"));
@@ -106,7 +113,9 @@ test("execution completion requires a qualifying Verify result", async () => {
     assert.match(blocked.content[0].text, /Cannot complete until/);
     app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "run", results: [] });
     const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
-    assert.match(completed.content[0].text, /state updated/);
+    assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
+    const repeated = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(repeated.content[0].text, /already completed.*No further continuity updates needed/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -126,10 +135,11 @@ test("explicit plan selects planner and hands approved work to executor session"
   ]);
   const childEntries: Array<{ type: string; value: any }> = [];
   let kickoff = "";
+  let app: ReturnType<typeof runtime>;
   const ctx: any = {
     cwd,
-    hasUI: false,
-    mode: "json",
+    hasUI: true,
+    mode: "tui",
     model: models.get("provider/base"),
     modelRegistry: {
       find: (provider: string, id: string) => models.get(`${provider}/${id}`),
@@ -140,6 +150,20 @@ test("explicit plan selects planner and hands approved work to executor session"
       getSessionId: () => "planner-session",
       getSessionFile: () => join(root, "planner.jsonl"),
       getEntries: () => [],
+    },
+    waitForIdle: async () => {
+      await app.tools.get("continuity_update").execute(
+        "call",
+        {
+          action: "set_plan",
+          goal: "Ship change",
+          planSummary: "Implement then verify",
+          todos: ["Implement", "Verify"],
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
     },
     newSession: async ({ setup, withSession }: any) => {
       await setup({
@@ -157,10 +181,16 @@ test("explicit plan selects planner and hands approved work to executor session"
       });
       return { cancelled: false };
     },
-    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async () => "Approve — fresh executor session",
+      editor: async () => "",
+    },
   };
   try {
-    const app = runtime();
+    app = runtime();
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
     await app.commands.get("continuity").handler(
@@ -174,19 +204,7 @@ test("explicit plan selects planner and hands approved work to executor session"
     await app.commands.get("plan").handler("Ship change", ctx);
     assert.equal(app.selectedModel()?.id, "planner");
     assert.equal(app.thinking(), "high");
-    await app.tools.get("continuity_update").execute(
-      "call",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement then verify",
-        todos: ["Implement", "Verify"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await app.commands.get("plan").handler("approve", ctx);
+    assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
     assert.deepEqual(childEntries[0], {
       type: "model",
       value: { provider: "provider", id: "executor" },
@@ -250,20 +268,43 @@ test("task widget resets after settlement but survives mid-turn steering", async
   }
 });
 
-test("settled TUI plan offers decision and dispatches selected command once", async () => {
+test("TUI current-session approval runs command logic without exposing a slash prompt", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-selector-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   let selections = 0;
+  let app: ReturnType<typeof runtime>;
+  const model = { provider: "provider", id: "base" };
   const ctx: any = {
     cwd,
     hasUI: true,
     mode: "tui",
+    model,
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+      getAvailable: () => [model],
+    },
     sessionManager: {
       getSessionId: () => "selector-session",
       getEntries: () => [],
+    },
+    waitForIdle: async () => {
+      await app.tools.get("continuity_update").execute(
+        "call",
+        {
+          action: "set_plan",
+          goal: "Ship change",
+          planSummary: "Implement then verify",
+          todos: ["Implement", "Verify"],
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
     },
     ui: {
       notify: () => {},
@@ -277,34 +318,18 @@ test("settled TUI plan offers decision and dispatches selected command once", as
     },
   };
   try {
-    const app = runtime();
+    app = runtime();
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
-    await app.commands.get("plan").handler("Ship change", {
-      ...ctx,
-      model: { provider: "provider", id: "base" },
-    });
-    await app.tools.get("continuity_update").execute(
-      "call",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement then verify",
-        todos: ["Implement", "Verify"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
     assert.equal(selections, 1);
     assert.deepEqual(app.sent, [
       "Plan this task without modifying project files: Ship change",
-      "/plan approve-current",
+      "Execute approved stored plan in current session. Track and verify todos.",
     ]);
+    assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
+    const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(context.messages.at(-1).content, /Work: executing/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
