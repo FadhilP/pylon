@@ -18,17 +18,24 @@ export function commandRisk(command: string): string | undefined {
   return commandRules.find(([pattern]) => pattern.test(command))?.[1];
 }
 
+function missingPath(error: unknown) {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 async function canonicalTarget(cwd: string, input: string) {
   const target = resolve(cwd, input.replace(/^@/, ""));
   try {
     return await realpath(target);
-  } catch {
+  } catch (error) {
+    if (!missingPath(error)) throw error;
     let parent = dirname(target);
     const suffix: string[] = [target.slice(parent.length + (parent.endsWith(sep) ? 0 : 1))];
     for (;;) {
       try {
         return resolve(await realpath(parent), ...suffix.reverse());
-      } catch {
+      } catch (parentError) {
+        if (!missingPath(parentError)) throw parentError;
         const next = dirname(parent);
         if (next === parent) return target;
         suffix.push(parent.slice(next.length + (next.endsWith(sep) ? 0 : 1)));
@@ -38,20 +45,35 @@ async function canonicalTarget(cwd: string, input: string) {
   }
 }
 
+function outside(root: string, target: string) {
+  const fromRoot = relative(root, target);
+  return fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot);
+}
+
+function explicitAbsolute(input: string) {
+  const value = input.replace(/^@/, "");
+  if (!isAbsolute(value)) return false;
+  if (process.platform !== "win32") return value.startsWith("/");
+  return /^[a-z]:[\\/]/i.test(value);
+}
+
 export async function pathRisk(
   cwd: string,
   input: string,
-): Promise<{ action: "block" | "confirm"; reason: string } | undefined> {
+): Promise<{ action: "block" | "confirm"; reason: string; target?: string } | undefined> {
   const root = await realpath(cwd);
+  const lexicalTarget = resolve(cwd, input.replace(/^@/, ""));
   const target = await canonicalTarget(cwd, input);
-  const fromRoot = relative(root, target);
-  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
-    return { action: "block", reason: "write target escapes workspace" };
-  const segments = fromRoot.split(/[\\/]/).map((part) => part.toLowerCase());
+  const segments = target.split(/[\\/]/).map((part) => part.toLowerCase());
   if (segments.includes(".git"))
     return { action: "block", reason: ".git internals are protected" };
   if (segments.includes("node_modules"))
     return { action: "block", reason: "node_modules is generated and protected" };
+  if (outside(root, target)) {
+    if (explicitAbsolute(input) && outside(resolve(cwd), lexicalTarget))
+      return { action: "confirm", reason: "write target is outside workspace", target };
+    return { action: "block", reason: "write target escapes workspace" };
+  }
   if (segments.some((part) => part === ".env" || part.startsWith(".env.")))
     return { action: "confirm", reason: "environment file may contain secrets" };
   return undefined;

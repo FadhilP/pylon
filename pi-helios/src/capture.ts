@@ -1,25 +1,10 @@
 import { stat } from "node:fs/promises";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 
-export type Exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number }) => Promise<ExecResult>;
-
-export interface BrowserCapture {
-  data: Buffer;
-  title: string;
-  url: string;
-}
-
-interface CdpTarget {
-  type?: string;
-  title?: string;
-  url?: string;
-  webSocketDebuggerUrl?: string;
-}
+export type Exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => Promise<ExecResult>;
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const MAX_TARGET_LIST_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_CDP_MESSAGE_CHARS = Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4096;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export function validatePng(data: Buffer): void {
@@ -199,90 +184,4 @@ export async function captureWindow(
   ]), { signal, timeout: 15_000 });
   if (result.code !== 0) throw failed("Window capture", result);
   if (!await outputCreated(outputPath)) throw new Error("Window capture produced no screenshot file");
-}
-
-function websocketScreenshot(url: URL, signal?: AbortSignal): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timeout = setTimeout(() => finish(new Error("Browser screenshot timed out")), 10_000);
-    const abort = () => finish(new Error("Browser screenshot cancelled"));
-    signal?.addEventListener("abort", abort, { once: true });
-
-    function finish(error?: Error, data?: Buffer) {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      try { socket.close(); } catch {}
-      if (error) reject(error);
-      else resolve(data!);
-    }
-
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({
-        id: 1,
-        method: "Page.captureScreenshot",
-        params: { format: "png", fromSurface: true, captureBeyondViewport: false },
-      }));
-    });
-    socket.addEventListener("error", () => finish(new Error("Could not connect to browser debugging target")));
-    socket.addEventListener("message", (event) => {
-      try {
-        if (typeof event.data !== "string") throw new Error("Browser returned an unexpected binary response");
-        if (event.data.length > MAX_CDP_MESSAGE_CHARS) throw new Error("Browser screenshot exceeds 25MB limit");
-        const message = JSON.parse(event.data);
-        if (message.id !== 1) return;
-        if (message.error) throw new Error(message.error.message || "Browser rejected screenshot request");
-        if (typeof message.result?.data !== "string") throw new Error("Browser returned no screenshot data");
-        const data = Buffer.from(message.result.data, "base64");
-        validatePng(data);
-        finish(undefined, data);
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
-}
-
-async function boundedText(response: Response): Promise<string> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_TARGET_LIST_BYTES) throw new Error("Browser target list exceeds 1MB limit");
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_TARGET_LIST_BYTES) {
-      await reader.cancel();
-      throw new Error("Browser target list exceeds 1MB limit");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
-}
-
-export async function captureBrowser(
-  endpoint = "http://127.0.0.1:9222",
-  title?: string,
-  signal?: AbortSignal,
-): Promise<BrowserCapture> {
-  const base = loopbackUrl(endpoint, ["http:"]);
-  const response = await fetch(new URL("/json/list", base), { signal });
-  if (!response.ok) throw new Error(`Browser endpoint returned HTTP ${response.status}`);
-  const targets = JSON.parse(await boundedText(response)) as CdpTarget[];
-  if (!Array.isArray(targets)) throw new Error("Browser returned an invalid target list");
-  const pages = targets.filter((target) => target.type === "page" && target.webSocketDebuggerUrl);
-  const needle = title?.toLowerCase();
-  const target = needle
-    ? pages.find((page) => `${page.title ?? ""}\n${page.url ?? ""}`.toLowerCase().includes(needle))
-    : pages[0];
-  if (!target) throw new Error(title ? `No browser tab matched "${title}"` : "No browser page target found");
-
-  const websocket = loopbackUrl(target.webSocketDebuggerUrl!, ["ws:", "wss:"]);
-  return {
-    data: await websocketScreenshot(websocket, signal),
-    title: target.title ?? "Untitled tab",
-    url: target.url ?? "",
-  };
 }

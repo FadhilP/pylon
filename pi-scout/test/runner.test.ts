@@ -4,6 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runPi } from "../src/runner.ts";
+import { scoutChildEnv } from "../src/child-env.ts";
 
 test("runner selects final assistant and sums per-turn usage", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-runner-")); const script = join(dir, "fake.mjs");
@@ -17,6 +18,18 @@ test("runner passes extension-controlled child environment", async () => {
   await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:process.env.PI_SCOUT_CHECKPOINT_PATH}],stopReason:'stop',usage:{}}}));`);
   const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, env: { PI_SCOUT_CHECKPOINT_PATH: "controlled" } });
   assert.equal(run.text, "controlled");
+});
+
+test("Web Scout child environment is allowlisted and can replace parent environment", async () => {
+  const filtered = scoutChildEnv({ PI_HELIOS_WEB_SCOUT_GRANT: "grant" }, {
+    PATH: "safe-path", OPENAI_API_KEY: "provider-key", NODE_OPTIONS: "--require=evil", SECRET_DATABASE_URL: "secret",
+  });
+  assert.deepEqual(filtered, { PATH: "safe-path", OPENAI_API_KEY: "provider-key", PI_HELIOS_WEB_SCOUT_GRANT: "grant" });
+  assert.deepEqual(scoutChildEnv({}, { PATH: "safe", OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "anthropic" }, "openai"), { PATH: "safe", OPENAI_API_KEY: "openai" });
+  const dir = await mkdtemp(join(tmpdir(), "scout-env-replace-")); const script = join(dir, "fake.mjs");
+  await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:String(process.env.SECRET_DATABASE_URL)+'|'+process.env.PI_HELIOS_WEB_SCOUT_GRANT}],stopReason:'stop',usage:{}}}));`);
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, env: { PI_HELIOS_WEB_SCOUT_GRANT: "grant" }, inheritEnv: false });
+  assert.equal(run.text, "undefined|grant");
 });
 
 test("runner exposes child tool activity", async () => {

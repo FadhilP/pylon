@@ -13,7 +13,7 @@ This installs the complete Pi Conductor bundle, including pi-conductor-core. Run
 ## Usage
 
 - `/conductor` shows registered package policies and the latest bounded Guard decision.
-- `/conductor doctor` also checks local Pi and Node compatibility, required and optional executables, old locks, quarantined state, configured child-model availability, and package tool surfaces without network calls.
+- `/conductor doctor` also checks local Pi and Node compatibility, required and optional executables, old locks, quarantined state, configured child-model availability, package tool surfaces, and bounded package health reports without network calls.
 
 Guard remains the independent final safety authority; Conductor never approves or weakens it.
 
@@ -23,6 +23,7 @@ Guard remains the independent final safety authority; Conductor never approves o
 - Tracks unmanaged baseline tools separately from package-managed tools.
 - Intersects restrictive tool gates fail-closed.
 - Validates versioned policy messages and keeps rejection diagnostics.
+- Collects versioned metadata-only health report promises with per-reporter timeout, malformed-report isolation, and duplicate-owner warnings.
 - Supports policy unregister and removes event listeners during shutdown or reload.
 - Lets Continuity planning retain read-only Scout and Advisor tools when enabled.
 - Coordinates pi-advisor, pi-scout, and pi-continuity.
@@ -48,3 +49,5 @@ pi.events.emit("pi-conductor:tool-policy", {
 ```
 
 No acknowledgement means Conductor is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
+
+Doctor health collection emits `pi-conductor:health-request`. Reporters must call `respond(reportPromise)` synchronously; Conductor awaits each promise for at most three seconds. Reports contain only `version`, `owner`, `label`, bounded `lines`, and `warning`—never page content, URLs, credentials, or raw logs.

@@ -94,14 +94,15 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "conductor", "continuity", "guard", "heartbeat", "memory", "plan", "scout", "timeline", "todos", "ui",
+      "advisor", "conductor", "continuity", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "scout", "timeline", "todos", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "continuity_update", "fd", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_capture", "repo_scout", "rg", "verify",
+      "advisor", "continuity_update", "fd", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "repo_scout", "rg", "verify", "web_scout",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 
-    const ui = new Proxy({ confirm: async () => false }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
+    let notification = "";
+    const ui = new Proxy({ confirm: async () => false, notify: (text: string) => { notification = text; } }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
     const ctx: any = {
       cwd, hasUI: false, mode: "json", model: undefined, ui,
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false, getAvailable: () => [] },
@@ -113,7 +114,13 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     assert.ok(active.includes("continuity_update"));
     assert.ok(active.includes("repo_scout"));
+    assert.ok(active.includes("web_scout"));
     assert.ok(events.count() > 0);
+    await commands.get("conductor").handler("doctor", ctx);
+    assert.match(notification, /Package health:/);
+    assert.match(notification, /Helios:/);
+    assert.match(notification, /Scout:/);
+    assert.match(notification, /Web Scout: Helios broker ready/);
 
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
     assert.equal(events.count(), 0);

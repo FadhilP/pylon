@@ -1,7 +1,7 @@
 {
   "name": "pi-scout",
   "version": "0.1.0",
-  "description": "Bounded repository and explicit Pi-session scouts for Pi",
+  "description": "Bounded repository, isolated public-web, and explicit Pi-session scouts for Pi",
   "type": "module",
   "keywords": ["pi-package"],
   "engines": { "node": ">=22.18.0" },

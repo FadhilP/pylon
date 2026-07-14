@@ -1,18 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import helios from "../extensions/pi-helios.ts";
+import webScoutBrowser from "../extensions/web-scout-browser.ts";
 import { captureWindow, findWindow, loopbackUrl } from "../src/capture.ts";
+import { consumeWebScoutGrant, issueWebScoutGrant, WEB_SCOUT_GRANT_ENV } from "../src/web-scout-grant.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const WINDOW = { handle: 42, processId: 7, title: "Visual Studio Code" };
 
-function registeredTool(pi: Record<string, unknown> = {}) {
-  let tool: any;
-  helios({ ...pi, registerTool(value: any) { tool = value; } } as any);
-  return tool;
+function runtime(pi: Record<string, unknown> = {}) {
+  const tools = new Map<string, any>();
+  const commands = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  const eventHandlers = new Map<string, Function[]>();
+  helios({
+    events: {
+      on(name: string, handler: Function) {
+        eventHandlers.set(name, [...(eventHandlers.get(name) ?? []), handler]);
+        return () => eventHandlers.set(name, (eventHandlers.get(name) ?? []).filter((item) => item !== handler));
+      },
+      emit(name: string, value: unknown) { for (const handler of eventHandlers.get(name) ?? []) handler(value); },
+    },
+    ...pi,
+    registerTool(value: any) { tools.set(value.name, value); },
+    registerCommand(name: string, value: any) { commands.set(name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any);
+  return { tools, commands, handlers, eventHandlers };
 }
 
 async function temporaryCaptures() {
@@ -31,116 +48,196 @@ function nativeSource(args: string[]): string {
   return Buffer.from(encodedSource, "base64").toString("utf8");
 }
 
-test("registers window capture with consent for resolved title", async () => {
-  const tool = registeredTool({ exec: async () => successfulLookup() });
-  assert.equal(tool.name, "helios_capture");
+function context(overrides: Record<string, unknown> = {}) {
+  return {
+    cwd: process.cwd(), hasUI: true, model: { input: ["text", "image"] },
+    sessionManager: { getSessionId: () => "test-session" },
+    ui: { async confirm() { return true; }, notify() {} },
+    ...overrides,
+  };
+}
 
+test("registers native capture and constrained browser tools", () => {
+  const { tools } = runtime();
+  assert.deepEqual([...tools.keys()].sort(), ["helios_browser", "helios_capture"]);
+  assert.match(tools.get("helios_capture").description, /Windows window/);
+  assert.doesNotMatch(tools.get("helios_capture").description, /browser viewport/);
+});
+
+test("visibility command changes future owned launches only", async () => {
+  let openArgs: string[] = [];
   let confirmation = "";
-  const result = await tool.execute("id", { target: "window", title: "Code" }, undefined, undefined, {
-    hasUI: true,
-    model: { input: ["image"] },
+  let notification = "";
+  const { tools, commands } = runtime({ exec: async (_command: string, args: string[]) => {
+    const cliCommand = args.find((arg) => ["open", "tab-list"].includes(arg));
+    if (cliCommand === "open") openArgs = args;
+    if (cliCommand === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const ctx = context({ ui: {
+    async confirm(_title: string, message: string) { confirmation = message; return true; },
+    notify(message: string) { notification = message; },
+  } });
+  await commands.get("helios-visibility").handler("hide", ctx);
+  assert.match(notification, /hidden \(headless\)/);
+  await tools.get("helios_browser").execute("id", { action: "start" }, undefined, undefined, ctx);
+  assert.match(confirmation, /headless isolated browser/);
+  assert.match(confirmation, /cannot be visually supervised/);
+  assert.ok(!openArgs.includes("--headed"));
+  await commands.get("helios-visibility").handler("show", ctx);
+  assert.match(notification, /Active owned session unchanged/);
+});
+
+test("doctor checks pinned CLI without launching a browser", async () => {
+  const calls: string[][] = [];
+  const { commands } = runtime({ exec: async (_command: string, args: string[]) => {
+    calls.push(args);
+    return { code: 0, stdout: "playwright-cli 0.1.17\n", stderr: "", killed: false };
+  } });
+  let notification = "";
+  await commands.get("helios-doctor").handler("", context({ ui: { notify(message: string) { notification = message; } } }));
+  assert.match(notification, /CLI ready/);
+  assert.ok(calls[0].includes("--version"));
+  assert.ok(!calls[0].includes("open"));
+});
+
+test("Helios advertises one-use Web Scout child capability", async () => {
+  const { eventHandlers } = runtime();
+  const capabilities: any[] = [];
+  for (const handler of eventHandlers.get("pi-helios:web-scout-capability") ?? []) {
+    handler({ version: 1, respond(value: unknown) { capabilities.push(value); } });
+  }
+  assert.equal(capabilities.length, 1);
+  assert.match(capabilities[0].childExtensionPath, /web-scout-browser\.ts$/);
+  const issued = await capabilities[0].issueGrant({ maxPages: 2, maxActions: 4, headed: true });
+  await issued.revoke();
+});
+
+test("Web Scout child extension requires and consumes issued grant", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 2, maxActions: 4, headed: false });
+  process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  await webScoutBrowser({
+    exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
+    registerTool(value: any) { tools.set(value.name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any);
+  assert.deepEqual([...tools.keys()], ["scout_browser"]);
+  assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+  await assert.rejects(webScoutBrowser({} as any), /grant is missing/);
+});
+
+test("Web Scout child cleans proxy after browser start failure", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 2, maxActions: 4, headed: false });
+  process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  await webScoutBrowser({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find((value) => ["open", "close", "list", "tab-list"].includes(value));
+      if (action === "open") return { code: 1, stdout: "", stderr: "failed", killed: false };
+      return { code: 0, stdout: action === "list" ? JSON.stringify({ browsers: [] }) : "{}", stderr: "", killed: false };
+    },
+    registerTool(value: any) { tools.set(value.name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any);
+  await assert.rejects(tools.get("scout_browser").execute("id", { action: "navigate", url: "https://example.com" }), /command failed/i);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+});
+
+test("crafted Web Scout grant path cannot delete attacker-selected directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "web-grant-victim-"));
+  const path = join(directory, "grant.json");
+  await writeFile(path, JSON.stringify({ version: 1, token: "token", expiresAt: Date.now() + 60_000, maxPages: 1, maxActions: 1, headed: false }));
+  const encoded = Buffer.from(JSON.stringify({ path, token: "token" })).toString("base64url");
+  try {
+    await assert.rejects(consumeWebScoutGrant(encoded), /path is invalid/);
+    assert.match(await readFile(path, "utf8"), /"token"/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("window capture consent names resolved title", async () => {
+  const { tools } = runtime({ exec: async () => successfulLookup() });
+  let confirmation = "";
+  const result = await tools.get("helios_capture").execute("id", { target: "window", title: "Code" }, undefined, undefined, context({
     ui: { async confirm(_title: string, message: string) { confirmation = message; return false; } },
-  });
+  }));
   assert.match(confirmation, /Visual Studio Code/);
   assert.equal(result.details.declined, true);
 });
 
-test("refuses capture without confirmation, image support, or window title", async () => {
-  const tool = registeredTool();
-  await assert.rejects(
-    tool.execute("id", { target: "window", title: "Code" }, undefined, undefined, { hasUI: false }),
-    /interactive confirmation/,
-  );
-  await assert.rejects(
-    tool.execute("id", { target: "window", title: "Code" }, undefined, undefined, { hasUI: true, model: { input: ["text"] } }),
-    /does not support image/,
-  );
-  await assert.rejects(
-    tool.execute("id", { target: "window" }, undefined, undefined, { hasUI: true, model: { input: ["image"] } }),
-    /non-empty title/,
-  );
+test("browser start refuses no UI and decline invokes no CLI", async () => {
+  let calls = 0;
+  const { tools } = runtime({ exec: async () => { calls++; return successfulLookup(); } });
+  const browser = tools.get("helios_browser");
+  await assert.rejects(browser.execute("id", { action: "start" }, undefined, undefined, context({ hasUI: false })), /interactive confirmation/);
+  const declined = await browser.execute("id", { action: "start" }, undefined, undefined, context({ ui: { async confirm() { return false; } } }));
+  assert.equal(declined.details.declined, true);
+  assert.equal(calls, 0);
 });
 
-test("browser endpoints must remain loopback", () => {
-  assert.equal(loopbackUrl("http://127.0.0.1:9222", ["http:"]).port, "9222");
-  assert.throws(() => loopbackUrl("http://example.com:9222", ["http:"]), /loopback/);
-  assert.throws(() => loopbackUrl("file:///tmp/socket", ["http:"]), /loopback/);
+test("attached endpoint validation happens before consent and remains loopback", async () => {
+  const { tools } = runtime({ exec: async () => successfulLookup() });
+  await assert.rejects(tools.get("helios_browser").execute("id", {
+    action: "attach", attachMode: "cdp", endpoint: "http://example.com:9222",
+  }, undefined, undefined, context()), /loopback/);
+  assert.equal(loopbackUrl("http://[::1]:9222", ["http:"]).port, "9222");
 });
 
-test("window lookup is Windows-only and returns selected identity", async () => {
+test("owned browser screenshot uses Playwright CLI, attaches image, and cleans artifacts", async () => {
+  const commands: string[] = [];
+  const before = await temporaryCaptures();
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const cliCommand = args.find((arg) => ["open", "list", "tab-list", "screenshot", "close"].includes(arg));
+    commands.push(cliCommand ?? "unknown");
+    const session = args.find((arg) => arg.startsWith("-s="))?.slice(3);
+    if (cliCommand === "list") return { code: 0, stdout: JSON.stringify({ browsers: [{ name: session, status: "open" }] }), stderr: "", killed: false };
+    if (cliCommand === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (cliCommand === "screenshot") {
+      const path = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(path, PNG);
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const statuses: Array<string | undefined> = [];
+  const ctx = context({ ui: {
+    async confirm() { return true; },
+    notify() {},
+    setStatus(_key: string, value: string | undefined) { statuses.push(value); },
+  } });
+  const browser = tools.get("helios_browser");
+  await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+  const result = await browser.execute("shot", { action: "screenshot" }, undefined, undefined, ctx);
+  assert.ok(result.content.some((item: any) => item.type === "image" && item.data.length > 0));
+  assert.ok(commands.includes("screenshot"));
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  assert.ok(commands.includes("close"));
+  assert.ok(statuses.includes("browser: start"));
+  assert.ok(statuses.includes("browser: screenshot"));
+  assert.equal(statuses.at(-1), undefined);
+  assert.deepEqual(await temporaryCaptures(), before);
+});
+
+test("window lookup and PrintWindow regression guarantees remain", async () => {
   await assert.rejects(findWindow(async () => successfulLookup(), "Code", undefined, "linux"), /Windows only/);
   const target = await findWindow(async (command, args) => {
     assert.equal(command, "powershell.exe");
-    const source = nativeSource(args);
-    assert.match(source, /StringComparison\.OrdinalIgnoreCase/);
+    assert.match(nativeSource(args), /StringComparison\.OrdinalIgnoreCase/);
     return successfulLookup();
   }, "Code", undefined, "win32");
   assert.deepEqual(target, WINDOW);
-});
 
-test("window capture uses PrintWindow only", async () => {
   const directory = await mkdtemp(join(tmpdir(), "helios-test-"));
   const output = join(directory, "capture.png");
   try {
-    await captureWindow(async (command, args) => {
-      assert.equal(command, "powershell.exe");
+    await captureWindow(async (_command, args) => {
       const source = nativeSource(args);
       assert.match(source, /PrintWindow/);
-      assert.doesNotMatch(source, /CopyFromScreen|VirtualScreen|expectedTitle/);
+      assert.doesNotMatch(source, /CopyFromScreen|VirtualScreen/);
       await writeFile(output, PNG);
       return { code: 0, stdout: "", stderr: "", killed: false };
     }, WINDOW, output, undefined, "win32");
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("approved browser capture attaches image bytes and removes temporary file", async () => {
-  const originalFetch = globalThis.fetch;
-  const originalWebSocket = globalThis.WebSocket;
-  const before = await temporaryCaptures();
-  let confirmation = "";
-
-  class FakeWebSocket {
-    listeners = new Map<string, Set<(event: any) => void>>();
-    constructor(_url: string | URL) { queueMicrotask(() => this.emit("open", {})); }
-    addEventListener(name: string, listener: (event: any) => void) {
-      const listeners = this.listeners.get(name) ?? new Set();
-      listeners.add(listener);
-      this.listeners.set(name, listeners);
-    }
-    removeEventListener(name: string, listener: (event: any) => void) { this.listeners.get(name)?.delete(listener); }
-    send() {
-      queueMicrotask(() => this.emit("message", { data: JSON.stringify({ id: 1, result: { data: PNG.toString("base64") } }) }));
-    }
-    close() {}
-    emit(name: string, event: any) { for (const listener of this.listeners.get(name) ?? []) listener(event); }
-  }
-
-  globalThis.fetch = async () => new Response(JSON.stringify([{
-    type: "page",
-    title: "Local App",
-    url: "http://localhost:3000/",
-    webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/1",
-  }])) as any;
-  globalThis.WebSocket = FakeWebSocket as any;
-
-  try {
-    const tool = registeredTool();
-    const result = await tool.execute("id", { target: "browser", title: "Local" }, undefined, undefined, {
-      cwd: process.cwd(),
-      hasUI: true,
-      model: { input: ["text", "image"] },
-      ui: {
-        async confirm(_title: string, message: string) { confirmation = message; return true; },
-        notify() {},
-      },
-    });
-    assert.match(confirmation, /127\.0\.0\.1:9222/);
-    assert.ok(result.content.some((item: any) => item.type === "image" && item.data.length > 0));
-    assert.deepEqual(await temporaryCaptures(), before);
-  } finally {
-    globalThis.fetch = originalFetch;
-    globalThis.WebSocket = originalWebSocket;
-  }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -102,6 +102,49 @@ export default function (pi: ExtensionAPI) {
       guardDiagnostic = `${event.decision}: ${event.reason} (blocked ${event.blocked}, confirmed ${event.confirmed})`;
   });
 
+  const collectHealth = async (): Promise<{ lines: string[]; warning: boolean }> => {
+    const pending: Promise<unknown>[] = [];
+    pi.events.emit("pi-conductor:health-request", {
+      version: 1,
+      respond(value: unknown | Promise<unknown>) {
+        if (pending.length < 20) pending.push(Promise.resolve(value));
+      },
+    });
+    const values = await Promise.all(pending.map((report) => new Promise<unknown>((resolve) => {
+      const timer = setTimeout(() => resolve(undefined), 3_000);
+      report.then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        () => { clearTimeout(timer); resolve(undefined); },
+      );
+    })));
+    const reports: Array<{ owner: string; label: string; lines: string[]; warning: boolean }> = [];
+    let warning = false;
+    for (const value of values) {
+      if (!value || typeof value !== "object") {
+        warning = true;
+        reports.push({ owner: `invalid-${reports.length}`, label: "Unknown", lines: ["Health reporter failed or timed out"], warning: true });
+        continue;
+      }
+      const report = value as any;
+      if (report.version !== 1 || typeof report.owner !== "string" || !/^[a-z0-9-]{1,64}$/.test(report.owner) || typeof report.label !== "string" || !Array.isArray(report.lines) || report.lines.some((line: unknown) => typeof line !== "string")) {
+        warning = true;
+        reports.push({ owner: `invalid-${reports.length}`, label: "Unknown", lines: ["Invalid health report rejected"], warning: true });
+        continue;
+      }
+      reports.push({ owner: report.owner, label: report.label.slice(0, 80), lines: report.lines.slice(0, 20).map((line: string) => line.replace(/[\r\n]+/g, " ").slice(0, 500)), warning: report.warning === true });
+    }
+    const counts = new Map<string, number>();
+    for (const report of reports) counts.set(report.owner, (counts.get(report.owner) ?? 0) + 1);
+    if ([...counts.values()].some((count) => count > 1)) warning = true;
+    reports.sort((a, b) => a.owner.localeCompare(b.owner));
+    return {
+      lines: reports.length
+        ? reports.flatMap((report) => [`${report.label}${(counts.get(report.owner) ?? 0) > 1 ? " (duplicate responder)" : ""}:`, ...report.lines.map((line) => `  ${line}`)])
+        : ["none reported"],
+      warning: warning || reports.some((report) => report.warning),
+    };
+  };
+
   pi.on("session_start", () => {
     captureBaseline();
     reconcile();
@@ -122,7 +165,7 @@ export default function (pi: ExtensionAPI) {
       ["Advisor", ["advisor"]],
       ["Continuity", ["continuity_update"]],
       ["Heartbeat", ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"]],
-      ["Scout", ["rg", "fd", "scout_checkpoint", "repo_scout"]],
+      ["Scout", ["rg", "fd", "scout_checkpoint", "repo_scout", "web_scout"]],
       ["Verify", ["verify"]],
     ] as const;
     const surfaceLines = surfaces.map(([name, tools]) => {
@@ -203,6 +246,7 @@ export default function (pi: ExtensionAPI) {
       else if (!available) configWarning = true;
       return `${label}: ${reference} (${!provider || !id ? "invalid reference" : !model ? "model unavailable" : available ? "available" : "credentials unavailable"})`;
     }) : ["none configured"];
+    const health = await collectHealth();
     return {
       lines: [
         `Node: ${process.versions.node} (${nodeCompatible ? "compatible" : "requires >=22.18.0"})`,
@@ -217,9 +261,11 @@ export default function (pi: ExtensionAPI) {
         ...modelLines,
         "Tool surfaces:",
         ...surfaceLines,
+        "Package health:",
+        ...health.lines,
         "Command-only surfaces (Focus, Guard, Timeline): not observable through ExtensionAPI",
       ],
-      warning: !nodeCompatible || missingApi.length > 0 || executables.some((item) => item.required && !item.available) || stateWarning || oldLocks.length > 0 || quarantined.length > 0 || configWarning,
+      warning: !nodeCompatible || missingApi.length > 0 || executables.some((item) => item.required && !item.available) || stateWarning || oldLocks.length > 0 || quarantined.length > 0 || configWarning || health.warning,
     };
   };
 

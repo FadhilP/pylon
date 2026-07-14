@@ -73,6 +73,9 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.match(diagnostic, /Effective:/);
   assert.match(diagnostic, /Rejected: 1/);
   assert.match(diagnostic, /Guard authority: blocked: destructive Git command/);
+  runtime.events.on("pi-conductor:health-request", (request: any) => request.respond(Promise.resolve({
+    version: 1, owner: "pi-helios", label: "Helios", lines: ["CLI: ready", "Browser sessions: 0"], warning: false,
+  })));
   await runtime.commands.get("conductor").handler("doctor", {
     modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
     ui: { notify: (text: string) => { diagnostic = text; } },
@@ -85,6 +88,7 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.match(diagnostic, /ripgrep: missing \(optional\)/);
   assert.match(diagnostic, /Tool surfaces:/);
   assert.match(diagnostic, /Advisor: registered/);
+  assert.match(diagnostic, /Package health:\nHelios:\n  CLI: ready/);
   for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
   assert.equal(runtime.events.count("pi-conductor:tool-policy"), 0);
   assert.equal(runtime.events.count("pi-guard:decision"), 0);

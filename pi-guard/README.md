@@ -18,7 +18,7 @@ Pi Guard intercepts agent `bash`, `write`, and `edit` calls plus user `!` and `!
 
 ## Path Protection
 
-Writes outside the workspace, inside `.git`, or inside `node_modules` are always blocked. `.env` writes require confirmation. Existing targets and nearest existing parents are canonicalized so symlink paths cannot escape the workspace.
+Explicit absolute write/edit targets outside the workspace require fresh confirmation and fail closed without UI. Relative traversal and workspace symlink escapes remain blocked. Writes inside `.git` or `node_modules` are always blocked; `.env` writes require confirmation. Existing targets and nearest existing parents are canonicalized, and outside-write confirmation shows the resolved target.
 
 ## Integrations
 
@@ -26,4 +26,4 @@ When Timeline is installed, Guard requests a checkpoint before showing destructi
 
 ## Security and Limitations
 
-V1 deliberately uses a narrow command policy. It is not a shell parser, sandbox, malware detector, or substitute for OS or container isolation. Unrecognized commands retain full user permissions. Review commands before approval.
+V1 deliberately uses a narrow command policy. It is not a shell parser, sandbox, malware detector, or substitute for OS or container isolation. Path confirmation covers `write` and `edit`; unrecognized commands and shell-based writes retain full user permissions. Review commands and resolved external targets before approval.

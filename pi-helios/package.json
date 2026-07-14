@@ -1,18 +1,39 @@
 {
   "name": "pi-helios",
-  "version": "0.1.0",
-  "description": "Consent-gated Windows-window and browser-viewport screenshots for Pi debugging",
+  "version": "0.2.0",
+  "description": "Consent-gated browser use and Windows-window screenshots for Pi",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=22.18.0" },
-  "files": ["extensions", "src", "README.md", "LICENSE"],
-  "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
-  "pi": { "extensions": ["./extensions/pi-helios.ts"] },
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-helios.ts"
+    ]
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
-  "devDependencies": { "typescript": "^5.8.0" },
-  "license": "MIT"
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@playwright/cli": "0.1.17"
+  }
 }

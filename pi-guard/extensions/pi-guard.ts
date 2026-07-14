@@ -31,10 +31,15 @@ export default function (pi: ExtensionAPI) {
       respond: (value: Promise<unknown>) => { checkpoint = value; },
     });
     if (checkpoint) await checkpoint.catch(() => undefined);
-    const allowed = await ctx.ui.confirm(
-      "Pi Guard confirmation",
-      `${reason}.\n\n${detail.slice(0, 2000)}\n\nAllow once?`,
-    );
+    let allowed = false;
+    try {
+      allowed = await ctx.ui.confirm(
+        "Pi Guard confirmation",
+        `${reason}.\n\n${detail.slice(0, 2000)}\n\nAllow once?`,
+      );
+    } catch {
+      allowed = false;
+    }
     if (allowed) confirmed++;
     publish(ctx, allowed ? "confirmed" : "blocked", reason);
     return allowed;
@@ -59,7 +64,10 @@ export default function (pi: ExtensionAPI) {
     ) return;
     const risk = await pathRisk(ctx.cwd, event.input.path);
     if (!risk) return;
-    if (risk.action === "confirm" && await approve(ctx, risk.reason, event.input.path))
+    const detail = risk.target
+      ? `${event.input.path}\nResolved target: ${risk.target}`
+      : event.input.path;
+    if (risk.action === "confirm" && await approve(ctx, risk.reason, detail))
       return;
     blocked++;
     publish(ctx, "blocked", risk.reason);

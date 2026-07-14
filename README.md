@@ -38,8 +38,8 @@ pi install /absolute/path/to/pi-conductor
 - **[pi-focus](./pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
 - **[pi-guard](./pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
 - **[pi-heartbeat](./pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
-- **[pi-helios](./pi-helios)** — Captures consented Windows-window or browser-viewport screenshots for vision-based debugging.
-- **[pi-scout](./pi-scout)** — Performs bounded, read-only repository reconnaissance with exact source citations and explicit Pi-session search.
+- **[pi-helios](./pi-helios)** — Provides consent-gated Playwright browser use plus named Windows-window screenshots.
+- **[pi-scout](./pi-scout)** — Performs bounded repository reconnaissance, consent-gated isolated public-web research, and explicit Pi-session search.
 - **[pi-timeline](./pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
 - **[pi-verify](./pi-verify)** — Detects and runs existing project checks with bounded time and output.
 

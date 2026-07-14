@@ -74,6 +74,7 @@ export async function runPi(
     timeoutMs?: number;
     invocation?: Invocation;
     env?: NodeJS.ProcessEnv;
+    inheritEnv?: boolean;
     onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
   },
 ): Promise<ScoutRun> {
@@ -85,7 +86,7 @@ export async function runPi(
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
-    env: options.env ? { ...process.env, ...options.env } : process.env,
+    env: options.inheritEnv === false ? options.env : options.env ? { ...process.env, ...options.env } : process.env,
   });
   const messages: any[] = [];
   const turns: ChildTurnUsage[] = [];
