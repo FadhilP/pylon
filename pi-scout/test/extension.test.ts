@@ -51,6 +51,14 @@ function context(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("historical findings use one persistent before-agent message", async () => {
+  const runtime = await harness();
+  try {
+    assert.equal(runtime.handlers.has("context"), false);
+    assert.equal(runtime.handlers.get("before_agent_start")?.length, 1);
+  } finally { runtime.restore(); }
+});
+
 test("steering preserves the current repo Scout session", () => {
   assert.equal(startsNewRepoSession({ source: "interactive", streamingBehavior: "steer" }), false);
   assert.equal(startsNewRepoSession({ source: "interactive" }), true);

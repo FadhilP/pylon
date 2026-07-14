@@ -23,10 +23,11 @@ test("verify publishes bounded result metadata and session entry", async () => {
   const tools = new Map<string, any>();
   const events: Array<{ channel: string; value: any }> = [];
   const entries: Array<{ type: string; data: any }> = [];
+  const handlers = new Map<string, (event: any) => any>();
   const gitCalls: string[] = [];
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    on: () => {},
+    on: (name: string, handler: (event: any) => any) => handlers.set(name, handler),
     events: { emit: (channel: string, value: any) => events.push({ channel, value }) },
     appendEntry: (type: string, data: any) => entries.push({ type, data }),
     exec: async (command: string, args: string[]) => {
@@ -58,6 +59,16 @@ test("verify publishes bounded result metadata and session entry", async () => {
   assert.equal("output" in entries[0]!.data.hygiene, false);
   assert.equal("status" in entries[0]!.data.hygiene, false);
   assert.match(result.content[0].text, /Changed paths:\n M file\.ts/);
+  assert.doesNotMatch(result.content[0].text, /\nok\n?/);
+
+  const injected = handlers.get("context")!({ messages: [] });
+  assert.match(injected.messages.at(-1).content, /^Verification: passed;/);
+  assert.doesNotMatch(injected.messages.at(-1).content, /command|durationMs|cwd/);
+  assert.equal(handlers.get("context")!({ messages: [{
+    role: "toolResult", toolName: "verify", details: result.details,
+  }] }), undefined);
+  handlers.get("tool_call")!({ toolName: "edit" });
+  assert.equal(handlers.get("context")!({ messages: [] }), undefined);
 });
 
 test("verify stops before declared checks when changed-set hygiene fails", async () => {
@@ -85,6 +96,28 @@ test("verify stops before declared checks when changed-set hygiene fails", async
   assert.equal(checks, 0);
   assert.match(result.content[0].text, /trailing whitespace/);
   assert.match(result.content[0].text, /\?\? debug\.log/);
+});
+
+test("verify keeps failed check diagnostics", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-failed-check-"));
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node fail.js" } }));
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
+    exec: async (command: string, args: string[]) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (command === "git") return { code: 0, stdout: "", stderr: "" };
+      return { code: 1, stdout: "decisive failure detail\n", stderr: "" };
+    },
+  };
+  extension(pi);
+  const result = await tools.get("verify").execute(
+    "call", { scope: "project" }, undefined, undefined,
+    { cwd, hasUI: false },
+  );
+  assert.equal(result.details.state, "failed");
+  assert.match(result.content[0].text, /decisive failure detail/);
 });
 
 test("verify selects a stable child-package check ID", async () => {

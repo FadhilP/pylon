@@ -215,14 +215,22 @@ test("context bounded active first", () => {
   const w = fresh("goal");
   assert.ok(buildContext(w, [], "", 20).length <= 80);
 });
-test("context always includes preferences and excludes unrelated facts", () => {
+test("context includes preferences but rejects weak one-word memory matches", () => {
   const facts: Fact[] = [
     { key: "preference.style", kind: "preference", text: "Keep output terse", source: "user", confidence: 1, updatedAt: "2026-01-01" },
     { key: "workflow.release", kind: "workflow", text: "Run release check", source: "README", confidence: 1, updatedAt: "2026-01-01" },
   ];
-  const text = buildContext(undefined, facts, "discuss database migrations");
+  const text = buildContext(undefined, facts, "discuss release migrations");
   assert.match(text, /Memory preference\.style: Keep output terse/);
   assert.doesNotMatch(text, /workflow\.release/);
+});
+test("context accepts two-term and exact-identifier memory matches", () => {
+  const facts: Fact[] = [
+    { key: "workflow.release", kind: "workflow", text: "Run release check", source: "README", confidence: 1, updatedAt: "2026-01-01" },
+    { key: "architecture.web_scout", kind: "architecture", text: "Use web_scout for public research", source: "source", confidence: 1, updatedAt: "2026-01-01" },
+  ];
+  assert.match(buildContext(undefined, facts, "release check"), /workflow\.release/);
+  assert.match(buildContext(undefined, facts, "call web_scout"), /architecture\.web_scout/);
 });
 test("context exposes exact todo IDs and status", () => {
   const w = fresh("goal");

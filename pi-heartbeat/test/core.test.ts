@@ -66,6 +66,23 @@ test("start returns, captures UTF-8 output, and completes", async () => {
   await manager.shutdown();
 });
 
+test("successful status keeps only a small output tail", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-"));
+  const manager = new JobManager(dir);
+  await manager.init();
+  const script = join(dir, "large-success.js");
+  await writeFile(script, `console.log("x".repeat(6000) + "END")`);
+  const job = await manager.start(`node "${script}"`, process.cwd());
+  await closed(job);
+  await logClosed(job);
+  const formatted = manager.format(job);
+  assert.match(formatted.text, /END/);
+  assert.match(formatted.text, /\[tail truncated\]/);
+  assert.match(formatted.text, /Full captured log:/);
+  assert.ok(Buffer.byteLength(formatted.text) < 3000);
+  await manager.shutdown();
+});
+
 test("timeout terminates process and shutdown is idempotent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);

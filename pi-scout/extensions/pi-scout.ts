@@ -98,6 +98,13 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
   const repoSessionDirs = new Set<string>();
   let pendingIntent: SessionIntent | undefined;
   let ephemeralFinding: string | undefined;
+  const findingMessage = (content: string) => ({
+    message: {
+      customType: "pi-scout-session",
+      content,
+      display: false,
+    },
+  });
 
   const repoSessionDir = () =>
     (repoSessionDirPromise ??= mkdtemp(join(tmpdir(), "pi-scout-agent-")).then(
@@ -203,19 +210,19 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
       if (!evidence.excerptCount) {
         ephemeralFinding =
           "Historical Pi-session result. No matching eligible Pi-session text found.";
-        return;
+        return findingMessage(ephemeralFinding);
       }
       const model = await resolveModel(ctx);
       if (!model) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: no selected model.";
-        return;
+        return findingMessage(ephemeralFinding);
       }
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: selected model has no credentials.";
-        return;
+        return findingMessage(ephemeralFinding);
       }
       const dir = await mkdtemp(join(tmpdir(), "pi-scout-session-"));
       const evidencePath = join(dir, "evidence.md");
@@ -264,22 +271,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
     } finally {
       if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
     }
-  });
-
-  pi.on("context", (event) => {
-    if (!ephemeralFinding) return;
-    return {
-      messages: [
-        ...event.messages,
-        {
-          role: "custom",
-          customType: "pi-scout-session",
-          content: ephemeralFinding,
-          display: false,
-          timestamp: Date.now(),
-        },
-      ],
-    };
+    return ephemeralFinding ? findingMessage(ephemeralFinding) : undefined;
   });
 
   pi.registerEntryRenderer("pi-scout-session", (entry, _options, theme) => {

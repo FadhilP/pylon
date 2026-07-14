@@ -634,7 +634,7 @@ test("child reload preserves progress instead of replaying the handoff snapshot"
 
     assert.equal(app.modelSelections(), 1);
     const context = await app.handlers.get("context")![0]({ messages: [] }, ctx);
-    assert.match(context.messages.at(-1).content, /Todo todo_1 \[done\]: Implement/);
+    assert.match(context.messages.at(-1).content, /Done: todo_1/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -921,13 +921,17 @@ test("memory candidates survive manual and turn-end compact into model context",
       await handler({ reason: "startup" }, ctx);
     for (const handler of second.handlers.get("input") ?? [])
       await handler({ source: "user", text: "verify lint release check" }, ctx);
-    const context = await second.handlers.get("context")?.[0]({ messages: [] }, ctx);
-    assert.match(context.messages.at(-1).content, /Memory workflow\.verify: Run npm test before release/);
-    assert.match(context.messages.at(-1).content, /Memory workflow\.lint: Run npm run check before release/);
+    assert.equal(
+      await second.handlers.get("context")?.[0]({ messages: [] }, ctx),
+      undefined,
+    );
+    const memory = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
+    assert.match(memory.message.content, /Memory workflow\.verify: Run npm test before release/);
+    assert.match(memory.message.content, /Memory workflow\.lint: Run npm run check before release/);
     await second.commands.get("memory").handler("forget workflow.verify", ctx);
-    const afterForget = await second.handlers.get("context")?.[0]({ messages: [] }, ctx);
-    assert.doesNotMatch(afterForget.messages.at(-1).content, /workflow\.verify/);
-    assert.match(afterForget.messages.at(-1).content, /workflow\.lint/);
+    const afterForget = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
+    assert.doesNotMatch(afterForget.message.content, /workflow\.verify/);
+    assert.match(afterForget.message.content, /workflow\.lint/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

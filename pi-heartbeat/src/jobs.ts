@@ -170,9 +170,16 @@ export class JobManager {
     const elapsed = ((job.finishedAt || Date.now()) - job.startedAt) / 1000;
     let text = `Job ${job.id}: ${job.state}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ""}, ${elapsed.toFixed(1)}s.`;
     if (!["running", "cancelling"].includes(job.state)) {
-      text += `\nstdout tail:\n${job.stdoutTail}\nstderr tail:\n${job.stderrTail}\nFull captured log: ${job.logPath}`;
+      const successful = job.state === "completed" && job.exitCode === 0;
+      const tails = bounded(
+        `stdout tail:\n${job.stdoutTail}\nstderr tail:\n${job.stderrTail}`,
+        successful ? 2048 : 12288,
+        successful ? 40 : 200,
+      );
+      text += `\n${tails.text}${tails.truncated ? "\n[tail truncated]" : ""}\nFull captured log: ${job.logPath}`;
       if (job.outputTruncated)
         text += `\nOutput exceeded 10 MiB; final tails retained.`;
+      return { text, truncated: tails.truncated || job.outputTruncated };
     }
     return bounded(text);
   }

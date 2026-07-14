@@ -470,12 +470,25 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", (event) => {
     if (event.source !== "extension") lastPrompt = event.text;
   });
+  const activeWork = () =>
+    work && !["handed_off", "completed", "cancelled"].includes(work.mode)
+      ? work
+      : undefined;
+  pi.on("before_agent_start", () => {
+    const active = activeWork();
+    const query = `${lastPrompt} ${active?.goal || ""} ${active?.todos.find((todo) => todo.id === active.currentTodoId)?.text || ""}`;
+    const text = buildContext(undefined, facts, query, 250, parentFacts);
+    if (text)
+      return {
+        message: {
+          customType: "pi-continuity-memory",
+          content: text,
+          display: false,
+        },
+      };
+  });
   pi.on("context", (event) => {
-    const activeWork =
-      work && !["handed_off", "completed", "cancelled"].includes(work.mode)
-        ? work
-        : undefined;
-    const text = buildContext(activeWork, facts, lastPrompt, 900, parentFacts);
+    const text = buildContext(activeWork(), [], lastPrompt, 450);
     if (text)
       return {
         messages: [

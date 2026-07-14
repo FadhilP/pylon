@@ -89,6 +89,16 @@ export default function (pi: ExtensionAPI) {
     hygiene.output,
     hygiene.status ? `Changed paths:\n${hygiene.status}${hygiene.statusTruncated ? "\n[status truncated]" : ""}` : "",
   ].filter(Boolean).join("\n\n");
+  const contextText = (value: any) => {
+    const checks = (value.results ?? [])
+      .map((result: any) => `${result.id}=${result.code ?? "error"}`)
+      .join(", ");
+    return [
+      `Verification: ${value.state}; scope: ${value.scope}; run: ${value.runId}`,
+      value.worktreeId ? `Worktree: ${value.worktreeId}` : "",
+      checks ? `Checks: ${checks}` : "Checks: none",
+    ].filter(Boolean).join("\n");
+  };
   const publish = (details: Details, cwd: string) => {
     const event = { version: 1 as const, cwd, ...details };
     pi.events.emit("pi-verify:result", event);
@@ -110,15 +120,29 @@ export default function (pi: ExtensionAPI) {
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
       ?.data;
   });
-  pi.on("context", (event) => latestContext ? {
-    messages: [...event.messages, {
-      role: "custom",
-      customType: "pi-verify-result",
-      content: JSON.stringify(latestContext),
-      display: false,
-      timestamp: Date.now(),
-    }],
-  } : undefined);
+  pi.on("tool_call", (event) => {
+    if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
+      latestContext = undefined;
+  });
+  pi.on("context", (event) => {
+    if (!latestContext) return;
+    const alreadyPresent = event.messages.some(
+      (message: any) =>
+        message.role === "toolResult" &&
+        message.toolName === "verify" &&
+        message.details?.runId === latestContext.runId,
+    );
+    if (alreadyPresent) return;
+    return {
+      messages: [...event.messages, {
+        role: "custom",
+        customType: "pi-verify-result",
+        content: contextText(latestContext),
+        display: false,
+        timestamp: Date.now(),
+      }],
+    };
+  });
   pi.registerTool({
     name: "verify",
     label: "Verify",
@@ -240,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 
       const passed = results.length === checks.length && results.every((result) => result.code === 0);
       const summary = results
-        .map((result) => `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)${result.output ? `\n${result.output}` : ""}${result.truncated ? "\n[output truncated]" : ""}`)
+        .map((result) => `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)${result.code !== 0 && result.output ? `\n${result.output}` : ""}${result.code !== 0 && result.truncated ? "\n[output truncated]" : ""}`)
         .join("\n\n");
       const finalIdentity = (await worktreeState(ctx.cwd, signal))?.id;
       const state: VerificationState = signal?.aborted
