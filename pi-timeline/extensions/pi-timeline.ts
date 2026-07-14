@@ -7,11 +7,16 @@ import {
 import { capture, type Snapshot } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import {
+  classifyCompatibility,
+  type Compatibility,
+  type GitState,
+} from "../src/compatibility.ts";
+import {
   normalizeGeneratedTitle,
   promptText,
   promptTitle,
 } from "../src/prompts.ts";
-import { git } from "../src/git.ts";
+import { git, symbolicHead } from "../src/git.ts";
 import {
   findRunEntry,
   isRunEntry,
@@ -45,6 +50,52 @@ type ClearV1 = {
   version: 1;
   ownerSessionId: string;
   checkpointEntryIds: string[];
+};
+const inspectGitState = async (cwd: string): Promise<GitState> => {
+  const [gitRoot, head, headRef] = await Promise.all([
+    git(cwd, ["rev-parse", "--show-toplevel"]),
+    git(cwd, ["rev-parse", "HEAD"]),
+    symbolicHead(cwd),
+  ]);
+  return { gitRoot, head, headRef };
+};
+const shortRef = (ref: string) => ref.replace(/^refs\/heads\//, "");
+const compatibilityLabel = (
+  target: Snapshot,
+  current: GitState,
+  result = classifyCompatibility(target, current),
+) => {
+  if (!result.allowed)
+    return result.reason === "repository-mismatch"
+      ? "[blocked:repository]"
+      : "[blocked:HEAD]";
+  if (result.refState === "legacy") return "[branch:unknown]";
+  if (result.refState === "target-detached") return "[checkpoint:detached]";
+  if (result.refState === "current-detached") return "[current:detached]";
+  if (result.refState === "ref-mismatch")
+    return `[branch:${shortRef(target.headRef!)}; current:${shortRef(current.headRef!)}]`;
+  return target.headRef === null
+    ? "[detached]"
+    : `[branch:${shortRef(target.headRef!)}]`;
+};
+const compatibilityDetail = (
+  target: Snapshot,
+  current: GitState,
+  result: Compatibility,
+) => {
+  if (!result.allowed)
+    return result.reason === "repository-mismatch"
+      ? "Checkpoint belongs to a different repository."
+      : "Checkpoint HEAD commit differs from current HEAD.";
+  if (result.refState === "legacy")
+    return "Branch information was not recorded for this checkpoint. HEAD commit matches.";
+  if (result.refState === "same")
+    return target.headRef === null
+      ? "Checkpoint and current state use detached HEAD at the same commit."
+      : `Checkpoint branch: ${shortRef(target.headRef!)}. HEAD commit matches.`;
+  const checkpoint = target.headRef === null ? "detached HEAD" : shortRef(target.headRef!),
+    now = current.headRef === null ? "detached HEAD" : shortRef(current.headRef!);
+  return `HEAD commit matches, but checkpoint used ${checkpoint} and current state uses ${now}. Restore updates index and working tree only; it does not switch branches.`;
 };
 export default function (
   pi: ExtensionAPI,
@@ -340,11 +391,12 @@ export default function (
       const [actionRaw, idRaw] = args.trim().split(/\s+/, 2),
         action = actionRaw || "select";
       if (action === "list") {
+        const current = await inspectGitState(ctx.cwd);
         ctx.ui.notify(
           [...records]
             .map(
               ([id, bound]) =>
-                `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? `[verified:${bound.record.verification.scope}] ` : ""}${bound.preview}`,
+                `${id} ${compatibilityLabel(bound.record, current)} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? `[verified:${bound.record.verification.scope}] ` : ""}${bound.preview}`,
             )
             .join("\n") ||
             "No checkpoints.",
@@ -387,11 +439,12 @@ export default function (
       let mode = action;
       let id: string | undefined = idRaw;
       if (action === "select") {
+        const current = await inspectGitState(ctx.cwd);
         id = await ctx.ui.select(
           "Checkpoint",
           [...records].map(
             ([id, bound]) =>
-              `${id} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? "[verified] " : ""}${bound.preview}`,
+              `${id} ${compatibilityLabel(bound.record, current)} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? "[verified] " : ""}${bound.preview}`,
           ),
         );
         id = id?.split(" ")[0];
@@ -407,14 +460,29 @@ export default function (
         ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
         return;
       }
+      let current = await inspectGitState(ctx.cwd),
+        compatibility = classifyCompatibility(target.record, current);
+      if (!compatibility.allowed) {
+        ctx.ui.notify(compatibilityDetail(target.record, current, compatibility), "error");
+        return;
+      }
       const source = await checkpoint(ctx);
       if (!source) {
         ctx.ui.notify("Unable to checkpoint current state.", "error");
         return;
       }
+      current = source;
+      compatibility = classifyCompatibility(target.record, current);
+      if (!compatibility.allowed) {
+        ctx.ui.notify(
+          `Git state changed while creating rollback checkpoint. ${compatibilityDetail(target.record, current, compatibility)}`,
+          "error",
+        );
+        return;
+      }
       const ok = await ctx.ui.confirm(
         mode === "fork" ? "Fork and restore?" : "View and restore?",
-        `${target.preview}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
+        `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
       );
       if (!ok) return;
       const foreign =

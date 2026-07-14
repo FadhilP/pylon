@@ -26,7 +26,9 @@ Every restore requires confirmation. Native `/tree` remains conversation-only.
 
 ## How It Works
 
-Snapshots use `refs/pi-timeline/...` synthetic commits. `HEAD`, branch, stash, and ignored files remain untouched. Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs.
+Snapshots use `refs/pi-timeline/...` synthetic commits. `HEAD`, branch, stash, and ignored files remain untouched. New checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list`, the selector, and restore confirmation show branch, detached, legacy-unknown, and blocked compatibility states. Older version 3 records without ref metadata remain usable and appear as `branch:unknown` when their repository and HEAD still match.
+
+Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs.
 
 After the first settled turn, Timeline makes one bounded title-only model request using short excerpts from the first prompt and final response. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
 
@@ -38,4 +40,4 @@ Matching successful Verify metadata is attached to checkpoints using exact workt
 
 ## Security and Limitations
 
-V1 refuses submodules, unmerged or active Git operations, changed `HEAD`, and noninteractive restore. Extensions execute with full user permissions; review source.
+V1 refuses submodules, unmerged or active Git operations, cross-repository or cross-`HEAD` restore, and noninteractive restore. Timeline never checks out or switches branches: same-commit branch differences are informational, and restore changes only the index and working tree. Git state is inspected at capture and command boundaries rather than watched continuously. Restore rechecks repository identity and exact HEAD immediately before filesystem mutation, so UI compatibility labels never replace the authoritative safety check. Extensions execute with full user permissions; review source.

@@ -82,20 +82,33 @@ export default function (pi: ExtensionAPI) {
     currentCwd = "",
     latestVerification: any,
     needsVerification = false,
-    recentCalls = new Map<string, number[]>();
+    awaitingClarificationProse = false,
+    recentCalls = new Map<string, number[]>(),
+    pendingPlanStart: { runId: string; resolve: (started: boolean) => void } | undefined;
   const modelName = (model: any) => `${model.provider}/${model.id}`;
-  const hasReplyBeforeCompletion = (event: any, ctx: any) => {
+  const assistantContent = (ctx: any) => {
     const entry = ctx.sessionManager?.getLeafEntry?.();
     const content = entry?.type === "message" && entry.message?.role === "assistant"
       ? entry.message.content
       : undefined;
-    if (!Array.isArray(content)) return false;
+    return Array.isArray(content) ? content : [];
+  };
+  const hasReplyBeforeCompletion = (event: any, ctx: any) => {
+    const content = assistantContent(ctx);
     const callIndex = content.findIndex(
       (part: any) => part?.type === "toolCall" && part.id === event.toolCallId,
     );
     return callIndex > 0 && content
       .slice(0, callIndex)
       .some((part: any) => part?.type === "text" && part.text.trim());
+  };
+  const hasUnsafeExecutionClarificationBatch = (ctx: any) => {
+    if (work?.mode !== "executing") return false;
+    const calls = assistantContent(ctx).filter((part: any) => part?.type === "toolCall");
+    return calls.length > 1 && calls.some(
+      (part: any) =>
+        part.name === "continuity_update" && part.arguments?.action === "clarify",
+    );
   };
   const tripsCircuitBreaker = (params: unknown) => {
     const now = Date.now(), cutoff = now - 30_000;
@@ -321,7 +334,7 @@ export default function (pi: ExtensionAPI) {
           entry.customType === HANDOFF_ENTRY_TYPE &&
           isWork(entry.data?.work),
       ) as any;
-    if (handoff) {
+    if (!work && handoff) {
       work = handoff.data.work;
       const requested = handoff.data.model;
       const model =
@@ -354,6 +367,8 @@ export default function (pi: ExtensionAPI) {
     refresh(ctx);
   });
   pi.on("session_shutdown", () => {
+    pendingPlanStart?.resolve(false);
+    pendingPlanStart = undefined;
     disposeVerify();
     disposeHeartbeat();
     pi.events.emit("pi-conductor:tool-policy", {
@@ -362,9 +377,14 @@ export default function (pi: ExtensionAPI) {
       owner: "pi-continuity",
     });
   });
-  pi.on("agent_start", (_e, ctx) =>
-    tasksVisible ? refresh(ctx) : hideTasks(ctx),
-  );
+  pi.on("agent_start", (_e, ctx) => {
+    awaitingClarificationProse = false;
+    if (pendingPlanStart && pendingPlanStart.runId === work?.runId) {
+      pendingPlanStart.resolve(true);
+      pendingPlanStart = undefined;
+    }
+    tasksVisible ? refresh(ctx) : hideTasks(ctx);
+  });
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
@@ -376,6 +396,7 @@ export default function (pi: ExtensionAPI) {
       message.role !== "assistant" ||
       message.stopReason !== "stop" ||
       work?.mode !== "executing" ||
+      awaitingClarificationProse ||
       hasRemainingTodos(work) ||
       needsVerification ||
       !Array.isArray(message.content) ||
@@ -385,6 +406,16 @@ export default function (pi: ExtensionAPI) {
     await completeWork(ctx);
   });
   pi.on("tool_call", (event, ctx) => {
+    if (awaitingClarificationProse && work?.mode === "executing")
+      return {
+        block: true,
+        reason: "Ask the pending clarification in prose and stop. Do not call more tools until the user answers.",
+      };
+    if (hasUnsafeExecutionClarificationBatch(ctx))
+      return {
+        block: true,
+        reason: "Execution clarification must be the only tool call in its assistant message. Retry it alone at a safe checkpoint.",
+      };
     if (blocked(work?.mode === "planning", event.toolName))
       return {
         block: true,
@@ -438,8 +469,9 @@ export default function (pi: ExtensionAPI) {
     label: "Continuity Update",
     description:
       "Update plan, todos, state, clarification, or durable-memory candidate.",
+    executionMode: "sequential",
     promptGuidelines: [
-      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification when repository mutation occurred. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
+      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. During execution, use clarify only for a new blocking user decision that cannot be safely inferred, only as the sole tool call at a safe checkpoint; prefer asking before mutation, stabilize any atomic operation first, and never re-ask an answered question without new evidence. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification when repository mutation occurred. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -500,25 +532,31 @@ export default function (pi: ExtensionAPI) {
         };
       }
       if (p.action === "clarify") {
-        if (work?.mode !== "planning")
+        const executing = work?.mode === "executing";
+        if (work?.mode !== "planning" && !executing)
           return {
             content: [
               {
                 type: "text",
-                text: "Clarification available only during planning.",
+                text: "Clarification requires active planning or execution work.",
               },
             ],
           };
         validateQuestion(p.question || "", p.options || []);
-        if (!ctx.hasUI)
+        if (!ctx.hasUI) {
+          if (executing) awaitingClarificationProse = true;
+          const options = (p.options || []).map((o, index) =>
+            `${index + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`,
+          );
           return {
             content: [
               {
                 type: "text",
-                text: `Ask user in prose and wait: ${p.question}`,
+                text: `Ask user in prose and wait: ${p.question}\n${options.join("\n")}`,
               },
             ],
           };
+        }
         const labels = [
           ...(p.options || []).map((o) =>
             o.description ? `${o.label} — ${o.description}` : o.label,
@@ -526,13 +564,28 @@ export default function (pi: ExtensionAPI) {
           "Write a different answer…",
         ];
         const choice = await ctx.ui.select(p.question!, labels);
-        if (!choice)
+        if (!choice) {
+          if (executing) {
+            ctx.abort();
+            return {
+              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
+              terminate: true,
+            };
+          }
           return { content: [{ type: "text", text: "No answer selected." }] };
+        }
         if (choice === "Write a different answer…") {
-          const answer = await ctx.ui.editor("Custom answer", "");
+          const answer = (await ctx.ui.editor("Custom answer", ""))?.trim();
+          if (!answer && executing) {
+            ctx.abort();
+            return {
+              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
+              terminate: true,
+            };
+          }
           return {
             content: [
-              { type: "text", text: answer?.trim() || "No answer selected." },
+              { type: "text", text: answer || "No answer selected." },
             ],
           };
         }
@@ -779,7 +832,7 @@ export default function (pi: ExtensionAPI) {
             )
               throw new Error("Executor model was not selected in child session.");
             await fresh.sendUserMessage(
-              "Execute approved stored plan. Track and verify todos.",
+              "Inspect the current workspace and validate the approved plan's assumptions before editing. Execute the plan, track todos, and run fresh verification.",
             );
           },
         });
@@ -818,6 +871,10 @@ export default function (pi: ExtensionAPI) {
         );
         return;
       }
+      if (ctx.isIdle?.() === false) {
+        ctx.ui.notify("Wait for the current response before starting a plan.", "warning");
+        return;
+      }
       const config = await loadConfig();
       const baseModel = ctx.model && {
         provider: ctx.model.provider,
@@ -844,10 +901,17 @@ export default function (pi: ExtensionAPI) {
       await saveWork();
       refresh(ctx);
       if (!value) return;
+      const planningStarted = new Promise<boolean>((resolve) => {
+        pendingPlanStart = { runId: work!.runId!, resolve };
+      });
       pi.sendUserMessage(
         `Plan this task without modifying project files: ${value}`,
       );
-      if (ctx.mode !== "tui") return;
+      if (ctx.mode !== "tui") {
+        pendingPlanStart = undefined;
+        return;
+      }
+      if (!(await planningStarted)) return;
       await ctx.waitForIdle();
       if (
         work?.mode !== "planning" ||

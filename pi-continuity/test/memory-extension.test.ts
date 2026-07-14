@@ -9,12 +9,14 @@ function runtime() {
   let active = ["read", "edit", "continuity_update"];
   let thinking = "medium";
   let selectedModel: any;
+  let modelSelections = 0;
   const appended: Array<{ customType: string; data: any }> = [];
   const sent: string[] = [];
   const handlers = new Map<string, Function[]>();
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const listeners = new Map<string, Set<(value: unknown) => void>>();
+  let sendHook: ((message: string) => void) | undefined;
   const pi: any = {
     events: {
       emit: (channel: string, value: unknown) => {
@@ -32,10 +34,17 @@ function runtime() {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
     appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
-    setModel: async (model: any) => { selectedModel = model; return true; },
+    setModel: async (model: any) => {
+      selectedModel = model;
+      modelSelections++;
+      return true;
+    },
     getThinkingLevel: () => thinking,
     setThinkingLevel: (next: string) => { thinking = next; },
-    sendUserMessage: (message: string) => { sent.push(message); },
+    sendUserMessage: (message: string) => {
+      sent.push(message);
+      sendHook?.(message);
+    },
   };
   extension(pi);
   return {
@@ -45,7 +54,9 @@ function runtime() {
     appended,
     sent,
     selectedModel: () => selectedModel,
+    modelSelections: () => modelSelections,
     thinking: () => thinking,
+    onSendUserMessage: (hook: (message: string) => void) => { sendHook = hook; },
     emit: (channel: string, value: unknown) => {
       for (const listener of listeners.get(channel) ?? []) listener(value);
     },
@@ -59,6 +70,9 @@ test("completion guidance keeps final responses tool-free", () => {
   assert.match(guidance, /final user-facing response with no tool calls/i);
   assert.match(guidance, /Continuity completes automatically/i);
   assert.match(guidance, /skip Verify for read-only work/i);
+  assert.match(guidance, /blocking user decision/i);
+  assert.match(guidance, /sole tool call at a safe checkpoint/i);
+  assert.match(guidance, /never re-ask an answered question without new evidence/i);
 });
 
 test("completion requires response text before its tool call", async () => {
@@ -270,6 +284,111 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
   }
 });
 
+test("execution clarification is isolated, blocking, and cancellable", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-clarify-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  let leafContent: any[] = [];
+  let aborts = 0;
+  let selection: string | undefined;
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
+    abort: () => { aborts++; },
+    sessionManager: {
+      getSessionId: () => "clarify-session",
+      getEntries: () => [],
+      getLeafEntry: () => ({
+        type: "message",
+        message: { role: "assistant", content: leafContent },
+      }),
+    },
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async () => selection,
+      editor: async () => "",
+    },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", {
+      action: "set_plan", goal: "Ship", todos: ["Implement"],
+    }, undefined, undefined, ctx);
+
+    const clarifyCall = {
+      type: "toolCall", id: "clarify", name: "continuity_update",
+      arguments: { action: "clarify" },
+    };
+    const editCall = {
+      type: "toolCall", id: "edit", name: "edit", arguments: {},
+    };
+    leafContent = [clarifyCall, editCall];
+    for (const event of [
+      { toolName: "continuity_update", toolCallId: "clarify", input: { action: "clarify" } },
+      { toolName: "edit", toolCallId: "edit", input: {} },
+    ]) {
+      for (const guard of app.handlers.get("tool_call") ?? [])
+        assert.match((await guard(event, ctx)).reason, /only tool call.*safe checkpoint/i);
+    }
+
+    leafContent = [clarifyCall];
+    const params = {
+      action: "clarify",
+      question: "Which implementation?",
+      options: [{ label: "Small" }, { label: "Full", description: "Broader change" }],
+    };
+    for (const guard of app.handlers.get("tool_call") ?? [])
+      assert.equal(await guard({ toolName: "continuity_update", toolCallId: "clarify", input: params }, ctx), undefined);
+    const prose = await tool.execute("clarify", params, undefined, undefined, ctx);
+    assert.match(prose.content[0].text, /Ask user in prose and wait/);
+    assert.match(prose.content[0].text, /1\. Small/);
+    assert.match(prose.content[0].text, /2\. Full — Broader change/);
+    assert.equal(prose.terminate, undefined);
+    for (const guard of app.handlers.get("tool_call") ?? [])
+      assert.match((await guard({ toolName: "read", toolCallId: "read", input: {} }, ctx)).reason, /Ask the pending clarification in prose and stop/i);
+    await tool.execute("done", {
+      action: "todo", todoId: "todo_1", status: "done",
+    }, undefined, undefined, ctx);
+    await app.handlers.get("message_end")?.[0]?.({ message: {
+      role: "assistant", stopReason: "stop",
+      content: [{ type: "text", text: "Which implementation?" }],
+    } }, ctx);
+    const pendingContext = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(pendingContext.messages.at(-1).content, /Work: executing/);
+
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+    ctx.hasUI = true;
+    ctx.mode = "tui";
+    selection = undefined;
+    const cancelled = await tool.execute("cancel", {
+      ...params, question: "Continue or stop?",
+    }, undefined, undefined, ctx);
+    assert.match(cancelled.content[0].text, /Execution stopped/);
+    assert.equal(cancelled.terminate, true);
+    assert.equal(aborts, 1);
+
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+    selection = "Small";
+    const answered = await tool.execute("answer", {
+      ...params, question: "Pick scope?",
+    }, undefined, undefined, ctx);
+    assert.equal(answered.content[0].text, "Small");
+    selection = "Full — Broader change";
+    const secondAnswer = await tool.execute("second-answer", {
+      ...params, question: "Pick deployment scope?",
+    }, undefined, undefined, ctx);
+    assert.equal(secondAnswer.content[0].text, "Full — Broader change");
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
 test("read-only execution completion skips Verify", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-read-only-"));
@@ -346,6 +465,7 @@ test("explicit plan selects planner and hands approved work to executor session"
   ]);
   const childEntries: Array<{ type: string; value: any }> = [];
   let kickoff = "";
+  let planningRun: Promise<void> | undefined;
   let app: ReturnType<typeof runtime>;
   const ctx: any = {
     cwd,
@@ -362,20 +482,8 @@ test("explicit plan selects planner and hands approved work to executor session"
       getSessionFile: () => join(root, "planner.jsonl"),
       getEntries: () => [],
     },
-    waitForIdle: async () => {
-      await app.tools.get("continuity_update").execute(
-        "call",
-        {
-          action: "set_plan",
-          goal: "Ship change",
-          planSummary: "Implement then verify",
-          todos: ["Implement", "Verify"],
-        },
-        undefined,
-        undefined,
-        ctx,
-      );
-    },
+    isIdle: () => !planningRun,
+    waitForIdle: async () => { await planningRun; },
     newSession: async ({ setup, withSession }: any) => {
       await setup({
         appendModelChange: (provider: string, id: string) =>
@@ -402,6 +510,27 @@ test("explicit plan selects planner and hands approved work to executor session"
   };
   try {
     app = runtime();
+    app.onSendUserMessage((message) => {
+      if (!message.startsWith("Plan this task")) return;
+      planningRun = (async () => {
+        await Promise.resolve();
+        for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+        await app.tools.get("continuity_update").execute(
+          "call",
+          {
+            action: "set_plan",
+            goal: "Ship change",
+            planSummary: "Implement then verify",
+            todos: ["Implement", "Verify"],
+          },
+          undefined,
+          undefined,
+          ctx,
+        );
+        for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+        planningRun = undefined;
+      })();
+    });
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
     await app.commands.get("continuity").handler(
@@ -420,9 +549,81 @@ test("explicit plan selects planner and hands approved work to executor session"
       type: "model",
       value: { provider: "provider", id: "executor" },
     });
-    assert.ok(childEntries.some((entry) => entry.type === "pi-conductor-run"));
-    assert.ok(childEntries.some((entry) => entry.type === "pi-continuity-handoff"));
-    assert.match(kickoff, /Execute approved stored plan/);
+    assert.deepEqual(childEntries.map((entry) => entry.type), [
+      "model",
+      "thinking",
+      "pi-conductor-run",
+      "pi-continuity-handoff",
+    ]);
+    assert.equal(
+      kickoff,
+      "Inspect the current workspace and validate the approved plan's assumptions before editing. Execute the plan, track todos, and run fresh verification.",
+    );
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("child reload preserves progress instead of replaying the handoff snapshot", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-child-reload-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const now = new Date().toISOString();
+  const handoffWork = {
+    schemaVersion: 1,
+    mode: "executing",
+    goal: "Ship change",
+    approved: true,
+    constraints: ["Keep compatibility"],
+    planSummary: "Implement then verify",
+    todos: [{ id: "todo_1", text: "Implement", status: "pending", updatedAt: now }],
+    runId: "run-child",
+    createdAt: now,
+    updatedAt: now,
+  };
+  const model = { provider: "provider", id: "executor" };
+  const entries = [{
+    type: "custom",
+    customType: "pi-continuity-handoff",
+    data: { version: 1, work: handoffWork, model, thinking: "low" },
+  }];
+  const ctx: any = {
+    cwd,
+    hasUI: false,
+    mode: "json",
+    model,
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: {
+      getSessionId: () => "child-session",
+      getEntries: () => entries,
+    },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    const sessionStart = app.handlers.get("session_start")![0];
+    await sessionStart({ reason: "startup" }, ctx);
+    assert.equal(app.modelSelections(), 1);
+
+    await app.tools.get("continuity_update").execute(
+      "done",
+      { action: "todo", todoId: "todo_1", status: "done" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    await sessionStart({ reason: "reload" }, ctx);
+
+    assert.equal(app.modelSelections(), 1);
+    const context = await app.handlers.get("context")![0]({ messages: [] }, ctx);
+    assert.match(context.messages.at(-1).content, /Todo todo_1 \[done\]: Implement/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -479,13 +680,14 @@ test("task widget resets after settlement but survives mid-turn steering", async
   }
 });
 
-test("TUI current-session approval runs command logic without exposing a slash prompt", async () => {
+test("TUI approval waits for the scheduled planner response before showing choices", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-selector-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   let selections = 0;
+  let planningRun: Promise<void> | undefined;
   let app: ReturnType<typeof runtime>;
   const model = { provider: "provider", id: "base" };
   const ctx: any = {
@@ -503,20 +705,8 @@ test("TUI current-session approval runs command logic without exposing a slash p
       getSessionId: () => "selector-session",
       getEntries: () => [],
     },
-    waitForIdle: async () => {
-      await app.tools.get("continuity_update").execute(
-        "call",
-        {
-          action: "set_plan",
-          goal: "Ship change",
-          planSummary: "Implement then verify",
-          todos: ["Implement", "Verify"],
-        },
-        undefined,
-        undefined,
-        ctx,
-      );
-    },
+    isIdle: () => !planningRun,
+    waitForIdle: async () => { await planningRun; },
     ui: {
       notify: () => {},
       setStatus: () => {},
@@ -530,6 +720,28 @@ test("TUI current-session approval runs command logic without exposing a slash p
   };
   try {
     app = runtime();
+    app.onSendUserMessage((message) => {
+      if (!message.startsWith("Plan this task")) return;
+      planningRun = (async () => {
+        await Promise.resolve();
+        assert.equal(selections, 0);
+        for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+        await app.tools.get("continuity_update").execute(
+          "call",
+          {
+            action: "set_plan",
+            goal: "Ship change",
+            planSummary: "Implement then verify",
+            todos: ["Implement", "Verify"],
+          },
+          undefined,
+          undefined,
+          ctx,
+        );
+        for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+        planningRun = undefined;
+      })();
+    });
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);

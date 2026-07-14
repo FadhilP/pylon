@@ -64,6 +64,7 @@ test("Scout registers separate repo and web tools; Web Scout fails closed withou
     assert.match(repoGuidance, /bounded read-only orientation pass/i);
     assert.match(repoGuidance, /lack a concrete path, package, symbol, or boundary anchor/i);
     assert.match(repoGuidance, /broad parent context is sent only on the first call/i);
+    assert.match(repoGuidance, /do not call Scout again solely because the user approved implementation/i);
     const result = await runtime.tools.get("web_scout").execute("id", { task: "current docs" }, undefined, undefined, context({ hasUI: false }));
     assert.equal(result.details.failureCode, "confirmation_unavailable");
   } finally { runtime.restore(); }

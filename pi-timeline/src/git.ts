@@ -22,3 +22,8 @@ export function git(
     ),
   );
 }
+
+export async function symbolicHead(cwd: string): Promise<string | null> {
+  const ref = await git(cwd, ["rev-parse", "--symbolic-full-name", "HEAD"]);
+  return ref === "HEAD" ? null : ref;
+}

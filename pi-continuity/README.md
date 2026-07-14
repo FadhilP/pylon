@@ -29,6 +29,8 @@ Planner and executor profiles are optional. Resetting either profile uses the ma
 
 The task widget shows all stored todos while the agent works and clears when the turn settles; todo descriptions are capped at 120 characters. `/todos` remains available afterward. Direct execution task lists do not restrict tools. Explicit plan mode permits only `read`, `grep` or `rg`, `find` or `fd`, `ls`, `continuity_update`, `repo_scout`, and `advisor`. Approval restores only tools Continuity removed. Replanning preserves matching todo progress; completion requires every todo done.
 
+Structured clarification works during planning and active execution. During execution it is reserved for a new blocking user decision that cannot be safely inferred and must be the only tool call; the agent is instructed to ask only at a safe checkpoint and not repeat answered questions without new evidence. TUI and RPC modes show the option dialog. Print and JSON modes ask through the next prose response and block further tools for the remainder of that run. Cancelling an execution dialog requests cancellation of the current agent run without changing the work mode, todos, approval, or verification state.
+
 Read-only work can complete without Verify. After a mutation-capable tool call, execution completion requires current-worktree Verify state `passed`; `clean` or `no_checks` requires explicit `allowUnverified`. Failed, cancelled, stale, error, and missing results never qualify. Mutation debt persists across user turns until verification passes. Heartbeat jobs carrying a valid `todoId` update that todo from running through completion or failure. `/plan review` records a shared-run `reviewer` phase and starts bounded implementation review.
 
 ## Memory and Storage
@@ -41,4 +43,4 @@ Persisted work and memory are schema-validated; malformed files are quarantined.
 
 ## Security and Limitations
 
-Extensions execute with full user permissions. V1 has no branch-aware active work, shell in plan mode, cloud sync, or interactive clarification in print or JSON modes. Planner and executor handoff requires a persisted Pi session.
+Extensions execute with full user permissions. V1 has no branch-aware active work, shell in plan mode, cloud sync, or structured clarification dialogs in print or JSON modes; those modes use a prose question instead. Planner and executor handoff requires a persisted Pi session.

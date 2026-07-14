@@ -2,12 +2,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git } from "./git.ts";
+import { git, symbolicHead } from "./git.ts";
 import { preflight } from "./safety.ts";
 export type Snapshot = {
   snapshotId: string;
   gitRoot: string;
   head: string;
+  headRef?: string | null;
   worktreeRef: string;
   indexRef: string;
   worktreeTree: string;
@@ -24,6 +25,7 @@ export async function capture(
   sessionId: string,
 ): Promise<Snapshot> {
   const { root, head } = await preflight(cwd),
+    headRef = await symbolicHead(root),
     id = randomBytes(6).toString("hex"),
     dir = await mkdtemp(join(tmpdir(), "pi-timeline-")),
     index = join(dir, "index");
@@ -56,14 +58,18 @@ export async function capture(
     await git(root, ["update-ref", worktreeRef, wc]);
     try {
       await git(root, ["update-ref", indexRef, ic]);
+      if (await git(root, ["rev-parse", "HEAD"]) !== head)
+        throw Error("HEAD changed during checkpoint.");
     } catch (error) {
       await git(root, ["update-ref", "-d", worktreeRef]).catch(() => {});
+      await git(root, ["update-ref", "-d", indexRef]).catch(() => {});
       throw error;
     }
     return {
       snapshotId: id,
       gitRoot: root,
       head,
+      headRef,
       worktreeRef,
       indexRef,
       worktreeTree,

@@ -10,6 +10,7 @@ import { capture } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import { preflight } from "../src/safety.ts";
 import { findRunEntry, isRunEntry } from "../src/run.ts";
+import { classifyCompatibility } from "../src/compatibility.ts";
 
 const exec = promisify(execFile);
 
@@ -67,6 +68,30 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
   assert.equal(calls[0][2].maxTokens, 32);
   assert.equal(handlers.has("before_agent_start"), false);
   assert.equal(handlers.has("message_end"), false);
+});
+
+test("fresh Continuity executor kickoff triggers automatic session naming", async () => {
+  const calls: any[] = [];
+  const kickoff = "Inspect the current workspace and validate the approved plan's assumptions before editing. Execute the plan, track todos, and run fresh verification.";
+  const entries = [
+    { type: "model_change", id: "model-1", provider: "provider", modelId: "executor" },
+    { type: "thinking_level_change", id: "thinking-1", thinkingLevel: "low" },
+    { type: "custom", id: "run-1", customType: "pi-conductor-run", data: { version: 1 } },
+    { type: "custom", id: "handoff-1", customType: "pi-continuity-handoff", data: { version: 1 } },
+    { type: "message", id: "user-1", message: { role: "user", content: kickoff } },
+    { type: "message", id: "assistant-1", message: { role: "assistant", content: [{ type: "text", text: "Validated plan assumptions." }] } },
+  ];
+  const { handlers, names, ctx } = namingHarness(entries, async (...args: any[]) => {
+    calls.push(args);
+    return { content: [{ type: "text", text: "Execute Approved Continuity Plan" }] };
+  });
+
+  await handlers.get("session_start")![0]({ reason: "new" }, ctx);
+  await handlers.get("agent_settled")![0]({}, ctx);
+
+  assert.deepEqual(names, ["Execute Approved Continuity Plan"]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1].messages[0].content[0].text, /Inspect the current workspace/);
 });
 
 test("invalid or failed title generation falls back to first prompt", async () => {
@@ -156,6 +181,42 @@ test("existing or manually cleared session names remain untouched", async () => 
   }
 });
 
+test("checkpoint compatibility keeps refs informational", () => {
+  const current = {
+    gitRoot: join(tmpdir(), "repo"),
+    head: "a".repeat(40),
+    headRef: "refs/heads/main",
+  };
+  assert.deepEqual(
+    classifyCompatibility({ ...current, headRef: undefined }, current),
+    { allowed: true, refState: "legacy" },
+  );
+  assert.deepEqual(
+    classifyCompatibility({ ...current, headRef: null }, { ...current, headRef: null }),
+    { allowed: true, refState: "same" },
+  );
+  assert.deepEqual(
+    classifyCompatibility({ ...current, headRef: null }, current),
+    { allowed: true, refState: "target-detached" },
+  );
+  assert.deepEqual(
+    classifyCompatibility(current, { ...current, headRef: null }),
+    { allowed: true, refState: "current-detached" },
+  );
+  assert.deepEqual(
+    classifyCompatibility(current, { ...current, headRef: "refs/heads/other" }),
+    { allowed: true, refState: "ref-mismatch" },
+  );
+  assert.deepEqual(
+    classifyCompatibility(current, { ...current, head: "b".repeat(40) }),
+    { allowed: false, reason: "head-mismatch" },
+  );
+  assert.deepEqual(
+    classifyCompatibility(current, { ...current, gitRoot: join(tmpdir(), "other") }),
+    { allowed: false, reason: "repository-mismatch" },
+  );
+});
+
 test("run metadata is optional and latest valid entry wins", () => {
   assert.equal(findRunEntry([]), undefined);
   const planner = {
@@ -199,6 +260,92 @@ async function deleteRefs(root: string, refs: string[]) {
     await exec("git", ["update-ref", "-d", ref], { cwd: root });
 }
 
+test("timeline rejects incompatible targets before rollback capture", async () => {
+  const { root, git } = await repository();
+  try {
+    const head = await git("rev-parse", "HEAD"),
+      entries = [
+        { type: "message", id: "user-1", message: { role: "user", content: "Old prompt" } },
+        {
+          type: "custom",
+          customType: "pi-prompt-checkpoint",
+          id: "checkpoint-1",
+          data: {
+            version: 3,
+            kind: "pi-prompt-checkpoint",
+            promptEntryId: "user-1",
+            ownerSessionId: "test-session",
+            continuationEntryId: "user-1",
+            createdAt: new Date().toISOString(),
+            snapshotId: "old",
+            gitRoot: root,
+            head: head === "a".repeat(40) ? "b".repeat(40) : "a".repeat(40),
+            headRef: "refs/heads/main",
+            worktreeRef: "refs/pi-timeline/test/old/worktree",
+            indexRef: "refs/pi-timeline/test/old/index",
+            worktreeTree: head,
+            indexTree: head,
+          },
+        },
+        {
+          type: "custom",
+          customType: "pi-prompt-checkpoint",
+          id: "checkpoint-legacy",
+          data: {
+            version: 3,
+            kind: "pi-prompt-checkpoint",
+            promptEntryId: "user-1",
+            ownerSessionId: "test-session",
+            continuationEntryId: "user-1",
+            createdAt: new Date().toISOString(),
+            snapshotId: "legacy",
+            gitRoot: root,
+            head,
+            worktreeRef: "refs/pi-timeline/test/legacy/worktree",
+            indexRef: "refs/pi-timeline/test/legacy/index",
+            worktreeTree: head,
+            indexTree: head,
+          },
+        },
+      ],
+      handlers = new Map<string, Function[]>(),
+      commands = new Map<string, any>(),
+      notices: string[] = [];
+    let appended = 0;
+    const pi: any = {
+      events: { on: () => () => {} },
+      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerCommand: (name: string, command: any) => commands.set(name, command),
+      appendEntry: () => { appended++; },
+      setSessionName() {},
+    };
+    extension(pi);
+    const ctx: any = {
+      cwd: root,
+      hasUI: true,
+      mode: "tui",
+      waitForIdle: async () => {},
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setStatus() {},
+      },
+      sessionManager: {
+        getEntries: () => entries,
+        getSessionId: () => "test-session",
+        getSessionFile: () => undefined,
+      },
+    };
+    await handlers.get("session_start")![0]({}, ctx);
+    await commands.get("timeline").handler("list", ctx);
+    assert.match(notices.at(-1)!, /checkpoint-legacy \[branch:unknown\]/);
+    await commands.get("timeline").handler("jump test-session:checkpoint-1", ctx);
+    assert.equal(appended, 0);
+    assert.match(notices.at(-1)!, /HEAD commit differs/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("capture completes and restore preserves ignored files", { timeout: 20_000 }, async () => {
   const { root, git } = await repository();
   try {
@@ -207,6 +354,7 @@ test("capture completes and restore preserves ignored files", { timeout: 20_000 
     await writeFile(join(root, "ignored.log"), "ignored-before\n");
     const snapshot = await capture(root, "test-session");
     assert.match(snapshot.worktreeTree, /^[0-9a-f]{40}$/);
+    assert.match(snapshot.headRef!, /^refs\/heads\//);
     assert.equal(
       (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline"))
         .split(/\r?\n/)
@@ -228,6 +376,18 @@ test("capture completes and restore preserves ignored files", { timeout: 20_000 
       "ordinary\n",
     );
     assert.equal(await readFile(join(root, "ignored.log"), "utf8"), "ignored-later\n");
+    await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("capture records detached HEAD distinctly from legacy records", async () => {
+  const { root, git } = await repository();
+  try {
+    await git("checkout", "--detach", "-q");
+    const snapshot = await capture(root, "detached-session");
+    assert.equal(snapshot.headRef, null);
     await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
   } finally {
     await rm(root, { recursive: true, force: true });
