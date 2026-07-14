@@ -37,6 +37,7 @@ import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext } from "../src/context.ts";
 import { validateQuestion } from "../src/questions.ts";
+import { worktreeFingerprint } from "../src/worktree.ts";
 import {
   loadConfig,
   parseModelRef,
@@ -97,6 +98,7 @@ export default function (pi: ExtensionAPI) {
     needsVerification = false,
     awaitingClarificationProse = false,
     recentCalls = new Map<string, number[]>(),
+    pendingBash = new Map<string, string | undefined>(),
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
     approvalSelectionOpen = false,
@@ -324,6 +326,7 @@ export default function (pi: ExtensionAPI) {
     sessionGeneration++;
     currentCwd = ctx.cwd;
     recentCalls.clear();
+    pendingBash.clear();
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
@@ -362,6 +365,13 @@ export default function (pi: ExtensionAPI) {
       if (thinkingLevels.includes(handoff.data.thinking))
         pi.setThinkingLevel(handoff.data.thinking);
       await saveWork();
+    }
+    if (work?.mode === "executing" && !work.currentTodoId) {
+      const first = work.todos.find((todo) => todo.status !== "done");
+      if (first) {
+        updateTodo(work, first.id, "in_progress");
+        await saveWork();
+      }
     }
     if (work?.mode === "planning" && work.todos.length) {
       let changed = false;
@@ -435,7 +445,7 @@ export default function (pi: ExtensionAPI) {
     ) return;
     await completeWork(ctx);
   });
-  pi.on("tool_call", (event, ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (awaitingClarificationProse && work?.mode === "executing")
       return {
         block: true,
@@ -462,7 +472,22 @@ export default function (pi: ExtensionAPI) {
         block: true,
         reason: "Write the final user-facing response first, then retry completion as the last tool call in the same assistant message.",
       };
-    if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName)) {
+    if (event.toolName === "bash") {
+      pendingBash.set(
+        event.toolCallId,
+        await worktreeFingerprint(ctx.cwd),
+      );
+    } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
+      latestVerification = undefined;
+      needsVerification = true;
+    }
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName !== "bash") return;
+    const before = pendingBash.get(event.toolCallId);
+    pendingBash.delete(event.toolCallId);
+    const after = await worktreeFingerprint(ctx.cwd);
+    if (!before || !after || before !== after) {
       latestVerification = undefined;
       needsVerification = true;
     }
@@ -514,7 +539,7 @@ export default function (pi: ExtensionAPI) {
       "Update plan, todos, state, clarification, or durable-memory candidate.",
     executionMode: "sequential",
     promptGuidelines: [
-      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list without activating the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. When planning used Scout, put compact actionable anchors in planSummary: relevant paths, symbols, line ranges, assumptions, and unresolved gaps; do not copy the raw Scout report. During execution, use clarify only for a new blocking user decision that cannot be safely inferred, only as the sole tool call at a safe checkpoint; prefer asking before mutation, stabilize any atomic operation first, and never re-ask an answered question without new evidence. During execution, use exact todo IDs from Continuity context: mark one todo in_progress before work, then mark it done immediately after verification when repository mutation occurred. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
+      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list, starts its first todo, and does not activate the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. When planning used Scout, put compact actionable anchors in planSummary: relevant paths, symbols, line ranges, assumptions, and unresolved gaps; do not copy the raw Scout report. During execution, use clarify only for a new blocking user decision that cannot be safely inferred, only as the sole tool call at a safe checkpoint; prefer asking before mutation, stabilize any atomic operation first, and never re-ask an answered question without new evidence. During execution, use exact todo IDs from Continuity context. Complete current work and start the next todo atomically by passing nextTodoId with status done; omit nextTodoId for the final todo. Mark mutation work done immediately after verification. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -551,6 +576,12 @@ export default function (pi: ExtensionAPI) {
           Type.String({
             description:
               "Exact todo ID shown in Continuity context, such as todo_1",
+          }),
+        ),
+        nextTodoId: Type.Optional(
+          Type.String({
+            description:
+              "Pending todo to start atomically when marking current todo done",
           }),
         ),
         status: Type.Optional(Status),
@@ -656,6 +687,10 @@ export default function (pi: ExtensionAPI) {
         work.constraints = (p.constraints || []).slice(0, 12);
         work.planSummary = p.planSummary?.trim() || todos.join("; ") || work.goal;
         setPlan(work, todos, now);
+        if (!planning && !work.currentTodoId) {
+          const first = work.todos.find((todo) => todo.status !== "done");
+          if (first) updateTodo(work, first.id, "in_progress", now);
+        }
         if (planning) work.planRevision = (work.planRevision ?? 0) + 1;
         work.updatedAt = now;
         await saveWork();
@@ -719,15 +754,25 @@ export default function (pi: ExtensionAPI) {
       if (!work)
         return { content: [{ type: "text", text: "No active work." }] };
       if (p.action === "todo") {
-        if (!p.todoId || !p.status || !updateTodo(work, p.todoId, p.status))
+        const todo = p.todoId && work.todos.find((item) => item.id === p.todoId),
+          next = p.nextTodoId && work.todos.find((item) => item.id === p.nextTodoId);
+        if (!todo || !p.status || (p.nextTodoId && (
+          p.status !== "done" ||
+          !next ||
+          next.id === todo.id ||
+          next.status !== "pending"
+        )))
           return {
             content: [
               {
                 type: "text",
-                text: `Unknown todo or status. Valid IDs: ${work.todos.map((t) => t.id).join(", ") || "none"}.`,
+                text: `Unknown or invalid todo transition. Valid IDs: ${work.todos.map((t) => t.id).join(", ") || "none"}.`,
               },
             ],
           };
+        const now = new Date().toISOString();
+        updateTodo(work, todo.id, p.status, now);
+        if (next) updateTodo(work, next.id, "in_progress", now);
         if (p.latestFailure !== undefined) work.latestFailure = p.latestFailure;
         if (p.nextAction !== undefined) work.nextAction = p.nextAction;
       } else if (p.action === "state") {

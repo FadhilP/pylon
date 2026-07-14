@@ -123,7 +123,9 @@ test("Scout registers separate repo and web tools; Web Scout fails closed withou
     assert.deepEqual([...runtime.tools.keys()].sort(), ["repo_scout", "web_scout"]);
     const repoGuidance = runtime.tools.get("repo_scout").promptGuidelines.join("\n");
     assert.match(repoGuidance, /bounded read-only orientation pass/i);
-    assert.match(repoGuidance, /lack a concrete path, package, symbol, or boundary anchor/i);
+    assert.match(repoGuidance, /neither the user request nor current context supplies a concrete path/i);
+    assert.match(repoGuidance, /sufficient for read-only evaluation by default/i);
+    assert.match(repoGuidance, /do not reread cited source unless an exact edit needs current text/i);
     assert.match(repoGuidance, /broad parent context is sent only on the first call/i);
     assert.match(repoGuidance, /do not call Scout again solely because the user approved implementation/i);
     const result = await runtime.tools.get("web_scout").execute("id", { task: "current docs" }, undefined, undefined, context({ hasUI: false }));

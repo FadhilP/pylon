@@ -26,7 +26,7 @@ Every restore requires confirmation. Native `/tree` remains conversation-only.
 
 ## How It Works
 
-Snapshots use `refs/pi-timeline/...` synthetic commits. `HEAD`, branch, stash, and ignored files remain untouched. New checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list`, the selector, and restore confirmation show branch, detached, legacy-unknown, and blocked compatibility states. Older version 3 records without ref metadata remain usable and appear as `branch:unknown` when their repository and HEAD still match.
+Snapshots use `refs/pi-timeline/...` synthetic commits. Automatic checkpoints run only after mutation-capable tools change or may change Git-backed worktree state; read-only turns and unchanged `bash` calls skip capture. Explicit rollback and Guard checkpoints remain unconditional. `HEAD`, branch, stash, and ignored files remain untouched. New checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list`, the selector, and restore confirmation show branch, detached, legacy-unknown, and blocked compatibility states. Older version 3 records without ref metadata remain usable and appear as `branch:unknown` when their repository and HEAD still match.
 
 Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs.
 

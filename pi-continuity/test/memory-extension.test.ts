@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import extension from "../extensions/pi-continuity.ts";
+
+const exec = promisify(execFile);
 
 async function waitFor(predicate: () => boolean) {
   for (let attempt = 0; attempt < 100 && !predicate(); attempt++)
@@ -285,8 +289,21 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
     assert.match(result.content[0].text, /Executing task list stored/);
     const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
-    assert.match(context.messages.at(-1).content, /Todo todo_1 \[pending\]: Implement/);
+    assert.match(context.messages.at(-1).content, /Todo todo_1 \[in_progress\]: Implement/);
     assert.match(context.messages.at(-1).content, /Todo todo_2 \[pending\]: Verify/);
+
+    const advanced = await app.tools.get("continuity_update").execute(
+      "advance", {
+        action: "todo",
+        todoId: "todo_1",
+        status: "done",
+        nextTodoId: "todo_2",
+      }, undefined, undefined, ctx,
+    );
+    assert.match(advanced.content[0].text, /state updated/i);
+    const advancedContext = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(advancedContext.messages.at(-1).content, /Todo todo_2 \[in_progress\]: Verify/);
+    assert.match(advancedContext.messages.at(-1).content, /Done: todo_1/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -419,6 +436,47 @@ test("read-only execution completion skips Verify", async () => {
     const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
     assert.equal(completed.terminate, true);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("bash requires Verify only when its Git worktree changes", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-bash-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  await exec("git", ["init", "-q"], { cwd });
+  await exec("git", ["config", "user.email", "continuity@test.local"], { cwd });
+  await exec("git", ["config", "user.name", "continuity-test"], { cwd });
+  await writeFile(join(cwd, "tracked.txt"), "base\n");
+  await exec("git", ["add", "tracked.txt"], { cwd });
+  await exec("git", ["commit", "-qm", "base"], { cwd });
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const context = (sessionId: string): any => ({
+    cwd, hasUI: false, mode: "json",
+    sessionManager: { getSessionId: () => sessionId, getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  });
+  try {
+    for (const [sessionId, mutate] of [["read-only", false], ["changed", true]] as const) {
+      const app = runtime(), ctx = context(sessionId);
+      for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+      const tool = app.tools.get("continuity_update");
+      await tool.execute("plan", { action: "set_plan", goal: "Run command", todos: ["Finish"] }, undefined, undefined, ctx);
+      for (const handler of app.handlers.get("tool_call") ?? [])
+        await handler({ toolName: "bash", toolCallId: `bash-${sessionId}`, input: { command: "test" } }, ctx);
+      if (mutate) await writeFile(join(cwd, "tracked.txt"), "changed\n");
+      for (const handler of app.handlers.get("tool_result") ?? [])
+        await handler({ toolName: "bash", toolCallId: `bash-${sessionId}`, input: { command: "test" }, content: [], details: {}, isError: false }, ctx);
+      await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+      const result = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
+      assert.match(result.content[0].text, mutate ? /Cannot complete until/ : /Work completed/);
+      if (mutate) {
+        await exec("git", ["checkout", "--", "tracked.txt"], { cwd });
+      }
+    }
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -669,7 +727,7 @@ test("task widget resets after settlement but survives mid-turn steering", async
       todos: ["Implement"],
     }, undefined, undefined, ctx);
     const shown = widgets.length;
-    assert.deepEqual(widgets.at(-1), ["Tasks", "○ Implement"]);
+    assert.deepEqual(widgets.at(-1), ["Tasks", "● Implement"]);
 
     for (const handler of app.handlers.get("input") ?? [])
       await handler({ text: "Adjust it", source: "interactive", streamingBehavior: "steer" }, ctx);
@@ -684,7 +742,7 @@ test("task widget resets after settlement but survives mid-turn steering", async
       goal: "Second task",
       todos: ["Verify"],
     }, undefined, undefined, ctx);
-    assert.deepEqual(widgets.at(-1), ["Tasks", "○ Verify"]);
+    assert.deepEqual(widgets.at(-1), ["Tasks", "● Verify"]);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

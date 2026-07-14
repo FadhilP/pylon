@@ -4,7 +4,11 @@ import {
   SessionManager,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { capture, type Snapshot } from "../src/snapshot.ts";
+import {
+  capture,
+  worktreeFingerprint,
+  type Snapshot,
+} from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import {
   classifyCompatibility,
@@ -109,6 +113,8 @@ export default function (
     pendingContext = "",
     activeRun: RunEntry | undefined,
     latestVerification: any,
+    pendingBash = new Map<string, string | undefined>(),
+    automaticMutation = false,
     lastCtx: any;
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
   const nameSession = async (ctx: any) => {
@@ -332,6 +338,8 @@ export default function (
   pi.on("session_start", async (_e, ctx) => {
     lastCtx = ctx;
     latestVerification = undefined;
+    pendingBash.clear();
+    automaticMutation = false;
     await load(ctx);
     paired = false;
     namingGeneration++;
@@ -353,8 +361,22 @@ export default function (
   pi.on("input", (event) => {
     if (event.source !== "extension") paired = false;
   });
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "bash")
+      pendingBash.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName === "bash") {
+      const before = pendingBash.get(event.toolCallId);
+      pendingBash.delete(event.toolCallId);
+      const after = await worktreeFingerprint(ctx.cwd);
+      if (!before || !after || before !== after) automaticMutation = true;
+    } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
+      automaticMutation = true;
+    }
+  });
   pi.on("agent_settled", async (_e, ctx) => {
-    await checkpoint(ctx);
+    if (automaticMutation && await checkpoint(ctx)) automaticMutation = false;
     await nameSession(ctx);
   });
   pi.on("session_tree", (_e, ctx) => {

@@ -20,6 +20,30 @@ const ident = {
   GIT_COMMITTER_NAME: "pi-timeline",
   GIT_COMMITTER_EMAIL: "pi-timeline@local",
 };
+
+export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
+  try {
+    const { root, head } = await preflight(cwd),
+      status = await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    if (!status) return `${root}\n${head}\nclean`;
+
+    const indexTree = await git(root, ["write-tree"]),
+      dir = await mkdtemp(join(tmpdir(), "pi-timeline-fingerprint-")),
+      index = join(dir, "index"),
+      env = { GIT_INDEX_FILE: index };
+    try {
+      await git(root, ["read-tree", "HEAD"], env);
+      await git(root, ["add", "-A", "--", "."], env);
+      const worktreeTree = await git(root, ["write-tree"], env);
+      return `${root}\n${head}\n${indexTree}\n${worktreeTree}`;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 export async function capture(
   cwd: string,
   sessionId: string,

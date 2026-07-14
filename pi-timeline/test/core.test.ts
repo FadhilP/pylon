@@ -255,6 +255,55 @@ async function repository() {
   return { root, git };
 }
 
+test("automatic checkpoints skip read-only turns and unchanged bash", async () => {
+  const { root } = await repository();
+  const entries = [{
+    type: "message", id: "user-1",
+    message: { role: "user", content: "Inspect then update" },
+  }];
+  const handlers = new Map<string, Function[]>(), appended: any[] = [];
+  const pi: any = {
+    events: { on: () => () => {} },
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    setSessionName() {},
+  };
+  extension(pi);
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    mode: "json",
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
+      getSessionId: () => "mutation-aware-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+
+    await handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "read-only" }, ctx);
+    await handlers.get("tool_result")![0]({ toolName: "bash", toolCallId: "read-only" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    const checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
+    assert.equal(checkpoints.length, 1);
+    await deleteRefs(root, [checkpoints[0].data.worktreeRef, checkpoints[0].data.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function deleteRefs(root: string, refs: string[]) {
   for (const ref of refs)
     await exec("git", ["update-ref", "-d", ref], { cwd: root });
