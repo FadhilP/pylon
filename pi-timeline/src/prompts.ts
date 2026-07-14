@@ -18,17 +18,15 @@ export function promptTitle(message: any) {
   return text.length > 60 ? `${text.slice(0, 59).trimEnd()}…` : text;
 }
 
-export function extractSessionTitle(message: any) {
-  if (!Array.isArray(message?.content)) return { message };
-  const index = message.content.findLastIndex((part: any) => part.type === "text"),
-    part = message.content[index],
-    match = part?.text.match(
-      /\s*<!-- pi-session-title:\s*([^<>\r\n]{1,200}?)\s*-->\s*$/i,
-    );
-  if (!match) return { title: undefined, message };
-  const title = promptTitle({ content: match[1] }),
-    text = part.text.slice(0, match.index).trimEnd(),
-    content = [...message.content];
-  text ? (content[index] = { ...part, text }) : content.splice(index, 1);
-  return { title, message: { ...message, content } };
+export function normalizeGeneratedTitle(text: string) {
+  const lines = text.trim().split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length !== 1) return undefined;
+  const title = lines[0]
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, " ");
+  const words = title.split(" ");
+  if (title.length > 60 || words.length < 3 || words.length > 8)
+    return undefined;
+  return title;
 }

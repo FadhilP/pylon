@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 
 export type Exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => Promise<ExecResult>;
@@ -7,11 +7,30 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+function validatePngHeader(size: number, header: Buffer): void {
+  if (size === 0) throw new Error("Screenshot command produced an empty image");
+  if (size > MAX_IMAGE_BYTES) throw new Error("Screenshot exceeds 25MB limit");
+  if (size < PNG_SIGNATURE.length || !header.equals(PNG_SIGNATURE)) throw new Error("Screenshot command did not produce a PNG image");
+}
+
 export function validatePng(data: Buffer): void {
-  if (data.length === 0) throw new Error("Screenshot command produced an empty image");
-  if (data.length > MAX_IMAGE_BYTES) throw new Error("Screenshot exceeds 25MB limit");
-  if (data.length < PNG_SIGNATURE.length || !data.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-    throw new Error("Screenshot command did not produce a PNG image");
+  validatePngHeader(data.length, data.subarray(0, PNG_SIGNATURE.length));
+}
+
+export async function validatePngFile(path: string): Promise<void> {
+  const file = await open(path, "r");
+  try {
+    const { size } = await file.stat();
+    const header = Buffer.alloc(Math.min(size, PNG_SIGNATURE.length));
+    let offset = 0;
+    while (offset < header.length) {
+      const { bytesRead } = await file.read(header, offset, header.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    validatePngHeader(size, header.subarray(0, offset));
+  } finally {
+    await file.close();
   }
 }
 

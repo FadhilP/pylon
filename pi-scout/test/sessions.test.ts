@@ -14,4 +14,5 @@ test("credentials redact and caps state truncation", () => {
   const result = redact("api_key=sk-proj-abcdefghijklmnopqrstuvwxyz123456");
   assert.ok(result.count >= 1); assert.ok(!result.text.includes("abcdefghijklmnopqrstuvwxyz"));
   assert.equal(capText("a\nb\nc", 100, 2).truncated, true);
+  assert.equal(capText("x\n".repeat(251)).truncated, false);
 });

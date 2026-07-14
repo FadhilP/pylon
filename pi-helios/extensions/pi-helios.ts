@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { BrowserSessionManager, validateCdpEndpoint } from "../src/browser-session.ts";
-import { captureWindow, findWindow, validatePng } from "../src/capture.ts";
+import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
 import { diagnosePlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { issueWebScoutGrant } from "../src/web-scout-grant.ts";
 
@@ -78,10 +78,11 @@ function browserAction(params: BrowserParams): BrowserAction {
   }
 }
 
-function describe(result: { action: string; ownership: string; outcome: string; durationMs?: number; metadataAvailable?: boolean; page?: { index: number; title: string; url: string }; tabs?: unknown[]; snapshot?: string; snapshotRedactions?: number; snapshotTruncated?: boolean; snapshotOmittedLines?: number; snapshotOmittedBytes?: number; cleanupWarnings?: string[] }): string {
+function describe(result: { action: string; ownership: string; outcome: string; durationMs?: number; metadataAvailable?: boolean; metadataStale?: boolean; page?: { index: number; title: string; url: string }; tabs?: unknown[]; snapshot?: string; snapshotRedactions?: number; snapshotTruncated?: boolean; snapshotOmittedLines?: number; snapshotOmittedBytes?: number; cleanupWarnings?: string[] }): string {
   const lines = [`Browser ${result.action} ${result.outcome}.`, `Ownership: ${result.ownership}.`];
   if (result.durationMs !== undefined) lines.push(`Duration: ${result.durationMs}ms.`);
-  if (result.metadataAvailable === false) lines.push("Tab metadata unavailable; primary browser action completed.");
+  if (result.metadataStale) lines.push("Tab metadata cached.");
+  else if (result.metadataAvailable === false) lines.push("Tab metadata unavailable; primary browser action completed.");
   if (result.page) lines.push(`Tab ${result.page.index}: ${result.page.title} (${result.page.url})`);
   if (result.tabs) lines.push(`Tabs: ${JSON.stringify(result.tabs)}`);
   if (result.snapshot) lines.push(`Snapshot:\n${result.snapshot}`);
@@ -100,6 +101,15 @@ async function withBrowserStatus<T>(ctx: any, action: string, operation: () => P
 export default function helios(pi: ExtensionAPI) {
   const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => pi.exec(command, args, options);
   const manager = new BrowserSessionManager(exec);
+  let healthDiagnostic: Promise<string> | undefined;
+  const cachedHealthDiagnostic = () => {
+    if (!healthDiagnostic) {
+      const pending = diagnosePlaywrightCli(exec);
+      healthDiagnostic = pending;
+      pending.catch(() => { if (healthDiagnostic === pending) healthDiagnostic = undefined; });
+    }
+    return healthDiagnostic;
+  };
   const webScoutExtensionPath = fileURLToPath(new URL("./web-scout-browser.ts", import.meta.url));
   const disposeWebScoutCapability = pi.events.on("pi-helios:web-scout-capability", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
@@ -115,7 +125,7 @@ export default function helios(pi: ExtensionAPI) {
     request.respond((async () => {
       const sessions = manager.summary();
       try {
-        const version = await diagnosePlaywrightCli(exec);
+        const version = await cachedHealthDiagnostic();
         return {
           version: 1,
           owner: "pi-helios",
@@ -151,6 +161,7 @@ export default function helios(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       try {
         const version = await diagnosePlaywrightCli(exec);
+        healthDiagnostic = Promise.resolve(version);
         ctx.ui.notify(`Helios CLI ready: ${version}. Compatible browser launch is verified by consented browser start.`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "Helios CLI diagnostic failed", "error");
@@ -199,7 +210,7 @@ export default function helios(pi: ExtensionAPI) {
       try {
         await chmod(directory, 0o700).catch(() => {});
         await captureWindow((command, args, options) => pi.exec(command, args, options), windowTarget, screenshot, signal);
-        validatePng(await readFile(screenshot));
+        await validatePngFile(screenshot);
         const result = await createReadToolDefinition(ctx.cwd).execute(toolCallId, { path: screenshot }, signal, onUpdate, ctx);
         return { content: [{ type: "text" as const, text: `Captured Windows window: ${windowTarget.title}` }, ...result.content], details: { target: "window", windowTitle: windowTarget.title } };
       } finally {

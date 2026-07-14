@@ -126,7 +126,7 @@ export default function (pi: ExtensionAPI) {
       "Run bounded changed-set hygiene, then detect and run existing project verification commands. Discovers immediate child packages when root declares no checks. Scope changed skips clean Git worktrees; project always runs. Optionally select up to six stable check IDs.",
     promptSnippet: "Run detected project checks and return bounded failures",
     promptGuidelines: [
-      "Use verify after code changes before claiming completion. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits and project for broad refactors or release checks. Verify never installs dependencies.",
+      "Use verify after code changes before claiming completion. Call verify in a tool-only assistant turn before writing final user-facing text, then wait for its result and respond once. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits and project for broad refactors or release checks. Verify never installs dependencies.",
     ],
     parameters: Type.Object(
       {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  extractSessionTitle,
+  normalizeGeneratedTitle,
   promptText,
   promptTitle,
 } from "../src/prompts.ts";
@@ -18,34 +18,16 @@ test("prompt title is concise and single-line", () =>
     "Update session naming with a title that stays readable in t…",
   ));
 
-test("session title marker is extracted and removed", () => {
-  const original = {
-    role: "assistant",
-    content: [
-      { type: "thinking", thinking: "done" },
-      { type: "text", text: "Finished.\n<!-- pi-session-title: Persistent Session Titles -->" },
-    ],
-  };
-  assert.deepEqual(extractSessionTitle(original), {
-    title: "Persistent Session Titles",
-    message: {
-      ...original,
-      content: [original.content[0], { type: "text", text: "Finished." }],
-    },
-  });
-  assert.deepEqual(extractSessionTitle({ role: "assistant", content: [{ type: "text", text: "No marker" }] }), {
-    title: undefined,
-    message: { role: "assistant", content: [{ type: "text", text: "No marker" }] },
-  });
-  const trailingText = {
-    role: "assistant",
-    content: [
-      { type: "text", text: "<!-- pi-session-title: Ignore This -->" },
-      { type: "text", text: "Actual ending" },
-    ],
-  };
-  assert.deepEqual(extractSessionTitle(trailingText), {
-    title: undefined,
-    message: trailingText,
-  });
+test("generated title validation enforces one concise line", () => {
+  assert.equal(
+    normalizeGeneratedTitle('  "Persistent Timeline Session Names"  '),
+    "Persistent Timeline Session Names",
+  );
+  assert.equal(normalizeGeneratedTitle("Too short"), undefined);
+  assert.equal(
+    normalizeGeneratedTitle("One two three four five six seven eight nine"),
+    undefined,
+  );
+  assert.equal(normalizeGeneratedTitle("First valid title\nExtra prose"), undefined);
+  assert.equal(normalizeGeneratedTitle("x".repeat(61)), undefined);
 });

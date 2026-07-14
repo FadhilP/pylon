@@ -13,6 +13,7 @@
   },
   "pi": { "extensions": ["./extensions/pi-timeline.ts"] },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": { "typescript": "^5.8.0" },

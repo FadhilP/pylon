@@ -1,9 +1,9 @@
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
-import { validatePng, type Exec } from "./capture.ts";
+import { validatePngFile, type Exec } from "./capture.ts";
 
 const CLI_PATH = fileURLToPath(new URL("../node_modules/@playwright/cli/playwright-cli.js", import.meta.url));
 const MAX_STDOUT_BYTES = 256 * 1024;
@@ -40,10 +40,12 @@ export interface CliResult {
   artifactPath?: string;
 }
 
-export class HeliosCliError extends Error {
-  readonly category: "cancelled" | "timeout" | "unavailable" | "invalid-output" | "command-failed";
+export type HeliosCliErrorCategory = "cancelled" | "timeout" | "unavailable" | "invalid-output" | "command-failed" | "session-missing";
 
-  constructor(category: "cancelled" | "timeout" | "unavailable" | "invalid-output" | "command-failed", message: string) {
+export class HeliosCliError extends Error {
+  readonly category: HeliosCliErrorCategory;
+
+  constructor(category: HeliosCliErrorCategory, message: string) {
     super(message);
     this.category = category;
     this.name = "HeliosCliError";
@@ -89,7 +91,12 @@ interface BoundedSnapshot {
   omittedBytes: number;
 }
 
-function boundedSnapshot(value: string): BoundedSnapshot {
+export interface PlaywrightCliOptions {
+  maxSnapshotLines?: number;
+  maxSnapshotBytes?: number;
+}
+
+function boundedSnapshot(value: string, options: PlaywrightCliOptions): BoundedSnapshot {
   let redactions = 0;
   let redacted = value.replace(/(\b(?:textbox|searchbox|combobox|spinbutton)\b.*\[ref=e\d+\])\s*:.+$/gim, (_match, field: string) => {
     redactions++;
@@ -108,7 +115,7 @@ function boundedSnapshot(value: string): BoundedSnapshot {
   for (; index < lines.length; index++) {
     const line = lines[index];
     const size = Buffer.byteLength(line) + (kept.length ? 1 : 0);
-    if (kept.length >= MAX_SNAPSHOT_LINES || bytes + size > MAX_SNAPSHOT_BYTES) break;
+    if (kept.length >= (options.maxSnapshotLines ?? MAX_SNAPSHOT_LINES) || bytes + size > (options.maxSnapshotBytes ?? MAX_SNAPSHOT_BYTES)) break;
     kept.push(line);
     bytes += size;
   }
@@ -123,7 +130,7 @@ function boundedSnapshot(value: string): BoundedSnapshot {
   };
 }
 
-function parseJson(result: ExecResult, privateDirectory: string): Record<string, unknown> {
+function parseJson(result: ExecResult, privateDirectory: string, sessionName: string): Record<string, unknown> {
   if (Buffer.byteLength(result.stdout) > MAX_STDOUT_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI output exceeded 256KB limit");
   if (Buffer.byteLength(result.stderr) > MAX_STDERR_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI error output exceeded 16KB limit");
   if (result.killed) throw new HeliosCliError("timeout", "Playwright CLI command timed out");
@@ -135,7 +142,8 @@ function parseJson(result: ExecResult, privateDirectory: string): Record<string,
   if (result.code !== 0 || object.isError === true) {
     const raw = typeof object.error === "string" ? object.error : "Playwright CLI command failed";
     const sanitized = raw.replaceAll(privateDirectory, "<private Helios directory>").replace(/[\r\n]+/g, " ").slice(0, 500);
-    throw new HeliosCliError("command-failed", sanitized);
+    const category = raw === `The browser '${sessionName}' is not open, please run open first` ? "session-missing" : "command-failed";
+    throw new HeliosCliError(category, sanitized);
   }
   return object;
 }
@@ -144,22 +152,23 @@ export class PlaywrightCli {
   private readonly exec: Exec;
   readonly directory: string;
   private readonly configPath: string;
+  private readonly options: PlaywrightCliOptions;
+  private configReady?: Promise<void>;
 
-  private constructor(exec: Exec, directory: string, configPath: string) {
+  private constructor(exec: Exec, directory: string, configPath: string, options: PlaywrightCliOptions) {
     this.exec = exec;
     this.directory = directory;
     this.configPath = configPath;
+    this.options = options;
   }
 
-  static async create(exec: Exec): Promise<PlaywrightCli> {
+  static async create(exec: Exec, options: PlaywrightCliOptions = {}): Promise<PlaywrightCli> {
     await access(CLI_PATH).catch(() => { throw new HeliosCliError("unavailable", "Pinned @playwright/cli executable is unavailable; reinstall pi-helios"); });
     const directory = await mkdtemp(join(tmpdir(), "pi-helios-browser-"));
     await chmod(directory, 0o700).catch(() => {});
     const outputDirectory = join(directory, "artifacts");
     await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
-    const configPath = join(directory, "cli.config.json");
-    await writeFile(configPath, JSON.stringify({ outputDir: outputDirectory, outputMode: "stdout", codegen: "none" }), { mode: 0o600 });
-    return new PlaywrightCli(exec, directory, configPath);
+    return new PlaywrightCli(exec, directory, join(directory, "cli.config.json"), options);
   }
 
   async dispose(): Promise<void> {
@@ -167,10 +176,9 @@ export class PlaywrightCli {
   }
 
   async configureOwned(profileDirectory: string, headed: boolean, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<void> {
-    const outputDirectory = join(this.directory, "artifacts");
     await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
-    await writeFile(this.configPath, JSON.stringify({
-      outputDir: outputDirectory,
+    await this.writeConfig({
+      outputDir: join(this.directory, "artifacts"),
       outputMode: "stdout",
       codegen: "none",
       browser: {
@@ -184,12 +192,13 @@ export class PlaywrightCli {
         },
         ...(webIsolation ? { contextOptions: { acceptDownloads: false, serviceWorkers: "block" } } : {}),
       },
-    }), { mode: 0o600 });
+    });
   }
 
   async run(sessionName: string, action: BrowserAction, signal?: AbortSignal): Promise<CliResult> {
     if (!SESSION_NAME.test(sessionName)) throw new Error("Unsafe Playwright CLI session name");
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
+    await this.ensureConfig();
     const { command, args, artifactPath, timeout } = this.arguments(action);
     const invocation = [CLI_PATH, "--json", `-s=${sessionName}`, command, ...args];
     let result: ExecResult;
@@ -200,17 +209,19 @@ export class PlaywrightCli {
       throw new HeliosCliError("unavailable", error instanceof Error ? error.message.slice(0, 300) : "Could not start Playwright CLI");
     }
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
-    const value = parseJson(result, this.directory);
-    const rawSnapshot = typeof value.snapshot === "string"
-      ? value.snapshot
-      : value.result && typeof value.result === "object" && typeof (value.result as Record<string, unknown>).snapshot === "string"
-        ? (value.result as Record<string, unknown>).snapshot as string
-        : undefined;
+    const value = parseJson(result, this.directory, sessionName);
+    const nested = value.result && typeof value.result === "object" ? value.result as Record<string, unknown> : undefined;
+    const rawSnapshot = typeof value.snapshot === "string" ? value.snapshot : typeof nested?.snapshot === "string" ? nested.snapshot : undefined;
+    delete value.snapshot;
+    if (nested) delete nested.snapshot;
     if (artifactPath) {
-      const bytes = await readFile(artifactPath).catch(() => { throw new HeliosCliError("invalid-output", "Playwright CLI produced no screenshot file"); });
-      validatePng(bytes);
+      try { await validatePngFile(artifactPath); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new HeliosCliError("invalid-output", "Playwright CLI produced no screenshot file");
+        throw error;
+      }
     }
-    const snapshot = rawSnapshot === undefined ? undefined : boundedSnapshot(rawSnapshot);
+    const snapshot = rawSnapshot === undefined ? undefined : boundedSnapshot(rawSnapshot, this.options);
     return {
       value,
       snapshot: snapshot?.content,
@@ -220,6 +231,16 @@ export class PlaywrightCli {
       snapshotOmittedBytes: snapshot?.omittedBytes,
       artifactPath,
     };
+  }
+
+  private ensureConfig(): Promise<void> {
+    return this.configReady ?? this.writeConfig({ outputDir: join(this.directory, "artifacts"), outputMode: "stdout", codegen: "none" });
+  }
+
+  private writeConfig(config: Record<string, unknown>): Promise<void> {
+    const writing = writeFile(this.configPath, JSON.stringify(config), { mode: 0o600 });
+    this.configReady = writing.catch((error) => { this.configReady = undefined; throw error; });
+    return this.configReady;
   }
 
   private arguments(action: BrowserAction): { command: string; args: string[]; artifactPath?: string; timeout: number } {

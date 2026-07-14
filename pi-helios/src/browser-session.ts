@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Exec } from "./capture.ts";
 import { loopbackUrl } from "./capture.ts";
-import { PlaywrightCli, type BrowserAction, type BrowserOwnership, type CliResult } from "./playwright-cli.ts";
+import { HeliosCliError, PlaywrightCli, type BrowserAction, type BrowserOwnership, type CliResult } from "./playwright-cli.ts";
 
 export type BrowserState = "starting" | "ready" | "cleanup-required" | "closing" | "closed";
 
@@ -31,6 +31,7 @@ export interface BrowserOperationResult {
   outcome: "completed";
   durationMs?: number;
   metadataAvailable?: boolean;
+  metadataStale?: boolean;
   page?: PageIdentity;
   tabs?: PageIdentity[];
   snapshot?: string;
@@ -49,7 +50,25 @@ export interface BrowserShutdownResult {
 }
 
 type CliFactory = (exec: Exec) => Promise<PlaywrightCli>;
-interface Managed { record: BrowserSessionRecord; cli: PlaywrightCli; tail: Promise<void>; references: Set<string>; closingRequested: boolean }
+interface Managed {
+  record: BrowserSessionRecord;
+  cli: PlaywrightCli;
+  tail: Promise<void>;
+  references: Set<string>;
+  closingRequested: boolean;
+  page?: PageIdentity;
+  tabs?: PageIdentity[];
+}
+
+const METADATA_ACTIONS = new Set(["start", "attach", "navigate", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
+
+function sessionMissing(error: unknown): boolean {
+  return error instanceof HeliosCliError && error.category === "session-missing";
+}
+
+function staleSessionError(): Error {
+  return new Error("Helios browser session is stale; close or detach, then start again");
+}
 
 export function cliSessionName(piSessionId: string): string {
   const hash = createHash("sha256").update(piSessionId).digest("hex").slice(0, 12);
@@ -193,12 +212,16 @@ export class BrowserSessionManager {
     return this.serialized(managed, async () => {
       const startedAt = Date.now();
       if (this.sessions.get(piSessionId) !== managed || managed.record.state !== "ready") throw new Error(`Browser session is ${managed.record.state}`);
-      await this.ensureLive(managed, signal);
       this.validateReference(managed, action);
       let result: CliResult;
       try {
         result = await managed.cli.run(managed.record.cliSessionName, action, signal);
       } catch (error) {
+        if (sessionMissing(error)) {
+          managed.record.state = "cleanup-required";
+          managed.references.clear();
+          throw staleSessionError();
+        }
         if (this.invalidatesReferences(action)) managed.references.clear();
         throw error;
       }
@@ -276,25 +299,11 @@ export class BrowserSessionManager {
   }
 
   private updateReferences(managed: Managed, action: BrowserAction, snapshot?: string): void {
-    if (action.kind === "snapshot") {
-      managed.references = new Set(snapshot?.match(/\bref=(e\d+)\b/g)?.map((item) => item.slice(4)) ?? []);
+    if (snapshot !== undefined) {
+      managed.references = new Set(snapshot.match(/\bref=(e\d+)\b/g)?.map((item) => item.slice(4)) ?? []);
       return;
     }
     if (this.invalidatesReferences(action)) managed.references.clear();
-  }
-
-  private async ensureLive(managed: Managed, signal?: AbortSignal): Promise<void> {
-    const listed = await managed.cli.run(managed.record.cliSessionName, { kind: "list" }, signal);
-    const browsers = listedBrowsers(listed.value);
-    if (!browsers) {
-      managed.record.state = "cleanup-required";
-      throw new Error("Playwright CLI returned an invalid browser session list");
-    }
-    const live = browsers.some((item) => item.name === managed.record.cliSessionName && item.status === "open");
-    if (!live) {
-      managed.record.state = "cleanup-required";
-      throw new Error("Helios browser session is stale; close or detach, then start again");
-    }
   }
 
   private async runCleanup(managed: Managed, action: "close" | "detach", signal?: AbortSignal): Promise<{ cleaned: boolean; error?: unknown }> {
@@ -324,26 +333,44 @@ export class BrowserSessionManager {
   }
 
   private async envelope(managed: Managed, action: string, result: CliResult, signal?: AbortSignal, includeTabs = false, startedAt = Date.now()): Promise<BrowserOperationResult> {
+    const refreshMetadata = METADATA_ACTIONS.has(action);
     let tabResult: CliResult | undefined;
-    let metadataAvailable = true;
+    let metadataAvailable = false;
+    let metadataStale = !refreshMetadata && managed.page !== undefined;
     if (action === "tab-list") tabResult = result;
-    else {
+    else if (refreshMetadata) {
       try { tabResult = await managed.cli.run(managed.record.cliSessionName, { kind: "tab-list" }, signal); }
-      catch { metadataAvailable = false; }
+      catch (error) {
+        metadataStale = managed.page !== undefined;
+        if (sessionMissing(error)) {
+          managed.record.state = "cleanup-required";
+          managed.references.clear();
+          if (action === "start" || action === "attach") throw staleSessionError();
+        }
+      }
     }
-    const text = resultText(tabResult?.value ?? {});
-    const parsedTabs = parseTabs(text);
-    const page = currentTab(text);
-    if (!text || !page || parsedTabs.length === 0) metadataAvailable = false;
-    if (page) managed.record.activeTab = page.index;
+    if (tabResult) {
+      const text = resultText(tabResult.value);
+      const tabs = parseTabs(text);
+      const page = currentTab(text);
+      metadataAvailable = Boolean(text && page && tabs.length);
+      if (tabs.length) managed.tabs = tabs;
+      if (page) {
+        managed.page = page;
+        managed.record.activeTab = page.index;
+      }
+      if (metadataAvailable) metadataStale = false;
+      else metadataStale = managed.page !== undefined;
+    }
     return {
       action,
       ownership: managed.record.ownership,
       outcome: "completed",
       durationMs: Date.now() - startedAt,
       metadataAvailable,
-      page,
-      tabs: includeTabs ? parsedTabs : undefined,
+      metadataStale,
+      page: managed.page,
+      tabs: includeTabs ? managed.tabs : undefined,
       snapshot: result.snapshot,
       snapshotRedactions: result.snapshotRedactions,
       snapshotTruncated: result.snapshotTruncated,

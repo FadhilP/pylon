@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { BrowserSessionManager, type BrowserOperationResult } from "../src/browser-session.ts";
+import { PlaywrightCli } from "../src/playwright-cli.ts";
 import { PublicNetworkProxy, resolvePublicHost, validatePublicWebUrl } from "../src/public-proxy.ts";
 import { consumeWebScoutGrant } from "../src/web-scout-grant.ts";
 
@@ -12,14 +13,18 @@ function describe(result: BrowserOperationResult, pages: number, maxPages: numbe
   if (result.snapshot) lines.push(`Snapshot:\n${result.snapshot}`);
   if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
   if (result.snapshotTruncated) lines.push(`Snapshot truncated; omitted ${result.snapshotOmittedLines ?? 0} lines.`);
-  if (result.metadataAvailable === false) lines.push("Page metadata unavailable.");
+  if (result.metadataStale) lines.push("Page metadata cached.");
+  else if (result.metadataAvailable === false) lines.push("Page metadata unavailable.");
   return lines.join("\n");
 }
 
 export default async function webScoutBrowser(pi: ExtensionAPI) {
   const grant = await consumeWebScoutGrant();
   const proxy = await PublicNetworkProxy.start({ maxRequests: Math.min(1_000, grant.maxActions * 20), maxBytes: 100 * 1024 * 1024 });
-  const manager = new BrowserSessionManager((command, args, options) => pi.exec(command, args, options));
+  const manager = new BrowserSessionManager(
+    (command, args, options) => pi.exec(command, args, options),
+    (exec) => PlaywrightCli.create(exec, { maxSnapshotLines: 250, maxSnapshotBytes: 20 * 1024 }),
+  );
   const sessionId = `web-scout-${randomUUID()}`;
   let started = false;
   let pages = 0;
@@ -46,13 +51,14 @@ export default async function webScoutBrowser(pi: ExtensionAPI) {
     await resolvePublicHost(url.hostname);
     return url.href;
   };
-  const snapshot = async (signal?: AbortSignal) => {
-    const result = await manager.operate(sessionId, { kind: "snapshot", depth: 10 }, signal);
+  const acceptSnapshot = (result: BrowserOperationResult) => {
     linkRefs = new Set(result.snapshot?.split(/\r?\n/)
       .filter((line) => /\blink\b/i.test(line))
       .flatMap((line) => line.match(/\bref=(e\d+)\b/g)?.map((item) => item.slice(4)) ?? []) ?? []);
     return result;
   };
+  const snapshot = async (signal?: AbortSignal) => acceptSnapshot(await manager.operate(sessionId, { kind: "snapshot", depth: 6 }, signal));
+  const actionSnapshot = async (result: BrowserOperationResult, signal?: AbortSignal) => result.snapshot === undefined ? snapshot(signal) : acceptSnapshot(result);
   const response = (action: string, result: BrowserOperationResult) => ({
     content: [{ type: "text" as const, text: describe(result, pages, grant.maxPages, actions, grant.maxActions) }],
     details: { action, pages, actions, page: result.page, truncated: result.snapshotTruncated, redactions: result.snapshotRedactions },
@@ -85,11 +91,12 @@ export default async function webScoutBrowser(pi: ExtensionAPI) {
         if (params.target !== undefined) throw new Error("navigate does not accept target");
         const url = await publicUrl(params.url);
         consumePage();
-        await manager.operate(sessionId, { kind: "navigate", url }, signal);
-        const result = await snapshot(signal);
+        const navigated = await manager.operate(sessionId, { kind: "navigate", url }, signal);
+        const result = await actionSnapshot(navigated, signal);
         return response(params.action, result);
       }
       if (params.url !== undefined) throw new Error(`${params.action} does not accept url`);
+      let actionResult: BrowserOperationResult | undefined;
       if (params.action === "follow") {
         if (!params.target) throw new Error("follow requires target");
         if (!linkRefs.has(params.target)) throw new Error("follow target must be a link reference from latest snapshot");
@@ -97,15 +104,15 @@ export default async function webScoutBrowser(pi: ExtensionAPI) {
         if (!href.resolvedUrl) throw new Error("Link has no public navigation URL");
         const url = await publicUrl(href.resolvedUrl);
         consumePage();
-        await manager.operate(sessionId, { kind: "navigate", url }, signal);
+        actionResult = await manager.operate(sessionId, { kind: "navigate", url }, signal);
       } else if (params.action === "back") {
         if (params.target !== undefined) throw new Error("back does not accept target");
         consumePage();
-        await manager.operate(sessionId, { kind: "back" }, signal);
+        actionResult = await manager.operate(sessionId, { kind: "back" }, signal);
       } else {
         if (params.target !== undefined) throw new Error("snapshot does not accept target");
       }
-      const result = await snapshot(signal);
+      const result = actionResult ? await actionSnapshot(actionResult, signal) : await snapshot(signal);
       return response(params.action, result);
     },
   });

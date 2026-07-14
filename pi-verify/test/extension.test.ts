@@ -5,6 +5,18 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import extension from "../extensions/pi-verify.ts";
 
+test("verify guidance keeps verification before final text", () => {
+  let tool: any;
+  extension({
+    registerTool: (value: any) => { tool = value; },
+    on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
+  } as any);
+  const guidance = tool.promptGuidelines.join("\n");
+  assert.match(guidance, /tool-only assistant turn/i);
+  assert.match(guidance, /before writing final user-facing text/i);
+  assert.match(guidance, /wait for its result and respond once/i);
+});
+
 test("verify publishes bounded result metadata and session entry", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-verify-extension-"));
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node ok.js" } }));

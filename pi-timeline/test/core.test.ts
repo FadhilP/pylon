@@ -13,7 +13,9 @@ import { findRunEntry, isRunEntry } from "../src/run.ts";
 
 const exec = promisify(execFile);
 
-function namingHarness(entries: any[]) {
+function namingHarness(entries: any[], completeTitle: any = async () => ({
+  content: [{ type: "text", text: "Semantic Timeline Session" }],
+})) {
   const handlers = new Map<string, Function[]>(), names: string[] = [];
   const pi: any = {
     events: { on: () => () => {} },
@@ -21,10 +23,14 @@ function namingHarness(entries: any[]) {
     registerCommand() {},
     setSessionName: (name: string) => names.push(name),
   };
-  extension(pi);
+  extension(pi, completeTitle);
   const ctx: any = {
     cwd: join(tmpdir(), "pi-timeline-naming-test"),
     hasUI: false,
+    model: { provider: "test", id: "title-model" },
+    modelRegistry: {
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
+    },
     sessionManager: {
       getBranch: () => entries,
       getEntries: () => entries,
@@ -36,72 +42,117 @@ function namingHarness(entries: any[]) {
   return { handlers, names, ctx };
 }
 
-test("unnamed sessions are named from first prompt after settled turn", async () => {
-  const entries = [{
-    type: "message",
-    id: "user-1",
-    message: { role: "user", content: "  Add session naming\nwithout noise  " },
-  }];
-  const { handlers, names, ctx } = namingHarness(entries);
-  await handlers.get("session_start")![0]({}, ctx);
-  await handlers.get("agent_settled")![0]({}, ctx);
-  assert.deepEqual(names, ["Add session naming without noise"]);
-});
-
-test("main model supplies semantic title without exposing marker", async () => {
-  const entries = [{
-    type: "message",
-    id: "user-1",
-    message: { role: "user", content: "Can we add session name to the TUI?" },
-  }];
-  const { handlers, names, ctx } = namingHarness(entries);
-  await handlers.get("session_start")![0]({}, ctx);
-  const prompt = await handlers.get("before_agent_start")![0]({ systemPrompt: "base" }, ctx);
-  assert.match(prompt.systemPrompt, /3-8 word semantic task title/);
-
-  const result = await handlers.get("message_end")![0]({
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Done.\n<!-- pi-session-title: Persistent TUI Session Names -->" }],
+test("settled unnamed session gets a dedicated semantic title", async () => {
+  const calls: any[] = [], entries = [
+    {
+      type: "message", id: "user-1",
+      message: { role: "user", content: "Can we add session name to the TUI?" },
     },
-  }, ctx);
-  assert.deepEqual(names, ["Persistent TUI Session Names"]);
-  assert.deepEqual(result.message.content, [{ type: "text", text: "Done." }]);
-
+    {
+      type: "message", id: "assistant-1",
+      message: { role: "assistant", content: [{ type: "text", text: "Implemented session naming." }] },
+    },
+  ];
+  const { handlers, names, ctx } = namingHarness(entries, async (...args: any[]) => {
+    calls.push(args);
+    return { content: [{ type: "text", text: "Persistent TUI Session Names" }] };
+  });
+  await handlers.get("session_start")![0]({}, ctx);
   await handlers.get("agent_settled")![0]({}, ctx);
+
   assert.deepEqual(names, ["Persistent TUI Session Names"]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1].messages[0].content[0].text, /Can we add session name/);
+  assert.match(calls[0][1].messages[0].content[0].text, /Implemented session naming/);
+  assert.equal(calls[0][2].maxTokens, 32);
+  assert.equal(handlers.has("before_agent_start"), false);
+  assert.equal(handlers.has("message_end"), false);
 });
 
-test("manual rename wins while semantic title is pending", async () => {
+test("invalid or failed title generation falls back to first prompt", async () => {
+  for (const completeTitle of [
+    async () => ({ content: [{ type: "text", text: "Too short" }] }),
+    async () => { throw new Error("unavailable"); },
+  ]) {
+    const entries = [{
+      type: "message", id: "user-1",
+      message: { role: "user", content: "  Add session naming\nwithout noise  " },
+    }];
+    const { handlers, names, ctx } = namingHarness(entries, completeTitle);
+    await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.deepEqual(names, ["Add session naming without noise"]);
+  }
+});
+
+test("pending title call is single-flight and manual rename wins", async () => {
+  let calls = 0, finish!: (value: any) => void, markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const pending = new Promise((resolve) => { finish = resolve; });
   const entries = [{
-    type: "message",
-    id: "user-1",
-    message: { role: "user", content: "First prompt" },
+    type: "message", id: "user-1",
+    message: { role: "user", content: "First prompt for naming" },
   }];
-  const { handlers, names, ctx } = namingHarness(entries);
+  const { handlers, names, ctx } = namingHarness(entries, async () => {
+    calls++;
+    markStarted();
+    return pending;
+  });
   await handlers.get("session_start")![0]({}, ctx);
-  await handlers.get("before_agent_start")![0]({ systemPrompt: "base" }, ctx);
+  const settling = handlers.get("agent_settled")![0]({}, ctx);
+  await started;
+  await handlers.get("agent_settled")![0]({}, ctx);
+  assert.equal(calls, 1);
   await handlers.get("session_info_changed")![0]({ name: "Manual title" }, ctx);
-  const result = await handlers.get("message_end")![0]({
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Done.\n<!-- pi-session-title: Generated Title -->" }],
-    },
-  }, ctx);
+  finish({ content: [{ type: "text", text: "Generated Session Title" }] });
+  await settling;
   assert.deepEqual(names, []);
-  assert.deepEqual(result.message.content, [{ type: "text", text: "Done." }]);
+});
+
+test("pending title from an old session cannot rename a new session", async () => {
+  let finish!: (value: any) => void, markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const pending = new Promise((resolve) => { finish = resolve; });
+  const entries = [{
+    type: "message", id: "user-1",
+    message: { role: "user", content: "Name the old session safely" },
+  }];
+  const { handlers, names, ctx } = namingHarness(entries, async () => {
+    markStarted();
+    return pending;
+  });
+  await handlers.get("session_start")![0]({}, ctx);
+  const settling = handlers.get("agent_settled")![0]({}, ctx);
+  await started;
+  const nextCtx = {
+    ...ctx,
+    sessionManager: {
+      ...ctx.sessionManager,
+      getEntries: () => [{ type: "session_info", id: "name-2", name: "New session" }],
+      getSessionId: () => "next-session",
+    },
+  };
+  await handlers.get("session_start")![0]({}, nextCtx);
+  finish({ content: [{ type: "text", text: "Generated Old Session Title" }] });
+  await settling;
+  assert.deepEqual(names, []);
 });
 
 test("existing or manually cleared session names remain untouched", async () => {
   for (const name of ["Existing name", ""]) {
+    let calls = 0;
     const entries = [
       { type: "message", id: "user-1", message: { role: "user", content: "First prompt" } },
       { type: "session_info", id: "name-1", name },
     ];
-    const { handlers, names, ctx } = namingHarness(entries);
+    const { handlers, names, ctx } = namingHarness(entries, async () => {
+      calls++;
+      return { content: [{ type: "text", text: "Generated Session Title" }] };
+    });
     await handlers.get("session_start")![0]({}, ctx);
     await handlers.get("agent_settled")![0]({}, ctx);
     assert.deepEqual(names, []);
+    assert.equal(calls, 0);
   }
 });
 

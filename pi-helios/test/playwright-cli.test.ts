@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { validatePngFile } from "../src/capture.ts";
 import { PlaywrightCli, HeliosCliError, validateNavigationUrl } from "../src/playwright-cli.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -19,6 +22,7 @@ test("adapter invokes pinned CLI with argument array and private cwd", async () 
     assert.deepEqual(call!.args.slice(1), ["--json", `-s=${SESSION}`, "snapshot", "--depth=3"]);
     assert.equal(call!.options.cwd, cli.directory);
     assert.equal(result.snapshot, "- heading [ref=e1]");
+    assert.equal(result.value.snapshot, undefined);
   } finally { await cli.dispose(); }
 });
 
@@ -63,6 +67,16 @@ test("adapter rejects unsafe inputs and malformed or oversized output", async ()
   await oversized.dispose();
 });
 
+test("adapter classifies only the pinned missing-session error", async () => {
+  const missing = await PlaywrightCli.create(async () => ({ code: 1, stdout: JSON.stringify({ isError: true, error: `The browser '${SESSION}' is not open, please run open first` }), stderr: "", killed: false }));
+  await assert.rejects(missing.run(SESSION, { kind: "reload" }), (error: any) => error.category === "session-missing");
+  await missing.dispose();
+
+  const nearMatch = await PlaywrightCli.create(async () => ({ code: 1, stdout: JSON.stringify({ isError: true, error: `The browser '${SESSION}' is not open; please run open first` }), stderr: "", killed: false }));
+  await assert.rejects(nearMatch.run(SESSION, { kind: "reload" }), (error: any) => error.category === "command-failed");
+  await nearMatch.dispose();
+});
+
 test("adapter maps timeout and cancellation without leaking subprocess details", async () => {
   const timed = await PlaywrightCli.create(async () => ({ code: 1, stdout: "{}", stderr: "private failure", killed: true }));
   await assert.rejects(timed.run(SESSION, { kind: "reload" }), (error: any) => error.category === "timeout");
@@ -104,4 +118,32 @@ test("snapshot truncation reports deterministic omitted counts", async () => {
     assert.ok((result.snapshotOmittedBytes ?? 0) > 0);
     assert.match(result.snapshot!, /\[Snapshot truncated by Helios\]$/);
   } finally { await cli.dispose(); }
+});
+
+test("custom snapshot limits bound Web Scout output", async () => {
+  const raw = Array.from({ length: 10 }, (_, index) => `- link ${index} [ref=e${index}]`).join("\n");
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: JSON.stringify({ result: { snapshot: raw } }), stderr: "", killed: false }), { maxSnapshotLines: 2, maxSnapshotBytes: 1024 });
+  try {
+    const result = await cli.run(SESSION, { kind: "snapshot" });
+    assert.equal(result.snapshot?.split("\n").length, 3);
+    assert.equal((result.value.result as Record<string, unknown>).snapshot, undefined);
+  } finally { await cli.dispose(); }
+});
+
+test("PNG file validation reads only metadata and signature", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "helios-png-test-"));
+  try {
+    const valid = join(directory, "valid.png");
+    await writeFile(valid, PNG);
+    await validatePngFile(valid);
+
+    const invalid = join(directory, "invalid.png");
+    await writeFile(invalid, "not png");
+    await assert.rejects(validatePngFile(invalid), /did not produce a PNG/);
+
+    const oversized = join(directory, "oversized.png");
+    await writeFile(oversized, PNG.subarray(0, 8));
+    await truncate(oversized, 25 * 1024 * 1024 + 1);
+    await assert.rejects(validatePngFile(oversized), /exceeds 25MB/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

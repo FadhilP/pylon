@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BrowserSessionManager, cliSessionName, parseTabs, validateCdpEndpoint } from "../src/browser-session.ts";
+import { HeliosCliError } from "../src/playwright-cli.ts";
 
 function fakeCli(log: string[], delay = 0) {
   return {
@@ -62,13 +63,20 @@ test("operations serialize and shutdown is idempotent", async () => {
   assert.equal(log.filter((item) => item === "dispose").length, 1);
 });
 
-test("missing CLI session fails conservatively", async () => {
-  const cli = fakeCli([]);
-  cli.run = async (_session: string, action: any) => action.kind === "list" ? { value: { browsers: [] } } : { value: {} };
+test("missing CLI session fails conservatively without a liveness subprocess", async () => {
+  const actions: string[] = [];
+  const cli = fakeCli(actions);
+  cli.run = async (_session: string, action: any) => {
+    actions.push(action.kind);
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "reload") throw new HeliosCliError("session-missing", "browser is not open");
+    return { value: {} };
+  };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("stale");
   await assert.rejects(manager.operate("stale", { kind: "reload" }), /stale/);
   assert.equal(manager.get("stale")?.state, "cleanup-required");
+  assert.equal(actions.includes("list"), false);
   await manager.shutdown();
 });
 
@@ -140,12 +148,56 @@ test("metadata failure does not hide primary success and hover invalidates refs"
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("metadata");
-  const snapshot = await manager.operate("metadata", { kind: "snapshot" });
-  assert.equal(snapshot.outcome, "completed");
-  assert.equal(snapshot.metadataAvailable, false);
+  let snapshot = await manager.operate("metadata", { kind: "snapshot" });
+  const clicked = await manager.operate("metadata", { kind: "click", target: "e1" });
+  assert.equal(clicked.outcome, "completed");
+  assert.equal(clicked.metadataAvailable, false);
+  snapshot = await manager.operate("metadata", { kind: "snapshot" });
   await manager.operate("metadata", { kind: "hover", target: "e1" });
   await assert.rejects(manager.operate("metadata", { kind: "click", target: "e1" }), /stale/);
   await manager.close("metadata", "close");
+});
+
+test("secondary missing-session metadata marks cleanup required", async () => {
+  let tabLists = 0;
+  const cli = fakeCli([]);
+  cli.run = async (_session: string, action: any) => {
+    if (action.kind === "tab-list") {
+      if (++tabLists > 1) throw new HeliosCliError("session-missing", "browser is not open");
+      return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    }
+    if (action.kind === "snapshot") return { value: {}, snapshot: "- button [ref=e1]" };
+    if (action.kind === "click") return { value: {}, snapshot: "- button [ref=e2]" };
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("metadata-stale-session");
+  await manager.operate("metadata-stale-session", { kind: "snapshot" });
+  const clicked = await manager.operate("metadata-stale-session", { kind: "click", target: "e1" });
+  assert.equal(clicked.metadataAvailable, false);
+  assert.equal(clicked.metadataStale, true);
+  assert.equal(manager.get("metadata-stale-session")?.state, "cleanup-required");
+  await assert.rejects(manager.operate("metadata-stale-session", { kind: "click", target: "e2" }), /cleanup-required/);
+  await manager.shutdown();
+});
+
+test("action snapshots replace references without an explicit snapshot command", async () => {
+  const actions: string[] = [];
+  const cli = fakeCli(actions);
+  cli.run = async (session: string, action: any) => {
+    actions.push(action.kind);
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "navigate") return { value: {}, snapshot: "- link [ref=e2]" };
+    return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("action-refs");
+  const navigated = await manager.operate("action-refs", { kind: "navigate", url: "https://example.com" });
+  assert.match(navigated.snapshot!, /ref=e2/);
+  await manager.operate("action-refs", { kind: "click", target: "e2" });
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "e2" }), /stale/);
+  assert.equal(actions.includes("list"), false);
+  await manager.close("action-refs", "close");
 });
 
 test("shutdown reports partial cleanup failure and keeps uncertain session", async () => {

@@ -101,6 +101,23 @@ test("doctor checks pinned CLI without launching a browser", async () => {
   assert.ok(!calls[0].includes("open"));
 });
 
+test("health diagnostics share cached work while doctor stays fresh", async () => {
+  let calls = 0;
+  const { commands, eventHandlers } = runtime({ exec: async () => {
+    calls++;
+    return { code: 0, stdout: "playwright-cli 0.1.17\n", stderr: "", killed: false };
+  } });
+  const health = eventHandlers.get("pi-conductor:health-request")![0];
+  const responses: Promise<unknown>[] = [];
+  const request = { version: 1, respond(value: Promise<unknown>) { responses.push(value); } };
+  health(request);
+  health(request);
+  await Promise.all(responses);
+  assert.equal(calls, 1);
+  await commands.get("helios-doctor").handler("", context());
+  assert.equal(calls, 2);
+});
+
 test("Helios advertises one-use Web Scout child capability", async () => {
   const { eventHandlers } = runtime();
   const capabilities: any[] = [];
@@ -127,6 +144,34 @@ test("Web Scout child extension requires and consumes issued grant", async () =>
   assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
   await assert.rejects(webScoutBrowser({} as any), /grant is missing/);
+});
+
+test("Web Scout reuses navigation snapshots without extra snapshot subprocesses", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 3, maxActions: 4, headed: false });
+  process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  const commands: string[] = [];
+  await webScoutBrowser({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find((value) => ["open", "goto", "eval", "snapshot", "tab-list", "close"].includes(value)) ?? "unknown";
+      commands.push(action);
+      if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://1.1.1.1/)" }), stderr: "", killed: false };
+      if (action === "eval") return { code: 0, stdout: JSON.stringify({ result: "https://1.1.1.1/next" }), stderr: "", killed: false };
+      if (action === "goto") return { code: 0, stdout: JSON.stringify({ snapshot: "- link Next [ref=e1]" }), stderr: "", killed: false };
+      return { code: 0, stdout: "{}", stderr: "", killed: false };
+    },
+    registerTool(value: any) { tools.set(value.name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any);
+  const browser = tools.get("scout_browser");
+  const navigated = await browser.execute("navigate", { action: "navigate", url: "https://1.1.1.1" });
+  assert.match(navigated.content[0].text, /ref=e1/);
+  assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list"]);
+  await browser.execute("follow", { action: "follow", target: "e1" });
+  assert.deepEqual(commands.slice(4), ["eval", "goto", "tab-list"]);
+  assert.equal(commands.includes("snapshot"), false);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
 });
 
 test("Web Scout child cleans proxy after browser start failure", async () => {

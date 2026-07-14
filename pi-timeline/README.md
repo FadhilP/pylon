@@ -28,7 +28,7 @@ Every restore requires confirmation. Native `/tree` remains conversation-only.
 
 Snapshots use `refs/pi-timeline/...` synthetic commits. `HEAD`, branch, stash, and ignored files remain untouched. Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs.
 
-During the first turn, the main model proposes a concise semantic session title without an extra model request; the marker carrying it is removed from the visible response. If no valid title is returned, the first prompt supplies a concise fallback. Existing names and manually cleared names remain untouched.
+After the first settled turn, Timeline makes one bounded title-only model request using short excerpts from the first prompt and final response. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
 
 ## Integrations
 
