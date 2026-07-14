@@ -2,7 +2,7 @@ export const ADVISOR_MAX_CALLS = 3;
 export const ADVISOR_MAX_OUTPUT_TOKENS = 8_192;
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 
-export const ADVISOR_PROMPT = `You are senior technical advisor, not executor. Analyze quoted executor context only.
+export const ADVISOR_PROMPT = `Analyze quoted executor context only.
 Review the executor's evidence, stated findings, tentative judgments, and proposed direction. Challenge unsupported conclusions, contradictions, missed risks, and weak checks. If no tentative judgment is stated, evaluate available evidence while marking what remains unknown.
 Give concise actionable strategic advice; do not call tools, write files, or pretend to inspect anything.
 
