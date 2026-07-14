@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import scout, { parentContextForRepoRun, startsNewRepoSession } from "../extensions/pi-scout.ts";
+import scout, {
+  parentContextForRepoRun,
+  REPO_SESSION_CACHE_READ_LIMIT,
+  REPO_SESSION_CONTEXT_LIMIT,
+  shouldRotateRepoSession,
+  startsNewRepoSession,
+} from "../extensions/pi-scout.ts";
+import type { ScoutRun } from "../src/runner.ts";
 
 class Bus {
   handlers = new Map<string, Set<(value: any) => void>>();
@@ -15,7 +22,7 @@ class Bus {
   emit(name: string, value: any) { for (const handler of this.handlers.get(name) ?? []) handler(value); }
 }
 
-async function harness() {
+async function harness(runRepoScout?: Parameters<typeof scout>[1]) {
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-scout-extension-"));
   const events = new Bus();
@@ -30,7 +37,7 @@ async function harness() {
     getActiveTools: () => [...active], setActiveTools: (value: string[]) => { active = value; },
     getThinkingLevel: () => "low",
   };
-  scout(pi);
+  scout(pi, runRepoScout);
   return { events, tools, handlers, restore() { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; } };
 }
 
@@ -54,6 +61,52 @@ test("parent context is sent only on the first repo Scout call", () => {
   const entries = [{ type: "message", message: { role: "user", content: "Find auth flow" } }];
   assert.match(parentContextForRepoRun(1, entries), /Find auth flow/);
   assert.equal(parentContextForRepoRun(2, entries), "");
+});
+
+test("Repo Scout rotates after either independent usage limit", () => {
+  assert.equal(shouldRotateRepoSession(REPO_SESSION_CONTEXT_LIMIT, REPO_SESSION_CACHE_READ_LIMIT), false);
+  assert.equal(shouldRotateRepoSession(REPO_SESSION_CONTEXT_LIMIT + 1, 0), true);
+  assert.equal(shouldRotateRepoSession(0, REPO_SESSION_CACHE_READ_LIMIT + 1), true);
+});
+
+test("parallel Repo Scout follow-up starts fresh after prior child exceeds context limit", async () => {
+  let calls = 0;
+  let firstStarted!: () => void;
+  let releaseFirst!: () => void;
+  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const childArgs: string[][] = [];
+  const run = async (args: string[]): Promise<ScoutRun> => {
+    childArgs.push(args);
+    calls++;
+    if (calls === 1) {
+      firstStarted();
+      await firstGate;
+    }
+    return {
+      text: `result ${calls}`, stderr: "", durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 0, activity: [],
+      contextTokens: calls === 1 ? REPO_SESSION_CONTEXT_LIMIT + 1 : 1,
+      cacheReadTokens: 0,
+    };
+  };
+  const runtime = await harness(run);
+  const ctx = context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } });
+  try {
+    const first = runtime.tools.get("repo_scout").execute("one", { task: "first" }, undefined, undefined, ctx);
+    await started;
+    const second = runtime.tools.get("repo_scout").execute("two", { task: "second" }, undefined, undefined, ctx);
+    releaseFirst();
+    const results = await Promise.all([first, second]);
+    const sessionDir = (args: string[]) => args[args.indexOf("--session-dir") + 1];
+    assert.equal(calls, 2);
+    assert.equal(results[0].details.callNumber, 1);
+    assert.equal(results[1].details.callNumber, 2);
+    assert.equal(results[1].details.sessionCallNumber, 1);
+    assert.ok(!childArgs[1].includes("--continue"));
+    assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
+  } finally { runtime.restore(); }
 });
 
 test("Scout registers separate repo and web tools; Web Scout fails closed without UI", async () => {

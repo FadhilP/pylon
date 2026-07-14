@@ -27,6 +27,8 @@ function harness() {
   const pi = {
     events,
     getActiveTools: () => [...active],
+    getAllTools: () => ["read", "edit", "write", "advisor", "repo_scout", "continuity_update"]
+      .map((name) => ({ name })),
     setActiveTools: (tools: string[]) => {
       if (failReconcile) throw Error("forced reconcile failure");
       active = [...tools];
@@ -122,6 +124,50 @@ test("doctor reports quarantined state and unavailable configured models", async
   }
 });
 
+test("tools command manages baseline while restrictive gates remain authoritative", async () => {
+  const runtime = harness();
+  let message = "", level = "";
+  const ctx = { ui: { notify: (text: string, severity: string) => {
+    message = text; level = severity;
+  } } };
+  for (const handler of runtime.handlers.get("session_start") ?? [])
+    await handler({ reason: "startup" }, ctx);
+
+  await runtime.commands.get("conductor").handler("tools disable edit", ctx);
+  assert.ok(!runtime.active().includes("edit"));
+  await runtime.commands.get("conductor").handler("tools enable edit write", ctx);
+  assert.ok(runtime.active().includes("edit"));
+  assert.ok(runtime.active().includes("write"));
+
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "register", owner: "pi-continuity",
+    managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
+    allowOnly: ["read", "continuity_update"],
+  });
+  await runtime.commands.get("conductor").handler("tools enable edit", ctx);
+  assert.ok(!runtime.active().includes("edit"));
+  assert.match(message, /Deferred by active gate: edit/);
+  assert.equal(level, "warning");
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "unregister", owner: "pi-continuity",
+  });
+  assert.ok(runtime.active().includes("edit"));
+
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "register", owner: "pi-advisor",
+    managedTools: ["advisor"], enabledTools: ["advisor"],
+  });
+  await runtime.commands.get("conductor").handler("tools disable advisor", ctx);
+  assert.match(message, /Policy-managed tools cannot be changed manually: advisor/);
+  assert.equal(level, "error");
+  await runtime.commands.get("conductor").handler("tools enable missing", ctx);
+  assert.match(message, /Unknown tools: missing/);
+
+  await runtime.commands.get("conductor").handler("tools status", ctx);
+  assert.match(message, /Baseline:/);
+  assert.match(message, /Effective:/);
+});
+
 test("acknowledges policy only after successful reconcile", () => {
   const runtime = harness();
   let acknowledgements = 0;
@@ -139,6 +185,47 @@ test("acknowledges policy only after successful reconcile", () => {
   runtime.fail(false);
   runtime.events.emit("pi-conductor:tool-policy", policy);
   assert.equal(acknowledgements, 1);
+});
+
+test("restores pre-gate tools supplied by an acknowledged policy", () => {
+  const runtime = harness();
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1,
+    kind: "register",
+    owner: "pi-continuity",
+    managedTools: ["continuity_update"],
+    enabledTools: ["continuity_update"],
+    allowOnly: ["read", "continuity_update"],
+  });
+  assert.ok(!runtime.active().includes("edit"));
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1,
+    kind: "register",
+    owner: "pi-continuity",
+    managedTools: ["continuity_update"],
+    enabledTools: ["continuity_update"],
+    restoreTools: ["read", "edit", "advisor", "repo_scout"],
+  });
+  assert.ok(runtime.active().includes("edit"));
+});
+
+test("restore snapshot does not bypass another active gate", () => {
+  const runtime = harness();
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "register", owner: "pi-continuity",
+    managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
+    allowOnly: ["read", "continuity_update"],
+  });
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "register", owner: "pi-other",
+    managedTools: [], enabledTools: [], allowOnly: ["read"],
+  });
+  runtime.events.emit("pi-conductor:tool-policy", {
+    version: 1, kind: "register", owner: "pi-continuity",
+    managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
+    restoreTools: ["read", "edit"],
+  });
+  assert.ok(!runtime.active().includes("edit"));
 });
 
 test("rolls back unregister state when reconcile fails", async () => {

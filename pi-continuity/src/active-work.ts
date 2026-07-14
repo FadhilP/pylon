@@ -17,6 +17,8 @@ export type Work = {
   latestFailure?: string;
   nextAction?: string;
   runId?: string;
+  planRevision?: number;
+  offeredPlanRevision?: number;
   baseModel?: { provider: string; id: string };
   baseThinking?: string;
   createdAt: string;
@@ -57,6 +59,13 @@ export function isWork(value: any): value is Work {
         typeof value.latestFailure === "string") &&
       (value.nextAction === undefined || typeof value.nextAction === "string") &&
       (value.runId === undefined || typeof value.runId === "string") &&
+      (value.planRevision === undefined ||
+        (Number.isInteger(value.planRevision) && value.planRevision > 0)) &&
+      (value.offeredPlanRevision === undefined ||
+        (Number.isInteger(value.offeredPlanRevision) &&
+          value.offeredPlanRevision > 0 &&
+          (value.planRevision === undefined ||
+            value.offeredPlanRevision <= value.planRevision))) &&
       (value.baseModel === undefined ||
         (typeof value.baseModel?.provider === "string" &&
           typeof value.baseModel?.id === "string")) &&

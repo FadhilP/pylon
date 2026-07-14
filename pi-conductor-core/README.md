@@ -14,6 +14,8 @@ This installs the complete Pi Conductor bundle, including pi-conductor-core. Run
 
 - `/conductor` shows registered package policies and the latest bounded Guard decision.
 - `/conductor doctor` also checks local Pi and Node compatibility, required and optional executables, old locks, quarantined state, configured child-model availability, package tool surfaces, and bounded package health reports without network calls.
+- `/conductor tools status` shows baseline tools, effective tools, and whether a restrictive gate is active.
+- `/conductor tools enable edit write` enables registered unmanaged tools; `/conductor tools disable edit write` disables them. Policy-managed tools must be changed through their owning package. Active gates remain authoritative, so enabling a blocked tool is deferred until every restrictive gate clears.
 
 Guard remains the independent final safety authority; Conductor never approves or weakens it.
 
@@ -21,6 +23,7 @@ Guard remains the independent final safety authority; Conductor never approves o
 
 - Merges independently enabled tools without lost updates.
 - Tracks unmanaged baseline tools separately from package-managed tools.
+- Supports explicit baseline tool enable/disable without bypassing package policies.
 - Intersects restrictive tool gates fail-closed.
 - Validates versioned policy messages and keeps rejection diagnostics.
 - Collects versioned metadata-only health report promises with per-reporter timeout, malformed-report isolation, and duplicate-owner warnings.
@@ -44,10 +47,11 @@ pi.events.emit("pi-conductor:tool-policy", {
   managedTools: ["example_tool"],
   enabledTools: ["example_tool"],
   allowOnly: undefined,
+  restoreTools: undefined,
   acknowledge: () => { coordinated = true; },
 });
 ```
 
-No acknowledgement means Conductor is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
+`allowOnly` intersects active restrictive gates. When removing a gate, `restoreTools` may provide the package's pre-gate snapshot; Conductor merges unmanaged entries into its baseline only when no other gate remains. No acknowledgement means Conductor is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
 
 Doctor health collection emits `pi-conductor:health-request`. Reporters must call `respond(reportPromise)` synchronously; Conductor awaits each promise for at most three seconds. Reports contain only `version`, `owner`, `label`, bounded `lines`, and `warning`—never page content, URLs, credentials, or raw logs.

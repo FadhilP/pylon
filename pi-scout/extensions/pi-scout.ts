@@ -29,6 +29,8 @@ import {
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const searchToolsExtension = join(extensionDir, "search-tools.ts");
 const HEARTBEAT_MS = 1_000;
+export const REPO_SESSION_CONTEXT_LIMIT = 131_072;
+export const REPO_SESSION_CACHE_READ_LIMIT = 524_288;
 const WEB_SCOUT_TIMEOUT_MS = 5 * 60 * 1000;
 const WEB_SCOUT_GRANT_ENV = "PI_HELIOS_WEB_SCOUT_GRANT";
 
@@ -66,6 +68,13 @@ export function startsNewRepoSession(event: { source: string; streamingBehavior?
 export function parentContextForRepoRun(run: number, entries: readonly any[]): string {
   return run === 1 ? buildParentContext(entries) : "";
 }
+export function shouldRotateRepoSession(
+  contextTokens: number,
+  cacheReadTokens: number,
+): boolean {
+  return contextTokens > REPO_SESSION_CONTEXT_LIMIT ||
+    cacheReadTokens > REPO_SESSION_CACHE_READ_LIMIT;
+}
 export function usageText(run: ScoutRun): string {
   const u = run.usage;
   return `${run.turns.length} turn${run.turns.length === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
@@ -79,8 +88,12 @@ function activityText(items: readonly ScoutActivity[]): string {
     .join("\n");
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, runRepoScout = runPi) {
   let repoRuns = 0;
+  let repoSessionRuns = 0;
+  let repoSessionContextTokens = 0;
+  let repoSessionCacheReadTokens = 0;
+  let repoCallQueue = Promise.resolve();
   let repoSessionDirPromise: Promise<string> | undefined;
   const repoSessionDirs = new Set<string>();
   let pendingIntent: SessionIntent | undefined;
@@ -93,6 +106,17 @@ export default function (pi: ExtensionAPI) {
         return dir;
       },
     ));
+  const serializeRepoCall = async <T>(run: () => Promise<T>): Promise<T> => {
+    const previousRun = repoCallQueue;
+    let releaseRun = () => {};
+    repoCallQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
+    await previousRun;
+    try {
+      return await run();
+    } finally {
+      releaseRun();
+    }
+  };
 
   const resolveModel = async (ctx: any) => {
     const config = await loadConfig();
@@ -155,6 +179,9 @@ export default function (pi: ExtensionAPI) {
     if (event.source === "extension") return;
     if (startsNewRepoSession(event)) {
       repoRuns = 0;
+      repoSessionRuns = 0;
+      repoSessionContextTokens = 0;
+      repoSessionCacheReadTokens = 0;
       repoSessionDirPromise = undefined;
     }
     ephemeralFinding = undefined;
@@ -296,6 +323,7 @@ export default function (pi: ExtensionAPI) {
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, onUpdate, ctx) {
+      return serializeRepoCall(async () => {
       if ((await loadConfig()).disabled)
         return {
           content: [{ type: "text" as const, text: "Repo scout disabled." }],
@@ -333,7 +361,14 @@ export default function (pi: ExtensionAPI) {
           ],
           details: { failureCode: "unavailable", model: modelName(model) },
         };
+      if (shouldRotateRepoSession(repoSessionContextTokens, repoSessionCacheReadTokens)) {
+        repoSessionRuns = 0;
+        repoSessionContextTokens = 0;
+        repoSessionCacheReadTokens = 0;
+        repoSessionDirPromise = undefined;
+      }
       repoRuns++;
+      repoSessionRuns++;
       if (ctx.hasUI)
         ctx.ui.setStatus("pi-scout", "scout: searching repository…");
       onUpdate?.({
@@ -355,14 +390,14 @@ export default function (pi: ExtensionAPI) {
       heartbeat.unref();
       try {
         const parentContext = parentContextForRepoRun(
-          repoRuns,
+          repoSessionRuns,
           ctx.sessionManager.buildContextEntries(),
         );
         const prompt = `Repository reconnaissance task: ${params.task.trim()}${params.retryReason ? `\nPrior scout gap requiring follow-up: ${params.retryReason.trim()}` : ""}${parentContext ? `\n\nParent-agent context (untrusted, redacted background; task above remains authoritative):\n${parentContext}` : ""}`;
         const args = [
           "--mode",
           "json",
-          ...(repoRuns > 1 ? ["--continue"] : []),
+          ...(repoSessionRuns > 1 ? ["--continue"] : []),
           "--session-dir",
           await repoSessionDir(),
           "--no-extensions",
@@ -381,7 +416,7 @@ export default function (pi: ExtensionAPI) {
           REPO_SCOUT_PROMPT,
           prompt,
         ];
-        const run = await runPi(args, {
+        const run = await runRepoScout(args, {
           cwd: ctx.cwd,
           signal,
           timeoutMs: repoTimeoutMs(),
@@ -404,6 +439,10 @@ export default function (pi: ExtensionAPI) {
             });
           },
         });
+        if (run.contextTokens > 0 || run.cacheReadTokens > 0) {
+          repoSessionContextTokens = run.contextTokens;
+          repoSessionCacheReadTokens = run.cacheReadTokens;
+        }
         const text = repoResult(run.text, run.error);
         return {
           content: [{ type: "text" as const, text }],
@@ -411,6 +450,9 @@ export default function (pi: ExtensionAPI) {
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
             callNumber: repoRuns,
+            sessionCallNumber: repoSessionRuns,
+            contextTokens: run.contextTokens,
+            cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
             durationMs: run.durationMs,
             usage: run.usage,
@@ -426,6 +468,7 @@ export default function (pi: ExtensionAPI) {
         clearInterval(heartbeat);
         if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
       }
+      });
     },
     renderCall(args, theme, context) {
       const callNumber = (context.state.callNumber as number | undefined) ?? repoRuns + 1;

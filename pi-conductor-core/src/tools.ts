@@ -9,6 +9,7 @@ export type ToolPolicy = {
 export type ToolPolicyMessage = ToolPolicy & {
   version: typeof PROTOCOL_VERSION;
   kind: "register";
+  restoreTools?: string[];
   acknowledge?: () => void;
 };
 export type ToolUnregisterMessage = {
@@ -44,6 +45,8 @@ export function parseToolMessage(value: unknown):
     return { error: "enabledTools must be a subset of managedTools" };
   if (input.allowOnly !== undefined && !stringList(input.allowOnly))
     return { error: "allowOnly must contain unique non-empty strings" };
+  if (input.restoreTools !== undefined && !stringList(input.restoreTools))
+    return { error: "restoreTools must contain unique non-empty strings" };
   if (input.acknowledge !== undefined && typeof input.acknowledge !== "function")
     return { error: "acknowledge must be a function" };
   return {
@@ -54,6 +57,7 @@ export function parseToolMessage(value: unknown):
       managedTools: [...managedTools],
       enabledTools: [...enabledTools],
       ...(input.allowOnly ? { allowOnly: [...input.allowOnly] } : {}),
+      ...(input.restoreTools ? { restoreTools: [...input.restoreTools] } : {}),
       ...(input.acknowledge ? { acknowledge: input.acknowledge as () => void } : {}),
     },
   };

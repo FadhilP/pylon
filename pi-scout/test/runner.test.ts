@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runPi } from "../src/runner.ts";
+import { cacheReadTokensFromUsage, contextTokensFromUsage, runPi } from "../src/runner.ts";
 import { scoutChildEnv } from "../src/child-env.ts";
 
 test("runner selects final assistant and sums per-turn usage", async () => {
@@ -11,6 +11,16 @@ test("runner selects final assistant and sums per-turn usage", async () => {
   await writeFile(script, `for (let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'fake',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`);
   const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
   assert.equal(run.text, "turn 2"); assert.equal(run.turns.length, 2); assert.equal(run.usage.input, 3); assert.equal(run.usage.cacheRead, 6);
+  assert.equal(run.contextTokens, 8);
+  assert.equal(run.cacheReadTokens, 3);
+});
+
+test("context and cache-read sizes remain independent", () => {
+  assert.equal(contextTokensFromUsage({ totalTokens: 210_000, cacheRead: 80_000 }), 130_000);
+  assert.equal(cacheReadTokensFromUsage({ totalTokens: 210_000, cacheRead: 80_000 }), 80_000);
+  assert.equal(contextTokensFromUsage({ input: 100_000, output: 10_000, cacheRead: 90_000, cacheWrite: 1 }), 110_001);
+  assert.equal(contextTokensFromUsage({ input: -1, output: 2, cacheRead: 3, cacheWrite: 4 }), 0);
+  assert.equal(contextTokensFromUsage({ totalTokens: Number.NaN, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }), 7);
 });
 
 test("runner serializes parallel Scout child processes", async () => {

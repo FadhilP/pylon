@@ -67,6 +67,19 @@ const Kind = StringEnum([
   ] as const),
   MemAction = StringEnum(["add", "replace", "remove"] as const);
 export default function (pi: ExtensionAPI) {
+  let duplicate = false;
+  pi.events.emit("pi-continuity:instance-claim", {
+    version: 1,
+    respond: () => { duplicate = true; },
+  });
+  if (duplicate) return;
+  const instanceId = randomUUID();
+  const disposeInstanceClaim = pi.events.on(
+    "pi-continuity:instance-claim",
+    (request: any) => {
+      if (request?.version === 1) request.respond?.(instanceId);
+    },
+  );
   let root = defaultRoot(),
     dir = "",
     workFile = "",
@@ -84,7 +97,11 @@ export default function (pi: ExtensionAPI) {
     needsVerification = false,
     awaitingClarificationProse = false,
     recentCalls = new Map<string, number[]>(),
-    pendingPlanStart: { runId: string; resolve: (started: boolean) => void } | undefined;
+    pendingApproval: { runId?: string; revision: number } | undefined,
+    approvalContext: any,
+    approvalSelectionOpen = false,
+    sessionGeneration = 0,
+    schedulePlanApproval = (_ctx: any) => {};
   const modelName = (model: any) => `${model.provider}/${model.id}`;
   const assistantContent = (ctx: any) => {
     const entry = ctx.sessionManager?.getLeafEntry?.();
@@ -228,6 +245,7 @@ export default function (pi: ExtensionAPI) {
       });
     });
   const gate = (on: boolean) => {
+    if (on) savedTools ??= pi.getActiveTools();
     let coordinated = false;
     pi.events.emit("pi-conductor:tool-policy", {
       version: 1,
@@ -236,24 +254,22 @@ export default function (pi: ExtensionAPI) {
       managedTools: ["continuity_update"],
       enabledTools: ["continuity_update"],
       ...(on ? { allowOnly: planningTools() } : {}),
+      ...(!on && savedTools ? { restoreTools: savedTools } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) {
-      savedTools = undefined;
+      if (!on) savedTools = undefined;
       return;
     }
     if (on) {
-      savedTools ??= pi.getActiveTools();
       const allowed = new Set(planningTools());
       pi.setActiveTools(pi.getActiveTools().filter((tool) => allowed.has(tool)));
     } else if (savedTools) {
-      const allowed = new Set(planningTools());
-      const restored = [
+      pi.setActiveTools([...new Set([
         ...pi.getActiveTools(),
-        ...savedTools.filter((tool) => !allowed.has(tool)),
+        ...savedTools,
         "continuity_update",
-      ];
-      pi.setActiveTools([...new Set(restored)]);
+      ])]);
       savedTools = undefined;
     }
   };
@@ -305,6 +321,7 @@ export default function (pi: ExtensionAPI) {
     void saveWork();
   });
   pi.on("session_start", async (_e, ctx) => {
+    sessionGeneration++;
     currentCwd = ctx.cwd;
     recentCalls.clear();
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
@@ -346,6 +363,20 @@ export default function (pi: ExtensionAPI) {
         pi.setThinkingLevel(handoff.data.thinking);
       await saveWork();
     }
+    if (work?.mode === "planning" && work.todos.length) {
+      let changed = false;
+      if (!work.planSummary?.trim()) {
+        work.planSummary = work.todos.map((todo) => todo.text).join("; ") || work.goal;
+        changed = true;
+      }
+      if (!work.planRevision) {
+        work.planRevision = 1;
+        changed = true;
+      }
+      if ((work.offeredPlanRevision ?? 0) < work.planRevision)
+        pendingApproval = { runId: work.runId, revision: work.planRevision };
+      if (changed) await saveWork();
+    }
     facts = (
       await readJson(p.memory, { schemaVersion: 1 as const, facts: [] as Fact[] }, isMemoryFile)
     ).facts;
@@ -367,8 +398,10 @@ export default function (pi: ExtensionAPI) {
     refresh(ctx);
   });
   pi.on("session_shutdown", () => {
-    pendingPlanStart?.resolve(false);
-    pendingPlanStart = undefined;
+    sessionGeneration++;
+    pendingApproval = undefined;
+    approvalContext = undefined;
+    disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();
     pi.events.emit("pi-conductor:tool-policy", {
@@ -379,16 +412,13 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("agent_start", (_e, ctx) => {
     awaitingClarificationProse = false;
-    if (pendingPlanStart && pendingPlanStart.runId === work?.runId) {
-      pendingPlanStart.resolve(true);
-      pendingPlanStart = undefined;
-    }
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
     await compactMemory();
+    schedulePlanApproval(ctx);
   });
   pi.on("message_end", async (event, ctx) => {
     const message = event.message as any;
@@ -593,12 +623,13 @@ export default function (pi: ExtensionAPI) {
       }
       if (p.action === "set_plan") {
         const planning = work?.mode === "planning";
-        if (!planning && !(p.todos?.length))
+        const todos = (p.todos || []).map((todo) => todo.trim()).filter(Boolean);
+        if (!todos.length)
           return {
             content: [
               {
                 type: "text",
-                text: "At least one todo is required outside explicit plan mode.",
+                text: "At least one non-empty todo is required.",
               },
             ],
           };
@@ -610,10 +641,13 @@ export default function (pi: ExtensionAPI) {
         const now = new Date().toISOString();
         work.goal = p.goal?.trim() || work.goal;
         work.constraints = (p.constraints || []).slice(0, 12);
-        work.planSummary = p.planSummary?.trim() || "";
-        setPlan(work, p.todos || [], now);
+        work.planSummary = p.planSummary?.trim() || todos.join("; ") || work.goal;
+        setPlan(work, todos, now);
+        if (planning) work.planRevision = (work.planRevision ?? 0) + 1;
         work.updatedAt = now;
         await saveWork();
+        if (planning)
+          pendingApproval = { runId: work.runId, revision: work.planRevision! };
         tasksVisible = true;
         refresh(ctx);
         return {
@@ -764,6 +798,7 @@ export default function (pi: ExtensionAPI) {
         if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
         work.mode = "executing";
         work.approved = true;
+        pendingApproval = undefined;
         work.updatedAt = new Date().toISOString();
         await saveWork();
         if (work.runId)
@@ -797,6 +832,7 @@ export default function (pi: ExtensionAPI) {
         const sourceSessionFile = ctx.sessionManager.getSessionFile();
         const sourceWorkFile = workFile;
         const now = new Date().toISOString();
+        pendingApproval = undefined;
         const childWork: Work = {
           ...work,
           mode: "executing",
@@ -849,6 +885,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       if (value === "cancel") {
+        pendingApproval = undefined;
         if (work) {
           work.mode = "cancelled";
           await saveWork();
@@ -875,6 +912,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Wait for the current response before starting a plan.", "warning");
         return;
       }
+      approvalContext = ctx;
       const config = await loadConfig();
       const baseModel = ctx.model && {
         provider: ctx.model.provider,
@@ -900,40 +938,70 @@ export default function (pi: ExtensionAPI) {
       gate(true);
       await saveWork();
       refresh(ctx);
-      if (!value) return;
-      const planningStarted = new Promise<boolean>((resolve) => {
-        pendingPlanStart = { runId: work!.runId!, resolve };
-      });
-      pi.sendUserMessage(
-        `Plan this task without modifying project files: ${value}`,
-      );
-      if (ctx.mode !== "tui") {
-        pendingPlanStart = undefined;
-        return;
-      }
-      if (!(await planningStarted)) return;
-      await ctx.waitForIdle();
-      if (
-        work?.mode !== "planning" ||
-        !work.planSummary ||
-        !work.todos.length
-      )
-        return;
-      const choice = await ctx.ui.select("Plan ready", [
-        "Approve — fresh executor session",
-        "Approve — continue current session",
-        "Request changes",
-      ]);
-      if (choice === "Approve — fresh executor session")
-        await planCommand.handler("approve", ctx);
-      else if (choice === "Approve — continue current session")
-        await planCommand.handler("approve-current", ctx);
-      else if (choice === "Request changes") {
-        const feedback = await ctx.ui.editor("Plan feedback", "");
-        if (feedback?.trim())
-          pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
-      }
+      if (value)
+        pi.sendUserMessage(
+          `Plan this task without modifying project files: ${value}`,
+        );
     },
+  };
+  schedulePlanApproval = (settledCtx: any) => {
+    const token = pendingApproval;
+    const actionCtx = approvalContext;
+    const generation = sessionGeneration;
+    if (
+      !token ||
+      !actionCtx ||
+      settledCtx.mode !== "tui" ||
+      approvalSelectionOpen ||
+      work?.mode !== "planning" ||
+      work.runId !== token.runId ||
+      work.planRevision !== token.revision ||
+      !work.planSummary ||
+      !work.todos.length
+    ) return;
+    pendingApproval = undefined;
+    approvalSelectionOpen = true;
+    queueMicrotask(async () => {
+      const previousOfferedRevision = work?.offeredPlanRevision;
+      try {
+        if (
+          sessionGeneration !== generation ||
+          work?.mode !== "planning" ||
+          work.runId !== token.runId ||
+          work.planRevision !== token.revision
+        ) return;
+        work.offeredPlanRevision = token.revision;
+        await saveWork();
+        const choice = await settledCtx.ui.select("Plan ready", [
+          "Approve — fresh executor session",
+          "Approve — continue current session",
+          "Request changes",
+        ]);
+        if (sessionGeneration !== generation) return;
+        if (choice === "Approve — fresh executor session")
+          await planCommand.handler("approve", actionCtx);
+        else if (choice === "Approve — continue current session")
+          await planCommand.handler("approve-current", actionCtx);
+        else if (choice === "Request changes") {
+          const feedback = await settledCtx.ui.editor("Plan feedback", "");
+          if (feedback?.trim() && sessionGeneration === generation)
+            pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
+        }
+      } catch (error: any) {
+        if (
+          sessionGeneration === generation &&
+          work?.mode === "planning" &&
+          work.runId === token.runId &&
+          work.planRevision === token.revision
+        ) {
+          work.offeredPlanRevision = previousOfferedRevision;
+          pendingApproval = token;
+        }
+        settledCtx.ui.notify(error?.message ?? String(error), "error");
+      } finally {
+        approvalSelectionOpen = false;
+      }
+    });
   };
   pi.registerCommand("plan", planCommand);
   pi.registerCommand("continuity", {

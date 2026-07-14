@@ -77,6 +77,11 @@ export default function (pi: ExtensionAPI) {
       enabledTools: [...message.enabledTools],
       ...(message.allowOnly ? { allowOnly: [...message.allowOnly] } : {}),
     });
+    if (message.restoreTools && !hasGate()) {
+      const managed = managedTools();
+      for (const tool of message.restoreTools)
+        if (!managed.has(tool)) baseline.add(tool);
+    }
     if (reconcile()) {
       try {
         message.acknowledge?.();
@@ -269,9 +274,60 @@ export default function (pi: ExtensionAPI) {
     };
   };
 
+  const manageTools = (args: string, ctx: any) => {
+    const [action = "status", ...names] = args.trim().split(/\s+/).filter(Boolean);
+    const effective = () => pi.getActiveTools();
+    if (action === "status") {
+      ctx.ui.notify(
+        `Baseline: ${[...baseline].sort().join(", ") || "none"}\nEffective: ${effective().sort().join(", ") || "none"}\nRestrictive gates: ${hasGate() ? "active" : "none"}`,
+        "info",
+      );
+      return;
+    }
+    if (!(["enable", "disable"] as string[]).includes(action) || !names.length) {
+      ctx.ui.notify("Usage: /conductor tools [status|enable <tool...>|disable <tool...>]", "error");
+      return;
+    }
+    const known = new Set(
+      (pi.getAllTools?.() ?? effective().map((name) => ({ name })))
+        .map((tool: any) => tool.name),
+    );
+    const unknown = names.filter((name) => !known.has(name));
+    if (unknown.length) {
+      ctx.ui.notify(`Unknown tools: ${unknown.join(", ")}`, "error");
+      return;
+    }
+    const managed = managedTools();
+    const policyOwned = names.filter((name) => managed.has(name));
+    if (policyOwned.length) {
+      ctx.ui.notify(`Policy-managed tools cannot be changed manually: ${policyOwned.join(", ")}`, "error");
+      return;
+    }
+    const previous = new Set(baseline);
+    for (const name of names)
+      if (action === "enable") baseline.add(name);
+      else baseline.delete(name);
+    if (!reconcile()) {
+      baseline.clear();
+      for (const name of previous) baseline.add(name);
+      ctx.ui.notify(`Tool update failed: ${lastError}`, "error");
+      return;
+    }
+    const deferred = action === "enable"
+      ? names.filter((name) => !effective().includes(name))
+      : [];
+    ctx.ui.notify(
+      `${action === "enable" ? "Enabled" : "Disabled"}: ${names.join(", ")}${deferred.length ? `\nDeferred by active gate: ${deferred.join(", ")}` : ""}`,
+      deferred.length ? "warning" : "info",
+    );
+  };
+
   pi.registerCommand("conductor", {
-    description: "Show coordinated policies; use /conductor doctor for environment diagnostics",
+    description: "Show policies or manage tools with /conductor tools",
     handler: async (args, ctx) => {
+      const value = args.trim();
+      if (value === "tools" || value.startsWith("tools "))
+        return manageTools(value.slice("tools".length), ctx);
       const policyLines = [...policies.values()]
         .sort((a, b) => a.owner.localeCompare(b.owner))
         .map(
@@ -281,7 +337,7 @@ export default function (pi: ExtensionAPI) {
       const missing = ["pi-advisor", "pi-scout", "pi-continuity"].filter(
         (owner) => !policies.has(owner),
       );
-      const diagnosis = args.trim().toLowerCase() === "doctor" ? await doctor(ctx) : undefined;
+      const diagnosis = value.toLowerCase() === "doctor" ? await doctor(ctx) : undefined;
       const lines = [
         ...(diagnosis ? ["Conductor doctor", ...diagnosis.lines, ""] : []),
         `Baseline: ${[...baseline].join(", ") || "none"}`,

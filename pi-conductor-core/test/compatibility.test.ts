@@ -31,28 +31,36 @@ test("actual Advisor, Scout, and Continuity adapters coordinate end to end", asy
     let active = ["read", "grep", "find", "ls", "edit", "write", "bash"];
     const handlers = new Map<string, Function[]>();
     const commands = new Map<string, any>();
+    const tools = new Map<string, any>();
+    const model = { provider: "provider", id: "base" };
     const pi: any = {
       events,
       getActiveTools: () => [...active],
       setActiveTools: (tools: string[]) => { active = [...tools]; },
       getThinkingLevel: () => "low",
+      setThinkingLevel: () => {},
       on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-      registerTool: (tool: any) => { if (!active.includes(tool.name)) active.push(tool.name); },
+      registerTool: (tool: any) => {
+        tools.set(tool.name, tool);
+        if (!active.includes(tool.name)) active.push(tool.name);
+      },
       registerCommand: (name: string, command: any) => commands.set(name, command),
       registerEntryRenderer: () => {},
       appendEntry: () => {},
       sendUserMessage: () => {},
+      setModel: async () => true,
     };
     conductor(pi); advisor(pi); scout(pi); continuity(pi);
     const ctx: any = {
       cwd,
       hasUI: false,
       mode: "json",
-      model: undefined,
+      model,
       modelRegistry: {
-        find: () => undefined,
-        hasConfiguredAuth: () => false,
-        getAvailable: () => [],
+        find: (provider: string, id: string) =>
+          provider === model.provider && id === model.id ? model : undefined,
+        hasConfiguredAuth: () => true,
+        getAvailable: () => [model],
       },
       sessionManager: { getSessionId: () => "compat-session" },
       ui: {
@@ -69,6 +77,15 @@ test("actual Advisor, Scout, and Continuity adapters coordinate end to end", asy
     assert.ok(!active.includes("edit"));
     await commands.get("scout").handler("disable", ctx);
     assert.ok(!active.includes("repo_scout"));
+    await tools.get("continuity_update").execute(
+      "plan",
+      { action: "set_plan", goal: "compatibility", todos: ["Implement"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    await commands.get("plan").handler("approve-current", ctx);
+    assert.ok(active.includes("edit"));
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
     assert.equal(events.handlers.get("pi-conductor:tool-policy")?.size ?? 0, 0);
   } finally {

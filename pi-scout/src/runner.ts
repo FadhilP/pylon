@@ -27,6 +27,8 @@ export type ScoutRun = {
   truncated: boolean;
   exitCode: number;
   activity: ScoutActivity[];
+  contextTokens: number;
+  cacheReadTokens: number;
 };
 export type Invocation = { command: string; args: string[] };
 
@@ -43,6 +45,23 @@ export function getPiInvocation(args: string[]): Invocation {
 
 function emptyUsage(): ChildUsage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+}
+const validTokens = (value: unknown): number => {
+  const tokens = Number(value);
+  return Number.isFinite(tokens) && tokens >= 0 ? tokens : 0;
+};
+export function cacheReadTokensFromUsage(usage: any): number {
+  return validTokens(usage?.cacheRead);
+}
+export function contextTokensFromUsage(usage: any): number {
+  const cacheRead = cacheReadTokensFromUsage(usage);
+  const nativeTotal = Number(usage?.totalTokens);
+  if (Number.isFinite(nativeTotal) && nativeTotal > 0)
+    return Math.max(0, nativeTotal - cacheRead);
+  const parts = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite]
+    .map(Number);
+  if (!parts.every((value) => Number.isFinite(value) && value >= 0)) return 0;
+  return Math.max(0, parts.reduce((sum, value) => sum + value, 0) - cacheRead);
 }
 function terminate(child: ChildProcess): void {
   if (child.exitCode !== null) return;
@@ -108,7 +127,9 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     stderr = "",
     timedOut = false,
     aborted = false,
-    protocolOverflow = false;
+    protocolOverflow = false,
+    contextTokens = 0,
+    cacheReadTokens = 0;
   const processLine = (line: string) => {
     if (!line.trim()) return;
     try {
@@ -132,6 +153,15 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       const message = event.message;
       messages.push(message);
       const usage = message.usage ?? {};
+      const latestContextTokens = contextTokensFromUsage(usage);
+      const latestCacheReadTokens = cacheReadTokensFromUsage(usage);
+      if (
+        message.stopReason !== "aborted" && message.stopReason !== "error" &&
+        (latestContextTokens > 0 || latestCacheReadTokens > 0)
+      ) {
+        contextTokens = latestContextTokens;
+        cacheReadTokens = latestCacheReadTokens;
+      }
       turns.push({
         input: usage.input ?? 0,
         output: usage.output ?? 0,
@@ -221,5 +251,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     truncated: capped.truncated,
     exitCode,
     activity,
+    contextTokens,
+    cacheReadTokens,
   };
 }
