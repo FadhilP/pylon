@@ -67,9 +67,21 @@ function errorCode(
     : "invalid_response";
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, completeAdvisor = complete) {
   let calls = 0;
   let previousAdvice: string | undefined;
+  let advisorQueue = Promise.resolve();
+  const serializeAdvisor = async <T>(run: () => Promise<T>): Promise<T> => {
+    const previousRun = advisorQueue;
+    let releaseRun = () => {};
+    advisorQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
+    await previousRun;
+    try {
+      return await run();
+    } finally {
+      releaseRun();
+    }
+  };
   const configuredModel = async (ctx: any): Promise<Model<any> | undefined> => {
     const config = await loadConfig();
     if (!config.advisorModel) return;
@@ -145,6 +157,7 @@ export default function (pi: ExtensionAPI) {
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, onUpdate, ctx) {
+      return serializeAdvisor(async () => {
       const callNumber = Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"];
       const cacheRetention: "short" | "long" =
         process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
@@ -272,7 +285,7 @@ export default function (pi: ExtensionAPI) {
           ],
           timestamp: Date.now(),
         };
-        const response = await complete(
+        const response = await completeAdvisor(
           model,
           { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
           {
@@ -383,6 +396,7 @@ export default function (pi: ExtensionAPI) {
         signal?.removeEventListener("abort", abort);
         if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", undefined);
       }
+      });
     },
     renderCall(args, theme, context) {
       const callNumber = (context.state.callNumber as number | undefined) ??

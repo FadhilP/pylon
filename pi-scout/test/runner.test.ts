@@ -13,6 +13,18 @@ test("runner selects final assistant and sums per-turn usage", async () => {
   assert.equal(run.text, "turn 2"); assert.equal(run.turns.length, 2); assert.equal(run.usage.input, 3); assert.equal(run.usage.cacheRead, 6);
 });
 
+test("runner serializes parallel Scout child processes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scout-serial-"));
+  const script = join(dir, "fake.mjs");
+  await writeFile(script, `import {mkdir,rm} from 'node:fs/promises'; const lock=process.argv[2]; let held=false; let text='ok'; try { await mkdir(lock); held=true; await new Promise(r=>setTimeout(r,100)); } catch { text='overlap'; } finally { if(held) await rm(lock,{recursive:true}); } console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],stopReason:'stop',usage:{}}}));`);
+  const invocation = { command: process.execPath, args: [script, join(dir, "active")] };
+  const runs = await Promise.all([
+    runPi([], { cwd: dir, invocation }),
+    runPi([], { cwd: dir, invocation }),
+  ]);
+  assert.deepEqual(runs.map((run) => run.text), ["ok", "ok"]);
+});
+
 test("runner passes extension-controlled child environment", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-env-")); const script = join(dir, "fake.mjs");
   await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:process.env.PI_SCOUT_CHECKPOINT_PATH}],stopReason:'stop',usage:{}}}));`);

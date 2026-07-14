@@ -1,6 +1,6 @@
 {
   "name": "pi-conductor",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "description": "Complete Pi Conductor package with all extensions and themes.",
   "type": "module",

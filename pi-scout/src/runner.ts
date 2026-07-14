@@ -30,6 +30,8 @@ export type ScoutRun = {
 };
 export type Invocation = { command: string; args: string[] };
 
+let scoutRunQueue = Promise.resolve();
+
 export function getPiInvocation(args: string[]): Invocation {
   const script = process.argv[1];
   if (script && !script.startsWith("/$bunfs/root/") && existsSync(script))
@@ -66,18 +68,29 @@ function terminate(child: ChildProcess): void {
   }
 }
 
-export async function runPi(
-  args: string[],
-  options: {
-    cwd: string;
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    invocation?: Invocation;
-    env?: NodeJS.ProcessEnv;
-    inheritEnv?: boolean;
-    onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
-  },
-): Promise<ScoutRun> {
+type RunPiOptions = {
+  cwd: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  invocation?: Invocation;
+  env?: NodeJS.ProcessEnv;
+  inheritEnv?: boolean;
+  onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
+};
+
+export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
+  const previousRun = scoutRunQueue;
+  let releaseRun = () => {};
+  scoutRunQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
+  await previousRun;
+  try {
+    return await runPiUnlocked(args, options);
+  } finally {
+    releaseRun();
+  }
+}
+
+async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<ScoutRun> {
   const started = Date.now();
   const invocation = options.invocation ?? getPiInvocation(args);
   const child = spawn(invocation.command, invocation.args, {
