@@ -197,18 +197,20 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
           throw new Error(`Worker runner did not confirm the ${mode} working directory`);
         if (!isolated) {
           const status = derivedStatus(run, 0);
+          const recovery = status !== "completed";
           const lines = [
             `Worker status: ${status}.`,
             "Execution mode: DIRECT; worker edits affected the current working directory immediately.",
             "Rollback and changed-path derivation: unavailable.",
             isolationFallback ? `Dynamic isolation fallback: ${isolationFallback}` : "",
-            run.error ? `Worker failure: ${run.error}` : "",
-            run.text ? `\nWorker report:\n${run.text}` : "",
+            recovery && run.error ? `Worker failure: ${run.error}` : "",
+            recovery && run.text ? `\nWorker report:\n${run.text}` : "",
           ].filter(Boolean);
           return {
             content: [{ type: "text" as const, text: lines.join("\n") }],
             details: {
-              status, mode, configuredMode, isolationFallback, isolated: false, workerCwd: run.cwd, task, suggestedPaths: suggested,
+              status, mode, configuredMode, isolationFallback, isolated: false, workerCwd: run.cwd,
+              ...(recovery ? { task, suggestedPaths: suggested } : {}),
               model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
               usage: run.usage, turns: run.turns, activity: run.activity, stopReason: run.stopReason,
               truncated: run.truncated, stderr: run.stderr, failureCode: run.failure,
@@ -246,24 +248,25 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         const suggestionPath = (path: string) => cwdPrefix && path.startsWith(`${cwdPrefix}/`) ? path.slice(cwdPrefix.length + 1) : path;
         const outsideSuggestedPaths = suggested.length ? worker.changedPaths.filter((path) => !isSuggested(suggestionPath(path), suggested)) : [];
         const preExistingDirtyTouched = worker.changedPaths.filter((path) => isolated.parentBaseline.paths.has(path));
+        const recovery = status !== "completed";
         const lines = [
           `Worker status: ${status}.`,
           `Isolation verified: ${isolated.isolationVerified ? "yes" : "no"}.`,
           `Parent patch applied: ${applied ? "yes" : "no"}.`,
-          `Derived changed paths: ${worker.changedPaths.join(", ") || "none"}.`,
-          preExistingDirtyTouched.length ? `Pre-existing dirty paths touched in isolated snapshot: ${preExistingDirtyTouched.join(", ")}.` : "",
-          outsideSuggestedPaths.length ? `Outside suggested paths: ${outsideSuggestedPaths.join(", ")}.` : "",
+          recovery ? `Derived changed paths: ${worker.changedPaths.join(", ") || "none"}.` : "",
+          recovery && preExistingDirtyTouched.length ? `Pre-existing dirty paths touched in isolated snapshot: ${preExistingDirtyTouched.join(", ")}.` : "",
+          recovery && outsideSuggestedPaths.length ? `Outside suggested paths: ${outsideSuggestedPaths.join(", ")}.` : "",
           artifactPath ? `Unapplied patch artifact: ${artifactPath}.` : "",
           integrationError ? `Integration failure: ${integrationError}` : "",
-          run.error ? `Worker failure: ${run.error}` : "",
-          run.text ? `\nWorker report:\n${run.text}` : "",
+          recovery && run.error ? `Worker failure: ${run.error}` : "",
+          recovery && run.text ? `\nWorker report:\n${run.text}` : "",
         ].filter(Boolean);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
             status, applied, mode, configuredMode, isolated: true, isolationVerified: isolated.isolationVerified,
-            workerCwd: run.cwd, workerHead: isolated.workerHead, artifactPath, task, suggestedPaths: suggested,
-            missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths,
+            workerCwd: run.cwd, workerHead: isolated.workerHead, artifactPath,
+            ...(recovery ? { task, suggestedPaths: suggested, missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths } : {}),
             model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
             usage: run.usage, turns: run.turns, activity: run.activity, stopReason: run.stopReason,
             truncated: run.truncated, stderr: run.stderr, failureCode,

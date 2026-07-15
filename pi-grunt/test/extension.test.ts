@@ -100,19 +100,22 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(result.details.isolationVerified, true);
     assert.equal(result.details.workerCwd, workerCwd);
     assert.notEqual(workerCwd, cwd);
-    assert.deepEqual(result.details.changedPaths, ["src/worker.ts"]);
-    assert.deepEqual(result.details.outsideSuggestedPaths, []);
+    assert.equal(result.details.changedPaths, undefined);
+    assert.equal(result.details.outsideSuggestedPaths, undefined);
+    assert.doesNotMatch(result.content[0].text, /Derived changed paths|Worker report/);
     assert.equal(childArgs[childArgs.indexOf("--thinking") + 1], "medium");
     assert.ok(childArgs.includes("--no-extensions"));
     assert.doesNotMatch(childArgs.at(-1) ?? "", /Add worker/);
     assert.match(childArgs.at(-1) ?? "", /Unavailable ignored dependency directories: node_modules/);
-    assert.deepEqual(result.details.missingDependencies, ["node_modules"]);
+    assert.equal(result.details.missingDependencies, undefined);
     assert.equal((await import("node:fs/promises").then((fs) => fs.readFile(join(cwd, "src", "worker.ts"), "utf8"))).replace(/\r\n/g, "\n"), "export const completed = true;\n");
 
     outcome = "blocked";
     const blocked = await tools.get("grunt").execute("blocked", { task: "Attempt uncertain work", thinking: "high", suggestedPaths: ["src/**"] }, undefined, undefined, ctx);
     assert.equal(blocked.details.status, "partial");
     assert.equal(blocked.details.applied, false);
+    assert.deepEqual(blocked.details.changedPaths, ["src/blocked.ts"]);
+    assert.match(blocked.content[0].text, /Worker report/);
     assert.ok(blocked.details.artifactPath);
     await assert.rejects(access(join(cwd, "src", "blocked.ts")));
 
@@ -133,6 +136,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(direct.details.isolated, false);
     assert.equal(direct.details.workerCwd, cwd);
     assert.match(direct.content[0].text, /partial edits|affected the current working directory/i);
+    assert.doesNotMatch(direct.content[0].text, /Worker report/);
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
