@@ -3,4 +3,3 @@ node_modules/
 .pi/
 .env
 *.log
-/pi-focus-web

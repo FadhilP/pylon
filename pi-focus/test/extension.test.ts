@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import extension, { ringCompletionBell } from "../extensions/pi-focus.ts";
+import extension, { ringCompletionBell, usage } from "../extensions/pi-focus.ts";
 
 test("completion bell writes only in TUI mode", () => {
   let output = "";
@@ -9,6 +9,31 @@ test("completion bell writes only in TUI mode", () => {
   assert.equal(output, "");
   ringCompletionBell("tui", write);
   assert.equal(output, "\x07");
+});
+
+test("session cost includes persisted child model usage", () => {
+  const child = (toolName: string, cost: number) => ({
+    type: "message",
+    message: { role: "toolResult", toolName, details: { usage: { cost } } },
+  });
+  const ctx = {
+    sessionManager: {
+      getBranch: () => [
+        {
+          type: "message",
+          message: { role: "assistant", usage: { input: 10, output: 20, cost: { total: 0.25 } } },
+        },
+        child("repo_scout", 0.1),
+        child("web_scout", 0.2),
+        child("grunt", 0.3),
+        child("advisor", 0.4),
+        child("other", 99),
+      ],
+    },
+    getContextUsage: () => undefined,
+  };
+
+  assert.equal(usage(ctx), "in 10 · out 20 · $1.250");
 });
 
 test("focused chrome shows current session name and Git branch", () => {

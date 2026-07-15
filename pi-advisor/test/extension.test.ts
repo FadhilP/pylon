@@ -6,7 +6,7 @@ import { join } from "node:path";
 import advisor from "../extensions/pi-advisor.ts";
 import { saveConfig } from "../src/config.ts";
 
-test("parallel Advisor calls use only one model request at a time", async () => {
+test("parallel Advisor calls serialize and report running duration", async () => {
   const previousDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-advisor-extension-"));
   await saveConfig({ schemaVersion: 1, advisorModel: "test/model" });
@@ -19,6 +19,15 @@ test("parallel Advisor calls use only one model request at a time", async () => 
   const started = new Promise<void>((resolve) => { firstStarted = resolve; });
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const prompts: string[] = [];
+  let runningUpdate: any;
+  let reportDuration!: () => void;
+  const durationReported = new Promise<void>((resolve) => { reportDuration = resolve; });
+  const onUpdate = (update: any) => {
+    if (update.details?.state === "running" && update.details.durationMs > 0) {
+      runningUpdate = update;
+      reportDuration();
+    }
+  };
   const complete = async (_model: any, request: any) => {
     calls++;
     active++;
@@ -53,11 +62,14 @@ test("parallel Advisor calls use only one model request at a time", async () => 
     sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
   };
   try {
-    const first = tool.execute("one", { request: "first" }, undefined, undefined, ctx);
+    const first = tool.execute("one", { request: "first" }, undefined, onUpdate, ctx);
     await started;
+    await durationReported;
     const second = tool.execute("two", { request: "second" }, undefined, undefined, ctx);
     releaseFirst();
     const results = await Promise.all([first, second]);
+    assert.equal(runningUpdate.details.state, "running");
+    assert.ok(runningUpdate.details.durationMs >= 1_000);
     assert.equal(maxActive, 1);
     assert.equal(calls, 2);
     assert.equal(results[0].details.callNumber, 1);
@@ -94,6 +106,23 @@ test("advisor call renders the executor request instead of the user prompt", () 
 
   assert.match(rendered, /Review migration path risks\./);
   assert.doesNotMatch(rendered, /original user prompt/);
+
+  const collapsed = tool.renderResult({
+    content: [{ type: "text", text: "Detailed advice" }],
+    details: {
+      advisorModel: "test/model",
+      durationMs: 1_250,
+      usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
+      callNumber: 1,
+      snapshotEstimatedTokens: 10,
+      redactionCount: 0,
+      truncated: false,
+      cacheRetention: "short",
+    },
+  }, { expanded: false }, theme).render(1_000).map((line: string) => line.trimEnd()).join("\n");
+  assert.equal(collapsed, "Advisor · test/model · 1 input · 2 output · R3 · W4 · $0.5000 · 1.3s");
+  assert.doesNotMatch(collapsed, /Detailed advice/);
+
   assert.ok(tool.parameters.required.includes("request"));
   assert.equal(tool.parameters.properties.request.maxLength, 8_192);
 });

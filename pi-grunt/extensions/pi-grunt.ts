@@ -27,17 +27,12 @@ const HEARTBEAT_MS = 1000;
 const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
 
 function activityText(activity: readonly WorkerActivity[]): string {
-  return activity.slice(-8).map((item) => `${item.kind === "call" ? "$" : item.isError ? "!" : "✓"} ${item.tool}: ${item.text.replace(/\s+/g, " ").slice(0, 180)}`).join("\n");
+  return activity.map((item) => `${item.kind === "call" ? ">" : item.isError ? "!" : "<"} ${item.tool} ${item.text.replace(/\s+/g, " ").slice(0, 180)}`).join("\n");
 }
 
 function usageText(run: WorkerRun): string {
-  const parts = [`${run.turns} turn${run.turns === 1 ? "" : "s"}`];
-  if (run.usage.input) parts.push(`↑${run.usage.input}`);
-  if (run.usage.output) parts.push(`↓${run.usage.output}`);
-  if (run.usage.cacheRead) parts.push(`R${run.usage.cacheRead}`);
-  if (run.usage.cost) parts.push(`$${run.usage.cost.toFixed(4)}`);
-  parts.push(`${(run.durationMs / 1000).toFixed(0)}s`);
-  return parts.join(" · ");
+  const u = run.usage;
+  return `${run.turns} turn${run.turns === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
 }
 
 function isSuggested(path: string, suggestions: readonly string[]): boolean {
@@ -58,6 +53,7 @@ function derivedStatus(run: WorkerRun, changedCount: number): string {
 }
 
 export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
+  let calls = 0;
   const resolveModel = async (ctx: any) => {
     const config = await loadConfig();
     if (!config.model) return ctx.model;
@@ -90,6 +86,9 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   };
 
   pi.on("session_start", refreshTool);
+  pi.on("input", (event) => {
+    if (event.source !== "extension" && event.streamingBehavior !== "steer") calls = 0;
+  });
   pi.on("session_shutdown", () => {
     disposeHealth();
     pi.events.emit("pi-conductor:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
@@ -118,6 +117,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       if (!model) return { content: [{ type: "text" as const, text: "Grunt unavailable: no selected model." }], details: { status: "unavailable" } };
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) return { content: [{ type: "text" as const, text: "Grunt unavailable: selected model has no credentials." }], details: { status: "unavailable", model: modelName(model) } };
+      calls++;
 
       const exec = pi.exec.bind(pi);
       let isolated;
@@ -147,7 +147,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { state: "running", model: modelName(model), thinking: params.thinking, activity } });
+        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { state: "running", model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
       try {
@@ -155,7 +155,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
           cwd: isolated.workerCwd, signal, timeoutMs: gruntTimeoutMs(),
           onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
             activity = all; lastUpdateAt = Date.now();
-            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", model: modelName(model), thinking: params.thinking, activity: all } });
+            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
           },
         });
         if (run.cwd !== isolated.workerCwd)
@@ -224,17 +224,27 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", undefined);
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
+      const callNumber = (context.state.callNumber as number | undefined) ?? calls + 1;
+      context.state.callNumber = callNumber;
       const prompt = args.task.trim().replace(/\s+/g, " ");
-      return new Text(theme.fg("toolTitle", theme.bold("Grunt")) + theme.fg("muted", ` · ${args.thinking}`) + `\n${theme.fg("dim", prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt)}`, 0, 0);
+      const truncatedPrompt = prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt;
+      return new Text(
+        theme.fg("toolTitle", theme.bold("Grunt")) +
+          theme.fg("muted", ` · ${callNumber}/∞`) +
+          `\n${theme.fg("dim", truncatedPrompt)}`,
+        0,
+        0,
+      );
     },
     renderResult(result, { expanded }, theme) {
       const details = result.details as any;
       const body = result.content.find((part: any) => part.type === "text") as any;
-      let text = theme.fg(details?.status === "completed" ? "success" : "warning", `Grunt · ${details?.status ?? "unknown"} · ${details?.model ?? "unavailable"}`);
+      let text = theme.fg(details?.status === "completed" ? "success" : "warning", `Grunt · ${details?.model ?? "Unavailable"}`);
       if (details?.usage) text += ` · ${usageText({ usage: details.usage, turns: details.turns, durationMs: details.durationMs } as WorkerRun)}`;
+      else if (details?.durationMs) text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && details?.activity?.length) text += `\n\nChild activity:\n${activityText(details.activity)}`;
-      if (expanded && body?.text) text += `\n\n${body.text}`;
+      if (expanded && body?.text) text += `\n\nGrunt report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });

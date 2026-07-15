@@ -207,13 +207,19 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget(
         "pi-continuity",
         work && !["handed_off", "completed", "cancelled"].includes(work.mode)
-          ? [
-              "Tasks",
-              ...work.todos.map(
-                (t) =>
-                  `${t.status === "done" ? "✓" : t.status === "in_progress" ? "●" : "○"} ${t.text}`,
-              ),
-            ]
+          ? (_tui: unknown, theme: any) =>
+              new Text(
+                [
+                  "Tasks",
+                  ...work!.todos.map((t) =>
+                    t.status === "done"
+                      ? `● ${theme.fg("muted", theme.strikethrough(t.text))}`
+                      : `${t.status === "in_progress" ? "●" : "○"} ${t.text}`,
+                  ),
+                ].join("\n"),
+                0,
+                0,
+              )
           : undefined,
       );
   };

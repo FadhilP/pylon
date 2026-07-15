@@ -252,6 +252,7 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
         content: [{ type: "text", text: `Consulting ${modelName(model)}…` }],
         details: {
           ...runningDetails,
+          state: "running",
           snapshotEstimatedTokens: snapshot.estimatedTokens,
           redactionCount: snapshot.redactionCount,
           truncated: snapshot.truncated,
@@ -270,7 +271,7 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
         const durationMs = Date.now() - started;
         onUpdate?.({
           content: [{ type: "text", text: `${(durationMs / 1000).toFixed(0)}s` }],
-          details: { ...runningDetails },
+          details: { ...runningDetails, state: "running", durationMs },
         });
       }, HEARTBEAT_MS);
       heartbeat.unref();
@@ -424,12 +425,10 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
       );
       if (!details.failureCode && details.usage)
         text += ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`;
-      else if (!details.failureCode && details.durationMs)
-        text += ` · ~${details.snapshotEstimatedTokens} input · ${(details.durationMs / 1000).toFixed(0)}s`;
-      if (!expanded && body?.text)
-        text += `\n${body.text.split("\n").slice(0, 16).join("\n")}`;
+      else if (details.durationMs)
+        text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && body?.text)
-        text += `\n\n${body.text}\n\nredactions: ${details.redactionCount} · truncated: ${details.truncated}`;
+        text += `\n\nAdvisor report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });

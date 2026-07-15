@@ -39,9 +39,15 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     const model = { provider: "test", id: "worker" };
     let workerCwd = "";
     let outcome: "completed" | "blocked" = "completed";
-    const runWorker = async (args: string[], options: { cwd: string }): Promise<WorkerRun> => {
+    const runningUpdates: any[] = [];
+    const runWorker = async (args: string[], options: { cwd: string; onActivity?: Function }): Promise<WorkerRun> => {
       childArgs = args;
       workerCwd = options.cwd;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      options.onActivity?.(
+        { kind: "call", tool: "read", text: "README.md" },
+        [{ kind: "call", tool: "read", text: "README.md" }],
+      );
       await mkdir(join(options.cwd, "src"), { recursive: true });
       const file = outcome === "completed" ? "worker.ts" : "blocked.ts";
       await writeFile(join(options.cwd, "src", file), `export const ${outcome} = true;\n`);
@@ -75,7 +81,10 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       ui: { setStatus() {} },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    const result = await tools.get("grunt").execute("id", { task: "Add trivial worker module", thinking: "medium", suggestedPaths: ["src/**"] }, undefined, undefined, ctx);
+    const result = await tools.get("grunt").execute("id", { task: "Add trivial worker module", thinking: "medium", suggestedPaths: ["src/**"] }, undefined, (update: any) => runningUpdates.push(update), ctx);
+    const activityUpdate = runningUpdates.find((update) => update.details?.activity?.length);
+    assert.equal(activityUpdate.details.state, "running");
+    assert.ok(activityUpdate.details.durationMs > 0);
     assert.equal(result.details.status, "completed");
     assert.equal(result.details.applied, true);
     assert.equal(result.details.isolated, true);
@@ -122,4 +131,26 @@ test("Grunt guidance permits whole non-difficult changes and retains Main owners
   assert.match(guidance, /entire change when it is not difficult/i);
   assert.match(guidance, /Main model must own difficult architecture/i);
   assert.match(guidance, /advisor at least once when available/i);
+
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  assert.equal(
+    tool.renderCall({ task: "Implement change", thinking: "medium" }, theme, { state: {} }).render(1_000).map((line: string) => line.trimEnd()).join("\n"),
+    "Grunt · 1/∞\nImplement change",
+  );
+  assert.equal(
+    tool.renderResult({
+      content: [{ type: "text", text: "Worker details" }],
+      details: {
+        status: "completed",
+        model: "test/worker",
+        durationMs: 1_250,
+        usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
+        turns: 1,
+      },
+    }, { expanded: false }, theme).render(1_000).map((line: string) => line.trimEnd()).join("\n"),
+    "Grunt · test/worker · 1 turn · 1 input · 2 output · R3 · W4 · $0.5000 · 1.3s",
+  );
 });

@@ -52,17 +52,23 @@ class FocusEditor extends CustomEditor {
   }
 }
 
-function usage(ctx: any): string {
+const childTools = new Set(["repo_scout", "web_scout", "grunt", "advisor"]);
+
+export function usage(ctx: any): string {
   let input = 0,
     output = 0,
     cost = 0;
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "assistant")
-      continue;
-    const message = entry.message as AssistantMessage;
-    input += message.usage.input;
-    output += message.usage.output;
-    cost += message.usage.cost.total;
+    if (entry.type !== "message") continue;
+    if (entry.message.role === "assistant") {
+      const message = entry.message as AssistantMessage;
+      input += message.usage.input;
+      output += message.usage.output;
+      cost += message.usage.cost.total;
+    } else if (entry.message.role === "toolResult" && childTools.has(entry.message.toolName)) {
+      const childCost = entry.message.details?.usage?.cost;
+      if (typeof childCost === "number") cost += childCost;
+    }
   }
   const compact = (value: number) =>
     value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`;

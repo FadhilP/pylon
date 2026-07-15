@@ -721,13 +721,25 @@ test("task widget resets after settlement but survives mid-turn steering", async
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
+    const renderWidget = (widget: any) => widget({}, {
+      fg: (_color: string, text: string) => text,
+      strikethrough: (text: string) => `~${text}~`,
+    }).render(1_000).map((line: string) => line.trimEnd());
     await tool.execute("call", {
       action: "set_plan",
       goal: "First task",
-      todos: ["Implement"],
+      todos: ["Implement", "Verify"],
     }, undefined, undefined, ctx);
+    assert.deepEqual(renderWidget(widgets.at(-1)), ["Tasks", "● Implement", "○ Verify"]);
+
+    await tool.execute("call", {
+      action: "todo",
+      todoId: "todo_1",
+      nextTodoId: "todo_2",
+      status: "done",
+    }, undefined, undefined, ctx);
+    assert.deepEqual(renderWidget(widgets.at(-1)), ["Tasks", "● ~Implement~", "● Verify"]);
     const shown = widgets.length;
-    assert.deepEqual(widgets.at(-1), ["Tasks", "● Implement"]);
 
     for (const handler of app.handlers.get("input") ?? [])
       await handler({ text: "Adjust it", source: "interactive", streamingBehavior: "steer" }, ctx);
@@ -742,7 +754,7 @@ test("task widget resets after settlement but survives mid-turn steering", async
       goal: "Second task",
       todos: ["Verify"],
     }, undefined, undefined, ctx);
-    assert.deepEqual(widgets.at(-1), ["Tasks", "● Verify"]);
+    assert.deepEqual(renderWidget(widgets.at(-1)), ["Tasks", "● Verify"]);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
