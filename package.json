@@ -1,8 +1,8 @@
 {
-  "name": "pi-conductor",
+  "name": "pylon",
   "version": "0.10.1",
   "private": true,
-  "description": "Complete Pi Conductor package with all extensions and themes.",
+  "description": "Complete Pylon package with all extensions and themes.",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -19,7 +19,7 @@
   "pi": {
     "extensions": [
       "./packages/pi-advisor/extensions/pi-advisor.ts",
-      "./packages/pi-conductor-core/extensions/pi-conductor-core.ts",
+      "./packages/pylon-core/extensions/pylon-core.ts",
       "./packages/pi-continuity/extensions/pi-continuity.ts",
       "./packages/pi-focus/extensions/pi-focus.ts",
       "./packages/pi-guard/extensions/pi-guard.ts",

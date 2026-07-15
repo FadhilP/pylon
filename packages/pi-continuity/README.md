@@ -5,10 +5,10 @@ Opt-in planning, structured clarification, visible todos, external workspace mem
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-continuity. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-continuity. Run `/reload` after installation.
 
 ## Usage
 
@@ -43,7 +43,7 @@ At injection, all current-owner project facts are classified before final releva
 
 `/memory show` displays current user/project facts with transient status, reason, and concise provenance. `/memory forget suspect` confirms and reclassifies under lock before deleting only currently suspect project facts (never unverifiable ones). `/memory owners` lists owner IDs and counts; `/memory forget owner <id>` confirms removal of that exact owner's facts and candidates. `/memory backups` lists reset backups. Key forget defaults to the current project; specify `user` or `project` to target one scope explicitly. Continuity caches each workspace's last Git project owner so a transient Git failure exposes existing facts as unverifiable instead of silently switching owners.
 
-Memory and candidate files have explicit V4 schemas. On first V4 use the prior `memory-v3` directory is atomically renamed to a `*.reset-unsupported-*` backup and V4 starts empty; there is no migration. Unsupported files are likewise renamed and replaced with empty V4 state. Malformed individual V4 records are dropped while valid records remain. Writes use unique temporary files and short cross-process locks. Pi owns sessions and compaction. Explicit plan, executor, and reviewer sessions carry versioned `pi-conductor-run` custom entries. Each plan has a unique `runId`; later plans started from an existing conductor session inherit its `timelineId`, allowing consumers such as pi-timeline to keep one cross-session history without detecting whether Continuity is installed.
+Memory and candidate files have explicit V4 schemas. On first V4 use the prior `memory-v3` directory is atomically renamed to a `*.reset-unsupported-*` backup and V4 starts empty; there is no migration. Unsupported files are likewise renamed and replaced with empty V4 state. Malformed individual V4 records are dropped while valid records remain. Writes use unique temporary files and short cross-process locks. Pi owns sessions and compaction. Explicit plan, executor, and reviewer sessions carry versioned `pylon-run` custom entries. Each plan has a unique `runId`; later plans started from an existing pylon session inherit its `timelineId`, allowing consumers such as pi-timeline to keep one cross-session history without detecting whether Continuity is installed.
 
 ## Security and Limitations
 

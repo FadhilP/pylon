@@ -9,7 +9,7 @@ import {
   type ToolPolicy,
 } from "../src/tools.ts";
 
-export default function conductorCoreExtension(pi: ExtensionAPI) {
+export default function pylonCoreExtension(pi: ExtensionAPI) {
   const baseline = new Set<string>();
   const managedByOwner = new Map<string, Set<string>>();
   const policies = new Map<string, ToolPolicy>();
@@ -99,7 +99,7 @@ export default function conductorCoreExtension(pi: ExtensionAPI) {
     }
   };
   const disposePolicyListener = pi.events.on(
-    "pi-conductor:tool-policy",
+    "pylon:tool-policy",
     handlePolicy,
   );
   const disposeGuardListener = pi.events.on("pi-guard:decision", (event: any) => {
@@ -109,7 +109,7 @@ export default function conductorCoreExtension(pi: ExtensionAPI) {
 
   const collectHealth = async (): Promise<{ lines: string[]; warning: boolean }> => {
     const pending: Promise<unknown>[] = [];
-    pi.events.emit("pi-conductor:health-request", {
+    pi.events.emit("pylon:health-request", {
       version: 1,
       respond(value: unknown | Promise<unknown>) {
         if (pending.length < 20) pending.push(Promise.resolve(value));
@@ -287,7 +287,7 @@ export default function conductorCoreExtension(pi: ExtensionAPI) {
       return;
     }
     if (!(["enable", "disable"] as string[]).includes(action) || !names.length) {
-      ctx.ui.notify("Usage: /conductor tools [status|enable <tool...>|disable <tool...>]", "error");
+      ctx.ui.notify("Usage: /pylon tools [status|enable <tool...>|disable <tool...>]", "error");
       return;
     }
     const known = new Set(
@@ -324,8 +324,8 @@ export default function conductorCoreExtension(pi: ExtensionAPI) {
     );
   };
 
-  pi.registerCommand("conductor", {
-    description: "Show policies or manage tools with /conductor tools",
+  pi.registerCommand("pylon", {
+    description: "Show policies or manage tools with /pylon tools",
     handler: async (args, ctx) => {
       const value = args.trim();
       if (value === "tools" || value.startsWith("tools "))
@@ -341,7 +341,7 @@ export default function conductorCoreExtension(pi: ExtensionAPI) {
       );
       const diagnosis = value.toLowerCase() === "doctor" ? await doctor(ctx) : undefined;
       const lines = [
-        ...(diagnosis ? ["Conductor doctor", ...diagnosis.lines, ""] : []),
+        ...(diagnosis ? ["Pylon doctor", ...diagnosis.lines, ""] : []),
         `Baseline: ${[...baseline].join(", ") || "none"}`,
         `Effective: ${pi.getActiveTools().join(", ") || "none"}`,
         ...(policyLines.length ? policyLines : ["Policies: none"]),

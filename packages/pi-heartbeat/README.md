@@ -5,10 +5,10 @@ Bounded background shell jobs for [Pi](https://pi.dev).
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-heartbeat. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-heartbeat. Run `/reload` after installation.
 
 ## Usage
 

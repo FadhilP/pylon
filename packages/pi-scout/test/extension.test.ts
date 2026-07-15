@@ -184,14 +184,14 @@ test("Web Scout requests a headless browser after fresh consent", async () => {
   } finally { runtime.restore(); }
 });
 
-test("Scout contributes bounded metadata-only Conductor health", async () => {
+test("Scout contributes bounded metadata-only Pylon health", async () => {
   const runtime = await harness();
   runtime.events.on("pi-helios:web-scout-capability", (request) => request.respond({
     version: 1, owner: "pi-helios", childExtensionPath: "C:/bundle/web-scout-browser.ts", issueGrant() {},
   }));
   try {
     const reports: Promise<any>[] = [];
-    runtime.events.emit("pi-conductor:health-request", { version: 1, respond(value: any) { reports.push(Promise.resolve(value)); } });
+    runtime.events.emit("pylon:health-request", { version: 1, respond(value: any) { reports.push(Promise.resolve(value)); } });
     const report = await reports[0];
     assert.equal(report.owner, "pi-scout");
     assert.match(report.lines.join("\n"), /Helios broker ready/);

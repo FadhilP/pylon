@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import extension from "../extensions/pi-conductor-core.ts";
+import extension from "../extensions/pylon-core.ts";
 
 class Bus {
   handlers = new Map<string, Set<(value: unknown) => void>>();
@@ -50,39 +50,39 @@ function harness() {
 test("extension validates, unregisters, diagnoses, and cleans listener", async () => {
   const runtime = harness();
   let acknowledged = false;
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-advisor",
     managedTools: ["advisor"], enabledTools: ["advisor"],
     acknowledge: () => { acknowledged = true; },
   });
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-continuity",
     managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
     allowOnly: ["read", "advisor", "continuity_update"],
   });
-  runtime.events.emit("pi-conductor:tool-policy", { version: 99 });
+  runtime.events.emit("pylon:tool-policy", { version: 99 });
   runtime.events.emit("pi-guard:decision", {
     version: 1, decision: "blocked", reason: "destructive Git command", blocked: 1, confirmed: 0,
   });
   assert.equal(acknowledged, true);
   assert.deepEqual(new Set(runtime.active()), new Set(["read", "advisor", "continuity_update"]));
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "unregister", owner: "pi-continuity",
   });
   assert.deepEqual(new Set(runtime.active()), new Set(["read", "edit", "repo_scout", "advisor"]));
   let diagnostic = "";
-  await runtime.commands.get("conductor").handler("", { ui: { notify: (text: string) => { diagnostic = text; } } });
+  await runtime.commands.get("pylon").handler("", { ui: { notify: (text: string) => { diagnostic = text; } } });
   assert.match(diagnostic, /Effective:/);
   assert.match(diagnostic, /Rejected: 1/);
   assert.match(diagnostic, /Guard authority: blocked: destructive Git command/);
-  runtime.events.on("pi-conductor:health-request", (request: any) => request.respond(Promise.resolve({
+  runtime.events.on("pylon:health-request", (request: any) => request.respond(Promise.resolve({
     version: 1, owner: "pi-helios", label: "Helios", lines: ["CLI: ready", "Browser sessions: 0"], warning: false,
   })));
-  await runtime.commands.get("conductor").handler("doctor", {
+  await runtime.commands.get("pylon").handler("doctor", {
     modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
     ui: { notify: (text: string) => { diagnostic = text; } },
   });
-  assert.match(diagnostic, /Conductor doctor/);
+  assert.match(diagnostic, /Pylon doctor/);
   assert.match(diagnostic, /Node: .*compatible/);
   assert.match(diagnostic, /Pi API: compatible/);
   assert.match(diagnostic, /Policy protocol: v1/);
@@ -92,13 +92,13 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.match(diagnostic, /Advisor: registered/);
   assert.match(diagnostic, /Package health:\nHelios:\n  CLI: ready/);
   for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
-  assert.equal(runtime.events.count("pi-conductor:tool-policy"), 0);
+  assert.equal(runtime.events.count("pylon:tool-policy"), 0);
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
 
 test("doctor reports quarantined state and unavailable configured models", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "pi-conductor-doctor-"));
+  const root = await mkdtemp(join(tmpdir(), "pylon-doctor-"));
   process.env.PI_CODING_AGENT_DIR = root;
   try {
     await mkdir(join(root, "pi-advisor"), { recursive: true });
@@ -110,7 +110,7 @@ test("doctor reports quarantined state and unavailable configured models", async
     const runtime = harness();
     let diagnostic = "";
     let severity = "";
-    await runtime.commands.get("conductor").handler("doctor", {
+    await runtime.commands.get("pylon").handler("doctor", {
       modelRegistry: {
         find: (provider: string, id: string) => provider === "openai" && id === "test-model" ? { provider, id } : undefined,
         hasConfiguredAuth: () => false,
@@ -136,37 +136,37 @@ test("tools command manages baseline while restrictive gates remain authoritativ
   for (const handler of runtime.handlers.get("session_start") ?? [])
     await handler({ reason: "startup" }, ctx);
 
-  await runtime.commands.get("conductor").handler("tools disable edit", ctx);
+  await runtime.commands.get("pylon").handler("tools disable edit", ctx);
   assert.ok(!runtime.active().includes("edit"));
-  await runtime.commands.get("conductor").handler("tools enable edit write", ctx);
+  await runtime.commands.get("pylon").handler("tools enable edit write", ctx);
   assert.ok(runtime.active().includes("edit"));
   assert.ok(runtime.active().includes("write"));
 
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-continuity",
     managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
     allowOnly: ["read", "continuity_update"],
   });
-  await runtime.commands.get("conductor").handler("tools enable edit", ctx);
+  await runtime.commands.get("pylon").handler("tools enable edit", ctx);
   assert.ok(!runtime.active().includes("edit"));
   assert.match(message, /Deferred by active gate: edit/);
   assert.equal(level, "warning");
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "unregister", owner: "pi-continuity",
   });
   assert.ok(runtime.active().includes("edit"));
 
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-advisor",
     managedTools: ["advisor"], enabledTools: ["advisor"],
   });
-  await runtime.commands.get("conductor").handler("tools disable advisor", ctx);
+  await runtime.commands.get("pylon").handler("tools disable advisor", ctx);
   assert.match(message, /Policy-managed tools cannot be changed manually: advisor/);
   assert.equal(level, "error");
-  await runtime.commands.get("conductor").handler("tools enable missing", ctx);
+  await runtime.commands.get("pylon").handler("tools enable missing", ctx);
   assert.match(message, /Unknown tools: missing/);
 
-  await runtime.commands.get("conductor").handler("tools status", ctx);
+  await runtime.commands.get("pylon").handler("tools status", ctx);
   assert.match(message, /Baseline:/);
   assert.match(message, /Effective:/);
 });
@@ -183,16 +183,16 @@ test("acknowledges policy only after successful reconcile", () => {
     acknowledge: () => { acknowledgements++; },
   };
   runtime.fail(true);
-  runtime.events.emit("pi-conductor:tool-policy", policy);
+  runtime.events.emit("pylon:tool-policy", policy);
   assert.equal(acknowledgements, 0);
   runtime.fail(false);
-  runtime.events.emit("pi-conductor:tool-policy", policy);
+  runtime.events.emit("pylon:tool-policy", policy);
   assert.equal(acknowledgements, 1);
 });
 
 test("restores pre-gate tools supplied by an acknowledged policy", () => {
   const runtime = harness();
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1,
     kind: "register",
     owner: "pi-continuity",
@@ -201,7 +201,7 @@ test("restores pre-gate tools supplied by an acknowledged policy", () => {
     allowOnly: ["read", "continuity_update"],
   });
   assert.ok(!runtime.active().includes("edit"));
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1,
     kind: "register",
     owner: "pi-continuity",
@@ -214,16 +214,16 @@ test("restores pre-gate tools supplied by an acknowledged policy", () => {
 
 test("restore snapshot does not bypass another active gate", () => {
   const runtime = harness();
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-continuity",
     managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
     allowOnly: ["read", "continuity_update"],
   });
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-other",
     managedTools: [], enabledTools: [], allowOnly: ["read"],
   });
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-continuity",
     managedTools: ["continuity_update"], enabledTools: ["continuity_update"],
     restoreTools: ["read", "edit"],
@@ -233,16 +233,16 @@ test("restore snapshot does not bypass another active gate", () => {
 
 test("rolls back unregister state when reconcile fails", async () => {
   const runtime = harness();
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-test",
     managedTools: ["test_tool"], enabledTools: ["test_tool"],
   });
   runtime.fail(true);
-  runtime.events.emit("pi-conductor:tool-policy", {
+  runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "unregister", owner: "pi-test",
   });
   let diagnostic = "";
-  await runtime.commands.get("conductor").handler("", {
+  await runtime.commands.get("pylon").handler("", {
     ui: { notify: (text: string) => { diagnostic = text; } },
   });
   assert.match(diagnostic, /pi-test: enabled/);
@@ -251,14 +251,14 @@ test("rolls back unregister state when reconcile fails", async () => {
 
 test("isolates and diagnoses acknowledgement failures", async () => {
   const runtime = harness();
-  assert.doesNotThrow(() => runtime.events.emit("pi-conductor:tool-policy", {
+  assert.doesNotThrow(() => runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-test",
     managedTools: ["test_tool"], enabledTools: ["test_tool"],
     acknowledge: () => { throw Error("forced acknowledge failure"); },
   }));
   assert.ok(runtime.active().includes("test_tool"));
   let diagnostic = "";
-  await runtime.commands.get("conductor").handler("", {
+  await runtime.commands.get("pylon").handler("", {
     ui: { notify: (text: string) => { diagnostic = text; } },
   });
   assert.match(diagnostic, /Last acknowledge error: forced acknowledge failure/);

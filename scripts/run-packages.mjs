@@ -6,7 +6,7 @@ import { mapLimit } from "./run-packages-lib.mjs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packages = [
   "pi-advisor",
-  "pi-conductor-core",
+  "pylon-core",
   "pi-continuity",
   "pi-focus",
   "pi-guard",

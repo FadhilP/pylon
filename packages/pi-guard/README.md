@@ -5,10 +5,10 @@ Conservative destructive-command and path guard for [Pi](https://pi.dev).
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-guard. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-guard. Run `/reload` after installation.
 
 ## Usage
 
@@ -22,7 +22,7 @@ Explicit absolute write/edit targets outside the workspace require fresh confirm
 
 ## Integrations
 
-When Timeline is installed, Guard requests a checkpoint before showing destructive confirmation. Failure or absence of Timeline never weakens Guard. Versioned, bounded `pi-guard:decision` events feed Focus status and Conductor diagnostics.
+When Timeline is installed, Guard requests a checkpoint before showing destructive confirmation. Failure or absence of Timeline never weakens Guard. Versioned, bounded `pi-guard:decision` events feed Focus status and Pylon diagnostics.
 
 ## Security and Limitations
 

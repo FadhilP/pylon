@@ -5,10 +5,10 @@ Git-backed filesystem checkpoints paired with Pi user prompts.
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-timeline. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-timeline. Run `/reload` after installation.
 
 ## Requirements
 
@@ -34,9 +34,9 @@ After the first settled turn, Timeline makes one bounded title-only model reques
 
 ## Integrations
 
-Sessions carrying valid `pi-conductor-run` metadata share one run timeline. Checkpoints from planner, executor, and future reviewer sessions appear together. Selecting a linked-session checkpoint switches to its owning session before restoring or forking. Sessions without metadata retain session-local behavior. Timeline reads persisted metadata only and does not require pi-continuity.
+Sessions carrying valid `pylon-run` metadata share one run timeline. Checkpoints from planner, executor, and future reviewer sessions appear together. Selecting a linked-session checkpoint switches to its owning session before restoring or forking. Sessions without metadata retain session-local behavior. Timeline reads persisted metadata only and does not require pi-continuity.
 
-Each subsequent explicit plan gets a new run ID but inherits the conductor timeline ID already attached to its current planner or executor session. Timeline groups sessions by that stable lineage, so checkpoints survive repeated plans and fresh executor handoffs. Legacy metadata without a timeline ID uses its run ID as the lineage root. Checkpoints from unrelated lineages stay excluded, and `/timeline clear` remains owner-session scoped.
+Each subsequent explicit plan gets a new run ID but inherits the pylon timeline ID already attached to its current planner or executor session. Timeline groups sessions by that stable lineage, so checkpoints survive repeated plans and fresh executor handoffs. Legacy metadata without a timeline ID uses its run ID as the lineage root. Checkpoints from unrelated lineages stay excluded, and `/timeline clear` remains owner-session scoped.
 
 Matching successful Verify metadata remains attached to checkpoints using exact worktree identity. Before Guard asks approval for a destructive action, Timeline attempts a recoverable checkpoint; Guard still owns approval and blocking.
 

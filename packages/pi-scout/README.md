@@ -5,10 +5,10 @@ Bounded repository reconnaissance, consent-gated isolated public-web research, a
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-scout. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-scout. Run `/reload` after installation.
 
 ## Configuration
 

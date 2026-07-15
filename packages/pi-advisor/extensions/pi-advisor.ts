@@ -94,7 +94,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     const model = await configuredModel(ctx);
     const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
     let coordinated = false;
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-advisor",
@@ -118,7 +118,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     await refreshTool(ctx);
   });
   pi.on("session_shutdown", () => {
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
       owner: "pi-advisor",

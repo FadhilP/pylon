@@ -562,7 +562,7 @@ test("subsequent plan inherits timeline lineage from a fresh executor session", 
   };
   const entries = [{
     type: "custom",
-    customType: "pi-conductor-run",
+    customType: "pylon-run",
     data: previousRun,
   }];
   const ctx: any = {
@@ -584,7 +584,7 @@ test("subsequent plan inherits timeline lineage from a fresh executor session", 
     await app.commands.get("plan").handler("Plan another change", ctx);
 
     const nextRun = app.appended.find((entry) =>
-      entry.customType === "pi-conductor-run" && entry.data.role === "planner"
+      entry.customType === "pylon-run" && entry.data.role === "planner"
     )?.data;
     assert.ok(nextRun);
     assert.notEqual(nextRun.runId, previousRun.runId);
@@ -697,7 +697,7 @@ test("explicit plan selects planner and hands approved work to executor session"
     assert.deepEqual(childEntries.map((entry) => entry.type), [
       "model",
       "thinking",
-      "pi-conductor-run",
+      "pylon-run",
       "pi-continuity-handoff",
     ]);
     const childRun = childEntries[2]!.value;

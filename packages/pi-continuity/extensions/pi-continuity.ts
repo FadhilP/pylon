@@ -338,7 +338,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const gate = (on: boolean) => {
     if (on) savedTools ??= pi.getActiveTools();
     let coordinated = false;
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-continuity",
@@ -493,7 +493,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
       owner: "pi-continuity",
@@ -932,7 +932,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const value = args.trim();
       if (value === "review") {
         if (!work?.runId)
-          return void ctx.ui.notify("No active conductor run.", "error");
+          return void ctx.ui.notify("No active pylon run.", "error");
         pi.appendEntry(RUN_ENTRY_TYPE, {
           version: 1,
           runId: work.runId,

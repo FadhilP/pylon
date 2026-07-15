@@ -5,10 +5,10 @@ Tool-free strategic model consultation for [Pi](https://pi.dev).
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-advisor. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-advisor. Run `/reload` after installation.
 
 ## Configuration
 

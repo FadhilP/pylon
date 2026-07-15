@@ -120,7 +120,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
       issueGrant: issueWebScoutGrant,
     });
   });
-  const disposeHealth = pi.events.on("pi-conductor:health-request", (request: any) => {
+  const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond((async () => {
       const sessions = manager.summary();

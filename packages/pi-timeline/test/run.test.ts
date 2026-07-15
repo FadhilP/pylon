@@ -64,17 +64,17 @@ test("run metadata is optional and latest valid entry preserves timeline lineage
   assert.equal(isRunEntry({ ...nextPlan, timelineId: "" }), false);
   assert.equal(runTimelineId(planner), runTimelineId(nextPlan));
   const entries = [
-    { type: "custom", customType: "pi-conductor-run", data: planner },
-    { type: "custom", customType: "pi-conductor-run", data: executor },
+    { type: "custom", customType: "pylon-run", data: planner },
+    { type: "custom", customType: "pylon-run", data: executor },
     { type: "custom", customType: "other", data: {} },
-    { type: "custom", customType: "pi-conductor-run", data: nextPlan },
+    { type: "custom", customType: "pylon-run", data: nextPlan },
   ];
   assert.equal(hasTimeline(entries, "run-1"), true);
   assert.equal(hasTimeline(entries, "unrelated"), false);
   assert.deepEqual(findRunEntry(entries), nextPlan);
   assert.equal(hasTimeline([
     ...entries,
-    { type: "custom", customType: "pi-conductor-run", data: {
+    { type: "custom", customType: "pylon-run", data: {
       ...planner,
       runId: "unrelated",
       timelineId: "unrelated",

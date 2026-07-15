@@ -5,7 +5,7 @@ Consent-gated browser use and named Windows-window screenshots for [Pi](https://
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
 Run `/reload` after installation. `@playwright/cli@0.1.17` is pinned as runtime dependency.

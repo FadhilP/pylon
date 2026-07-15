@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
-import conductor from "../packages/pi-conductor-core/extensions/pi-conductor-core.ts";
+import pylon from "../packages/pylon-core/extensions/pylon-core.ts";
 import continuity from "../packages/pi-continuity/extensions/pi-continuity.ts";
 import focus from "../packages/pi-focus/extensions/pi-focus.ts";
 import guard from "../packages/pi-guard/extensions/pi-guard.ts";
@@ -51,7 +51,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.pi.extensions, [
     "./packages/pi-advisor/extensions/pi-advisor.ts",
-    "./packages/pi-conductor-core/extensions/pi-conductor-core.ts",
+    "./packages/pylon-core/extensions/pylon-core.ts",
     "./packages/pi-continuity/extensions/pi-continuity.ts",
     "./packages/pi-focus/extensions/pi-focus.ts",
     "./packages/pi-guard/extensions/pi-guard.ts",
@@ -64,7 +64,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./packages/pi-verify/extensions/pi-verify.ts",
   ]);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "pi-conductor-bundle-"));
+  const root = await mkdtemp(join(tmpdir(), "pylon-bundle-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -92,11 +92,11 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, conductor, continuity, focus, guard, grunt, heartbeat, helios, searchTools, scout, timeline, verify]
+    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, searchTools, scout, timeline, verify]
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "conductor", "continuity", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "scout", "timeline", "todos", "ui",
+      "advisor", "continuity", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "timeline", "todos", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
       "advisor", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "repo_scout", "rg", "verify", "web_scout",
@@ -120,7 +120,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(!active.includes("web_scout"));
     assert.ok(!active.includes("advisor"));
     assert.ok(events.count() > 0);
-    await commands.get("conductor").handler("doctor", ctx);
+    await commands.get("pylon").handler("doctor", ctx);
     assert.match(notification, /Package health:/);
     assert.match(notification, /Helios:/);
     assert.match(notification, /Grunt:/);

@@ -77,7 +77,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     const ref = parseModelRef(config.model);
     return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
   };
-  const disposeHealth = pi.events.on("pi-conductor:health-request", (request: any) => {
+  const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond((async () => {
       const config = await loadConfig();
@@ -91,7 +91,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   const refreshTool = async () => {
     const enabled = isGruntEnabled(await loadConfig());
     let coordinated = false;
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1, kind: "register", owner: "pi-grunt",
       managedTools: ["grunt"], enabledTools: enabled ? ["grunt"] : [],
       acknowledge: () => { coordinated = true; },
@@ -108,7 +108,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   });
   pi.on("session_shutdown", () => {
     disposeHealth();
-    pi.events.emit("pi-conductor:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
   });
 
   pi.registerTool({

@@ -1,5 +1,5 @@
 {
-  "name": "pi-conductor-core",
+  "name": "pylon-core",
   "version": "0.1.0",
   "description": "Optional runtime coordination for interoperable Pi packages",
   "type": "module",
@@ -11,7 +11,7 @@
     "check": "tsc --noEmit"
   },
   "pi": {
-    "extensions": ["./extensions/pi-conductor-core.ts"]
+    "extensions": ["./extensions/pylon-core.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

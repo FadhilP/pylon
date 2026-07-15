@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import conductor from "../extensions/pi-conductor-core.ts";
+import pylon from "../extensions/pylon-core.ts";
 import advisor from "../../pi-advisor/extensions/pi-advisor.ts";
 import scout from "../../pi-scout/extensions/pi-scout.ts";
 import grunt from "../../pi-grunt/extensions/pi-grunt.ts";
@@ -23,7 +23,7 @@ class Bus {
 
 test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to end", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "conductor-compat-"));
+  const root = await mkdtemp(join(tmpdir(), "pylon-compat-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -52,7 +52,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       setModel: async () => true,
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    conductor(pi); advisor(pi); grunt(pi); scout(pi); continuity(pi);
+    pylon(pi); advisor(pi); grunt(pi); scout(pi); continuity(pi);
     const ctx: any = {
       cwd,
       hasUI: false,
@@ -96,7 +96,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     await commands.get("plan").handler("approve-current", ctx);
     assert.ok(active.includes("edit"));
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
-    assert.equal(events.handlers.get("pi-conductor:tool-policy")?.size ?? 0, 0);
+    assert.equal(events.handlers.get("pylon:tool-policy")?.size ?? 0, 0);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

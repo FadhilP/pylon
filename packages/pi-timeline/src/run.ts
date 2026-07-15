@@ -1,4 +1,4 @@
-export const RUN_ENTRY_TYPE = "pi-conductor-run";
+export const RUN_ENTRY_TYPE = "pylon-run";
 export type RunRole = "planner" | "executor" | "reviewer";
 export type RunEntry = {
   version: 1;

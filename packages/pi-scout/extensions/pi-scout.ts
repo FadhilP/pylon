@@ -133,7 +133,7 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
   };
   const resolveThinking = async () =>
     (await loadConfig()).thinking ?? pi.getThinkingLevel();
-  const disposeHealth = pi.events.on("pi-conductor:health-request", (request: any) => {
+  const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond((async () => {
       const config = await loadConfig();
@@ -154,7 +154,7 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
   const refreshTool = async () => {
     const enabled = isScoutEnabled(await loadConfig());
     let coordinated = false;
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-scout",
@@ -171,7 +171,7 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
   pi.on("session_start", refreshTool);
   pi.on("session_shutdown", async () => {
     disposeHealth();
-    pi.events.emit("pi-conductor:tool-policy", {
+    pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
       owner: "pi-scout",

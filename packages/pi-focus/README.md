@@ -5,10 +5,10 @@ Low-noise extension-first TUI package for [Pi](https://pi.dev), built from an au
 ## Installation
 
 ```sh
-pi install git:github.com/FadhilP/pi-conductor
+pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-focus and the `focus-dark` theme. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-focus and the `focus-dark` theme. Run `/reload` after installation.
 
 Apply the palette once with `/ui theme`, or select `focus-dark` through `/settings`.
 

@@ -66,7 +66,7 @@ test("fresh Continuity executor kickoff triggers automatic session naming", asyn
   const entries = [
     { type: "model_change", id: "model-1", provider: "provider", modelId: "executor" },
     { type: "thinking_level_change", id: "thinking-1", thinkingLevel: "low" },
-    { type: "custom", id: "run-1", customType: "pi-conductor-run", data: { version: 1 } },
+    { type: "custom", id: "run-1", customType: "pylon-run", data: { version: 1 } },
     { type: "custom", id: "handoff-1", customType: "pi-continuity-handoff", data: { version: 1 } },
     { type: "message", id: "user-1", message: { role: "user", content: kickoff } },
     { type: "message", id: "assistant-1", message: { role: "assistant", content: [{ type: "text", text: "Validated plan assumptions." }] } },

@@ -107,7 +107,7 @@ test("health diagnostics share cached work while doctor stays fresh", async () =
     calls++;
     return { code: 0, stdout: "playwright-cli 0.1.17\n", stderr: "", killed: false };
   } });
-  const health = eventHandlers.get("pi-conductor:health-request")![0];
+  const health = eventHandlers.get("pylon:health-request")![0];
   const responses: Promise<unknown>[] = [];
   const request = { version: 1, respond(value: Promise<unknown>) { responses.push(value); } };
   health(request);

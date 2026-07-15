@@ -5,10 +5,10 @@ Sequential delegated implementation worker for Pi. Grunt uses a separately confi
 ## Installation
 
 ```sh
-pi install /absolute/path/to/pi-conductor
+pi install /absolute/path/to/pylon
 ```
 
-This installs the complete Pi Conductor bundle, including pi-grunt. Run `/reload` after installation.
+This installs the complete Pylon bundle, including pi-grunt. Run `/reload` after installation.
 
 ## Configuration
 
