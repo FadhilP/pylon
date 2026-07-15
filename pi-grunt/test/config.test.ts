@@ -6,18 +6,24 @@ import { tmpdir } from "node:os";
 import {
   DEFAULT_GRUNT_MAX_COST_USD, DEFAULT_GRUNT_MAX_TURNS, DEFAULT_GRUNT_PARENT_CONTEXT_CHARS,
   DEFAULT_GRUNT_TIMEOUT_MS, gruntMaxCostUsd, gruntMaxTurns, gruntParentContextChars,
-  gruntTimeoutMs, isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
+  gruntMode, gruntTimeoutMs, isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 
 test("config is atomic, validated, and preserves corrupt input", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-config-"));
   const path = join(dir, "nested", "config.json");
-  await saveConfig({ version: 1, model: "openai/worker" }, path);
-  assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker" });
+  await saveConfig({ version: 1, model: "openai/worker", mode: "direct" }, path);
+  assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker", mode: "direct" });
   await saveConfig({ version: 1, disabled: false }, path);
   assert.deepEqual(await loadConfig(path), { version: 1, disabled: false });
   await writeFile(path, "bad");
   assert.deepEqual(await loadConfig(path), { version: 1 });
+});
+
+test("execution mode defaults to isolated", () => {
+  assert.equal(gruntMode({ version: 1 }), "isolated");
+  assert.equal(gruntMode({ version: 1, mode: "direct" }), "direct");
+  assert.equal(gruntMode({ version: 1, mode: "dynamic" }), "dynamic");
 });
 
 test("Grunt stays inactive until configured or explicitly reset", () => {

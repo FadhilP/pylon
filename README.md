@@ -74,7 +74,7 @@ Packages coordinate through bounded, versioned event-bus metadata while remainin
 - Verify publishes lifecycle and results; Continuity gates completion, Timeline marks matching checkpoints, Advisor receives bounded recovery metadata, and Focus shows status.
 - Guard requests a Timeline checkpoint before destructive confirmation and remains final safety authority; Conductor reports its latest decision.
 - Heartbeat publishes job lifecycle with optional todo and purpose metadata; Continuity tracks explicitly linked jobs.
-- Grunt performs sequential implementation in an isolated temporary Git worktree, applying successful non-stale patches back to the parent; Main retains architecture, review, and final verification, with Advisor consultation remaining optional and evidence-driven.
+- Grunt performs sequential implementation in an isolated temporary Git worktree by default, applying successful non-stale patches back to the parent. Direct mode edits the current working directory without rollback guarantees; dynamic mode selects isolation when Git `HEAD` exists and direct execution otherwise. Main retains architecture, review, and final verification; Advisor consultation remains optional and evidence-driven.
 - Scout receives bounded verification and checkpoint archaeology from parent session metadata.
 - Continuity supports `/plan review`, recording the shared run's `reviewer` phase for Timeline grouping.
 

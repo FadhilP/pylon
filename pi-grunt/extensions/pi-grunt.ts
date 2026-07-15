@@ -6,18 +6,24 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildWorkerContext } from "../src/context.ts";
 import {
-  gruntMaxCostUsd, gruntMaxTurns, gruntParentContextChars, gruntTimeoutMs,
+  gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntTimeoutMs,
   isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 import {
   applyWorkerPatch, collectWorkerPatch, createIsolatedWorktree,
   parentChangesSinceBaseline, persistPatchArtifact, removeIsolatedWorktree,
 } from "../src/isolation.ts";
-import { WORKER_PROMPT } from "../src/prompts.ts";
+import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
 
 const HEARTBEAT_MS = 1000;
 const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
+
+async function resolveExecutionMode(configured: ReturnType<typeof gruntMode>, exec: any, cwd: string): Promise<"isolated" | "direct"> {
+  if (configured !== "dynamic") return configured;
+  const git = await exec("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree", "--verify", "HEAD"], { timeout: 10_000 });
+  return git.code === 0 && git.stdout.trim().startsWith("true") ? "isolated" : "direct";
+}
 
 function activityText(activity: readonly WorkerActivity[]): string {
   return activity.map((item) => `${item.kind === "call" ? ">" : item.isError ? "!" : "<"} ${item.tool} ${item.text.replace(/\s+/g, " ").slice(0, 180)}`).join("\n");
@@ -77,8 +83,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const config = await loadConfig();
       return {
         version: 1, owner: "pi-grunt", label: "Grunt",
-        lines: [`State: ${config.disabled ? "disabled" : isGruntEnabled(config) ? "active" : "inactive"}`, `Model: ${config.model ?? "current main model"}`, "Execution: synchronous isolated Git worktree"],
-        warning: false,
+        lines: [`State: ${config.disabled ? "disabled" : isGruntEnabled(config) ? "active" : "inactive"}`, `Model: ${config.model ?? "current main model"}`, `Execution: synchronous ${gruntMode(config) === "isolated" ? "isolated Git worktree" : gruntMode(config) === "direct" ? "DIRECT current working directory" : "DYNAMIC (isolated with Git HEAD, direct otherwise)"}`],
+        warning: gruntMode(config) !== "isolated",
       };
     })());
   });
@@ -108,12 +114,13 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   pi.registerTool({
     name: "grunt",
     label: "Grunt",
-    description: "Run one synchronous delegated implementation worker in an isolated temporary Git worktree, then apply its patch only after success and a stale-parent check. Calls are unlimited per original user prompt. Use for a compact non-difficult slice or an entire non-difficult change; main model retains review and final verification.",
+    description: "Run one synchronous delegated implementation worker using the configured execution mode. Isolated mode is default; direct mode edits the current working directory immediately; dynamic mode chooses based on Git HEAD availability. Calls are unlimited per original user prompt. Main model retains review and final verification.",
     promptSnippet: "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
     promptGuidelines: [
-      "Use estimated changed LOC only as a soft routing guide: small is under 50 LOC, medium is 50–400 LOC inclusive, and large is over 400 LOC. Keep small/local work in the main model. Use grunt for medium changes with compact handoffs and easy validation, or large mechanical changes. Large non-mechanical work must be decomposed into coherent sequential slices; prefer roughly 200–300 changed LOC or less per semantic slice. Delegate a whole large change only when behavior is simple and validation is decisive. Reasoning complexity, architectural coupling, handoff compactness, and validation ease override LOC; a tiny security or concurrency change may still be difficult. Main model must own difficult architecture, integration, review, and final verification. Select thinking by reasoning complexity, not diff size. Grunt calls are unlimited per original user prompt, but dependent slices must be sequential: invoke one Grunt, inspect its applied changes, run focused verification, then invoke the next Grunt. Do not issue dependent Grunt calls in one assistant response because the later handoff cannot incorporate earlier results. Before grunt on consequential architecturally coupled work, use advisor at least once when available; use a later advisor call when implementation creates material new uncertainty. Grunt works in an isolated Git worktree and applies changes only after successful completion and a stale-parent check; blocked or failed work remains unapplied. Inspect applied changes and run verify after grunt before claiming completion.",
+      "Use estimated changed LOC only as a soft routing guide: small is under 50 LOC, medium is 50–400 LOC inclusive, and large is over 400 LOC. Keep small/local work in the main model. Use grunt for medium changes with compact handoffs and easy validation, or large mechanical changes. Large non-mechanical work must be decomposed into coherent sequential slices; prefer roughly 200–300 changed LOC or less per semantic slice. Delegate a whole large change only when behavior is simple and validation is decisive. Reasoning complexity, architectural coupling, handoff compactness, and validation ease override LOC; a tiny security or concurrency change may still be difficult. Main model must own difficult architecture, integration, review, and final verification. Select thinking by reasoning complexity, not diff size. Grunt calls are unlimited per original user prompt, but dependent slices must be sequential: invoke one Grunt, inspect its applied changes, run focused verification, then invoke the next Grunt. Do not issue dependent Grunt calls in one assistant response because the later handoff cannot incorporate earlier results. Before grunt on consequential architecturally coupled work, use advisor at least once when available; use a later advisor call when implementation creates material new uncertainty. In default isolated mode, Grunt applies changes only after successful completion and a stale-parent check; blocked or failed work remains unapplied. Inspect applied or direct changes and run verify after grunt before claiming completion.",
       "Provide grunt suggestedPaths whenever the main model has reliable implementation anchors from its existing context or repository evidence. Include the narrowest useful files or directories; omit suggestedPaths rather than guessing stale or uncertain paths. Suggested paths guide discovery and scope but are not an allowlist.",
       "After any grunt result, the main model owns recovery. Inspect completed changes or any partial patch artifact, then fix small/local defects and finish small remaining work directly instead of spawning another worker. Do not call grunt merely to verify or repair the previous worker. Re-delegate only when the remaining work is still medium or large, self-contained, easy to validate, and likely cheaper than main-model completion.",
+      "Grunt direct execution, whether configured directly or selected by dynamic mode outside Git, edits the current working directory immediately. It provides no rollback, stale-parent check, changed-path derivation, or protection from partial edits after failure or cancellation.",
     ],
     parameters: Type.Object({
       task: Type.String({ minLength: 1, maxLength: 8000, description: "Self-contained implementation handoff including decisions and acceptance criteria" }),
@@ -133,21 +140,29 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       calls++;
 
       const exec = pi.exec.bind(pi);
+      const configuredMode = gruntMode(config);
+      let mode = await resolveExecutionMode(configuredMode, exec, ctx.cwd);
       let isolated;
-      try {
-        isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
-      } catch (error: any) {
-        return {
-          content: [{ type: "text" as const, text: `Grunt unavailable: ${error?.message ?? String(error)}` }],
-          details: { status: "unavailable", failureCode: "isolation_error", model: modelName(model), thinking: params.thinking },
-        };
+      let isolationFallback: string | undefined;
+      if (mode === "isolated") {
+        try {
+          isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
+        } catch (error: any) {
+          const message = error?.message ?? String(error);
+          if (configuredMode !== "dynamic") throw new Error(`Grunt isolation unavailable: ${message}`);
+          mode = "direct";
+          isolationFallback = message;
+        }
       }
+      const workerCwd = isolated?.workerCwd ?? ctx.cwd;
 
       const contextChars = gruntParentContextChars();
       const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
       const parentContext = contextChars ? buildWorkerContext(entries, contextChars) : "";
       const suggested = params.suggestedPaths ?? [];
-      const missingDependencies = unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd);
+      const missingDependencies = isolated
+        ? unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd)
+        : [];
       const dependencyNote = missingDependencies.length
         ? `\n\nUnavailable ignored dependency directories: ${missingDependencies.join(", ")}. Do not install dependencies; skip checks requiring them and report that limitation.`
         : "";
@@ -155,30 +170,51 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const args = [
         "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
         "--tools", "read,grep,find,ls,edit,write,bash", "--model", modelName(model), "--thinking", params.thinking,
-        "--append-system-prompt", WORKER_PROMPT, prompt,
+        "--append-system-prompt", mode === "isolated" ? WORKER_PROMPT : DIRECT_WORKER_PROMPT, prompt,
       ];
-      if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", "grunt: implementing in isolation…");
-      onUpdate?.({ content: [{ type: "text", text: "Grunt implementing in isolated worktree…" }], details: { state: "running", model: modelName(model), thinking: params.thinking } });
+      const runningText = mode === "isolated" ? "implementing in isolation" : "DIRECT — editing current working directory";
+      if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
+      onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
       const started = Date.now();
       let activity: readonly WorkerActivity[] = [];
       let lastUpdateAt = started;
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { state: "running", model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
+        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
       try {
         const run = await runWorker(args, {
-          cwd: isolated.workerCwd, signal, timeoutMs: gruntTimeoutMs(),
+          cwd: workerCwd, signal, timeoutMs: gruntTimeoutMs(),
           maxTurns: gruntMaxTurns(), maxCostUsd: gruntMaxCostUsd(),
           onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
             activity = all; lastUpdateAt = Date.now();
-            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
+            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
           },
         });
-        if (run.cwd !== isolated.workerCwd)
-          throw new Error("Worker runner did not confirm the isolated working directory");
+        if (run.cwd !== workerCwd)
+          throw new Error(`Worker runner did not confirm the ${mode} working directory`);
+        if (!isolated) {
+          const status = derivedStatus(run, 0);
+          const lines = [
+            `Worker status: ${status}.`,
+            "Execution mode: DIRECT; worker edits affected the current working directory immediately.",
+            "Rollback and changed-path derivation: unavailable.",
+            isolationFallback ? `Dynamic isolation fallback: ${isolationFallback}` : "",
+            run.error ? `Worker failure: ${run.error}` : "",
+            run.text ? `\nWorker report:\n${run.text}` : "",
+          ].filter(Boolean);
+          return {
+            content: [{ type: "text" as const, text: lines.join("\n") }],
+            details: {
+              status, mode, configuredMode, isolationFallback, isolated: false, workerCwd: run.cwd, task, suggestedPaths: suggested,
+              model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
+              usage: run.usage, turns: run.turns, activity: run.activity, stopReason: run.stopReason,
+              truncated: run.truncated, stderr: run.stderr, failureCode: run.failure,
+            },
+          };
+        }
         const worker = await collectWorkerPatch(exec, isolated);
         let status = derivedStatus(run, worker.changedPaths.length);
         let applied = false;
@@ -225,7 +261,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: {
-            status, applied, isolated: true, isolationVerified: isolated.isolationVerified,
+            status, applied, mode, configuredMode, isolated: true, isolationVerified: isolated.isolationVerified,
             workerCwd: run.cwd, workerHead: isolated.workerHead, artifactPath, task, suggestedPaths: suggested,
             missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths,
             model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
@@ -235,12 +271,12 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         };
       } catch (error: any) {
         return {
-          content: [{ type: "text" as const, text: `Grunt failed in isolated worktree; parent unchanged. ${error?.message ?? String(error)}` }],
-          details: { status: "failed", applied: false, isolated: true, failureCode: "isolation_error", model: modelName(model), thinking: params.thinking },
+          content: [{ type: "text" as const, text: mode === "isolated" ? `Grunt failed in isolated worktree; parent unchanged. ${error?.message ?? String(error)}` : `Grunt failed in DIRECT mode; partial edits may remain. ${error?.message ?? String(error)}` }],
+          details: { status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", model: modelName(model), thinking: params.thinking },
         };
       } finally {
         clearInterval(heartbeat);
-        const cleanupWarnings = await removeIsolatedWorktree(exec, isolated);
+        const cleanupWarnings = isolated ? await removeIsolatedWorktree(exec, isolated) : [];
         if (cleanupWarnings.length) {
           const text = `Grunt cleanup warning: ${cleanupWarnings.join("; ")}`;
           if (ctx.hasUI) ctx.ui.notify(text, "warning");
@@ -262,10 +298,16 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         0,
       );
     },
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded }, theme, context) {
       const details = result.details as any;
       const body = result.content.find((part: any) => part.type === "text") as any;
-      let text = theme.fg(details?.state === "running" || details?.status === "completed" ? "success" : "warning", `Grunt · ${details?.model ?? "Unavailable"}`);
+      const color = context?.isError || details?.failureCode === "isolation_error"
+        ? "error"
+        : details?.state === "running" || details?.status === "completed" ? "success" : "warning";
+      const modeLabel = details?.configuredMode === "dynamic"
+        ? ` · DYNAMIC/${details?.mode === "direct" ? "DIRECT" : "ISOLATED"}`
+        : details?.mode === "direct" ? " · DIRECT" : "";
+      let text = theme.fg(color, `Grunt · ${details?.model ?? "Unavailable"}${modeLabel}`);
       if (details?.usage) text += ` · ${usageText({ usage: details.usage, turns: details.turns, durationMs: details.durationMs } as WorkerRun)}`;
       else if (details?.durationMs) text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && details?.activity?.length) text += `\n\nChild activity:\n${activityText(details.activity)}`;
@@ -275,33 +317,43 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   });
 
   pi.registerCommand("grunt", {
-    description: "Select worker model, reset, disable, or show status",
+    description: "Select worker model, execution mode, reset, disable, or show status",
     handler: async (args, ctx) => {
       const value = args.trim();
       if (value === "disable") {
-        await saveConfig({ version: 1, disabled: true }); await refreshTool();
+        await saveConfig({ ...await loadConfig(), version: 1, disabled: true }); await refreshTool();
         ctx.ui.notify("Grunt disabled.", "info"); return;
       }
       if (value === "reset") {
-        await saveConfig({ version: 1, disabled: false }); await refreshTool();
-        ctx.ui.notify("Grunt reset to current main model.", "info"); return;
+        await saveConfig({ version: 1, disabled: false, mode: "isolated" }); await refreshTool();
+        ctx.ui.notify("Grunt reset to current main model in isolated mode.", "info"); return;
+      }
+      if (value === "isolated" || value === "direct" || value === "dynamic") {
+        const config = await loadConfig();
+        await saveConfig({ ...config, mode: value }); await refreshTool();
+        const message = value === "isolated"
+          ? "Grunt mode: isolated Git worktree."
+          : value === "direct"
+            ? "Grunt mode: DIRECT. Worker edits affect the current working directory immediately."
+            : "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.";
+        ctx.ui.notify(message, value === "direct" ? "warning" : "info"); return;
       }
       if (value === "status") {
         const config = await loadConfig();
         const model = await resolveModel(ctx);
         const state = config.disabled ? "disabled" : !isGruntEnabled(config) ? "inactive" : model ? "active" : "unavailable";
-        ctx.ui.notify(`Model: ${config.model ?? "current main model"}\nState: ${state}\nThinking: selected by main model per call`, "info"); return;
+        ctx.ui.notify(`Model: ${config.model ?? "current main model"}\nState: ${state}\nMode: ${gruntMode(config)}\nThinking: selected by main model per call`, "info"); return;
       }
       let selected = value;
       if (!selected) {
-        if (ctx.mode !== "tui") { ctx.ui.notify("Usage: /grunt <provider/model-id>|status|reset|disable", "info"); return; }
+        if (ctx.mode !== "tui") { ctx.ui.notify("Usage: /grunt <provider/model-id>|isolated|direct|dynamic|status|reset|disable", "info"); return; }
         selected = (await ctx.ui.select("Grunt worker model", ctx.modelRegistry.getAvailable().map(modelName))) ?? "";
         if (!selected) return;
       }
       const ref = parseModelRef(selected);
       const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);
       if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) { ctx.ui.notify(`Unavailable model: ${selected}`, "error"); return; }
-      await saveConfig({ version: 1, model: modelName(model) }); await refreshTool();
+      await saveConfig({ ...await loadConfig(), version: 1, model: modelName(model), disabled: false }); await refreshTool();
       ctx.ui.notify(`Grunt model: ${modelName(model)}\nThinking: selected by main model per call`, "info");
     },
   });

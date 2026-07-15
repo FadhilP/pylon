@@ -37,7 +37,9 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
   try {
     const events = new Bus();
     const tools = new Map<string, any>();
+    const commands = new Map<string, any>();
     const handlers = new Map<string, Function[]>();
+    const notifications: Array<{ text: string; level: string }> = [];
     let active: string[] = [];
     let childArgs: string[] = [];
     const model = { provider: "test", id: "worker" };
@@ -65,7 +67,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       events,
       on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
       registerTool: (tool: any) => { tools.set(tool.name, tool); active.push(tool.name); },
-      registerCommand: () => {},
+      registerCommand: (name: string, command: any) => commands.set(name, command),
       getActiveTools: () => active,
       setActiveTools: (value: string[]) => { active = value; },
       exec: async (command: string, args: string[]) => {
@@ -77,13 +79,13 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         }
       },
     };
-    await saveConfig({ version: 1, disabled: false });
+    await saveConfig({ version: 1, disabled: false, mode: "dynamic" });
     grunt(pi, runWorker as any);
     const ctx: any = {
       cwd, hasUI: false, model,
       modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model, hasConfiguredAuth: () => true },
       sessionManager: { buildContextEntries: () => [{ type: "message", message: { role: "user", content: "Add worker" } }] },
-      ui: { setStatus() {} },
+      ui: { setStatus() {}, notify: (text: string, level: string) => notifications.push({ text, level }) },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     const result = await tools.get("grunt").execute("id", { task: "Add trivial worker module", thinking: "medium", suggestedPaths: ["src/**"] }, undefined, (update: any) => runningUpdates.push(update), ctx);
@@ -93,6 +95,8 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(result.details.status, "completed");
     assert.equal(result.details.applied, true);
     assert.equal(result.details.isolated, true);
+    assert.equal(result.details.mode, "isolated");
+    assert.equal(result.details.configuredMode, "dynamic");
     assert.equal(result.details.isolationVerified, true);
     assert.equal(result.details.workerCwd, workerCwd);
     assert.notEqual(workerCwd, cwd);
@@ -111,7 +115,60 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(blocked.details.applied, false);
     assert.ok(blocked.details.artifactPath);
     await assert.rejects(access(join(cwd, "src", "blocked.ts")));
+
+    await commands.get("grunt").handler("dynamic", ctx);
+    assert.deepEqual(notifications.at(-1), {
+      text: "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.",
+      level: "info",
+    });
+    await commands.get("grunt").handler("direct", ctx);
+    assert.deepEqual(notifications.at(-1), {
+      text: "Grunt mode: DIRECT. Worker edits affect the current working directory immediately.",
+      level: "warning",
+    });
+    outcome = "completed";
+    const direct = await tools.get("grunt").execute("direct", { task: "Edit current working directory", thinking: "medium" }, undefined, undefined, ctx);
+    assert.equal(direct.details.status, "completed");
+    assert.equal(direct.details.mode, "direct");
+    assert.equal(direct.details.isolated, false);
+    assert.equal(direct.details.workerCwd, cwd);
+    assert.match(direct.content[0].text, /partial edits|affected the current working directory/i);
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
+});
+
+test("dynamic mode falls back to direct when isolation setup fails", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "grunt-dynamic-fallback-"));
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    const tools = new Map<string, any>();
+    const pi: any = {
+      events: new Bus(), on() {}, registerCommand() {}, getActiveTools: () => [], setActiveTools() {},
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      exec: async (_command: string, args: string[]) => args.includes("--is-inside-work-tree")
+        ? { code: 0, stdout: "true\ndeadbeef\n", stderr: "" }
+        : { code: 1, stdout: "", stderr: "worktree setup failed" },
+    };
+    await saveConfig({ version: 1, disabled: false, mode: "dynamic" });
+    grunt(pi, async (_args, options) => ({
+      text: "Status: completed", cwd: options.cwd, model: "worker", stopReason: "stop", stderr: "", durationMs: 1,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 }, turns: 1,
+      truncated: false, exitCode: 0, activity: [],
+    }));
+    const model = { provider: "test", id: "worker" };
+    const result = await tools.get("grunt").execute("id", { task: "Edit file", thinking: "medium" }, undefined, undefined, {
+      cwd: root, hasUI: false, model,
+      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model },
+    });
+    assert.equal(result.details.mode, "direct");
+    assert.equal(result.details.configuredMode, "dynamic");
+    assert.equal(result.details.workerCwd, root);
+    assert.equal(result.details.isolationFallback, "worktree setup failed");
+    assert.match(result.content[0].text, /Dynamic isolation fallback: worktree setup failed/);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -177,4 +234,65 @@ test("Grunt guidance decomposes large semantic work and retains Main ownership",
     fg: (color: string, text: string) => { runtimeColor = color; return text; },
   });
   assert.equal(runtimeColor, "success");
+
+  let errorColor = "";
+  tool.renderResult({
+    content: [{ type: "text", text: "Grunt isolation unavailable: not a Git worktree" }],
+    details: { status: "unavailable", failureCode: "isolation_error" },
+  }, { expanded: false }, {
+    fg: (color: string, text: string) => { errorColor = color; return text; },
+  }, { isError: true });
+  assert.equal(errorColor, "error");
+});
+
+test("isolated mode throws outside Git while direct mode runs there", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "grunt-no-git-"));
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    const tools = new Map<string, any>();
+    const pi: any = {
+      events: new Bus(), on() {}, registerCommand() {}, getActiveTools: () => [], setActiveTools() {},
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      exec: async (command: string, args: string[]) => {
+        try {
+          const result = await execFileAsync(command, args, { encoding: "utf8" });
+          return { code: 0, stdout: result.stdout, stderr: result.stderr };
+        } catch (error: any) {
+          return { code: error.code ?? 1, stdout: error.stdout ?? "", stderr: error.stderr ?? error.message };
+        }
+      },
+    };
+    await saveConfig({ version: 1, disabled: false, mode: "isolated" });
+    let workerCwd = "";
+    grunt(pi, async (_args, options) => {
+      workerCwd = options.cwd;
+      return {
+        text: "Status: completed", cwd: options.cwd, model: "worker", stopReason: "stop", stderr: "", durationMs: 1,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 }, turns: 1,
+        truncated: false, exitCode: 0, activity: [],
+      };
+    });
+    const model = { provider: "test", id: "worker" };
+    const ctx: any = {
+      cwd: root, hasUI: false, model,
+      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model },
+    };
+    await assert.rejects(
+      tools.get("grunt").execute("id", { task: "Edit file", thinking: "medium" }, undefined, undefined, ctx),
+      /Grunt isolation unavailable:.*git repository/i,
+    );
+    assert.equal(workerCwd, "");
+
+    await saveConfig({ version: 1, disabled: false, mode: "dynamic" });
+    const direct = await tools.get("grunt").execute("direct", { task: "Edit file", thinking: "medium" }, undefined, undefined, ctx);
+    assert.equal(workerCwd, root);
+    assert.equal(direct.details.status, "completed");
+    assert.equal(direct.details.isolated, false);
+    assert.equal(direct.details.mode, "direct");
+    assert.equal(direct.details.configuredMode, "dynamic");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });

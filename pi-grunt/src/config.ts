@@ -5,7 +5,10 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const thinkingLevels = ["medium", "high"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type GruntConfig = { version: 1; model?: string; disabled?: boolean };
+export const gruntModes = ["isolated", "direct", "dynamic"] as const;
+export type GruntMode = (typeof gruntModes)[number];
+export type GruntConfig = { version: 1; model?: string; disabled?: boolean; mode?: GruntMode };
+export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
 export const isGruntEnabled = (config: GruntConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const DEFAULT_GRUNT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -52,12 +55,14 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
     if (
       value?.version !== 1 ||
       (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
-      (value.disabled !== undefined && typeof value.disabled !== "boolean")
+      (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
+      (value.mode !== undefined && !gruntModes.includes(value.mode))
     ) throw new Error("invalid config");
     return {
       version: 1,
       ...(value.model ? { model: value.model } : {}),
       ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
+      ...(value.mode !== undefined ? { mode: value.mode } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return { version: 1 };

@@ -95,6 +95,29 @@ test("focused chrome shows current session name and Git branch", () => {
   assert.match(footer.render(120)[0], /^Renamed session · pi-conductor · READY/);
 });
 
+test("Grunt shows and clears child-model activity widget", () => {
+  const handlers = new Map<string, Function[]>();
+  const pi: any = {
+    getSessionName: () => undefined,
+    getThinkingLevel: () => "low",
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+  };
+  extension(pi);
+
+  let widget: any;
+  const ctx: any = { ui: { setWidget: (_name: string, value: any) => { widget = value; } } };
+  handlers.get("tool_execution_start")![0]({ toolName: "grunt" }, ctx);
+  const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+  assert.equal(
+    widget({}, theme).render(120).map((line: string) => line.trimEnd()).join("\n"),
+    "GRUNT · child model active · expand tool row for activity",
+  );
+
+  handlers.get("tool_execution_end")![0]({ toolName: "grunt" }, ctx);
+  assert.equal(widget, undefined);
+});
+
 test("ui command toggles and reports completion bell", async () => {
   const commands = new Map<string, any>();
   const handlers = new Map<string, Function[]>();

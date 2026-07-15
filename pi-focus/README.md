@@ -37,7 +37,7 @@ Apply the palette once with `/ui theme`, or select `focus-dark` through `/settin
 - Responsive footer grouping workspace, active state or extension status, usage, context pressure, and cost.
 - Built-in `CustomEditor` wrapper preserving Pi keybindings while showing model and thinking level.
 - Quieter working indicator.
-- Transient Scout and Advisor child-model widget.
+- Transient Scout, Advisor, and Grunt child-model widget.
 
 ## Limitations
 

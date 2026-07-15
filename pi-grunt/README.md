@@ -1,6 +1,6 @@
 # pi-grunt
 
-Sequential delegated implementation worker for Pi. Grunt uses a separately configured worker model in an isolated temporary Git worktree while the main model waits. It can implement a compact slice or an entire non-difficult change.
+Sequential delegated implementation worker for Pi. Grunt uses a separately configured worker model while the main model waits. Isolated Git-worktree execution is default; manually enabled direct mode edits the current working directory. It can implement a compact slice or an entire non-difficult change.
 
 ## Installation
 
@@ -16,10 +16,13 @@ This installs the complete Pi Conductor bundle, including pi-grunt. Run `/reload
 /grunt provider/model-id
 /grunt status
 /grunt reset
+/grunt isolated
+/grunt direct
+/grunt dynamic
 /grunt disable
 ```
 
-Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
+Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model and restores isolated mode. `/grunt direct` opts into direct execution; `/grunt isolated` switches back. `/grunt dynamic` chooses isolated mode when the current directory belongs to a Git worktree with a `HEAD` commit, otherwise direct mode. The selected mode persists in Grunt's global config and is shown by `/grunt status`. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
 
 Environment controls:
 
@@ -54,7 +57,11 @@ After any Grunt result, the main model owns recovery. It should inspect complete
 
 `grunt({ task, thinking, suggestedPaths? })` starts one synchronous child Pi process. The child receives the built-in `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash` tools. Optional parent context is bounded and redacted. `suggestedPaths` guides scope but is not an allowlist.
 
-Grunt requires a Git repository with a `HEAD` commit. It creates a detached temporary worktree, then mirrors only dirty/deleted tracked paths and non-ignored untracked paths because Git already checked out clean tracked files. Checkout and baseline-commit hooks are disabled. After normal completion, Grunt derives a binary patch against the immutable baseline commit, verifies that the parent's `HEAD` and dirty-file fingerprints remain unchanged, rechecks immediately before integration, then applies the patch. Worker commits remain included. Results report changed paths, pre-existing dirty files touched, changes outside suggested paths, and whether the patch was applied.
+In isolated mode, Grunt requires a Git repository with a `HEAD` commit. It creates a detached temporary worktree, then mirrors only dirty/deleted tracked paths and non-ignored untracked paths because Git already checked out clean tracked files. Checkout and baseline-commit hooks are disabled. After normal completion, Grunt derives a binary patch against the immutable baseline commit, verifies that the parent's `HEAD` and dirty-file fingerprints remain unchanged, rechecks immediately before integration, then applies the patch. Worker commits remain included. Results report changed paths, pre-existing dirty files touched, changes outside suggested paths, and whether the patch was applied. Isolation setup failures throw tool errors, so Pi marks them as errors in the TUI.
+
+In direct mode, Grunt runs in Pi's current working directory and works outside Git repositories. Edits happen immediately. Failure, timeout, cancellation, or a blocked report may leave partial changes. Direct mode provides no rollback, stale-parent check, patch artifact, or derived changed-path list.
+
+Dynamic mode checks for a Git worktree and valid `HEAD` before each Grunt call. It then uses the existing isolated or direct path; resolved mode is shown in tool output. If isolation setup later fails, dynamic mode falls back to direct execution and reports the setup failure. Explicit isolated mode still throws.
 
 Ignored dependency directories such as `node_modules`, `.venv`, and `venv` are not copied. When present in the parent but unavailable to the worker, Grunt tells the worker to skip checks requiring them instead of installing or repeatedly probing for them.
 
@@ -75,7 +82,7 @@ The worker must stop when it encounters architectural ownership, public API deci
 
 ## Safety
 
-Before launch, Grunt resolves the temporary worktree's Git top-level and verifies it differs from the parent. The child process is spawned with that worktree as its OS working directory, and results include isolation verification metadata. Worker patches are collected only from that worktree.
+In isolated mode, Grunt resolves the temporary worktree's Git top-level and verifies it differs from the parent. The child process is spawned with that worktree as its OS working directory, and results include isolation verification metadata. Worker patches are collected only from that worktree. Direct mode intentionally skips these guarantees and is labeled `DIRECT` in status and tool output.
 
 Blocked, aborted, timed-out, budget-limited, output-limited, failed, stale, or unapplicable work never changes the parent worktree. Only a normal model `stop` can integrate changes. When isolated edits exist, Grunt stores their unapplied patch under the Pi agent directory and reports its path. Successful patches are applied only after the stale-parent checks. Same-repository transactions are queued through cleanup; independent repositories may run independently. Cleanup failures are warnings and never disguise an already-applied result.
 
