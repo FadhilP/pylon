@@ -70,10 +70,16 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    assert.ok(active.includes("repo_scout"));
-    assert.ok(active.includes("grunt"));
+    assert.ok(!active.includes("repo_scout"));
+    assert.ok(!active.includes("grunt"));
     assert.ok(active.includes("continuity_update"));
     assert.ok(!active.includes("advisor"));
+    await commands.get("advisor").handler("reset", ctx);
+    await commands.get("grunt").handler("reset", ctx);
+    await commands.get("scout").handler("reset", ctx);
+    assert.ok(active.includes("advisor"));
+    assert.ok(active.includes("grunt"));
+    assert.ok(active.includes("repo_scout"));
     await commands.get("plan").handler("compatibility", ctx);
     assert.ok(active.includes("read"));
     assert.ok(active.includes("repo_scout"));

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import {
   DEFAULT_GRUNT_MAX_COST_USD, DEFAULT_GRUNT_MAX_TURNS, DEFAULT_GRUNT_PARENT_CONTEXT_CHARS,
   DEFAULT_GRUNT_TIMEOUT_MS, gruntMaxCostUsd, gruntMaxTurns, gruntParentContextChars,
-  gruntTimeoutMs, loadConfig, parseModelRef, saveConfig, thinkingLevels,
+  gruntTimeoutMs, isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 
 test("config is atomic, validated, and preserves corrupt input", async () => {
@@ -14,8 +14,17 @@ test("config is atomic, validated, and preserves corrupt input", async () => {
   const path = join(dir, "nested", "config.json");
   await saveConfig({ version: 1, model: "openai/worker" }, path);
   assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker" });
+  await saveConfig({ version: 1, disabled: false }, path);
+  assert.deepEqual(await loadConfig(path), { version: 1, disabled: false });
   await writeFile(path, "bad");
   assert.deepEqual(await loadConfig(path), { version: 1 });
+});
+
+test("Grunt stays inactive until configured or explicitly reset", () => {
+  assert.equal(isGruntEnabled({ version: 1 }), false);
+  assert.equal(isGruntEnabled({ version: 1, disabled: true }), false);
+  assert.equal(isGruntEnabled({ version: 1, disabled: false }), true);
+  assert.equal(isGruntEnabled({ version: 1, model: "openai/worker" }), true);
 });
 
 test("timeout defaults to fifteen minutes and validates overrides", () => {

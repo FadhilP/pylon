@@ -12,12 +12,12 @@ This installs the complete Pi Conductor bundle, including pi-scout. Run `/reload
 
 ## Configuration
 
-Select an optional child model with `/scout provider/model-id[:thinking]` or `/scout`. Example: `/scout openai/gpt-5:medium`.
+Scout stays inactive until you select a child model with `/scout provider/model-id[:thinking]` or `/scout`, or run `/scout reset` to use the current main model. Example: `/scout openai/gpt-5:medium`.
 
 Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Without a suffix, Scout follows the current main thinking level.
 
 - `/scout disable` disables repository, web, and session scouts.
-- `/scout reset` re-enables all scouts using the current main model and thinking level.
+- `/scout reset` enables all scouts using the current main model and thinking level.
 - `pi config` can disable the extension.
 - `pi --no-extensions` disables all extensions for one run.
 

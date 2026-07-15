@@ -10,7 +10,7 @@ import {
   loadConfig,
   parseModelRef,
   repoTimeoutMs,
-  resetConfig,
+  isScoutEnabled,
   saveConfig,
   thinkingLevels,
   type ThinkingLevel,
@@ -143,7 +143,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
         owner: "pi-scout",
         label: "Scout",
         lines: [
-          `State: ${config.disabled ? "disabled" : "active"}`,
+          `State: ${config.disabled ? "disabled" : isScoutEnabled(config) ? "active" : "inactive"}`,
           `Model: ${config.model ?? "current main model"}`,
           `Web Scout: ${webReady ? "Helios broker ready" : "Helios broker unavailable"}`,
         ],
@@ -152,7 +152,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
     })());
   });
   const refreshTool = async () => {
-    const enabled = !(await loadConfig()).disabled;
+    const enabled = isScoutEnabled(await loadConfig());
     let coordinated = false;
     pi.events.emit("pi-conductor:tool-policy", {
       version: 1,
@@ -198,7 +198,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
   pi.on("before_agent_start", async (_event, ctx) => {
     const intent = pendingIntent;
     pendingIntent = undefined;
-    if (!intent || (await loadConfig()).disabled) return;
+    if (!intent || !isScoutEnabled(await loadConfig())) return;
     if (ctx.hasUI)
       ctx.ui.setStatus("pi-scout", "scout: searching Pi sessions…");
     try {
@@ -316,9 +316,9 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
     ),
     async execute(_id, params, signal, onUpdate, ctx) {
       return serializeRepoCall(async () => {
-      if ((await loadConfig()).disabled)
+      if (!isScoutEnabled(await loadConfig()))
         return {
-          content: [{ type: "text" as const, text: "Repo scout disabled." }],
+          content: [{ type: "text" as const, text: "Repo Scout inactive. Configure it with /scout or use /scout reset." }],
           details: { failureCode: "disabled" },
         };
       if (!params.task.trim())
@@ -508,7 +508,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
     }, { additionalProperties: false }),
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
-      if ((await loadConfig()).disabled) return { content: [{ type: "text" as const, text: "Web scout disabled." }], details: { failureCode: "disabled" } };
+      if (!isScoutEnabled(await loadConfig())) return { content: [{ type: "text" as const, text: "Web Scout inactive. Configure it with /scout or use /scout reset." }], details: { failureCode: "disabled" } };
       if (!ctx.hasUI) return { content: [{ type: "text" as const, text: "Web scout requires interactive confirmation." }], details: { failureCode: "confirmation_unavailable" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Web scout task must not be empty." }], details: { failureCode: "invalid" } };
@@ -610,7 +610,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
         return;
       }
       if (value === "reset") {
-        await resetConfig();
+        await saveConfig({ version: 1, disabled: false });
         await refreshTool();
         ctx.ui.notify("Scout enabled; uses current main model.", "info");
         return;
@@ -619,7 +619,7 @@ export default function (pi: ExtensionAPI, runRepoScout = runPi) {
         const config = await loadConfig();
         const resolved = await resolveModel(ctx);
         ctx.ui.notify(
-          `State: ${config.disabled ? "disabled" : "active"}\nConfigured: ${config.model ?? "current main model"}\nThinking: ${config.thinking ?? "current main level"}\nResolved: ${resolved ? modelName(resolved) : "unavailable"}`,
+          `State: ${config.disabled ? "disabled" : isScoutEnabled(config) ? "active" : "inactive"}\nConfigured: ${config.model ?? "current main model"}\nThinking: ${config.thinking ?? "current main level"}\nResolved: ${resolved ? modelName(resolved) : "unavailable"}`,
           "info",
         );
         return;

@@ -10,6 +10,7 @@ import scout, {
   shouldRotateRepoSession,
   startsNewRepoSession,
 } from "../extensions/pi-scout.ts";
+import { saveConfig } from "../src/config.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
 class Bus {
@@ -22,9 +23,10 @@ class Bus {
   emit(name: string, value: any) { for (const handler of this.handlers.get(name) ?? []) handler(value); }
 }
 
-async function harness(runRepoScout?: Parameters<typeof scout>[1]) {
+async function harness(runRepoScout?: Parameters<typeof scout>[1], enabled = true) {
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-scout-extension-"));
+  if (enabled) await saveConfig({ version: 1, disabled: false });
   const events = new Bus();
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();

@@ -8,6 +8,7 @@ import { loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
 test("config persists and malformed config deactivates advisor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "advisor-config-")); const path = join(dir, "nested", "config.json");
   await saveConfig({ schemaVersion: 1, advisorModel: "p/m", thinking: "high" }, path); assert.deepEqual(await loadConfig(path), { schemaVersion: 1, advisorModel: "p/m", thinking: "high" });
+  await saveConfig({ schemaVersion: 1, useMainModel: true }, path); assert.deepEqual(await loadConfig(path), { schemaVersion: 1, useMainModel: true });
   await writeFile(path, "{}"); assert.deepEqual(await loadConfig(path), { schemaVersion: 1 });
 });
 

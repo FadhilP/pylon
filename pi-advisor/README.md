@@ -14,15 +14,15 @@ This installs the complete Pi Conductor bundle, including pi-advisor. Run `/relo
 
 Run `/advisor` in TUI or `/advisor provider/model-id[:thinking]` in any mode. Example: `/advisor anthropic/claude-sonnet-4-5:high`.
 
-Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Without a suffix, the provider default applies. No model default exists; the tool stays inactive until selection.
+Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Without a suffix, the provider default applies. Advisor stays inactive until selection or `/advisor reset`.
 
 - `/advisor status` reports model, thinking level, and state.
 - `/advisor disable` disables consultations.
-- `/advisor reset` remains an alias for disable.
+- `/advisor reset` enables Advisor using the current main model and thinking level.
 - `pi config` can disable the extension.
 - `pi --no-extensions` disables all extensions for one run.
 
-Selecting a model consents to sending that model and provider a redacted, bounded snapshot of the current Pi conversation. Explicit non-TUI commands and manually edited config also count as consent.
+Selecting or resetting to a model consents to sending that model and provider a redacted, bounded snapshot of the current Pi conversation. Explicit non-TUI commands and manually edited config also count as consent.
 
 ## Usage
 

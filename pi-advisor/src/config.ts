@@ -5,7 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type AdvisorConfig = { schemaVersion: 1; advisorModel?: string; thinking?: ThinkingLevel };
+export type AdvisorConfig = { schemaVersion: 1; advisorModel?: string; thinking?: ThinkingLevel; useMainModel?: boolean };
 export const configPath = (agentDir = getAgentDir()) =>
   join(agentDir, "pi-advisor", "config.json");
 export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
@@ -15,13 +15,15 @@ export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
       value?.schemaVersion !== 1 ||
       (value.advisorModel !== undefined &&
         (typeof value.advisorModel !== "string" || !value.advisorModel.trim())) ||
-      (value.thinking !== undefined && !thinkingLevels.includes(value.thinking))
+      (value.thinking !== undefined && !thinkingLevels.includes(value.thinking)) ||
+      (value.useMainModel !== undefined && typeof value.useMainModel !== "boolean")
     )
       throw new Error("invalid config");
     return {
       schemaVersion: 1,
       ...(value.advisorModel ? { advisorModel: value.advisorModel } : {}),
       ...(value.thinking ? { thinking: value.thinking } : {}),
+      ...(value.useMainModel ? { useMainModel: true } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return { schemaVersion: 1 };

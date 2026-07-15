@@ -6,6 +6,8 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type ScoutConfig = { version: 1; model?: string; thinking?: ThinkingLevel; disabled?: boolean };
+export const isScoutEnabled = (config: ScoutConfig): boolean =>
+  config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const defaultConfig = (): ScoutConfig => ({ version: 1 });
 export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
 export function repoTimeoutMs(value = process.env.PI_SCOUT_TIMEOUT_MS): number {
@@ -35,7 +37,7 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
       version: 1,
       ...(value.model ? { model: value.model } : {}),
       ...(value.thinking ? { thinking: value.thinking } : {}),
-      ...(value.disabled ? { disabled: true } : {}),
+      ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return defaultConfig();

@@ -215,14 +215,18 @@ test("automatic completion waits for required verification", async () => {
 test("TUI keeps ordinary continuity updates hidden but shows terminal outcomes", () => {
   const tool = runtime().tools.get("continuity_update");
   const theme = { fg: (_color: string, text: string) => text };
-  const render = (text: string) => tool.renderResult(
-    { content: [{ type: "text", text }] },
+  const render = (text: string, details?: any) => tool.renderResult(
+    { content: [{ type: "text", text }], details },
     {},
     theme,
-  ).render(80).join("\n");
+  ).render(80).map((line: string) => line.trimEnd()).join("\n");
   assert.equal(render("Continuity state updated."), "");
   assert.match(render("Work completed. No further continuity updates needed."), /Task completed/);
   assert.match(render("Continuity circuit breaker stopped 3 identical calls within 30 seconds."), /loop stopped/);
+  assert.equal(
+    render("Small", { clarification: { question: "Pick scope?", answer: "Small" } }),
+    "? Pick scope?\nSmall",
+  );
 });
 
 test("circuit breaker aborts the third identical call within 30 seconds", async () => {
@@ -319,6 +323,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
   let leafContent: any[] = [];
   let aborts = 0;
   let selection: string | undefined;
+  let customAnswer = "";
   const ctx: any = {
     cwd, hasUI: false, mode: "json",
     abort: () => { aborts++; },
@@ -335,7 +340,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       setStatus: () => {},
       setWidget: () => {},
       select: async () => selection,
-      editor: async () => "",
+      editor: async () => customAnswer,
     },
   };
   try {
@@ -404,11 +409,27 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       ...params, question: "Pick scope?",
     }, undefined, undefined, ctx);
     assert.equal(answered.content[0].text, "Small");
+    assert.deepEqual(answered.details.clarification, {
+      question: "Pick scope?", answer: "Small",
+    });
     selection = "Full — Broader change";
     const secondAnswer = await tool.execute("second-answer", {
       ...params, question: "Pick deployment scope?",
     }, undefined, undefined, ctx);
     assert.equal(secondAnswer.content[0].text, "Full — Broader change");
+    assert.deepEqual(secondAnswer.details.clarification, {
+      question: "Pick deployment scope?", answer: "Full — Broader change",
+    });
+
+    selection = "Write a different answer…";
+    customAnswer = "Only API changes";
+    const custom = await tool.execute("custom-answer", {
+      ...params, question: "Any constraints?",
+    }, undefined, undefined, ctx);
+    assert.equal(custom.content[0].text, "Only API changes");
+    assert.deepEqual(custom.details.clarification, {
+      question: "Any constraints?", answer: "Only API changes",
+    });
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

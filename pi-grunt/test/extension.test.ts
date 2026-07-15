@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import grunt from "../extensions/pi-grunt.ts";
+import { saveConfig } from "../src/config.ts";
 import type { WorkerRun } from "../src/runner.ts";
 
 const execFileAsync = promisify(execFile);
@@ -76,6 +77,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         }
       },
     };
+    await saveConfig({ version: 1, disabled: false });
     grunt(pi, runWorker as any);
     const ctx: any = {
       cwd, hasUI: false, model,
@@ -136,6 +138,8 @@ test("Grunt guidance permits whole non-difficult changes and retains Main owners
   assert.match(guidance, /entire change when it is not difficult/i);
   assert.match(guidance, /Main model must own difficult architecture/i);
   assert.match(guidance, /advisor at least once when available/i);
+  assert.match(guidance, /Provide grunt suggestedPaths whenever the main model has reliable implementation anchors/i);
+  assert.match(guidance, /omit suggestedPaths rather than guessing stale or uncertain paths/i);
   assert.match(guidance, /main model owns recovery/i);
   assert.match(guidance, /fix small\/local defects.*directly/i);
   assert.match(guidance, /Do not call grunt merely to verify or repair the previous worker/i);
@@ -162,4 +166,13 @@ test("Grunt guidance permits whole non-difficult changes and retains Main owners
     }, { expanded: false }, theme).render(1_000).map((line: string) => line.trimEnd()).join("\n"),
     "Grunt · test/worker · 1 turn · 1 input · 2 output · R3 · W4 · $0.5000 · 1.3s",
   );
+
+  let runtimeColor = "";
+  tool.renderResult({
+    content: [{ type: "text", text: "1s" }],
+    details: { state: "running", model: "test/worker", durationMs: 1_000 },
+  }, { expanded: false }, {
+    fg: (color: string, text: string) => { runtimeColor = color; return text; },
+  });
+  assert.equal(runtimeColor, "success");
 });

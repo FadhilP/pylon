@@ -3,13 +3,21 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DEFAULT_REPO_TIMEOUT_MS, loadConfig, parseModelRef, repoTimeoutMs, saveConfig } from "../src/config.ts";
+import { DEFAULT_REPO_TIMEOUT_MS, isScoutEnabled, loadConfig, parseModelRef, repoTimeoutMs, saveConfig } from "../src/config.ts";
 
 test("config is atomic, validated, and corrupt input is preserved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-config-")); const path = join(dir, "nested", "config.json");
   await saveConfig({ version: 1, model: "openai/gpt", thinking: "xhigh", disabled: true }, path);
   assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/gpt", thinking: "xhigh", disabled: true });
+  await saveConfig({ version: 1, disabled: false }, path);
+  assert.deepEqual(await loadConfig(path), { version: 1, disabled: false });
   await writeFile(path, "bad"); assert.deepEqual(await loadConfig(path), { version: 1 });
+});
+test("Scout stays inactive until configured or explicitly reset", () => {
+  assert.equal(isScoutEnabled({ version: 1 }), false);
+  assert.equal(isScoutEnabled({ version: 1, disabled: true }), false);
+  assert.equal(isScoutEnabled({ version: 1, disabled: false }), true);
+  assert.equal(isScoutEnabled({ version: 1, model: "openai/gpt" }), true);
 });
 test("repo timeout defaults to fifteen minutes and validates overrides", () => {
   assert.equal(repoTimeoutMs(undefined), DEFAULT_REPO_TIMEOUT_MS);

@@ -19,7 +19,7 @@ This installs the complete Pi Conductor bundle, including pi-grunt. Run `/reload
 /grunt disable
 ```
 
-Without a configured model, Grunt uses the current main model. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
+Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
 
 Environment controls:
 
@@ -38,6 +38,8 @@ Use estimated changed LOC only as a soft guide:
 - Deep architectural change: main model owns architecture. Grunt may implement bounded, non-difficult slices.
 
 Reasoning complexity, architectural coupling, handoff compactness, and validation ease override LOC. A tiny security or concurrency change may still be difficult.
+
+Provide `suggestedPaths` whenever the main model has reliable implementation anchors from its existing context or repository evidence. Use the narrowest useful files or directories. Omit paths rather than guessing stale or uncertain locations; they guide discovery and scope but are not an allowlist.
 
 Grunt calls are unlimited per original user prompt. Dependent slices remain sequential: invoke Grunt for one slice, inspect its applied changes, run focused verification, then invoke Grunt for the next slice. Do not issue dependent calls in one assistant response because later handoffs cannot incorporate earlier results.
 

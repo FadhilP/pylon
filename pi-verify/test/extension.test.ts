@@ -95,9 +95,20 @@ test("verify reports live elapsed runtime while a check runs", async () => {
     { cwd, hasUI: true, ui: { setStatus: (_id: string, status: string) => statuses.push(status) } },
   );
   assert.equal(result.details.state, "passed");
+  assert.ok(result.details.durationMs >= 1_000);
   assert.ok(updates.some((update) => /^1s$/.test(update.content[0].text)));
-  assert.ok(updates.some((update) => update.details.durationMs >= 1_000));
+  const runtimeUpdate = updates.find((update) => update.details.durationMs >= 1_000);
+  assert.ok(runtimeUpdate);
   assert.ok(statuses.some((status) => /Running 1\/1 · 1s/.test(status)));
+  const theme = { fg: (_color: string, text: string) => text };
+  assert.match(
+    tools.get("verify").renderResult(runtimeUpdate, { expanded: false }, theme).render(80).join("\n"),
+    /Verification running · \d+ check\(s\) · 1s/,
+  );
+  assert.match(
+    tools.get("verify").renderResult(result, { expanded: false }, theme).render(80).join("\n"),
+    /Verification passed · 1 check\(s\) · 1\.\d+s/,
+  );
 });
 
 test("verify stops before declared checks when changed-set hygiene fails", async () => {

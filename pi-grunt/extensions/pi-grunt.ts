@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { buildWorkerContext } from "../src/context.ts";
 import {
   gruntMaxCostUsd, gruntMaxTurns, gruntParentContextChars, gruntTimeoutMs,
-  loadConfig, parseModelRef, resetConfig, saveConfig, thinkingLevels,
+  isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 import {
   applyWorkerPatch, collectWorkerPatch, createIsolatedWorktree,
@@ -85,13 +85,13 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const config = await loadConfig();
       return {
         version: 1, owner: "pi-grunt", label: "Grunt",
-        lines: [`State: ${config.disabled ? "disabled" : "active"}`, `Model: ${config.model ?? "current main model"}`, "Execution: synchronous isolated Git worktree"],
+        lines: [`State: ${config.disabled ? "disabled" : isGruntEnabled(config) ? "active" : "inactive"}`, `Model: ${config.model ?? "current main model"}`, "Execution: synchronous isolated Git worktree"],
         warning: false,
       };
     })());
   });
   const refreshTool = async () => {
-    const enabled = !(await loadConfig()).disabled;
+    const enabled = isGruntEnabled(await loadConfig());
     let coordinated = false;
     pi.events.emit("pi-conductor:tool-policy", {
       version: 1, kind: "register", owner: "pi-grunt",
@@ -120,6 +120,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     promptSnippet: "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
     promptGuidelines: [
       "Use estimated changed LOC only as a soft routing guide: small is under 50 LOC, medium is 50–400 LOC inclusive, and large is over 400 LOC. Keep small/local work in the main model. Use grunt for medium changes with compact handoffs and easy validation, or large mechanical changes. Reasoning complexity, architectural coupling, handoff compactness, and validation ease override LOC; a tiny security or concurrency change may still be difficult. Grunt may complete the entire change when it is not difficult. Main model must own difficult architecture, integration, review, and final verification. Select thinking by reasoning complexity, not diff size. Grunt calls are unlimited per original user prompt, but dependent slices must be sequential: invoke one Grunt, inspect its applied changes, run focused verification, then invoke the next Grunt. Do not issue dependent Grunt calls in one assistant response because the later handoff cannot incorporate earlier results. Before grunt on consequential architecturally coupled work, use advisor at least once when available; use a later advisor call when implementation creates material new uncertainty. Grunt works in an isolated Git worktree and applies changes only after successful completion and a stale-parent check; blocked or failed work remains unapplied. Inspect applied changes and run verify after grunt before claiming completion.",
+      "Provide grunt suggestedPaths whenever the main model has reliable implementation anchors from its existing context or repository evidence. Include the narrowest useful files or directories; omit suggestedPaths rather than guessing stale or uncertain paths. Suggested paths guide discovery and scope but are not an allowlist.",
       "After any grunt result, the main model owns recovery. Inspect completed changes or any partial patch artifact, then fix small/local defects and finish small remaining work directly instead of spawning another worker. Do not call grunt merely to verify or repair the previous worker. Re-delegate only when the remaining work is still medium or large, self-contained, easy to validate, and likely cheaper than main-model completion.",
     ],
     parameters: Type.Object({
@@ -130,7 +131,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
       const config = await loadConfig();
-      if (config.disabled) return { content: [{ type: "text" as const, text: "Grunt disabled." }], details: { status: "disabled" } };
+      if (!isGruntEnabled(config)) return { content: [{ type: "text" as const, text: "Grunt inactive. Configure it with /grunt or use /grunt reset." }], details: { status: "disabled" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Grunt task must not be empty." }], details: { status: "invalid" } };
       const model = await resolveModel(ctx);
@@ -272,7 +273,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     renderResult(result, { expanded }, theme) {
       const details = result.details as any;
       const body = result.content.find((part: any) => part.type === "text") as any;
-      let text = theme.fg(details?.status === "completed" ? "success" : "warning", `Grunt · ${details?.model ?? "Unavailable"}`);
+      let text = theme.fg(details?.state === "running" || details?.status === "completed" ? "success" : "warning", `Grunt · ${details?.model ?? "Unavailable"}`);
       if (details?.usage) text += ` · ${usageText({ usage: details.usage, turns: details.turns, durationMs: details.durationMs } as WorkerRun)}`;
       else if (details?.durationMs) text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && details?.activity?.length) text += `\n\nChild activity:\n${activityText(details.activity)}`;
@@ -290,13 +291,14 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         ctx.ui.notify("Grunt disabled.", "info"); return;
       }
       if (value === "reset") {
-        await resetConfig(); await refreshTool();
+        await saveConfig({ version: 1, disabled: false }); await refreshTool();
         ctx.ui.notify("Grunt reset to current main model.", "info"); return;
       }
       if (value === "status") {
         const config = await loadConfig();
         const model = await resolveModel(ctx);
-        ctx.ui.notify(`Model: ${config.model ?? "current main model"}\nState: ${config.disabled ? "disabled" : model ? "active" : "unavailable"}\nThinking: selected by main model per call`, "info"); return;
+        const state = config.disabled ? "disabled" : !isGruntEnabled(config) ? "inactive" : model ? "active" : "unavailable";
+        ctx.ui.notify(`Model: ${config.model ?? "current main model"}\nState: ${state}\nThinking: selected by main model per call`, "info"); return;
       }
       let selected = value;
       if (!selected) {

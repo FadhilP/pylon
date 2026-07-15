@@ -552,6 +552,13 @@ export default function (pi: ExtensionAPI) {
     renderResult: (result, _options, theme) => {
       const item = result.content.find((content) => content.type === "text");
       const text = item?.type === "text" ? item.text : undefined;
+      const clarification = (result.details as any)?.clarification;
+      if (clarification)
+        return new Text(
+          `${theme.fg("muted", `? ${clarification.question}`)}\n${theme.fg("accent", clarification.answer)}`,
+          0,
+          0,
+        );
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
       return text?.startsWith("Work completed") || text?.startsWith("Work already completed")
@@ -663,13 +670,16 @@ export default function (pi: ExtensionAPI) {
               terminate: true,
             };
           }
+          const selected = answer || "No answer selected.";
           return {
-            content: [
-              { type: "text", text: answer || "No answer selected." },
-            ],
+            content: [{ type: "text", text: selected }],
+            details: { clarification: { question: p.question, answer: selected } },
           };
         }
-        return { content: [{ type: "text", text: choice }] };
+        return {
+          content: [{ type: "text", text: choice }],
+          details: { clarification: { question: p.question, answer: choice } },
+        };
       }
       if (p.action === "set_plan") {
         const planning = work?.mode === "planning";

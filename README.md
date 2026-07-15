@@ -24,6 +24,27 @@ pi install /absolute/path/to/pi-conductor
 
 > **Security:** Pi extensions run with your user permissions. Review package source before installation.
 
+## First-run Setup
+
+Select models for the child-agent tools after reloading. Replace the examples with models available through your configured Pi providers:
+
+```text
+/advisor
+/grunt
+/scout
+```
+
+Advisor, Grunt, and Scout stay inactive until configured. In TUI mode, `/advisor`, `/grunt`, and `/scout` open model selectors. Each command's `reset` option enables that tool with the current main model; `disable` turns it off. Use `status` to inspect its configuration.
+
+Optional Continuity planner and executor profiles can use separate models:
+
+```text
+/continuity planner
+/continuity executor
+```
+
+Run `/conductor doctor` to check model availability, credentials, dependencies, tool registration, and package health. See each package README below for detailed configuration, limits, privacy, and cost behavior.
+
 ## Requirements
 
 - Node.js 22.18 or newer

@@ -19,7 +19,7 @@ type Result = {
   truncated: boolean;
   durationMs: number;
 };
-type VerificationState = "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
+type VerificationState = "running" | "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
 type Hygiene = {
   command: string;
   code: number | null;
@@ -36,7 +36,8 @@ type Details = {
   worktreeId?: string;
   initialWorktreeId?: string;
   startedAt: string;
-  finishedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
   skipped?: string;
   omittedChecks?: string[];
   unrunChecks?: string[];
@@ -298,6 +299,7 @@ export default function (pi: ExtensionAPI) {
       const details: Details = {
         scope: params.scope, runId, state, worktreeId: finalIdentity,
         initialWorktreeId: initialIdentity, startedAt, finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - runStarted,
         ...(omittedChecks.length ? { omittedChecks } : {}),
         ...(unrunChecks.length ? { unrunChecks } : {}),
         ...(hygiene ? { hygiene } : {}), results,
@@ -328,7 +330,7 @@ export default function (pi: ExtensionAPI) {
       if (details.skipped) return new Text(theme.fg("muted", `${details.skipped}${details.hygiene ? " · Hygiene passed" : ""}`), 0, 0);
       const failed = details.state !== "passed";
       let text = theme.fg(failed ? "error" : "success", `Verification ${details.state}`);
-      text += theme.fg("dim", ` · ${details.results.length} check(s)${details.unrunChecks?.length ? ` · ${details.unrunChecks.length} not run` : ""}${details.omittedChecks?.length ? ` · ${details.omittedChecks.length} capped` : ""}`);
+      text += theme.fg("dim", ` · ${details.results.length} check(s)${details.unrunChecks?.length ? ` · ${details.unrunChecks.length} not run` : ""}${details.omittedChecks?.length ? ` · ${details.omittedChecks.length} capped` : ""}${details.durationMs ? ` · ${(details.durationMs / 1000).toFixed(details.state === "running" ? 0 : 1)}s` : ""}`);
       if (expanded) {
         const sections = [
           details.hygiene ? hygieneText(details.hygiene) : "",

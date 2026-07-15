@@ -84,6 +84,7 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
   };
   const configuredModel = async (ctx: any): Promise<Model<any> | undefined> => {
     const config = await loadConfig();
+    if (config.useMainModel) return ctx.model;
     if (!config.advisorModel) return;
     const ref = parseModelRef(config.advisorModel);
     return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
@@ -183,6 +184,7 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
       const started = Date.now();
       const model = await configuredModel(ctx);
       const config = await loadConfig();
+      const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
       const base = {
         advisorModel: model ? modelName(model) : undefined,
         durationMs: 0,
@@ -298,11 +300,8 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
             maxTokens: advisorMaxTokens(model.contextWindow),
             cacheRetention,
             sessionId: ctx.sessionManager.getSessionId(),
-            ...(config.thinking
-              ? {
-                  reasoning:
-                    config.thinking === "off" ? undefined : config.thinking,
-                }
+            ...(thinking
+              ? { reasoning: thinking === "off" ? undefined : thinking }
               : process.env.PI_ADVISOR_THINKING
                 ? { reasoning: process.env.PI_ADVISOR_THINKING }
                 : {}),
@@ -437,17 +436,35 @@ export default function (pi: ExtensionAPI, completeAdvisor = complete) {
     description: "Select model and thinking, reset, or show status",
     handler: async (args, ctx) => {
       const value = args.trim();
-      if (value === "disable" || value === "reset") {
+      if (value === "disable") {
         await resetConfig();
         await refreshTool(ctx);
         ctx.ui.notify("Advisor disabled.", "info");
+        return;
+      }
+      if (value === "reset") {
+        const model = ctx.model;
+        if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+          ctx.ui.notify("Current main model is unavailable.", "error");
+          return;
+        }
+        if (ctx.mode === "tui") {
+          const ok = await ctx.ui.confirm(
+            "Share current context with advisor?",
+            `Advisor receives a redacted snapshot of current Pi conversation, including user prompts, assistant text, and relevant tool results. Continue with ${modelName(model)}?`,
+          );
+          if (!ok) return;
+        }
+        await saveConfig({ schemaVersion: 1, useMainModel: true });
+        await refreshTool(ctx);
+        ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
         return;
       }
       if (value === "status") {
         const config = await loadConfig();
         const model = await configuredModel(ctx);
         ctx.ui.notify(
-          `Selected: ${config.advisorModel ?? "none"}\nThinking: ${config.thinking ?? "provider default"}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${ADVISOR_MAX_CALLS} calls per original user prompt`,
+          `Selected: ${config.useMainModel ? "current main model" : config.advisorModel ?? "none"}\nThinking: ${config.useMainModel ? "current main level" : config.thinking ?? "provider default"}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${ADVISOR_MAX_CALLS} calls per original user prompt`,
           "info",
         );
         return;

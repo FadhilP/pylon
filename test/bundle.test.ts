@@ -115,8 +115,10 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     assert.ok(active.includes("continuity_update"));
-    assert.ok(active.includes("repo_scout"));
-    assert.ok(active.includes("web_scout"));
+    assert.ok(!active.includes("grunt"));
+    assert.ok(!active.includes("repo_scout"));
+    assert.ok(!active.includes("web_scout"));
+    assert.ok(!active.includes("advisor"));
     assert.ok(events.count() > 0);
     await commands.get("conductor").handler("doctor", ctx);
     assert.match(notification, /Package health:/);
