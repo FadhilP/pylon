@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import conductor from "../extensions/pi-conductor-core.ts";
 import advisor from "../../pi-advisor/extensions/pi-advisor.ts";
 import scout from "../../pi-scout/extensions/pi-scout.ts";
+import grunt from "../../pi-grunt/extensions/pi-grunt.ts";
 import continuity from "../../pi-continuity/extensions/pi-continuity.ts";
 
 class Bus {
@@ -20,7 +21,7 @@ class Bus {
   }
 }
 
-test("actual Advisor, Scout, and Continuity adapters coordinate end to end", async () => {
+test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to end", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "conductor-compat-"));
   const cwd = join(root, "repo");
@@ -49,8 +50,9 @@ test("actual Advisor, Scout, and Continuity adapters coordinate end to end", asy
       appendEntry: () => {},
       sendUserMessage: () => {},
       setModel: async () => true,
+      exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    conductor(pi); advisor(pi); scout(pi); continuity(pi);
+    conductor(pi); advisor(pi); grunt(pi); scout(pi); continuity(pi);
     const ctx: any = {
       cwd,
       hasUI: false,
@@ -69,6 +71,7 @@ test("actual Advisor, Scout, and Continuity adapters coordinate end to end", asy
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     assert.ok(active.includes("repo_scout"));
+    assert.ok(active.includes("grunt"));
     assert.ok(active.includes("continuity_update"));
     assert.ok(!active.includes("advisor"));
     await commands.get("plan").handler("compatibility", ctx);

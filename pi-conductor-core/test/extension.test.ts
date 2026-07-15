@@ -103,7 +103,9 @@ test("doctor reports quarantined state and unavailable configured models", async
   try {
     await mkdir(join(root, "pi-advisor"), { recursive: true });
     await mkdir(join(root, "pi-scout"), { recursive: true });
+    await mkdir(join(root, "pi-grunt"), { recursive: true });
     await writeFile(join(root, "pi-advisor", "config.json"), JSON.stringify({ schemaVersion: 1, advisorModel: "openai/test-model" }));
+    await writeFile(join(root, "pi-grunt", "config.json"), JSON.stringify({ version: 1, model: "openai/worker-model" }));
     await writeFile(join(root, "pi-scout", "config.json.corrupt-test"), "bad");
     const runtime = harness();
     let diagnostic = "";
@@ -117,6 +119,7 @@ test("doctor reports quarantined state and unavailable configured models", async
     });
     assert.match(diagnostic, /Quarantined state: .*config\.json\.corrupt-test/);
     assert.match(diagnostic, /Advisor: openai\/test-model \(credentials unavailable\)/);
+    assert.match(diagnostic, /Grunt: openai\/worker-model \(model unavailable\)/);
     assert.equal(severity, "warning");
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

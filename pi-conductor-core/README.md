@@ -29,9 +29,9 @@ Guard remains the independent final safety authority; Conductor never approves o
 - Collects versioned metadata-only health report promises with per-reporter timeout, malformed-report isolation, and duplicate-owner warnings.
 - Supports policy unregister and removes event listeners during shutdown or reload.
 - Lets Continuity planning retain read-only Scout and Advisor tools when enabled.
-- Coordinates pi-advisor, pi-scout, and pi-continuity.
+- Coordinates pi-advisor, pi-grunt, pi-scout, and pi-continuity.
 - Falls back to each package's standalone behavior when Conductor is absent.
-- Tests all three real package adapters together.
+- Tests real package adapters together.
 
 V1 does not coordinate TUI ownership, context ordering, storage, child processes, or benchmark packages. Those remain out of scope until concrete conflicts appear.
 

@@ -169,6 +169,7 @@ export default function (pi: ExtensionAPI) {
     const surfaces = [
       ["Advisor", ["advisor"]],
       ["Continuity", ["continuity_update"]],
+      ["Grunt", ["grunt"]],
       ["Heartbeat", ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"]],
       ["Scout", ["rg", "fd", "scout_checkpoint", "repo_scout", "web_scout"]],
       ["Verify", ["verify"]],
@@ -212,7 +213,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     const quarantined: string[] = [];
-    for (const name of ["pi-advisor", "pi-scout", "pi-continuity"]) {
+    for (const name of ["pi-advisor", "pi-grunt", "pi-scout", "pi-continuity"]) {
       const entries = await readdir(join(agentDir, name), { recursive: true }).catch(() => [] as string[]);
       for (const entry of entries)
         if (entry.includes(".corrupt-") && quarantined.length < 8)
@@ -222,6 +223,7 @@ export default function (pi: ExtensionAPI) {
     let configWarning = false;
     for (const [name, file, select] of [
       ["Advisor", join(agentDir, "pi-advisor", "config.json"), (value: any) => [["Advisor", value.advisorModel]]],
+      ["Grunt", join(agentDir, "pi-grunt", "config.json"), (value: any) => [["Grunt", value.model]]],
       ["Scout", join(agentDir, "pi-scout", "config.json"), (value: any) => [["Scout", value.model]]],
       ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model]]],
     ] as const) {

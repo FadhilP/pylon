@@ -10,6 +10,7 @@ const packages = [
   "pi-continuity",
   "pi-focus",
   "pi-guard",
+  "pi-grunt",
   "pi-heartbeat",
   "pi-helios",
   "pi-scout",

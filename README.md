@@ -37,6 +37,7 @@ pi install /absolute/path/to/pi-conductor
 - **[pi-continuity](./pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
 - **[pi-focus](./pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
 - **[pi-guard](./pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
+- **[pi-grunt](./pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
 - **[pi-heartbeat](./pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
 - **[pi-helios](./pi-helios)** — Provides consent-gated Playwright browser use plus named Windows-window screenshots.
 - **[pi-scout](./pi-scout)** — Performs bounded repository reconnaissance, consent-gated isolated public-web research, and explicit Pi-session search.
@@ -52,6 +53,7 @@ Packages coordinate through bounded, versioned event-bus metadata while remainin
 - Verify publishes lifecycle and results; Continuity gates completion, Timeline marks matching checkpoints, Advisor receives bounded recovery metadata, and Focus shows status.
 - Guard requests a Timeline checkpoint before destructive confirmation and remains final safety authority; Conductor reports its latest decision.
 - Heartbeat publishes job lifecycle with optional todo and purpose metadata; Continuity tracks explicitly linked jobs.
+- Grunt performs sequential implementation in an isolated temporary Git worktree, applying successful non-stale patches back to the parent; Main retains architecture, review, and final verification, with Advisor consultation remaining optional and evidence-driven.
 - Scout receives bounded verification and checkpoint archaeology from parent session metadata.
 - Continuity supports `/plan review`, recording the shared run's `reviewer` phase for Timeline grouping.
 

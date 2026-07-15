@@ -8,6 +8,7 @@ import conductor from "../pi-conductor-core/extensions/pi-conductor-core.ts";
 import continuity from "../pi-continuity/extensions/pi-continuity.ts";
 import focus from "../pi-focus/extensions/pi-focus.ts";
 import guard from "../pi-guard/extensions/pi-guard.ts";
+import grunt from "../pi-grunt/extensions/pi-grunt.ts";
 import heartbeat from "../pi-heartbeat/extensions/pi-heartbeat.ts";
 import helios from "../pi-helios/extensions/pi-helios.ts";
 import searchTools from "../pi-scout/extensions/search-tools.ts";
@@ -54,6 +55,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./pi-continuity/extensions/pi-continuity.ts",
     "./pi-focus/extensions/pi-focus.ts",
     "./pi-guard/extensions/pi-guard.ts",
+    "./pi-grunt/extensions/pi-grunt.ts",
     "./pi-heartbeat/extensions/pi-heartbeat.ts",
     "./pi-helios/extensions/pi-helios.ts",
     "./pi-scout/extensions/search-tools.ts",
@@ -90,14 +92,14 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, conductor, continuity, focus, guard, heartbeat, helios, searchTools, scout, timeline, verify]
+    [advisor, conductor, continuity, focus, guard, grunt, heartbeat, helios, searchTools, scout, timeline, verify]
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "conductor", "continuity", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "scout", "timeline", "todos", "ui",
+      "advisor", "conductor", "continuity", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "scout", "timeline", "todos", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "continuity_update", "fd", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "repo_scout", "rg", "verify", "web_scout",
+      "advisor", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "repo_scout", "rg", "verify", "web_scout",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 
@@ -119,6 +121,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     await commands.get("conductor").handler("doctor", ctx);
     assert.match(notification, /Package health:/);
     assert.match(notification, /Helios:/);
+    assert.match(notification, /Grunt:/);
     assert.match(notification, /Scout:/);
     assert.match(notification, /Web Scout: Helios broker ready/);
 
