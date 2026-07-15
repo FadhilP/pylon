@@ -85,6 +85,9 @@ test("completion guidance keeps final responses tool-free", () => {
   assert.match(guidance, /blocking user decision/i);
   assert.match(guidance, /sole tool call at a safe checkpoint/i);
   assert.match(guidance, /never re-ask an answered question without new evidence/i);
+  assert.match(guidance, /one concrete decision in plain language/i);
+  assert.match(guidance, /recommended option first/i);
+  assert.match(guidance, /Continuity owns plan presentation/i);
   assert.match(guidance, /put compact actionable anchors in planSummary/i);
 });
 
@@ -287,10 +290,28 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
       "call", {
         action: "set_plan",
         goal: "Ship change",
+        planSummary: "Implement safely, then run checks",
+        constraints: [" Keep API stable ", "  "],
         todos: ["Implement", "Verify"],
       }, undefined, undefined, ctx,
     );
     assert.match(result.content[0].text, /Executing task list stored/);
+    assert.equal(result.details.plan, [
+      "Plan",
+      "",
+      "Goal",
+      "Ship change",
+      "",
+      "Approach",
+      "Implement safely, then run checks",
+      "",
+      "Constraints",
+      "- Keep API stable",
+      "",
+      "Steps",
+      "1. Implement",
+      "2. Verify",
+    ].join("\n"));
     const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
     assert.match(context.messages.at(-1).content, /Todo todo_1 \[in_progress\]: Implement/);
@@ -540,6 +561,54 @@ test("execution completion requires a qualifying Verify result after mutation", 
   }
 });
 
+test("subsequent plan inherits timeline lineage from a fresh executor session", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-lineage-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const previousRun = {
+    version: 1,
+    runId: "first-plan",
+    role: "executor",
+    parentSessionId: "planner-session",
+    createdAt: new Date().toISOString(),
+  };
+  const entries = [{
+    type: "custom",
+    customType: "pi-conductor-run",
+    data: previousRun,
+  }];
+  const ctx: any = {
+    cwd,
+    hasUI: false,
+    mode: "json",
+    model: { provider: "provider", id: "executor" },
+    sessionManager: {
+      getSessionId: () => "fresh-executor-session",
+      getEntries: () => entries,
+    },
+    isIdle: () => true,
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, ctx);
+    await app.commands.get("plan").handler("Plan another change", ctx);
+
+    const nextRun = app.appended.find((entry) =>
+      entry.customType === "pi-conductor-run" && entry.data.role === "planner"
+    )?.data;
+    assert.ok(nextRun);
+    assert.notEqual(nextRun.runId, previousRun.runId);
+    assert.equal(nextRun.timelineId, previousRun.runId);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
 test("explicit plan selects planner and hands approved work to executor session", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-handoff-"));
@@ -645,6 +714,10 @@ test("explicit plan selects planner and hands approved work to executor session"
       "pi-conductor-run",
       "pi-continuity-handoff",
     ]);
+    const childRun = childEntries[2]!.value;
+    const childWork = childEntries[3]!.value.work;
+    assert.equal(childRun.timelineId, childRun.runId);
+    assert.equal(childWork.timelineId, childRun.timelineId);
     assert.equal(
       kickoff,
       "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
@@ -789,6 +862,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   let selections = 0;
+  let approvalTitle = "";
   let planningRun: Promise<void> | undefined;
   let app: ReturnType<typeof runtime>;
   const model = { provider: "provider", id: "base" };
@@ -813,7 +887,8 @@ test("TUI approval waits for the scheduled planner response before showing choic
       notify: () => {},
       setStatus: () => {},
       setWidget: () => {},
-      select: async () => {
+      select: async (title: string) => {
+        approvalTitle = title;
         selections++;
         return "Approve — continue current session";
       },
@@ -850,6 +925,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
     await planningRun;
     await waitFor(() => app.sent.length === 2);
     assert.equal(selections, 1);
+    assert.equal(approvalTitle, "Plan ready — review structured plan above");
     assert.deepEqual(app.sent, [
       "Plan this task without modifying project files: Ship change",
       "Execute approved stored plan in current session. Track and verify todos.",

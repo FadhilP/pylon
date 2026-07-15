@@ -17,6 +17,7 @@ export type Work = {
   latestFailure?: string;
   nextAction?: string;
   runId?: string;
+  timelineId?: string;
   planRevision?: number;
   offeredPlanRevision?: number;
   baseModel?: { provider: string; id: string };
@@ -58,7 +59,10 @@ export function isWork(value: any): value is Work {
       (value.latestFailure === undefined ||
         typeof value.latestFailure === "string") &&
       (value.nextAction === undefined || typeof value.nextAction === "string") &&
-      (value.runId === undefined || typeof value.runId === "string") &&
+      (value.runId === undefined ||
+        (typeof value.runId === "string" && value.runId.length > 0)) &&
+      (value.timelineId === undefined ||
+        (typeof value.timelineId === "string" && value.timelineId.length > 0)) &&
       (value.planRevision === undefined ||
         (Number.isInteger(value.planRevision) && value.planRevision > 0)) &&
       (value.offeredPlanRevision === undefined ||

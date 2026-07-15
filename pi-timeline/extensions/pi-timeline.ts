@@ -23,7 +23,9 @@ import {
 import { git, symbolicHead } from "../src/git.ts";
 import {
   findRunEntry,
+  hasTimeline,
   isRunEntry,
+  runTimelineId,
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
@@ -48,7 +50,6 @@ type Bound = {
   preview: string;
   sessionId: string;
   sessionPath?: string;
-  role?: RunEntry["role"];
 };
 type ClearV1 = {
   version: 1;
@@ -82,6 +83,9 @@ const compatibilityLabel = (
     ? "[detached]"
     : `[branch:${shortRef(target.headRef!)}]`;
 };
+const checkpointRow = (bound: Bound, current: GitState) =>
+  `${compatibilityLabel(bound.record, current)} ${bound.record.createdAt.replace(/\.\d{3}Z$/, "Z")} ${bound.preview}`;
+
 const compatibilityDetail = (
   target: Snapshot,
   current: GitState,
@@ -192,22 +196,23 @@ export default function (
     entries: readonly any[],
     sessionId: string,
     sessionPath?: string,
-    role?: RunEntry["role"],
+    timelineId?: string,
   ) => {
     const byId = new Map(entries.map((entry: any) => [entry.id, entry]));
-    let checkpointRole = role;
+    let checkpointTimelineId: string | undefined;
     for (const entry of entries) {
       if (
         entry.type === "custom" &&
         entry.customType === RUN_ENTRY_TYPE &&
         isRunEntry(entry.data)
       ) {
-        checkpointRole = entry.data.role;
+        checkpointTimelineId = runTimelineId(entry.data);
       } else if (
         entry.type === "custom" &&
         entry.customType === "pi-prompt-checkpoint" &&
         entry.data?.version === 3
       ) {
+        if (timelineId && checkpointTimelineId !== timelineId) continue;
         const user = byId.get(entry.data.promptEntryId) as any;
         if (user?.type === "message" && user.message.role === "user")
           records.set(key(sessionId, entry.id), {
@@ -216,7 +221,6 @@ export default function (
             preview: promptText(user.message),
             sessionId,
             sessionPath,
-            role: checkpointRole,
           });
       } else if (
         entry.type === "custom" &&
@@ -239,14 +243,14 @@ export default function (
       );
       return;
     }
+    const timelineId = runTimelineId(activeRun);
     const sessions = await SessionManager.list(ctx.cwd);
     for (const session of sessions) {
       try {
         const manager = SessionManager.open(session.path);
         const entries = manager.getEntries();
-        const run = findRunEntry(entries);
-        if (run?.runId === activeRun.runId)
-          loadEntries(entries, session.id, session.path);
+        if (hasTimeline(entries, timelineId))
+          loadEntries(entries, session.id, session.path, timelineId);
       } catch {}
     }
     if (!sessions.some((session) => session.id === ctx.sessionManager.getSessionId()))
@@ -254,7 +258,7 @@ export default function (
         currentEntries,
         ctx.sessionManager.getSessionId(),
         ctx.sessionManager.getSessionFile(),
-        activeRun.role,
+        timelineId,
       );
   };
   const refresh = (ctx: any) => {
@@ -318,7 +322,6 @@ export default function (
         preview: promptText(user.message),
         sessionId: currentSessionId,
         sessionPath: ctx.sessionManager.getSessionFile(),
-        role: activeRun?.role,
       });
       paired = true;
       refresh(ctx);
@@ -416,10 +419,7 @@ export default function (
         const current = await inspectGitState(ctx.cwd);
         ctx.ui.notify(
           [...records]
-            .map(
-              ([id, bound]) =>
-                `${id} ${compatibilityLabel(bound.record, current)} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? `[verified:${bound.record.verification.scope}] ` : ""}${bound.preview}`,
-            )
+            .map(([, bound]) => checkpointRow(bound, current))
             .join("\n") ||
             "No checkpoints.",
           "info",
@@ -462,14 +462,15 @@ export default function (
       let id: string | undefined = idRaw;
       if (action === "select") {
         const current = await inspectGitState(ctx.cwd);
-        id = await ctx.ui.select(
+        const choices = [...records].map(([checkpointId, bound]) => ({
+          id: checkpointId,
+          label: checkpointRow(bound, current),
+        }));
+        const selected = await ctx.ui.select(
           "Checkpoint",
-          [...records].map(
-            ([id, bound]) =>
-              `${id} ${compatibilityLabel(bound.record, current)} ${bound.role ? `[${bound.role}] ` : ""}${bound.record.verification ? "[verified] " : ""}${bound.preview}`,
-          ),
+          choices.map((choice) => choice.label),
         );
-        id = id?.split(" ")[0];
+        id = choices.find((choice) => choice.label === selected)?.id;
         if (!id) return;
         mode =
           (await ctx.ui.select("Action", ["View", "Fork & continue"])) ===

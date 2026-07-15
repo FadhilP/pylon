@@ -30,7 +30,7 @@ import {
   parseModelRef,
   saveConfig,
 } from "../src/config.ts";
-import { isRunEntry } from "../src/run.ts";
+import { isRunEntry, runTimelineId } from "../src/run.ts";
 test("model profiles parse, persist, and reset to defaults", async () => {
   assert.deepEqual(parseModelRef("provider/model:high"), {
     provider: "provider",
@@ -59,16 +59,18 @@ test("model profiles parse, persist, and reset to defaults", async () => {
   assert.deepEqual(defaultConfig(), { version: 1 });
 });
 
-test("run metadata validates", () => {
-  assert.equal(
-    isRunEntry({
-      version: 1,
-      runId: "run",
-      role: "planner",
-      createdAt: new Date().toISOString(),
-    }),
-    true,
-  );
+test("run metadata validates backward-compatible timeline lineage", () => {
+  const legacy = {
+    version: 1 as const,
+    runId: "run",
+    role: "planner" as const,
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal(isRunEntry(legacy), true);
+  assert.equal(runTimelineId(legacy), "run");
+  assert.equal(isRunEntry({ ...legacy, runId: "run-2", timelineId: "run" }), true);
+  assert.equal(runTimelineId({ ...legacy, runId: "run-2", timelineId: "run" }), "run");
+  assert.equal(isRunEntry({ ...legacy, timelineId: "" }), false);
   assert.equal(
     isRunEntry({ version: 1, runId: "run", role: "invalid", createdAt: "x" }),
     false,
@@ -283,11 +285,14 @@ test("work schema rejects malformed persisted state", () => {
     isWork({
       ...fresh("goal"),
       runId: "run",
+      timelineId: "timeline",
       baseModel: { provider: "provider", id: "model" },
       baseThinking: "high",
     }),
     true,
   );
+  assert.equal(isWork({ ...fresh("goal"), runId: "" }), false);
+  assert.equal(isWork({ ...fresh("goal"), timelineId: "" }), false);
   assert.equal(isWork({ ...fresh("goal"), schemaVersion: 2 }), false);
   assert.equal(isWork({ ...fresh("goal"), todos: [{ bad: true }] }), false);
 });

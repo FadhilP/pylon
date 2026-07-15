@@ -9,7 +9,7 @@ import extension from "../extensions/pi-timeline.ts";
 import { capture } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import { preflight } from "../src/safety.ts";
-import { findRunEntry, isRunEntry } from "../src/run.ts";
+import { findRunEntry, hasTimeline, isRunEntry, runTimelineId } from "../src/run.ts";
 import { classifyCompatibility } from "../src/compatibility.ts";
 
 const exec = promisify(execFile);
@@ -217,7 +217,7 @@ test("checkpoint compatibility keeps refs informational", () => {
   );
 });
 
-test("run metadata is optional and latest valid entry wins", () => {
+test("run metadata is optional and latest valid entry preserves timeline lineage", () => {
   assert.equal(findRunEntry([]), undefined);
   const planner = {
     version: 1 as const,
@@ -230,15 +230,32 @@ test("run metadata is optional and latest valid entry wins", () => {
     role: "executor" as const,
     parentSessionId: "planner-session",
   };
+  const nextPlan = {
+    ...planner,
+    runId: "run-2",
+    timelineId: "run-1",
+  };
   assert.equal(isRunEntry(planner), true);
-  assert.deepEqual(
-    findRunEntry([
-      { type: "custom", customType: "pi-conductor-run", data: planner },
-      { type: "custom", customType: "other", data: {} },
-      { type: "custom", customType: "pi-conductor-run", data: executor },
-    ]),
-    executor,
-  );
+  assert.equal(isRunEntry(nextPlan), true);
+  assert.equal(isRunEntry({ ...nextPlan, timelineId: "" }), false);
+  assert.equal(runTimelineId(planner), runTimelineId(nextPlan));
+  const entries = [
+    { type: "custom", customType: "pi-conductor-run", data: planner },
+    { type: "custom", customType: "pi-conductor-run", data: executor },
+    { type: "custom", customType: "other", data: {} },
+    { type: "custom", customType: "pi-conductor-run", data: nextPlan },
+  ];
+  assert.equal(hasTimeline(entries, "run-1"), true);
+  assert.equal(hasTimeline(entries, "unrelated"), false);
+  assert.deepEqual(findRunEntry(entries), nextPlan);
+  assert.equal(hasTimeline([
+    ...entries,
+    { type: "custom", customType: "pi-conductor-run", data: {
+      ...planner,
+      runId: "unrelated",
+      timelineId: "unrelated",
+    } },
+  ], "run-1"), true);
 });
 
 async function repository() {
@@ -313,6 +330,8 @@ test("timeline rejects incompatible targets before rollback capture", async () =
   const { root, git } = await repository();
   try {
     const head = await git("rev-parse", "HEAD"),
+      checkpointTime = "2026-02-18T12:34:56.789Z",
+      displayedTime = "2026-02-18T12:34:56Z",
       entries = [
         { type: "message", id: "user-1", message: { role: "user", content: "Old prompt" } },
         {
@@ -325,7 +344,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
             continuationEntryId: "user-1",
-            createdAt: new Date().toISOString(),
+            createdAt: checkpointTime,
             snapshotId: "old",
             gitRoot: root,
             head: head === "a".repeat(40) ? "b".repeat(40) : "a".repeat(40),
@@ -346,7 +365,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
             continuationEntryId: "user-1",
-            createdAt: new Date().toISOString(),
+            createdAt: checkpointTime,
             snapshotId: "legacy",
             gitRoot: root,
             head,
@@ -359,7 +378,8 @@ test("timeline rejects incompatible targets before rollback capture", async () =
       ],
       handlers = new Map<string, Function[]>(),
       commands = new Map<string, any>(),
-      notices: string[] = [];
+      notices: string[] = [],
+      selections: string[][] = [];
     let appended = 0;
     const pi: any = {
       events: { on: () => () => {} },
@@ -377,6 +397,10 @@ test("timeline rejects incompatible targets before rollback capture", async () =
       ui: {
         notify: (message: string) => notices.push(message),
         setStatus() {},
+        select: async (_title: string, options: string[]) => {
+          selections.push(options);
+          return undefined;
+        },
       },
       sessionManager: {
         getEntries: () => entries,
@@ -386,7 +410,12 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     };
     await handlers.get("session_start")![0]({}, ctx);
     await commands.get("timeline").handler("list", ctx);
-    assert.match(notices.at(-1)!, /checkpoint-legacy \[branch:unknown\]/);
+    assert.match(notices.at(-1)!, new RegExp(`\\[branch:unknown\\] ${displayedTime} Old prompt`));
+    assert.doesNotMatch(notices.at(-1)!, /test-session:checkpoint/);
+    await commands.get("timeline").handler("", ctx);
+    assert.equal(selections.length, 1);
+    assert.ok(selections[0]!.every((row) => row.includes(` ${displayedTime} Old prompt`)));
+    assert.ok(selections[0]!.every((row) => !row.includes("test-session:checkpoint")));
     await commands.get("timeline").handler("jump test-session:checkpoint-1", ctx);
     assert.equal(appended, 0);
     assert.match(notices.at(-1)!, /HEAD commit differs/);

@@ -47,10 +47,30 @@ import {
   type ThinkingLevel,
 } from "../src/config.ts";
 import {
+  findRunEntry,
   HANDOFF_ENTRY_TYPE,
+  runTimelineId,
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
+const formatPlan = (work: Work) => [
+  "Plan",
+  "",
+  "Goal",
+  work.goal.trim() || "Not specified",
+  "",
+  "Approach",
+  work.planSummary?.trim() || "Not specified",
+  "",
+  "Constraints",
+  ...(work.constraints.length
+    ? work.constraints.map((constraint) => `- ${constraint}`)
+    : ["- None"]),
+  "",
+  "Steps",
+  ...work.todos.map((todo, index) => `${index + 1}. ${todo.text}`),
+].join("\n");
+
 const Kind = StringEnum([
     "workflow",
     "structure",
@@ -545,7 +565,7 @@ export default function (pi: ExtensionAPI) {
       "Update plan, todos, state, clarification, or durable-memory candidate.",
     executionMode: "sequential",
     promptGuidelines: [
-      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list, starts its first todo, and does not activate the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. When planning used Scout, put compact actionable anchors in planSummary: relevant paths, symbols, line ranges, assumptions, and unresolved gaps; do not copy the raw Scout report. During execution, use clarify only for a new blocking user decision that cannot be safely inferred, only as the sole tool call at a safe checkpoint; prefer asking before mutation, stabilize any atomic operation first, and never re-ask an answered question without new evidence. During execution, use exact todo IDs from Continuity context. Complete current work and start the next todo atomically by passing nextTodoId with status done; omit nextTodoId for the final todo. Mark mutation work done immediately after verification. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
+      "For every non-trivial multi-step task, call continuity_update set_plan with brief todos before execution even when user did not invoke /plan; this creates an executing task list, starts its first todo, and does not activate the planning gate. During explicit planning use clarify only for unresolved user decisions, then set_plan. Clarification questions must ask one concrete decision in plain language, explain why the answer matters in one short sentence when needed, and avoid vague prompts such as 'What do you prefer?'. Use short distinct option labels; descriptions state the practical outcome or tradeoff. Put the recommended option first and say why in its description. Do not ask questions answerable from repository evidence or safe defaults. Continuity owns plan presentation: populate goal, planSummary as the approach, constraints, and ordered todos; do not invent a separate plan format. When planning used Scout, put compact actionable anchors in planSummary: relevant paths, symbols, line ranges, assumptions, and unresolved gaps; do not copy the raw Scout report. During execution, use clarify only for a new blocking user decision that cannot be safely inferred, only as the sole tool call at a safe checkpoint; prefer asking before mutation, stabilize any atomic operation first, and never re-ask an answered question without new evidence. During execution, use exact todo IDs from Continuity context. Complete current work and start the next todo atomically by passing nextTodoId with status done; omit nextTodoId for the final todo. Mark mutation work done immediately after verification. Skip Verify for read-only work. Run Verify and all nonterminal continuity updates in tool-only assistant turns before the final response. Once every todo is done and verification has passed when required, write the final user-facing response with no tool calls; Continuity completes automatically. Do not call tools after final text. Keep completion true for explicit allowUnverified fallback or compatibility only; it still requires preceding response text. Record concise failures/next action. Propose memory only when all three hold: evidence supports it (user instruction, verified repository/tool evidence, or repeated observation); it is likely true and useful in future sessions; it changes a future decision or avoids repeated work. Include evidence in source. Good candidates include user preferences, validated commands, project conventions, canonical paths, architecture boundaries, recurring warnings, and durable tool limitations. Never save task progress, guesses, one-time errors, temporary file state, generic facts, duplicates, or secrets. Reuse stable keys; add and replace both set one fact per key.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -553,12 +573,14 @@ export default function (pi: ExtensionAPI) {
       const item = result.content.find((content) => content.type === "text");
       const text = item?.type === "text" ? item.text : undefined;
       const clarification = (result.details as any)?.clarification;
+      const plan = (result.details as any)?.plan;
       if (clarification)
         return new Text(
           `${theme.fg("muted", `? ${clarification.question}`)}\n${theme.fg("accent", clarification.answer)}`,
           0,
           0,
         );
+      if (plan) return new Text(plan, 0, 0);
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
       return text?.startsWith("Work completed") || text?.startsWith("Work already completed")
@@ -568,12 +590,21 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object(
       {
         action: Action,
-        question: Type.Optional(Type.String({ maxLength: 500 })),
+        question: Type.Optional(Type.String({
+          maxLength: 500,
+          description: "One concrete decision in plain language. Include one short sentence of decision-relevant context only when needed.",
+        })),
         options: Type.Optional(
           Type.Array(
             Type.Object({
-              label: Type.String({ maxLength: 120 }),
-              description: Type.Optional(Type.String({ maxLength: 240 })),
+              label: Type.String({
+                maxLength: 120,
+                description: "Short, distinct answer label. Put the recommended option first.",
+              }),
+              description: Type.Optional(Type.String({
+                maxLength: 240,
+                description: "Practical outcome or tradeoff; for the recommended option, include why it is recommended.",
+              })),
             }),
           ),
         ),
@@ -700,7 +731,10 @@ export default function (pi: ExtensionAPI) {
         }
         const now = new Date().toISOString();
         work.goal = p.goal?.trim() || work.goal;
-        work.constraints = (p.constraints || []).slice(0, 12);
+        work.constraints = (p.constraints || [])
+          .map((constraint) => constraint.trim())
+          .filter(Boolean)
+          .slice(0, 12);
         work.planSummary = p.planSummary?.trim() || todos.join("; ") || work.goal;
         setPlan(work, todos, now);
         if (!planning && !work.currentTodoId) {
@@ -723,6 +757,7 @@ export default function (pi: ExtensionAPI) {
                 : "Executing task list stored.",
             },
           ],
+          details: { plan: formatPlan(work) },
         };
       }
       if (p.action === "memory_candidate") {
@@ -848,6 +883,7 @@ export default function (pi: ExtensionAPI) {
         pi.appendEntry(RUN_ENTRY_TYPE, {
           version: 1,
           runId: work.runId,
+          timelineId: work.timelineId ?? work.runId,
           role: "reviewer",
           parentSessionId: ctx.sessionManager.getSessionId(),
           createdAt: new Date().toISOString(),
@@ -879,6 +915,7 @@ export default function (pi: ExtensionAPI) {
           pi.appendEntry(RUN_ENTRY_TYPE, {
             version: 1,
             runId: work.runId,
+            timelineId: work.timelineId ?? work.runId,
             role: "executor",
             parentSessionId: ctx.sessionManager.getSessionId(),
             createdAt: new Date().toISOString(),
@@ -913,14 +950,17 @@ export default function (pi: ExtensionAPI) {
           approved: true,
           updatedAt: now,
         };
+        const runId = childWork.runId ?? randomUUID();
         const run: RunEntry = {
           version: 1,
-          runId: childWork.runId ?? randomUUID(),
+          runId,
+          timelineId: childWork.timelineId ?? childWork.runId ?? runId,
           role: "executor",
           parentSessionId: sourceSessionId,
           createdAt: now,
         };
         childWork.runId = run.runId;
+        childWork.timelineId = run.timelineId ?? run.runId;
         const thinking = config.executor?.thinking ?? work.baseThinking;
         const result = await ctx.newSession({
           parentSession: sourceSessionFile,
@@ -997,13 +1037,16 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Planner model unavailable.", "error");
         return;
       }
+      const previousRun = findRunEntry(ctx.sessionManager.getEntries?.() ?? []);
       work = fresh(value);
       work.runId = randomUUID();
+      work.timelineId = previousRun ? runTimelineId(previousRun) : work.runId;
       work.baseModel = baseModel;
       work.baseThinking = baseThinking;
       const run: RunEntry = {
         version: 1,
         runId: work.runId,
+        timelineId: work.timelineId,
         role: "planner",
         createdAt: new Date().toISOString(),
       };
@@ -1046,7 +1089,7 @@ export default function (pi: ExtensionAPI) {
         ) return;
         work.offeredPlanRevision = token.revision;
         await saveWork();
-        const choice = await settledCtx.ui.select("Plan ready", [
+        const choice = await settledCtx.ui.select("Plan ready — review structured plan above", [
           "Approve — fresh executor session",
           "Approve — continue current session",
           "Request changes",

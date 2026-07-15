@@ -26,7 +26,7 @@ Every restore requires confirmation. Native `/tree` remains conversation-only.
 
 ## How It Works
 
-Snapshots use `refs/pi-timeline/...` synthetic commits. Automatic checkpoints run only after mutation-capable tools change or may change Git-backed worktree state; read-only turns and unchanged `bash` calls skip capture. Explicit rollback and Guard checkpoints remain unconditional. `HEAD`, branch, stash, and ignored files remain untouched. New checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list`, the selector, and restore confirmation show branch, detached, legacy-unknown, and blocked compatibility states. Older version 3 records without ref metadata remain usable and appear as `branch:unknown` when their repository and HEAD still match.
+Snapshots use `refs/pi-timeline/...` synthetic commits. Automatic checkpoints run only after mutation-capable tools change or may change Git-backed worktree state; read-only turns and unchanged `bash` calls skip capture. Explicit rollback and Guard checkpoints remain unconditional. `HEAD`, branch, stash, and ignored files remain untouched. New checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list` and the selector show branch state, ISO timestamp, then prompt message; internal checkpoint IDs remain available for direct `jump` and `fork` commands but are not shown in rows. Restore confirmation shows compatibility details. Older version 3 records without ref metadata remain usable and appear as `branch:unknown` when their repository and HEAD still match.
 
 Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs.
 
@@ -34,9 +34,11 @@ After the first settled turn, Timeline makes one bounded title-only model reques
 
 ## Integrations
 
-Sessions carrying valid `pi-conductor-run` metadata share one run timeline. Checkpoints from planner, executor, and future reviewer sessions appear together with phase labels. Selecting a linked-session checkpoint switches to its owning session before restoring or forking. Sessions without metadata retain session-local behavior. Timeline reads persisted metadata only and does not require pi-continuity.
+Sessions carrying valid `pi-conductor-run` metadata share one run timeline. Checkpoints from planner, executor, and future reviewer sessions appear together. Selecting a linked-session checkpoint switches to its owning session before restoring or forking. Sessions without metadata retain session-local behavior. Timeline reads persisted metadata only and does not require pi-continuity.
 
-Matching successful Verify metadata is attached to checkpoints using exact worktree identity and shown by `/timeline list`. Before Guard asks approval for a destructive action, Timeline attempts a recoverable checkpoint; Guard still owns approval and blocking.
+Each subsequent explicit plan gets a new run ID but inherits the conductor timeline ID already attached to its current planner or executor session. Timeline groups sessions by that stable lineage, so checkpoints survive repeated plans and fresh executor handoffs. Legacy metadata without a timeline ID uses its run ID as the lineage root. Checkpoints from unrelated lineages stay excluded, and `/timeline clear` remains owner-session scoped.
+
+Matching successful Verify metadata remains attached to checkpoints using exact worktree identity. Before Guard asks approval for a destructive action, Timeline attempts a recoverable checkpoint; Guard still owns approval and blocking.
 
 ## Security and Limitations
 
