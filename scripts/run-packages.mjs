@@ -32,7 +32,7 @@ const run = (name, script) =>
       npmCli ? process.execPath : "npm",
       npmCli ? [npmCli, "run", script] : ["run", script],
       {
-        cwd: join(root, name),
+        cwd: join(root, "packages", name),
         shell: !npmCli && process.platform === "win32",
         stdio: ["ignore", "pipe", "pipe"],
       },

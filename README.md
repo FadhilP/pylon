@@ -53,19 +53,19 @@ Run `/conductor doctor` to check model availability, credentials, dependencies, 
 
 ## Bundled Packages
 
-- **[pi-advisor](./pi-advisor)** — Consults a selected tool-free model for difficult planning, architecture review, and failure recovery using bounded, redacted context.
-- **[pi-conductor-core](./pi-conductor-core)** — Coordinates tool policies from Advisor, Scout, and Continuity while preserving standalone behavior.
-- **[pi-continuity](./pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
-- **[pi-focus](./pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
-- **[pi-guard](./pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
-- **[pi-grunt](./pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
-- **[pi-heartbeat](./pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
-- **[pi-helios](./pi-helios)** — Provides consent-gated Playwright browser use plus named Windows-window screenshots.
-- **[pi-scout](./pi-scout)** — Performs bounded repository reconnaissance, consent-gated isolated public-web research, and explicit Pi-session search.
-- **[pi-timeline](./pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
-- **[pi-verify](./pi-verify)** — Detects and runs existing project checks with bounded time and output.
+- **[pi-advisor](./packages/pi-advisor)** — Consults a selected tool-free model for difficult planning, architecture review, and failure recovery using bounded, redacted context.
+- **[pi-conductor-core](./packages/pi-conductor-core)** — Coordinates tool policies from Advisor, Scout, and Continuity while preserving standalone behavior.
+- **[pi-continuity](./packages/pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
+- **[pi-focus](./packages/pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
+- **[pi-guard](./packages/pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
+- **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
+- **[pi-heartbeat](./packages/pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
+- **[pi-helios](./packages/pi-helios)** — Provides consent-gated Playwright browser use plus named Windows-window screenshots.
+- **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance, consent-gated isolated public-web research, and explicit Pi-session search.
+- **[pi-timeline](./packages/pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
+- **[pi-verify](./packages/pi-verify)** — Detects and runs existing project checks with bounded time and output.
 
-The bundle also installs the [`focus-dark`](./pi-focus/themes/focus-dark.json) theme.
+The bundle also installs the [`focus-dark`](./packages/pi-focus/themes/focus-dark.json) theme.
 
 ## Integrations
 

@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import advisor from "../pi-advisor/extensions/pi-advisor.ts";
-import conductor from "../pi-conductor-core/extensions/pi-conductor-core.ts";
-import continuity from "../pi-continuity/extensions/pi-continuity.ts";
-import focus from "../pi-focus/extensions/pi-focus.ts";
-import guard from "../pi-guard/extensions/pi-guard.ts";
-import grunt from "../pi-grunt/extensions/pi-grunt.ts";
-import heartbeat from "../pi-heartbeat/extensions/pi-heartbeat.ts";
-import helios from "../pi-helios/extensions/pi-helios.ts";
-import searchTools from "../pi-scout/extensions/search-tools.ts";
-import scout from "../pi-scout/extensions/pi-scout.ts";
-import timeline from "../pi-timeline/extensions/pi-timeline.ts";
-import verify from "../pi-verify/extensions/pi-verify.ts";
+import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
+import conductor from "../packages/pi-conductor-core/extensions/pi-conductor-core.ts";
+import continuity from "../packages/pi-continuity/extensions/pi-continuity.ts";
+import focus from "../packages/pi-focus/extensions/pi-focus.ts";
+import guard from "../packages/pi-guard/extensions/pi-guard.ts";
+import grunt from "../packages/pi-grunt/extensions/pi-grunt.ts";
+import heartbeat from "../packages/pi-heartbeat/extensions/pi-heartbeat.ts";
+import helios from "../packages/pi-helios/extensions/pi-helios.ts";
+import searchTools from "../packages/pi-scout/extensions/search-tools.ts";
+import scout from "../packages/pi-scout/extensions/pi-scout.ts";
+import timeline from "../packages/pi-timeline/extensions/pi-timeline.ts";
+import verify from "../packages/pi-verify/extensions/pi-verify.ts";
 import { mapLimit } from "../scripts/run-packages-lib.mjs";
 
 test("package runner bounds concurrency and preserves result order", async () => {
@@ -50,18 +50,18 @@ class Bus {
 test("root bundle loads, starts, wires integrations, and shuts down", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.pi.extensions, [
-    "./pi-advisor/extensions/pi-advisor.ts",
-    "./pi-conductor-core/extensions/pi-conductor-core.ts",
-    "./pi-continuity/extensions/pi-continuity.ts",
-    "./pi-focus/extensions/pi-focus.ts",
-    "./pi-guard/extensions/pi-guard.ts",
-    "./pi-grunt/extensions/pi-grunt.ts",
-    "./pi-heartbeat/extensions/pi-heartbeat.ts",
-    "./pi-helios/extensions/pi-helios.ts",
-    "./pi-scout/extensions/search-tools.ts",
-    "./pi-scout/extensions/pi-scout.ts",
-    "./pi-timeline/extensions/pi-timeline.ts",
-    "./pi-verify/extensions/pi-verify.ts",
+    "./packages/pi-advisor/extensions/pi-advisor.ts",
+    "./packages/pi-conductor-core/extensions/pi-conductor-core.ts",
+    "./packages/pi-continuity/extensions/pi-continuity.ts",
+    "./packages/pi-focus/extensions/pi-focus.ts",
+    "./packages/pi-guard/extensions/pi-guard.ts",
+    "./packages/pi-grunt/extensions/pi-grunt.ts",
+    "./packages/pi-heartbeat/extensions/pi-heartbeat.ts",
+    "./packages/pi-helios/extensions/pi-helios.ts",
+    "./packages/pi-scout/extensions/search-tools.ts",
+    "./packages/pi-scout/extensions/pi-scout.ts",
+    "./packages/pi-timeline/extensions/pi-timeline.ts",
+    "./packages/pi-verify/extensions/pi-verify.ts",
   ]);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "pi-conductor-bundle-"));

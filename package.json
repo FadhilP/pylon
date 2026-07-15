@@ -18,21 +18,21 @@
   },
   "pi": {
     "extensions": [
-      "./pi-advisor/extensions/pi-advisor.ts",
-      "./pi-conductor-core/extensions/pi-conductor-core.ts",
-      "./pi-continuity/extensions/pi-continuity.ts",
-      "./pi-focus/extensions/pi-focus.ts",
-      "./pi-guard/extensions/pi-guard.ts",
-      "./pi-grunt/extensions/pi-grunt.ts",
-      "./pi-heartbeat/extensions/pi-heartbeat.ts",
-      "./pi-helios/extensions/pi-helios.ts",
-      "./pi-scout/extensions/search-tools.ts",
-      "./pi-scout/extensions/pi-scout.ts",
-      "./pi-timeline/extensions/pi-timeline.ts",
-      "./pi-verify/extensions/pi-verify.ts"
+      "./packages/pi-advisor/extensions/pi-advisor.ts",
+      "./packages/pi-conductor-core/extensions/pi-conductor-core.ts",
+      "./packages/pi-continuity/extensions/pi-continuity.ts",
+      "./packages/pi-focus/extensions/pi-focus.ts",
+      "./packages/pi-guard/extensions/pi-guard.ts",
+      "./packages/pi-grunt/extensions/pi-grunt.ts",
+      "./packages/pi-heartbeat/extensions/pi-heartbeat.ts",
+      "./packages/pi-helios/extensions/pi-helios.ts",
+      "./packages/pi-scout/extensions/search-tools.ts",
+      "./packages/pi-scout/extensions/pi-scout.ts",
+      "./packages/pi-timeline/extensions/pi-timeline.ts",
+      "./packages/pi-verify/extensions/pi-verify.ts"
     ],
     "themes": [
-      "./pi-focus/themes/focus-dark.json"
+      "./packages/pi-focus/themes/focus-dark.json"
     ]
   },
   "dependencies": {
