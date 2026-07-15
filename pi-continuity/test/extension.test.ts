@@ -87,7 +87,8 @@ test("completion guidance keeps final responses tool-free", () => {
   assert.match(guidance, /never re-ask an answered question without new evidence/i);
   assert.match(guidance, /one concrete decision in plain language/i);
   assert.match(guidance, /recommended option first/i);
-  assert.match(guidance, /Continuity owns plan presentation/i);
+  assert.match(guidance, /During explicit planning, Continuity owns plan presentation/i);
+  assert.match(guidance, /internal execution task list only/i);
   assert.match(guidance, /put compact actionable anchors in planSummary/i);
 });
 
@@ -296,22 +297,7 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
       }, undefined, undefined, ctx,
     );
     assert.match(result.content[0].text, /Executing task list stored/);
-    assert.equal(result.details.plan, [
-      "Plan",
-      "",
-      "Goal",
-      "Ship change",
-      "",
-      "Approach",
-      "Implement safely, then run checks",
-      "",
-      "Constraints",
-      "- Keep API stable",
-      "",
-      "Steps",
-      "1. Implement",
-      "2. Verify",
-    ].join("\n"));
+    assert.equal(result.details, undefined);
     const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
     assert.match(context.messages.at(-1).content, /Todo todo_1 \[in_progress\]: Implement/);
@@ -863,6 +849,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   let selections = 0;
   let approvalTitle = "";
+  let structuredPlan = "";
   let planningRun: Promise<void> | undefined;
   let app: ReturnType<typeof runtime>;
   const model = { provider: "provider", id: "base" };
@@ -903,7 +890,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
         await Promise.resolve();
         assert.equal(selections, 0);
         for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
-        await app.tools.get("continuity_update").execute(
+        const result = await app.tools.get("continuity_update").execute(
           "call",
           {
             action: "set_plan",
@@ -915,6 +902,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
           undefined,
           ctx,
         );
+        structuredPlan = result.details.plan;
         for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
         planningRun = undefined;
       })();
@@ -926,6 +914,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
     await waitFor(() => app.sent.length === 2);
     assert.equal(selections, 1);
     assert.equal(approvalTitle, "Plan ready — review structured plan above");
+    assert.match(structuredPlan, /^Plan\n\nGoal\nShip change/);
     assert.deepEqual(app.sent, [
       "Plan this task without modifying project files: Ship change",
       "Execute approved stored plan in current session. Track and verify todos.",

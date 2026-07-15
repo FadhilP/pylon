@@ -19,7 +19,7 @@ Commands:
 - `/todos`
 - `/memory status|show|compact|forget <key>|forget workspace`
 
-Plan mode starts only through explicit `/plan`; natural-language keywords and `continuity_update set_plan` cannot activate the gate. For ordinary non-trivial multi-step work, the model calls `continuity_update set_plan` directly to create an executing todo list, automatically start its first todo, and avoid requiring `/plan` or approval.
+Plan mode starts only through explicit `/plan`; natural-language keywords and `continuity_update set_plan` cannot activate the gate. For ordinary non-trivial multi-step work, the model calls `continuity_update set_plan` directly to create an internal executing todo list, automatically start its first todo, and avoid requiring `/plan` or approval. That internal list is not presented as a structured user-facing plan.
 
 ## Planning and Execution
 
