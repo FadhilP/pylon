@@ -17,6 +17,35 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
   assert.equal(run.activity[0]?.tool, "edit");
 });
 
+test("runner fails closed on incomplete model stop reasons", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "grunt-incomplete-"));
+  for (const stopReason of ["length", "aborted"]) {
+    const script = join(dir, `${stopReason}.mjs`);
+    await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'unfinished'}],stopReason:'${stopReason}',usage:{}}}))`);
+    const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
+    assert.equal(run.failure, "child_error");
+    assert.match(run.error ?? "", /incomplete stop reason/);
+  }
+});
+
+test("runner fails closed on malformed protocol despite a later normal stop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "grunt-malformed-"));
+  const script = join(dir, "malformed.mjs");
+  await writeFile(script, `console.log('not-json'); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{}}}))`);
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
+  assert.equal(run.failure, "child_error");
+  assert.match(run.error ?? "", /malformed JSON/);
+});
+
+test("runner stops before another turn when budget is exhausted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "grunt-budget-"));
+  const script = join(dir, "budget.mjs");
+  await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continue'}],stopReason:'toolUse',usage:{cost:{total:0.5}}}}))`);
+  const run = await runPi([], { cwd: dir, maxTurns: 1, maxCostUsd: 2, invocation: { command: process.execPath, args: [script] } });
+  assert.equal(run.failure, "budget_exceeded");
+  assert.match(run.error ?? "", /turn limit/);
+});
+
 test("runner marks child failures as potentially partial", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-fail-"));
   const script = join(dir, "fail.mjs");

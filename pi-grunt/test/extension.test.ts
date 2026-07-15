@@ -27,7 +27,10 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
   await mkdir(cwd);
   await execFileAsync("git", ["init", cwd]);
   await writeFile(join(cwd, "README.md"), "base\n");
-  await execFileAsync("git", ["-C", cwd, "add", "README.md"]);
+  await writeFile(join(cwd, ".gitignore"), "node_modules/\n");
+  await mkdir(join(cwd, "node_modules"));
+  await writeFile(join(cwd, "node_modules", "installed.txt"), "available only in parent\n");
+  await execFileAsync("git", ["-C", cwd, "add", "README.md", ".gitignore"]);
   await execFileAsync("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@local", "commit", "-m", "base"]);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
@@ -95,7 +98,9 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.deepEqual(result.details.outsideSuggestedPaths, []);
     assert.equal(childArgs[childArgs.indexOf("--thinking") + 1], "medium");
     assert.ok(childArgs.includes("--no-extensions"));
-    assert.match(childArgs.at(-1) ?? "", /Add worker/);
+    assert.doesNotMatch(childArgs.at(-1) ?? "", /Add worker/);
+    assert.match(childArgs.at(-1) ?? "", /Unavailable ignored dependency directories: node_modules/);
+    assert.deepEqual(result.details.missingDependencies, ["node_modules"]);
     assert.equal((await import("node:fs/promises").then((fs) => fs.readFile(join(cwd, "src", "worker.ts"), "utf8"))).replace(/\r\n/g, "\n"), "export const completed = true;\n");
 
     outcome = "blocked";
@@ -131,6 +136,10 @@ test("Grunt guidance permits whole non-difficult changes and retains Main owners
   assert.match(guidance, /entire change when it is not difficult/i);
   assert.match(guidance, /Main model must own difficult architecture/i);
   assert.match(guidance, /advisor at least once when available/i);
+  assert.match(guidance, /main model owns recovery/i);
+  assert.match(guidance, /fix small\/local defects.*directly/i);
+  assert.match(guidance, /Do not call grunt merely to verify or repair the previous worker/i);
+  assert.match(guidance, /remaining work is still medium or large/i);
 
   const theme = {
     fg: (_color: string, text: string) => text,

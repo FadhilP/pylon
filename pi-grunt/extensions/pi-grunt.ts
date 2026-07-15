@@ -1,12 +1,13 @@
-import { relative } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildWorkerContext } from "../src/context.ts";
 import {
-  gruntTimeoutMs, loadConfig, parseModelRef, resetConfig, saveConfig,
-  thinkingLevels,
+  gruntMaxCostUsd, gruntMaxTurns, gruntParentContextChars, gruntTimeoutMs,
+  loadConfig, parseModelRef, resetConfig, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 import {
   applyWorkerPatch, collectWorkerPatch, createIsolatedWorktree,
@@ -50,6 +51,24 @@ function derivedStatus(run: WorkerRun, changedCount: number): string {
   if (run.error) return changedCount ? "partial" : "failed";
   if (/^Status:\s*blocked\b/im.test(run.text)) return changedCount ? "partial" : "blocked";
   return "completed";
+}
+
+function unavailableDependencies(parentRoot: string, parentCwd: string, workerRoot: string, workerCwd: string): string[] {
+  const missing = new Set<string>();
+  let parent = parentCwd;
+  let worker = workerCwd;
+  for (;;) {
+    for (const name of ["node_modules", ".venv", "venv"])
+      if (existsSync(join(parent, name)) && !existsSync(join(worker, name)))
+        missing.add(relative(parentRoot, join(parent, name)).replace(/\\/g, "/") || name);
+    if (parent === parentRoot) break;
+    const nextParent = dirname(parent);
+    const nextWorker = dirname(worker);
+    if (nextParent === parent || relative(parentRoot, nextParent).startsWith("..")) break;
+    parent = nextParent;
+    worker = nextWorker;
+  }
+  return [...missing].sort();
 }
 
 export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
@@ -101,6 +120,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     promptSnippet: "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
     promptGuidelines: [
       "Use estimated changed LOC only as a soft routing guide: small is under 50 LOC, medium is 50–400 LOC inclusive, and large is over 400 LOC. Keep small/local work in the main model. Use grunt for medium changes with compact handoffs and easy validation, or large mechanical changes. Reasoning complexity, architectural coupling, handoff compactness, and validation ease override LOC; a tiny security or concurrency change may still be difficult. Grunt may complete the entire change when it is not difficult. Main model must own difficult architecture, integration, review, and final verification. Select thinking by reasoning complexity, not diff size. Grunt calls are unlimited per original user prompt, but dependent slices must be sequential: invoke one Grunt, inspect its applied changes, run focused verification, then invoke the next Grunt. Do not issue dependent Grunt calls in one assistant response because the later handoff cannot incorporate earlier results. Before grunt on consequential architecturally coupled work, use advisor at least once when available; use a later advisor call when implementation creates material new uncertainty. Grunt works in an isolated Git worktree and applies changes only after successful completion and a stale-parent check; blocked or failed work remains unapplied. Inspect applied changes and run verify after grunt before claiming completion.",
+      "After any grunt result, the main model owns recovery. Inspect completed changes or any partial patch artifact, then fix small/local defects and finish small remaining work directly instead of spawning another worker. Do not call grunt merely to verify or repair the previous worker. Re-delegate only when the remaining work is still medium or large, self-contained, easy to validate, and likely cheaper than main-model completion.",
     ],
     parameters: Type.Object({
       task: Type.String({ minLength: 1, maxLength: 8000, description: "Self-contained implementation handoff including decisions and acceptance criteria" }),
@@ -122,7 +142,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const exec = pi.exec.bind(pi);
       let isolated;
       try {
-        isolated = await createIsolatedWorktree(exec, ctx.cwd);
+        isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
       } catch (error: any) {
         return {
           content: [{ type: "text" as const, text: `Grunt unavailable: ${error?.message ?? String(error)}` }],
@@ -130,10 +150,15 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         };
       }
 
-      const entries = ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [];
-      const parentContext = buildWorkerContext(entries);
+      const contextChars = gruntParentContextChars();
+      const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
+      const parentContext = contextChars ? buildWorkerContext(entries, contextChars) : "";
       const suggested = params.suggestedPaths ?? [];
-      const prompt = `Implementation task:\n${task}${suggested.length ? `\n\nSuggested paths (guidance only):\n${suggested.map((path) => `- ${path}`).join("\n")}` : ""}${parentContext ? `\n\nBounded redacted parent context (background only; task above is authoritative):\n${parentContext}` : ""}`;
+      const missingDependencies = unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd);
+      const dependencyNote = missingDependencies.length
+        ? `\n\nUnavailable ignored dependency directories: ${missingDependencies.join(", ")}. Do not install dependencies; skip checks requiring them and report that limitation.`
+        : "";
+      const prompt = `Implementation task:\n${task}${suggested.length ? `\n\nSuggested paths (guidance only):\n${suggested.map((path) => `- ${path}`).join("\n")}` : ""}${dependencyNote}${parentContext ? `\n\nBounded redacted parent context (background only; task above is authoritative):\n${parentContext}` : ""}`;
       const args = [
         "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
         "--tools", "read,grep,find,ls,edit,write,bash", "--model", modelName(model), "--thinking", params.thinking,
@@ -153,6 +178,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       try {
         const run = await runWorker(args, {
           cwd: isolated.workerCwd, signal, timeoutMs: gruntTimeoutMs(),
+          maxTurns: gruntMaxTurns(), maxCostUsd: gruntMaxCostUsd(),
           onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
             activity = all; lastUpdateAt = Date.now();
             onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
@@ -178,9 +204,10 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
               await applyWorkerPatch(exec, isolated, worker.patch);
               applied = true;
             } catch (error: any) {
-              status = "failed";
-              failureCode = "apply_failed";
               integrationError = error?.message ?? String(error);
+              const stale = integrationError.startsWith("Parent changed immediately before patch apply:");
+              status = stale ? "stale" : "failed";
+              failureCode = stale ? "stale_parent" : "apply_failed";
             }
           }
         }
@@ -207,7 +234,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
           details: {
             status, applied, isolated: true, isolationVerified: isolated.isolationVerified,
             workerCwd: run.cwd, workerHead: isolated.workerHead, artifactPath, task, suggestedPaths: suggested,
-            changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths,
+            missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths,
             model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
             usage: run.usage, turns: run.turns, activity: run.activity, stopReason: run.stopReason,
             truncated: run.truncated, stderr: run.stderr, failureCode,
@@ -220,7 +247,12 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         };
       } finally {
         clearInterval(heartbeat);
-        await removeIsolatedWorktree(exec, isolated);
+        const cleanupWarnings = await removeIsolatedWorktree(exec, isolated);
+        if (cleanupWarnings.length) {
+          const text = `Grunt cleanup warning: ${cleanupWarnings.join("; ")}`;
+          if (ctx.hasUI) ctx.ui.notify(text, "warning");
+          else onUpdate?.({ content: [{ type: "text", text }], details: { state: "cleanup_warning", cleanupWarnings } });
+        }
         if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", undefined);
       }
     },

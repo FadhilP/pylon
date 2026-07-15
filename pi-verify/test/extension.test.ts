@@ -15,6 +15,8 @@ test("verify guidance keeps verification before final text", () => {
   assert.match(guidance, /tool-only assistant turn/i);
   assert.match(guidance, /before writing final user-facing text/i);
   assert.match(guidance, /wait for its result and respond once/i);
+  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  assert.match(tool.renderCall({ scope: "changed" }, theme).render(80).join("\n"), /Verify worktree changes/);
 });
 
 test("verify publishes bounded result metadata and session entry", async () => {
@@ -69,6 +71,33 @@ test("verify publishes bounded result metadata and session entry", async () => {
   }] }), undefined);
   handlers.get("tool_call")!({ toolName: "edit" });
   assert.equal(handlers.get("context")!({ messages: [] }), undefined);
+});
+
+test("verify reports live elapsed runtime while a check runs", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-runtime-"));
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node slow.js" } }));
+  const tools = new Map<string, any>();
+  const statuses: string[] = [];
+  const updates: any[] = [];
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
+    exec: async (command: string, args: string[]) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (command === "git") return { code: 0, stdout: "", stderr: "" };
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      return { code: 0, stdout: "ok\n", stderr: "" };
+    },
+  };
+  extension(pi);
+  const result = await tools.get("verify").execute(
+    "call", { scope: "project" }, undefined, (update: any) => updates.push(update),
+    { cwd, hasUI: true, ui: { setStatus: (_id: string, status: string) => statuses.push(status) } },
+  );
+  assert.equal(result.details.state, "passed");
+  assert.ok(updates.some((update) => /^1s$/.test(update.content[0].text)));
+  assert.ok(updates.some((update) => update.details.durationMs >= 1_000));
+  assert.ok(statuses.some((status) => /Running 1\/1 · 1s/.test(status)));
 });
 
 test("verify stops before declared checks when changed-set hygiene fails", async () => {

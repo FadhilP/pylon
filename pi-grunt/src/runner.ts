@@ -10,7 +10,7 @@ export type WorkerRun = {
   model?: string;
   stopReason?: string;
   error?: string;
-  failure?: "aborted" | "timed_out" | "child_error";
+  failure?: "aborted" | "timed_out" | "budget_exceeded" | "child_error";
   stderr: string;
   durationMs: number;
   usage: ChildUsage;
@@ -25,11 +25,12 @@ type RunOptions = {
   cwd: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  maxTurns?: number;
+  maxCostUsd?: number;
   invocation?: Invocation;
   onActivity?: (activity: WorkerActivity, all: readonly WorkerActivity[]) => void;
 };
 
-let workerQueue = Promise.resolve();
 const emptyUsage = (): ChildUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 
 function capText(text: string, maxBytes = 16 * 1024): { text: string; truncated: boolean } {
@@ -65,15 +66,6 @@ function terminate(child: ChildProcess): void {
 }
 
 export async function runPi(args: string[], options: RunOptions): Promise<WorkerRun> {
-  const previous = workerQueue;
-  let release = () => {};
-  workerQueue = new Promise<void>((resolve) => { release = resolve; });
-  await previous;
-  try { return await runUnlocked(args, options); }
-  finally { release(); }
-}
-
-async function runUnlocked(args: string[], options: RunOptions): Promise<WorkerRun> {
   const started = Date.now();
   const invocation = options.invocation ?? getPiInvocation(args);
   const child = spawn(invocation.command, invocation.args, {
@@ -83,7 +75,8 @@ async function runUnlocked(args: string[], options: RunOptions): Promise<WorkerR
   const messages: any[] = [];
   const usages: ChildUsage[] = [];
   const activity: WorkerActivity[] = [];
-  let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false;
+  let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false, protocolMalformed = false;
+  let budgetExceeded = "";
   const processLine = (line: string) => {
     if (!line.trim()) return;
     try {
@@ -102,7 +95,13 @@ async function runUnlocked(args: string[], options: RunOptions): Promise<WorkerR
       messages.push(message);
       const usage = message.usage ?? {};
       usages.push({ input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost: usage.cost?.total ?? 0 });
-    } catch { /* final response reports malformed protocol */ }
+      const cost = usages.reduce((sum, item) => sum + item.cost, 0);
+      if (message.stopReason === "toolUse" && options.maxTurns !== undefined && messages.length >= options.maxTurns)
+        budgetExceeded = `Worker reached turn limit (${options.maxTurns}).`;
+      else if (message.stopReason === "toolUse" && options.maxCostUsd !== undefined && cost >= options.maxCostUsd)
+        budgetExceeded = `Worker reached cost limit ($${options.maxCostUsd.toFixed(2)}).`;
+      if (budgetExceeded) terminate(child);
+    } catch { protocolMalformed = true; }
   };
   child.stdout!.on("data", (data) => {
     stdout += data;
@@ -130,12 +129,17 @@ async function runUnlocked(args: string[], options: RunOptions): Promise<WorkerR
   const final = messages.at(-1);
   const rawText = final?.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
   const capped = capText(rawText);
-  const failure = aborted ? "aborted" : timedOut ? "timed_out" : protocolOverflow || exitCode !== 0 || final?.stopReason === "error" || !rawText ? "child_error" : undefined;
+  const incomplete = final?.stopReason !== "stop";
+  const failure = aborted ? "aborted" : timedOut ? "timed_out" : budgetExceeded ? "budget_exceeded"
+    : protocolOverflow || protocolMalformed || exitCode !== 0 || incomplete || !rawText ? "child_error" : undefined;
   const error = protocolOverflow ? "Worker protocol output exceeded 1 MiB."
+    : protocolMalformed ? "Worker emitted malformed JSON protocol output."
     : aborted ? "Worker aborted; edits may remain."
     : timedOut ? "Worker timed out; edits may remain."
+    : budgetExceeded ? budgetExceeded
     : exitCode !== 0 ? `Worker exited with code ${exitCode}; edits may remain.`
     : final?.stopReason === "error" ? final.errorMessage || "Worker model error; edits may remain."
+    : incomplete ? `Worker ended with incomplete stop reason: ${final?.stopReason ?? "missing"}.`
     : !rawText ? "Worker returned no assistant text; edits may remain." : undefined;
   return { text: capped.text, cwd: options.cwd, model: final?.model, stopReason: final?.stopReason, error, failure, stderr, durationMs: Date.now() - started, usage, turns: messages.length, truncated: capped.truncated, exitCode, activity };
 }

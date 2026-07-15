@@ -7,6 +7,9 @@ export const thinkingLevels = ["medium", "high"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type GruntConfig = { version: 1; model?: string; disabled?: boolean };
 export const DEFAULT_GRUNT_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_GRUNT_MAX_TURNS = 32;
+export const DEFAULT_GRUNT_MAX_COST_USD = 4;
+export const DEFAULT_GRUNT_PARENT_CONTEXT_CHARS = 0;
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-grunt", "config.json");
 
 export function gruntTimeoutMs(value = process.env.PI_GRUNT_TIMEOUT_MS): number {
@@ -15,6 +18,30 @@ export function gruntTimeoutMs(value = process.env.PI_GRUNT_TIMEOUT_MS): number 
   if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 7_200_000)
     throw new Error("PI_GRUNT_TIMEOUT_MS must be an integer between 1 and 7200000");
   return timeout;
+}
+
+export function gruntMaxTurns(value = process.env.PI_GRUNT_MAX_TURNS): number {
+  if (value === undefined) return DEFAULT_GRUNT_MAX_TURNS;
+  const turns = Number(value);
+  if (!Number.isInteger(turns) || turns < 1 || turns > 100)
+    throw new Error("PI_GRUNT_MAX_TURNS must be an integer between 1 and 100");
+  return turns;
+}
+
+export function gruntMaxCostUsd(value = process.env.PI_GRUNT_MAX_COST_USD): number {
+  if (value === undefined) return DEFAULT_GRUNT_MAX_COST_USD;
+  const cost = Number(value);
+  if (!Number.isFinite(cost) || cost <= 0 || cost > 100)
+    throw new Error("PI_GRUNT_MAX_COST_USD must be a number greater than 0 and at most 100");
+  return cost;
+}
+
+export function gruntParentContextChars(value = process.env.PI_GRUNT_PARENT_CONTEXT_CHARS): number {
+  if (value === undefined) return DEFAULT_GRUNT_PARENT_CONTEXT_CHARS;
+  const chars = Number(value);
+  if (!Number.isInteger(chars) || chars < 0 || chars > 12_000)
+    throw new Error("PI_GRUNT_PARENT_CONTEXT_CHARS must be an integer between 0 and 12000");
+  return chars;
 }
 
 export async function loadConfig(path = configPath()): Promise<GruntConfig> {

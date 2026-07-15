@@ -8,6 +8,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { detectChecks } from "../src/detect.ts";
 
+const HEARTBEAT_MS = 1_000;
+
 type Result = {
   id: string;
   label: string;
@@ -226,6 +228,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const results: Result[] = [];
+      const runStarted = Date.now();
       for (const [index, check] of checks.entries()) {
         if (signal?.aborted) break;
         const progress = `Verify: Running ${index + 1}/${checks.length}`;
@@ -239,15 +242,30 @@ export default function (pi: ExtensionAPI) {
           details: { scope: params.scope, runId, state: "running", worktreeId: initialIdentity, startedAt, results },
         });
         const started = Date.now();
-        const execution = await pi.exec(check.command, check.args, {
-          cwd: check.cwd,
-          signal,
-          timeout: 5 * 60_000,
-        }).catch((error: unknown) => ({
-          code: null,
-          stdout: "",
-          stderr: `Check unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        }));
+        const heartbeat = setInterval(() => {
+          const durationMs = Date.now() - runStarted;
+          if (ctx.hasUI) ctx.ui.setStatus("pi-verify", `${progress} · ${(durationMs / 1000).toFixed(0)}s`);
+          onUpdate?.({
+            content: [{ type: "text", text: `${(durationMs / 1000).toFixed(0)}s` }],
+            details: { scope: params.scope, runId, state: "running", worktreeId: initialIdentity, startedAt, durationMs, results },
+          });
+        }, HEARTBEAT_MS);
+        heartbeat.unref();
+        const execution = await (async () => {
+          try {
+            return await pi.exec(check.command, check.args, {
+              cwd: check.cwd,
+              signal,
+              timeout: 5 * 60_000,
+            }).catch((error: unknown) => ({
+              code: null,
+              stdout: "",
+              stderr: `Check unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            }));
+          } finally {
+            clearInterval(heartbeat);
+          }
+        })();
         const raw = [execution.stdout, execution.stderr].filter(Boolean).join("\n");
         const bounded = truncateTail(raw, { maxLines: 160, maxBytes: 12 * 1024 });
         results.push({
@@ -297,8 +315,9 @@ export default function (pi: ExtensionAPI) {
       };
     },
     renderCall(args, theme) {
+      const scope = args.scope === "changed" ? "worktree changes" : args.scope;
       return new Text(
-        theme.fg("toolTitle", theme.bold("Verify ")) + theme.fg("muted", `${args.scope}${args.checks?.length ? ` · ${args.checks.join(", ")}` : ""}`),
+        theme.fg("toolTitle", theme.bold("Verify ")) + theme.fg("muted", `${scope}${args.checks?.length ? ` · ${args.checks.join(", ")}` : ""}`),
         0,
         0,
       );
