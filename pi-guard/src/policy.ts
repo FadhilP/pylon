@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
+export const POLICY_VERSION = 1;
+
 const commandRules: Array<[RegExp, string]> = [
   [/\b(?:sudo|doas)\b/i, "privilege escalation"],
   [/\brm\b[^\n;&|]*(?:--recursive|-[a-z]*r[a-z]*)/i, "recursive deletion"],
@@ -60,7 +62,7 @@ function explicitAbsolute(input: string) {
 export async function pathRisk(
   cwd: string,
   input: string,
-): Promise<{ action: "block" | "confirm"; reason: string; target?: string } | undefined> {
+): Promise<{ action: "block"; reason: string } | { action: "confirm"; reason: string; target: string } | undefined> {
   const root = await realpath(cwd);
   const lexicalTarget = resolve(cwd, input.replace(/^@/, ""));
   const target = await canonicalTarget(cwd, input);
@@ -75,6 +77,6 @@ export async function pathRisk(
     return { action: "block", reason: "write target escapes workspace" };
   }
   if (segments.some((part) => part === ".env" || part.startsWith(".env.")))
-    return { action: "confirm", reason: "environment file may contain secrets" };
+    return { action: "confirm", reason: "environment file may contain secrets", target };
   return undefined;
 }
