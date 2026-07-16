@@ -6,6 +6,7 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 const TIMEOUT_MS = 30_000;
@@ -35,17 +36,20 @@ export default function scoutSearchToolsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "rg",
     label: "ripgrep",
-    description: `Fast read-only content search with line numbers. Output capped at ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}. Use grep if ripgrep is unavailable.`,
-    promptSnippet: "Fast read-only repository content search with line-numbered matches",
-    promptGuidelines: ["Prefer rg for repository content search; use grep when rg reports it is unavailable."],
+    description: `Fast read-only content search with line numbers or matching file paths. Output capped at ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}. Use grep if ripgrep is unavailable.`,
+    promptSnippet: "Fast read-only repository content search with line-numbered matches or matching file paths",
+    promptGuidelines: ["Prefer rg for repository content search; use grep when rg reports it is unavailable. Narrow searches with path or glob when reliable anchors exist. When locations are unknown and a normal search may be broad, use mode files to discover matching paths, then search selected files or directories for line-level evidence. If output is broad or truncated, refine the next search instead of repeating it."],
     parameters: Type.Object({
       pattern: Type.String({ description: "Regular expression to search" }),
       path: Type.Optional(Type.String({ description: "Workspace-relative file or directory; default ." })),
       glob: Type.Optional(Type.String({ description: "Optional file glob, such as *.ts" })),
+      mode: Type.Optional(StringEnum(["lines", "files"] as const, { description: "Return line-numbered matches (default) or only matching file paths" })),
     }),
     async execute(_id, params, signal, _update, ctx) {
       const path = workspacePath(ctx.cwd, params.path);
-      const args = ["--line-number", "--color=never", "--max-columns=500", "--max-columns-preview", "--max-count=200"];
+      const args = params.mode === "files"
+        ? ["--files-with-matches", "--color=never"]
+        : ["--line-number", "--color=never", "--max-columns=500", "--max-columns-preview", "--max-count=200"];
       if (params.glob) args.push("--glob", params.glob);
       args.push("--", params.pattern, path);
       try {

@@ -126,6 +126,10 @@ test("Scout registers separate repo and web tools; Web Scout fails closed withou
     const repoGuidance = runtime.tools.get("repo_scout").promptGuidelines.join("\n");
     assert.match(repoGuidance, /bounded read-only orientation pass/i);
     assert.match(repoGuidance, /neither the user request nor current context supplies a concrete path/i);
+    assert.match(repoGuidance, /Start the task with concrete reconnaissance work/i);
+    assert.match(repoGuidance, /Omit the broad user goal unless it materially constrains search scope or interpretation/i);
+    assert.match(repoGuidance, /include only the relevant constraint, not the full request/i);
+    assert.match(repoGuidance, /Trace redirectUri from request input through callback validation/i);
     assert.match(repoGuidance, /sufficient for read-only evaluation by default/i);
     assert.match(repoGuidance, /do not reread cited source unless an exact edit needs current text/i);
     assert.match(repoGuidance, /broad parent context is sent only on the first call/i);
