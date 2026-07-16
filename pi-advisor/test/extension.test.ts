@@ -123,6 +123,25 @@ test("advisor call renders the executor request instead of the user prompt", () 
   assert.equal(collapsed, "Advisor · test/model · 1 input · 2 output · R3 · W4 · $0.5000 · 1.3s");
   assert.doesNotMatch(collapsed, /Detailed advice/);
 
+  let failureColor = "";
+  const failed = tool.renderResult({
+    content: [{ type: "text", text: "Advisor failed nonfatally: timeout." }],
+    details: {
+      advisorModel: "test/model",
+      durationMs: 1_250,
+      callNumber: 1,
+      snapshotEstimatedTokens: 10,
+      redactionCount: 0,
+      truncated: false,
+      cacheRetention: "short",
+      failureCode: "timeout",
+    },
+  }, { expanded: false }, {
+    fg: (color: string, text: string) => { failureColor = color; return text; },
+  }).render(1_000).map((line: string) => line.trimEnd()).join("\n");
+  assert.equal(failureColor, "error");
+  assert.equal(failed, "Advisor failed · test/model · 1s\nAdvisor failed nonfatally: timeout.");
+
   assert.ok(tool.parameters.required.includes("request"));
   assert.equal(tool.parameters.properties.request.maxLength, 8_192);
 });

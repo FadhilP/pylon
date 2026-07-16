@@ -420,14 +420,16 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       ) as any;
       if (!details) return new Text(body?.text ?? "Advisor", 0, 0);
       let text = theme.fg(
-        details.failureCode ? "warning" : "success",
-        `Advisor · ${details.advisorModel ?? "Unavailable"}`,
+        details.failureCode ? "error" : "success",
+        `Advisor${details.failureCode ? " failed" : ""} · ${details.advisorModel ?? "Unavailable"}`,
       );
       if (!details.failureCode && details.usage)
         text += ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`;
       else if (details.durationMs)
         text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
-      if (expanded && body?.text)
+      if (details.failureCode && body?.text)
+        text += `\n${body.text}`;
+      else if (expanded && body?.text)
         text += `\n\nAdvisor report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
