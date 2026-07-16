@@ -38,7 +38,7 @@ test("blocks escaped and generated writes, confirms environment files", async ()
     action: "block", reason: "node_modules is generated and protected",
   });
   assert.deepEqual(await pathRisk(root, ".env.local"), {
-    action: "confirm", reason: "environment file may contain secrets",
+    action: "confirm", reason: "environment file may contain secrets", target: join(root, ".env.local"),
   });
   assert.equal(await pathRisk(root, "src/index.ts"), undefined);
 });
