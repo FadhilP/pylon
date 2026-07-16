@@ -61,6 +61,22 @@ test("historical findings use one persistent before-agent message", async () => 
   } finally { runtime.restore(); }
 });
 
+test("Repo Scout renders collapsed failures with reason", async () => {
+  const runtime = await harness();
+  try {
+    const tool = runtime.tools.get("repo_scout");
+    let failureColor = "";
+    const rendered = tool.renderResult({
+      content: [{ type: "text", text: "Repo scout failed nonfatally: Scout timed out." }],
+      details: { model: "test/model", durationMs: 1_250, failureCode: "child_error" },
+    }, { expanded: false }, {
+      fg: (color: string, text: string) => { failureColor = color; return text; },
+    }).render(1_000).map((line: string) => line.trimEnd()).join("\n");
+    assert.equal(failureColor, "error");
+    assert.equal(rendered, "Scout failed · test/model · 1s\nRepo scout failed nonfatally: Scout timed out.");
+  } finally { runtime.restore(); }
+});
+
 test("steering preserves the current repo Scout session", () => {
   assert.equal(startsNewRepoSession({ source: "interactive", streamingBehavior: "steer" }), false);
   assert.equal(startsNewRepoSession({ source: "interactive" }), true);

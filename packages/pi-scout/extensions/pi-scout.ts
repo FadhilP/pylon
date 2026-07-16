@@ -479,8 +479,8 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
       const details = result.details as any;
       const body = result.content.find((c: any) => c.type === "text") as any;
       let text = theme.fg(
-        details?.failureCode ? "warning" : "success",
-        `Scout · ${details?.model ?? "Unavailable"}`,
+        details?.failureCode ? "error" : "success",
+        `Scout${details?.failureCode ? " failed" : ""} · ${details?.model ?? "Unavailable"}`,
       );
       if (details?.usage)
         text += ` · ${usageText({ usage: details.usage, turns: details.turns ?? [], durationMs: details.durationMs, text: "", stderr: "", truncated: false, exitCode: 0, activity: details.activity ?? [] } as ScoutRun)}`;
@@ -488,7 +488,8 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
         text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (expanded && details?.activity?.length)
         text += `\n\nChild activity:\n${activityText(details.activity)}`;
-      if (expanded && body?.text) text += `\n\nScout report:\n${body.text}`;
+      if (details?.failureCode && body?.text) text += `\n${body.text}`;
+      else if (expanded && body?.text) text += `\n\nScout report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });
