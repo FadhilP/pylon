@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readlink, realpath, rm, rmdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -175,13 +175,57 @@ export async function applyWorkerPatch(exec: Exec, isolated: IsolatedWorktree, p
   if (apply.code !== 0) throw failure("Unable to apply worker patch", apply);
 }
 
+export const STALE_PATCH_ARTIFACT_MS = 7 * 24 * 60 * 60 * 1000;
+
+function patchArtifactDirectory() {
+  return join(getAgentDir(), "pi-grunt", "artifacts");
+}
+
 export async function persistPatchArtifact(patch: string): Promise<string | undefined> {
   if (!patch) return;
-  const directory = join(getAgentDir(), "pi-grunt", "artifacts");
+  const directory = patchArtifactDirectory();
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${Date.now()}-${randomUUID()}.patch`);
   await writeFile(path, patch, { mode: 0o600 });
   return path;
+}
+
+/** Best-effort pruning of recovery files left by a crashed extension session. */
+export async function pruneStalePatchArtifacts(
+  directory = patchArtifactDirectory(),
+  now = Date.now(),
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith(".patch")) return;
+    try {
+      const path = join(directory, entry.name);
+      if (now - (await stat(path)).mtimeMs >= STALE_PATCH_ARTIFACT_MS)
+        await rm(path, { force: true });
+    } catch {
+      // A concurrently inspected artifact or filesystem error is harmless.
+    }
+  }));
+  try {
+    await rmdir(directory);
+  } catch {
+    // Keep non-empty directories and ignore cleanup failures.
+  }
+}
+
+/** Best-effort session cleanup after recovery artifacts are no longer needed. */
+export async function cleanupSessionPatchArtifacts(paths: Iterable<string>): Promise<void> {
+  await Promise.all([...paths].map((path) => rm(path, { force: true }).catch(() => {})));
+  try {
+    await rmdir(patchArtifactDirectory());
+  } catch {
+    // Keep non-empty directories and ignore cleanup failures.
+  }
 }
 
 export async function removeIsolatedWorktree(exec: Exec, isolated: IsolatedWorktree): Promise<string[]> {

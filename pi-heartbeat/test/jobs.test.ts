@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { JobManager, type Job } from "../src/jobs.ts";
+import { JobManager, pruneStaleSessionDirs, STALE_SESSION_DIR_MS, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs, MIN_CHECK_INTERVAL_MS } from "../src/polling.ts";
 
@@ -15,6 +15,32 @@ const logClosed = (job: Job) =>
   job.file.closed
     ? Promise.resolve()
     : new Promise<void>((resolve) => job.file.once("close", () => resolve()));
+
+test("shutdown removes the current session directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-"));
+  const manager = new JobManager(dir);
+  await manager.init();
+  await manager.shutdown();
+  await assert.rejects(access(dir));
+});
+
+test("session startup prunes stale siblings but preserves current and recent sessions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hb-sessions-"));
+  const current = join(root, "current");
+  const stale = join(root, "stale");
+  const recent = join(root, "recent");
+  await Promise.all([mkdir(current), mkdir(stale), mkdir(recent)]);
+  const old = new Date(Date.now() - STALE_SESSION_DIR_MS - 1_000);
+  await utimes(stale, old, old);
+  try {
+    await pruneStaleSessionDirs(root, current);
+    await assert.rejects(access(stale));
+    await access(current);
+    await access(recent);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("running status checks stay over 30 seconds apart", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));

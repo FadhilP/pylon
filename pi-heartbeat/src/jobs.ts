@@ -1,12 +1,48 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { TailBuffer, bounded } from "./output.ts";
 import { killTree, shellInvocation } from "./process-tree.ts";
+export const STALE_SESSION_DIR_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Best-effort removal of abandoned heartbeat session directories. */
+export async function pruneStaleSessionDirs(
+  root: string,
+  currentDir: string,
+  now = Date.now(),
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory()) return;
+    const dir = join(root, entry.name);
+    if (resolve(dir) === resolve(currentDir)) return;
+    try {
+      let lastActivity = (await stat(dir)).mtimeMs;
+      // Job logs are written after their containing directory is created.
+      for (const child of await readdir(dir, { withFileTypes: true })) {
+        if (!child.isFile()) continue;
+        lastActivity = Math.max(
+          lastActivity,
+          (await stat(join(dir, child.name))).mtimeMs,
+        );
+      }
+      if (now - lastActivity >= STALE_SESSION_DIR_MS)
+        await rm(dir, { recursive: true, force: true });
+    } catch {
+      // A concurrent session or filesystem error must not disrupt startup.
+    }
+  }));
+}
+
 export type State =
   | "running"
   | "cancelling"

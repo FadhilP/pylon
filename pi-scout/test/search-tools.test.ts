@@ -39,7 +39,7 @@ test("rg files mode supports staged broad-to-focused discovery", async () => {
   const result = await tool.execute("id", { pattern: "session_compact", glob: "*.ts", mode: "files" }, undefined, undefined, { cwd: process.cwd() });
   assert.ok(calls[0].args.includes("--files-with-matches"));
   assert.ok(!calls[0].args.includes("--line-number"));
-  assert.deepEqual(result.content[0].text.split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(result.content[0].text.trimEnd().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
   assert.match(tool.promptGuidelines.join("\n"), /use mode files to discover matching paths/i);
   assert.match(tool.promptGuidelines.join("\n"), /refine the next search instead of repeating it/i);
 });

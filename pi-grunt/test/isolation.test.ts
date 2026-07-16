@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   applyWorkerPatch, collectWorkerPatch, createIsolatedWorktree,
-  parentChangesSinceBaseline, removeIsolatedWorktree,
+  parentChangesSinceBaseline, pruneStalePatchArtifacts, removeIsolatedWorktree,
+  STALE_PATCH_ARTIFACT_MS,
 } from "../src/isolation.ts";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +29,24 @@ async function repository(): Promise<string> {
   await execFileAsync("git", ["-C", root, "-c", "user.name=test", "-c", "user.email=test@local", "commit", "-m", "base"]);
   return root;
 }
+
+test("stale recovery artifacts are pruned while recent artifacts remain", async () => {
+  const root = await mkdtemp(join(tmpdir(), "grunt-artifacts-"));
+  const artifacts = join(root, "artifacts");
+  const stale = join(artifacts, "stale.patch");
+  const recent = join(artifacts, "recent.patch");
+  await mkdir(artifacts);
+  await Promise.all([writeFile(stale, "stale"), writeFile(recent, "recent")]);
+  const old = new Date(Date.now() - STALE_PATCH_ARTIFACT_MS - 1_000);
+  await utimes(stale, old, old);
+  try {
+    await pruneStalePatchArtifacts(artifacts);
+    await assert.rejects(access(stale));
+    await access(recent);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("isolated worktree includes dirty and untracked parent state then applies only worker delta", async () => {
   const root = await repository();

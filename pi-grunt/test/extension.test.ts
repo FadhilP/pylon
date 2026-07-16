@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import grunt from "../extensions/pi-grunt.ts";
 import { saveConfig } from "../src/config.ts";
@@ -117,6 +117,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.deepEqual(blocked.details.changedPaths, ["src/blocked.ts"]);
     assert.match(blocked.content[0].text, /Worker report/);
     assert.ok(blocked.details.artifactPath);
+    await access(blocked.details.artifactPath);
     await assert.rejects(access(join(cwd, "src", "blocked.ts")));
 
     await commands.get("grunt").handler("dynamic", ctx);
@@ -138,6 +139,8 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.match(direct.content[0].text, /partial edits|affected the current working directory/i);
     assert.doesNotMatch(direct.content[0].text, /Worker report/);
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+    await assert.rejects(access(blocked.details.artifactPath));
+    await assert.rejects(access(dirname(blocked.details.artifactPath)));
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

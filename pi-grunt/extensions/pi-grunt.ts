@@ -10,8 +10,9 @@ import {
   isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 import {
-  applyWorkerPatch, collectWorkerPatch, createIsolatedWorktree,
-  parentChangesSinceBaseline, persistPatchArtifact, removeIsolatedWorktree,
+  applyWorkerPatch, cleanupSessionPatchArtifacts, collectWorkerPatch,
+  createIsolatedWorktree, parentChangesSinceBaseline, persistPatchArtifact,
+  pruneStalePatchArtifacts, removeIsolatedWorktree,
 } from "../src/isolation.ts";
 import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
@@ -71,6 +72,7 @@ function unavailableDependencies(parentRoot: string, parentCwd: string, workerRo
 
 export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
   let calls = 0;
+  const sessionPatchArtifacts = new Set<string>();
   const resolveModel = async (ctx: any) => {
     const config = await loadConfig();
     if (!config.model) return ctx.model;
@@ -102,11 +104,16 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
     pi.setActiveTools(active);
   };
 
-  pi.on("session_start", refreshTool);
+  pi.on("session_start", async () => {
+    await pruneStalePatchArtifacts();
+    await refreshTool();
+  });
   pi.on("input", (event) => {
     if (event.source !== "extension" && event.streamingBehavior !== "steer") calls = 0;
   });
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    await cleanupSessionPatchArtifacts(sessionPatchArtifacts);
+    sessionPatchArtifacts.clear();
     disposeHealth();
     pi.events.emit("pi-conductor:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
   });
@@ -242,7 +249,10 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
             }
           }
         }
-        if (!applied && worker.patch) artifactPath = await persistPatchArtifact(worker.patch);
+        if (!applied && worker.patch) {
+          artifactPath = await persistPatchArtifact(worker.patch);
+          if (artifactPath) sessionPatchArtifacts.add(artifactPath);
+        }
 
         const cwdPrefix = relative(isolated.parentRoot, isolated.parentCwd).replace(/\\/g, "/");
         const suggestionPath = (path: string) => cwdPrefix && path.startsWith(`${cwdPrefix}/`) ? path.slice(cwdPrefix.length + 1) : path;

@@ -5,7 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { JobManager } from "../src/jobs.ts";
+import { JobManager, pruneStaleSessionDirs } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
 export default function heartbeatExtension(pi: ExtensionAPI) {
@@ -47,16 +47,17 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       );
   };
   pi.on("session_start", async (_e, ctx) => {
+    try {
+      await manager?.shutdown();
+    } catch {
+      // A failed old-directory removal must not prevent a new session.
+    }
+    manager = undefined;
     lastCtx = ctx;
-    manager = new JobManager(
-      join(
-        getAgentDir(),
-        "pi-heartbeat",
-        "tmp",
-        ctx.sessionManager.getSessionId(),
-      ),
-      refresh,
-    );
+    const root = join(getAgentDir(), "pi-heartbeat", "tmp");
+    const dir = join(root, ctx.sessionManager.getSessionId());
+    await pruneStaleSessionDirs(root, dir);
+    manager = new JobManager(dir, refresh);
     await manager.init();
     refresh();
   });

@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import extension from "../extensions/pi-heartbeat.ts";
 
 function harness() {
   const handlers = new Map<string, (...args: any[]) => any>();
   const tools = new Map<string, any>();
+  let sessionId = `heartbeat-test-${process.pid}-${Date.now()}`;
   extension({
     on: (name: string, handler: (...args: any[]) => any) =>
       handlers.set(name, handler),
@@ -18,11 +22,38 @@ function harness() {
     hasUI: false,
     mode: "print",
     sessionManager: {
-      getSessionId: () => `heartbeat-test-${process.pid}-${Date.now()}`,
+      getSessionId: () => sessionId,
     },
   };
-  return { handlers, tools, ctx };
+  return { handlers, tools, ctx, setSessionId: (value: string) => { sessionId = value; } };
 }
+
+test("session_start shuts down the previous manager before replacing it", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const agentDir = await mkdtemp(join(tmpdir(), "heartbeat-agent-"));
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const { handlers, tools, ctx, setSessionId } = harness();
+  const first = "first";
+  try {
+    setSessionId(first);
+    await handlers.get("session_start")!({}, ctx);
+    await tools.get("heartbeat_start").execute(
+      "start",
+      { command: `node -e "setTimeout(()=>{},10000)"`, otherWork: "replace session" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    setSessionId("second");
+    await handlers.get("session_start")!({}, ctx);
+    await assert.rejects(access(join(agentDir, "pi-heartbeat", "tmp", first)));
+  } finally {
+    await handlers.get("session_shutdown")!();
+    await rm(agentDir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
+});
 
 test("early targeted and list checks are rejected without conflicting context", async () => {
   const { handlers, tools, ctx } = harness();
