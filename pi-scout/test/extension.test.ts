@@ -3,13 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import scout, {
-  parentContextForRepoRun,
-  REPO_SESSION_CACHE_READ_LIMIT,
-  REPO_SESSION_CONTEXT_LIMIT,
-  shouldRotateRepoSession,
-  startsNewRepoSession,
-} from "../extensions/pi-scout.ts";
+import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
@@ -77,25 +71,13 @@ test("Repo Scout renders collapsed failures with reason", async () => {
   } finally { runtime.restore(); }
 });
 
-test("steering preserves the current repo Scout session", () => {
-  assert.equal(startsNewRepoSession({ source: "interactive", streamingBehavior: "steer" }), false);
-  assert.equal(startsNewRepoSession({ source: "interactive" }), true);
-  assert.equal(startsNewRepoSession({ source: "interactive", streamingBehavior: "followUp" }), true);
+test("steering preserves the current repo Scout call sequence", () => {
+  assert.equal(startsNewRepoSequence({ source: "interactive", streamingBehavior: "steer" }), false);
+  assert.equal(startsNewRepoSequence({ source: "interactive" }), true);
+  assert.equal(startsNewRepoSequence({ source: "interactive", streamingBehavior: "followUp" }), true);
 });
 
-test("parent context is sent only on the first repo Scout call", () => {
-  const entries = [{ type: "message", message: { role: "user", content: "Find auth flow" } }];
-  assert.match(parentContextForRepoRun(1, entries), /Find auth flow/);
-  assert.equal(parentContextForRepoRun(2, entries), "");
-});
-
-test("Repo Scout rotates after either independent usage limit", () => {
-  assert.equal(shouldRotateRepoSession(REPO_SESSION_CONTEXT_LIMIT, REPO_SESSION_CACHE_READ_LIMIT), false);
-  assert.equal(shouldRotateRepoSession(REPO_SESSION_CONTEXT_LIMIT + 1, 0), true);
-  assert.equal(shouldRotateRepoSession(0, REPO_SESSION_CACHE_READ_LIMIT + 1), true);
-});
-
-test("parallel Repo Scout follow-up starts fresh after prior child exceeds context limit", async () => {
+test("parallel Repo Scout calls are serialized into fresh child sessions with parent context", async () => {
   let calls = 0;
   let firstStarted!: () => void;
   let releaseFirst!: () => void;
@@ -113,12 +95,17 @@ test("parallel Repo Scout follow-up starts fresh after prior child exceeds conte
       text: `result ${calls}`, stderr: "", durationMs: 1,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       turns: [], truncated: false, exitCode: 0, activity: [],
-      contextTokens: calls === 1 ? REPO_SESSION_CONTEXT_LIMIT + 1 : 1,
+      contextTokens: 1,
       cacheReadTokens: 0,
     };
   };
   const runtime = await harness(run);
-  const ctx = context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } });
+  const ctx = context({
+    hasUI: false,
+    sessionManager: {
+      buildContextEntries: () => [{ type: "message", message: { role: "user", content: "Find auth flow" } }],
+    },
+  });
   try {
     const first = runtime.tools.get("repo_scout").execute("one", { task: "first" }, undefined, undefined, ctx);
     await started;
@@ -129,9 +116,9 @@ test("parallel Repo Scout follow-up starts fresh after prior child exceeds conte
     assert.equal(calls, 2);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
-    assert.equal(results[1].details.sessionCallNumber, 1);
-    assert.ok(!childArgs[1].includes("--continue"));
+    assert.ok(childArgs.every((args) => !args.includes("--continue")));
     assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
+    assert.ok(childArgs.every((args) => args.at(-1)?.includes("Find auth flow")));
   } finally { runtime.restore(); }
 });
 
@@ -148,7 +135,7 @@ test("Scout registers separate repo and web tools; Web Scout fails closed withou
     assert.match(repoGuidance, /Trace redirectUri from request input through callback validation/i);
     assert.match(repoGuidance, /sufficient for read-only evaluation by default/i);
     assert.match(repoGuidance, /do not reread cited source unless an exact edit needs current text/i);
-    assert.match(repoGuidance, /broad parent context is sent only on the first call/i);
+    assert.match(repoGuidance, /every call receives bounded current parent context/i);
     assert.match(repoGuidance, /Before any follow-up Scout call, do one bounded parent-side gap pass/i);
     assert.match(repoGuidance, /do not make serial Scout calls one finding, file, or question at a time/i);
     assert.match(repoGuidance, /do not call Scout again solely because the user approved implementation/i);
