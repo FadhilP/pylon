@@ -20,6 +20,11 @@ export type ScoutRun = {
   model?: string;
   stopReason?: string;
   error?: string;
+  failure?: "budget_exceeded";
+  /** The discovery ceiling was reached and Scout was instructed to finalize. */
+  budgetExceeded: boolean;
+  finalizationAttempted: boolean;
+  finalizationSucceeded: boolean;
   stderr: string;
   durationMs: number;
   usage: ChildUsage;
@@ -50,6 +55,8 @@ const validTokens = (value: unknown): number => {
   const tokens = Number(value);
   return Number.isFinite(tokens) && tokens >= 0 ? tokens : 0;
 };
+const validCost = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 export function cacheReadTokensFromUsage(usage: any): number {
   return validTokens(usage?.cacheRead);
 }
@@ -87,10 +94,13 @@ function terminate(child: ChildProcess): void {
   }
 }
 
-type RunPiOptions = {
+export type RunPiOptions = {
   cwd: string;
+  /** Initial RPC prompt. Prompts are never passed as positional CLI arguments. */
+  prompt: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  maxCostUsd?: number;
   invocation?: Invocation;
   env?: NodeJS.ProcessEnv;
   inheritEnv?: boolean;
@@ -115,7 +125,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.cwd,
     shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
     env: options.inheritEnv === false ? options.env : options.env ? { ...process.env, ...options.env } : process.env,
@@ -123,30 +133,62 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   const messages: any[] = [];
   const turns: ChildTurnUsage[] = [];
   const activity: ScoutActivity[] = [];
-  let stdout = "",
-    stderr = "",
-    timedOut = false,
-    aborted = false,
-    protocolOverflow = false,
-    contextTokens = 0,
-    cacheReadTokens = 0;
+  let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false;
+  let commandError: string | undefined;
+  let agentSettled = false;
+  let controlledCompletion = false;
+  let budgetExceeded = false;
+  let finalizationAttempted = false;
+  let finalizationSucceeded = false;
+  let finalizationFailed = false;
+  let contextTokens = 0, cacheReadTokens = 0, reportedCost = 0;
+  let finalizationMessage: any;
+  let commandId = 0;
+
+  const failCommand = (command: string, detail?: unknown) => {
+    if (commandError) return;
+    const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+    commandError = `Scout RPC ${command} command failed${suffix}`;
+    terminate(child);
+  };
+  const sendCommand = (type: "prompt" | "steer", message: string) => {
+    const command = { id: `scout-${++commandId}`, type, message };
+    try {
+      child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
+        if (error && !controlledCompletion && !timedOut && !aborted && !finalizationFailed) failCommand(type, error.message);
+      });
+    } catch (error) {
+      failCommand(type, error instanceof Error ? error.message : String(error));
+    }
+  };
+  const pushActivity = (item: ScoutActivity) => {
+    activity.push(item);
+    if (activity.length > 100) activity.shift();
+    options.onActivity?.(item, activity);
+  };
   const processLine = (line: string) => {
     if (!line.trim()) return;
     try {
       const event = JSON.parse(line);
+      // RPC responses are envelopes, not agent events. Only rejected commands matter.
+      if (event.type === "response") {
+        if (event.success === false && (event.command === "prompt" || event.command === "steer"))
+          failCommand(event.command, event.error);
+        return;
+      }
+      if (event.type === "agent_settled") {
+        agentSettled = true;
+        controlledCompletion = true;
+        terminate(child);
+        return;
+      }
       if (event.type === "tool_execution_start") {
-        const item: ScoutActivity = { kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}) };
-        activity.push(item);
-        if (activity.length > 100) activity.shift();
-        options.onActivity?.(item, activity);
+        pushActivity({ kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}) });
         return;
       }
       if (event.type === "tool_execution_end") {
         const text = (event.result?.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-        const item: ScoutActivity = { kind: "result", tool: event.toolName, text: capText(text, 2000, 40).text, ...(event.isError ? { isError: true } : {}) };
-        activity.push(item);
-        if (activity.length > 100) activity.shift();
-        options.onActivity?.(item, activity);
+        pushActivity({ kind: "result", tool: event.toolName, text: capText(text, 2000, 40).text, ...(event.isError ? { isError: true } : {}) });
         return;
       }
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;
@@ -155,26 +197,34 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       const usage = message.usage ?? {};
       const latestContextTokens = contextTokensFromUsage(usage);
       const latestCacheReadTokens = cacheReadTokensFromUsage(usage);
-      if (
-        message.stopReason !== "aborted" && message.stopReason !== "error" &&
-        (latestContextTokens > 0 || latestCacheReadTokens > 0)
-      ) {
+      if (message.stopReason !== "aborted" && message.stopReason !== "error" && (latestContextTokens > 0 || latestCacheReadTokens > 0)) {
         contextTokens = latestContextTokens;
         cacheReadTokens = latestCacheReadTokens;
       }
-      turns.push({
-        input: usage.input ?? 0,
-        output: usage.output ?? 0,
-        cacheRead: usage.cacheRead ?? 0,
-        cacheWrite: usage.cacheWrite ?? 0,
-        cost: usage.cost?.total ?? 0,
-        model: message.model,
-        stopReason: message.stopReason,
-      });
+      const cost = validCost(usage.cost?.total);
+      turns.push({ input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost, model: message.model, stopReason: message.stopReason });
+      reportedCost += cost;
+
+      if (finalizationAttempted && !finalizationMessage) {
+        finalizationMessage = message;
+        if (message.stopReason === "toolUse") {
+          finalizationFailed = true;
+          terminate(child);
+        } else if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+          finalizationSucceeded = true;
+        }
+        return;
+      }
+      if (!budgetExceeded && message.stopReason === "toolUse" && options.maxCostUsd !== undefined && reportedCost >= options.maxCostUsd) {
+        budgetExceeded = true;
+        finalizationAttempted = true;
+        sendCommand("steer", "Discovery budget exhausted. Stop searching and return your compact cited findings now. Do not call more tools.");
+      }
     } catch {
-      /* malformed lines handled if no final response */
+      /* Malformed lines remain harmless unless no usable final response arrives. */
     }
   };
+
   child.stdout!.on("data", (data) => {
     stdout += data;
     if (Buffer.byteLength(stdout) > 1024 * 1024) {
@@ -189,19 +239,17 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   });
   child.stderr!.on("data", (data) => {
     stderr += data;
-    if (Buffer.byteLength(stderr) > 8192)
-      stderr = Buffer.from(stderr).subarray(-8192).toString("utf8");
+    if (Buffer.byteLength(stderr) > 8192) stderr = Buffer.from(stderr).subarray(-8192).toString("utf8");
   });
-  const abort = () => {
-    aborted = true;
-    terminate(child);
-  };
+  child.stdin!.on("error", (error) => {
+    if (!controlledCompletion && !timedOut && !aborted && !finalizationFailed) failCommand("write", error.message);
+  });
+  const abort = () => { aborted = true; terminate(child); };
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    terminate(child);
-  }, options.timeoutMs ?? 90_000);
+  const timeout = setTimeout(() => { timedOut = true; terminate(child); }, options.timeoutMs ?? 90_000);
+  // Attach every handler before the initial command; RPC uses strict LF-delimited JSON.
+  if (!aborted) sendCommand("prompt", options.prompt);
   const exitCode = await new Promise<number>((resolve) => {
     child.once("error", () => resolve(1));
     child.once("close", (code) => resolve(code ?? 1));
@@ -209,41 +257,44 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   clearTimeout(timeout);
   options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout);
-  const usage = turns.reduce(
-    (sum, turn) => ({
-      input: sum.input + turn.input,
-      output: sum.output + turn.output,
-      cacheRead: sum.cacheRead + turn.cacheRead,
-      cacheWrite: sum.cacheWrite + turn.cacheWrite,
-      cost: sum.cost + turn.cost,
-    }),
-    emptyUsage(),
-  );
-  const final = messages.at(-1);
-  const rawText =
-    final?.content
-      ?.filter((part: any) => part.type === "text")
-      .map((part: any) => part.text)
-      .join("\n") ?? "";
+
+  const usage = turns.reduce((sum, turn) => ({
+    input: sum.input + turn.input, output: sum.output + turn.output,
+    cacheRead: sum.cacheRead + turn.cacheRead, cacheWrite: sum.cacheWrite + turn.cacheWrite, cost: sum.cost + turn.cost,
+  }), emptyUsage());
+  const final = finalizationMessage ?? messages.at(-1);
+  const rawText = final?.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
   const capped = capText(rawText);
+  const incompleteFinalization = agentSettled && finalizationAttempted && !finalizationSucceeded;
+  const budgetFailure = finalizationFailed || incompleteFinalization;
   const error = protocolOverflow
     ? "Scout protocol output exceeded 1 MiB."
     : aborted
       ? "Scout aborted."
       : timedOut
         ? "Scout timed out."
-        : exitCode !== 0
-          ? `Scout exited with code ${exitCode}.`
-          : final?.stopReason === "error"
-            ? final.errorMessage || "Scout model error."
-            : !rawText
-              ? "Scout returned no assistant text."
-              : undefined;
+        : commandError
+          ? commandError
+          : finalizationFailed
+            ? "Scout exceeded its discovery budget and requested more tools during finalization."
+            : incompleteFinalization
+              ? "Scout settled before returning its budget finalization."
+              : !agentSettled && !controlledCompletion
+                ? "Scout exited before agent settlement."
+                : final?.stopReason === "error"
+                  ? final.errorMessage || "Scout model error."
+                  : !rawText
+                    ? "Scout returned no assistant text."
+                    : undefined;
   return {
     text: capped.text,
     model: final?.model,
     stopReason: final?.stopReason,
     error,
+    ...(budgetFailure ? { failure: "budget_exceeded" as const } : {}),
+    budgetExceeded,
+    finalizationAttempted,
+    finalizationSucceeded,
     stderr,
     durationMs: Date.now() - started,
     usage,

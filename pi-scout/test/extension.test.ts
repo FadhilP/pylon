@@ -84,8 +84,10 @@ test("parallel Repo Scout calls are serialized into fresh child sessions with pa
   const started = new Promise<void>((resolve) => { firstStarted = resolve; });
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const childArgs: string[][] = [];
-  const run = async (args: string[]): Promise<ScoutRun> => {
+  const childPrompts: string[] = [];
+  const run = async (args: string[], options: any): Promise<ScoutRun> => {
     childArgs.push(args);
+    childPrompts.push(options.prompt);
     calls++;
     if (calls === 1) {
       firstStarted();
@@ -95,6 +97,7 @@ test("parallel Repo Scout calls are serialized into fresh child sessions with pa
       text: `result ${calls}`, stderr: "", durationMs: 1,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       turns: [], truncated: false, exitCode: 0, activity: [],
+      budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
       contextTokens: 1,
       cacheReadTokens: 0,
     };
@@ -118,7 +121,32 @@ test("parallel Repo Scout calls are serialized into fresh child sessions with pa
     assert.equal(results[1].details.callNumber, 2);
     assert.ok(childArgs.every((args) => !args.includes("--continue")));
     assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
-    assert.ok(childArgs.every((args) => args.at(-1)?.includes("Find auth flow")));
+    assert.ok(childArgs.every((args) => args.includes("rpc") && !args.some((arg) => arg.includes("Find auth flow"))));
+    assert.ok(childPrompts.every((prompt) => prompt.includes("Find auth flow")));
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustion", async () => {
+  let maxCostUsd: number | undefined;
+  const run = async (_args: string[], options: any): Promise<ScoutRun> => {
+    maxCostUsd = options.maxCostUsd;
+    return {
+      text: "partial", error: "Scout reached reported cost limit ($0.50).", failure: "budget_exceeded",
+      stderr: "", durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 },
+      turns: [], truncated: false, exitCode: 1, activity: [], budgetExceeded: true, finalizationAttempted: true, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
+    };
+  };
+  const runtime = await harness(run);
+  try {
+    const result = await runtime.tools.get("repo_scout").execute("id", { task: "find config" }, undefined, undefined, context({
+      hasUI: false,
+      sessionManager: { buildContextEntries: () => [] },
+    }));
+    assert.equal(maxCostUsd, 0.5);
+    assert.equal(result.details.failureCode, "budget_exceeded");
+    assert.equal(result.details.budgetExceeded, true);
+    assert.equal(result.details.finalizationAttempted, true);
   } finally { runtime.restore(); }
 });
 

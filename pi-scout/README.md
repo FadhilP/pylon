@@ -53,4 +53,6 @@ Only original user input beginning with `Search my Pi session ...` or `Search my
 
 Every child call costs the selected model's rates. Cache savings are never assumed. Repository Scout sends its task and bounded recent parent context to the selected provider. Web Scout sends its task and returned public-page text, while visited sites receive browser traffic, network address, and any research terms used in navigation; it never receives parent-session context. Session search can send text from other workspaces. Redaction is defense in depth, not proof of secrecy.
 
+Repository and Web Scout have a $0.50 reported-cost discovery ceiling per call by default. Set `PI_SCOUT_MAX_COST_USD` to a positive finite USD amount to override it, or `0` to disable the ceiling. When a tool-use response reaches the ceiling, Scout is steered once to return its compact cited findings; that one final report response may raise the total beyond the ceiling. There are no checkpoints. This relies on model-reported usage cost and does not guarantee actual provider billing.
+
 Repository timeout is 15 minutes by default. Set `PI_SCOUT_TIMEOUT_MS` to `1..7200000` milliseconds to override it. Session-search timeout remains 90 seconds. Failures are nonfatal. Pi extensions run with full user permissions; review source before installation.

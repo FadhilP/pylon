@@ -10,6 +10,7 @@ export const isScoutEnabled = (config: ScoutConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const defaultConfig = (): ScoutConfig => ({ version: 1 });
 export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_SCOUT_MAX_COST_USD = 0.5;
 export function repoTimeoutMs(value = process.env.PI_SCOUT_TIMEOUT_MS): number {
   if (value === undefined) return DEFAULT_REPO_TIMEOUT_MS;
   const timeout = Number(value);
@@ -18,6 +19,16 @@ export function repoTimeoutMs(value = process.env.PI_SCOUT_TIMEOUT_MS): number {
       "PI_SCOUT_TIMEOUT_MS must be an integer between 1 and 7200000",
     );
   return timeout;
+}
+
+export function scoutMaxCostUsd(
+  value = process.env.PI_SCOUT_MAX_COST_USD,
+): number | undefined {
+  if (value === undefined) return DEFAULT_SCOUT_MAX_COST_USD;
+  const cost = typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(cost) || cost < 0)
+    throw new Error("PI_SCOUT_MAX_COST_USD must be a finite number greater than or equal to 0");
+  return cost || undefined;
 }
 export const configPath = (agentDir = getAgentDir()) =>
   join(agentDir, "pi-scout", "config.json");

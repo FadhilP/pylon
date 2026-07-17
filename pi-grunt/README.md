@@ -27,8 +27,8 @@ Grunt stays inactive until you select a model or run `/grunt reset`. Reset enabl
 Environment controls:
 
 - `PI_GRUNT_TIMEOUT_MS`: wall-clock timeout; default 15 minutes, maximum two hours.
-- `PI_GRUNT_MAX_TURNS`: maximum child turns before another turn is blocked; default 32.
-- `PI_GRUNT_MAX_COST_USD`: maximum reported child cost before another turn is blocked; default `$4`.
+- `PI_GRUNT_MAX_TURNS`: maximum child turns before another turn is blocked; default 40.
+- `PI_GRUNT_MAX_COST_USD`: maximum reported child cost before another turn is blocked; default `$2`.
 - `PI_GRUNT_PARENT_CONTEXT_CHARS`: redacted parent-context budget; default `0` (disabled), maximum 12,000. Handoffs should be self-contained.
 
 Workers have a fixed 262,144-token reported-context limit. After each assistant response, Grunt counts `totalTokens - cacheRead` when native totals are available, otherwise `input + output + cacheWrite`. Exceeding the limit terminates the child and leaves any isolated edits unapplied.
