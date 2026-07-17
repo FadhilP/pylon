@@ -676,6 +676,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
         memoryFacts = (await readMemory()).facts;
         candidates = (await readCandidateQueue()).candidates;
         const owned = factsForOwners(memoryFacts, project.owner);
+        const classified = await classifyProjectFacts(
+          ctx.cwd,
+          owned.filter((fact) => fact.scope === "project"),
+        );
+        const applicability = new Map(classified.map((item) => [factIdentity(item.fact), item]));
         const pending = candidatesForOwners(candidates, project.owner), shownPending = pending.slice(0, 30);
         const concise = (text: string) => text.length > 200 ? `${text.slice(0, 197)}...` : text;
         const text = !owned.length && !pending.length
@@ -683,7 +688,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           : [
             ...(owned.length ? [
               "Stored facts:",
-              ...owned.map((fact) => `- ${fact.scope}/${fact.key}: ${concise(fact.text)}`),
+              ...owned.map((fact) => {
+                const state = fact.scope === "user"
+                  ? { status: "unchecked", reason: "user memory" }
+                  : applicability.get(factIdentity(fact))!;
+                return `- ${fact.scope}/${fact.key} [${state.status}: ${concise(state.reason)}]: ${concise(fact.text)}`;
+              }),
             ] : []),
             ...(pending.length ? [
               "Pending candidates:",

@@ -307,8 +307,8 @@ test("memory list is owner-safe, settles candidates, and status uses durable fac
       action: "add", key: "workflow.pending", text: "Pending command",
     }, undefined, undefined, first);
     let listed = await tool.execute("list", { action: "list" }, undefined, undefined, first);
-    assert.match(listed.content[0].text, /user\/preference\.reply: Use concise replies/);
-    assert.match(listed.content[0].text, /project\/workflow\.first: Run the first command/);
+    assert.match(listed.content[0].text, /user\/preference\.reply \[unchecked: user memory\]: Use concise replies/);
+    assert.match(listed.content[0].text, /project\/workflow\.first \[unchecked: no project provenance\]: Run the first command/);
     assert.match(listed.content[0].text, /project\/workflow\.pending \[add\]: Pending command/);
     assert.doesNotMatch(listed.content[0].text, /workflow\.second/);
     assert.equal(listed.details.memoryList, true);
@@ -325,6 +325,8 @@ test("memory list is owner-safe, settles candidates, and status uses durable fac
     await writeFile(join(firstCwd, "guide.txt"), "after\n");
     await app.handlers.get("input")![0]({ source: "user", text: "guide is current" }, first);
     await app.handlers.get("before_agent_start")![0]({}, first);
+    listed = await tool.execute("list-suspect", { action: "list" }, undefined, undefined, first);
+    assert.match(listed.content[0].text, /project\/workflow\.evidence \[suspect: captured evidence changed or is unavailable\]: Guide is current/);
     await app.commands.get("memory").handler("status", first);
     assert.match(notifications.at(-1)!, /4 current-owner stored facts, 3 visible/);
     assert.match(notifications.at(-1)!, /0 current-owner pending candidates .*normally compacted at settlement/);
