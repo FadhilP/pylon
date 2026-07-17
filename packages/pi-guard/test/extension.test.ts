@@ -22,8 +22,10 @@ function harness() {
 async function paths() {
   const parent = await mkdtemp(join(tmpdir(), "pi-guard-extension-"));
   const root = join(parent, "repo");
-  await mkdir(root);
-  return { root, outside: join(parent, "outside.txt"), agent: join(parent, "agent") };
+  const generated = join(parent, "generated");
+  const other = join(parent, "other", "outside.txt");
+  await Promise.all([mkdir(root), mkdir(generated), mkdir(join(parent, "other"))]);
+  return { root, generated, outside: join(generated, "outside.txt"), other, agent: join(parent, "agent") };
 }
 
 function event(toolName: "write" | "edit", path: string) {
@@ -50,7 +52,7 @@ async function approvalFiles(agent: string): Promise<string[]> {
 }
 
 test("approval choices have exact labels, allow once is fresh, and session approval is scoped", { concurrency: false }, async () => {
-  const { root, outside, agent } = await paths();
+  const { root, generated, outside, other, agent } = await paths();
   process.env.PI_CODING_AGENT_DIR = agent;
   const guard1 = harness();
   const prompts: any[] = [];
@@ -59,17 +61,25 @@ test("approval choices have exact labels, allow once is fresh, and session appro
   assert.equal((await guard1.tool(event("write", outside), ctx)).block, true);
   assert.deepEqual(prompts[0].options, ["Allow once", "Always allow this session", "Always allow on this project", "Deny"]);
   assert.match(prompts[0].title, /Resolved target:/);
+  assert.match(prompts[0].title, /Session\/project approval remembers directory:/);
+  assert.ok(prompts[0].title.includes(generated));
 
   const session = harness();
   const sessionCtx = context(root, ["Always allow this session"]);
   assert.equal(await session.tool(event("write", outside), sessionCtx), undefined);
-  assert.equal(await session.tool(event("edit", outside), sessionCtx), undefined, "write/edit share a path key");
-  assert.equal((await session.tool(event("write", `${outside}.other`), sessionCtx)).block, true, "different target does not share");
-  assert.equal(session.decisions.length, 3, "one publication per final outcome");
+  assert.equal(await session.tool(event("edit", outside), sessionCtx), undefined, "write/edit share a directory key");
+  assert.equal(await session.tool(event("write", `${outside}.other`), sessionCtx), undefined, "sibling target shares directory approval");
+  assert.equal(await session.tool(event("write", join(generated, "nested", "file.txt")), sessionCtx), undefined, "nested target shares directory approval");
+  assert.equal((await session.tool(event("write", other), context(root, ["Deny"]))).block, true, "adjacent directory does not share");
+
+  const env = harness();
+  assert.equal(await env.tool(event("write", ".env.local"), context(root, ["Always allow this session"])), undefined);
+  assert.equal((await env.tool(event("write", ".env.other"), context(root, ["Deny"]))).block, true, ".env approval stays exact");
+  assert.equal(session.decisions.length, 5, "one publication per final outcome");
 });
 
 test("project approval survives extension replacement but is cwd and exact-command scoped", { concurrency: false }, async () => {
-  const { root, outside, agent } = await paths();
+  const { root, generated, outside, other, agent } = await paths();
   process.env.PI_CODING_AGENT_DIR = agent;
   const first = harness();
   assert.equal(await first.tool(event("write", outside), context(root, ["Always allow on this project"])), undefined);
@@ -80,7 +90,9 @@ test("project approval survives extension replacement but is cwd and exact-comma
   })).block, true, "remembered project approval still requires UI");
   const noPrompt = context(root, []);
   assert.equal(await replacement.tool(event("edit", outside), noPrompt), undefined);
-  assert.equal((await replacement.tool(event("write", `${outside}.different`), noPrompt)).block, true);
+  assert.equal(await replacement.tool(event("write", `${outside}.different`), noPrompt), undefined);
+  assert.equal(await replacement.tool(event("write", join(generated, "nested", "file.txt")), noPrompt), undefined);
+  assert.equal((await replacement.tool(event("write", other), context(root, ["Deny"]))).block, true);
 
   const otherRoot = join(root, "other-project");
   await mkdir(otherRoot);

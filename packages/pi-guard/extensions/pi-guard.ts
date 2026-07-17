@@ -5,7 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { readFile, mkdir, realpath, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { commandRisk, pathRisk, POLICY_VERSION } from "../src/policy.ts";
 
 const APPROVAL_RECORD_VERSION = 1;
@@ -20,7 +20,7 @@ type ApprovalIdentity = {
   policyVersion: number;
   cwd: string;
   reason: string;
-  operation: "command" | "path";
+  operation: "command" | "path" | "path-tree";
   value: string;
 };
 
@@ -33,6 +33,27 @@ type StoredApproval = "allowed" | "missing" | "invalid" | "error";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const identityKey = (approval: ApprovalIdentity) => JSON.stringify(approval);
+
+function approvalScope(
+  approval: ApprovalIdentity,
+): { remembered: ApprovalIdentity; candidates: ApprovalIdentity[]; directory?: string } {
+  if (approval.operation !== "path" || approval.reason !== "write target is outside workspace")
+    return { remembered: approval, candidates: [approval] };
+
+  const root = parse(approval.value).root;
+  const parent = dirname(approval.value);
+  // Never turn one root-level file into approval for an entire drive/filesystem.
+  if (parent === root) return { remembered: approval, candidates: [approval] };
+
+  const candidates: ApprovalIdentity[] = [];
+  for (let directory = parent; directory !== root; directory = dirname(directory))
+    candidates.push({ ...approval, operation: "path-tree", value: directory });
+  return {
+    remembered: { ...approval, operation: "path-tree", value: parent },
+    candidates,
+    directory: parent,
+  };
+}
 
 function recordPath(approval: ApprovalIdentity) {
   // Both project and approval names are hashes so no command or path text becomes a filename.
@@ -121,16 +142,18 @@ export default function guardExtension(pi: ExtensionAPI) {
     } catch {
       return false;
     }
-    const approval: ApprovalIdentity = {
+    const scope = approvalScope({
       policyVersion: POLICY_VERSION, cwd, reason, operation, value,
-    };
-    const key = identityKey(approval);
-    if (sessionApprovals.has(key)) return true;
+    });
+    if (scope.candidates.some((approval) => sessionApprovals.has(identityKey(approval))))
+      return true;
 
-    const stored = await readProjectApproval(approval);
-    if (stored === "allowed") return true;
-    // An unreadable approval store is not a reason to permit a risky operation.
-    if (stored === "error") return false;
+    for (const approval of scope.candidates) {
+      const stored = await readProjectApproval(approval);
+      if (stored === "allowed") return true;
+      // An unreadable approval store is not a reason to permit a risky operation.
+      if (stored === "error") return false;
+    }
 
     // A checkpoint belongs to an actual prompt, not an already remembered decision.
     let checkpoint: Promise<unknown> | undefined;
@@ -144,20 +167,24 @@ export default function guardExtension(pi: ExtensionAPI) {
 
     let selected: string | undefined;
     try {
+      const remembered = scope.directory
+        ? `\n\nSession/project approval remembers directory:\n${scope.directory}`
+        : "";
       selected = await ctx.ui.select(
-        `Pi Guard confirmation\n\n${reason}.\n\n${detail.slice(0, 2000)}`,
+        `Pi Guard confirmation\n\n${reason}.\n\n${detail.slice(0, 2000)}${remembered}`,
         choices,
       );
     } catch {
       return false;
     }
     if (selected === "Allow once") return true;
+    const key = identityKey(scope.remembered);
     if (selected === "Always allow this session") {
       sessionApprovals.add(key);
       return true;
     }
     if (selected === "Always allow on this project") {
-      if (!await saveProjectApproval(approval)) return false;
+      if (!await saveProjectApproval(scope.remembered)) return false;
       sessionApprovals.add(key);
       return true;
     }
