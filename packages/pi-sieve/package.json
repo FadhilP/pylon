@@ -1,0 +1,14 @@
+{
+  "name": "pi-sieve",
+  "version": "0.1.0",
+  "description": "Outbound bulky tool-output limiting for Pi",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "engines": { "node": ">=22.18.0" },
+  "files": ["extensions", "src", "README.md", "LICENSE"],
+  "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
+  "pi": { "extensions": ["./extensions/pi-sieve.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "devDependencies": { "typescript": "^5.8.0" },
+  "license": "MIT"
+}

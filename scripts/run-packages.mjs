@@ -6,7 +6,7 @@ import { mapLimit } from "./run-packages-lib.mjs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packages = [
   "pi-advisor",
-  "pi-conductor-core",
+  "pylon-core",
   "pi-continuity",
   "pi-focus",
   "pi-guard",
@@ -14,6 +14,7 @@ const packages = [
   "pi-heartbeat",
   "pi-helios",
   "pi-scout",
+  "pi-sieve",
   "pi-timeline",
   "pi-verify",
 ];
@@ -32,7 +33,7 @@ const run = (name, script) =>
       npmCli ? process.execPath : "npm",
       npmCli ? [npmCli, "run", script] : ["run", script],
       {
-        cwd: join(root, name),
+        cwd: join(root, "packages", name),
         shell: !npmCli && process.platform === "win32",
         stdio: ["ignore", "pipe", "pipe"],
       },
