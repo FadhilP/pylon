@@ -66,6 +66,29 @@ test("uses strict age-adjusted thresholds at every age boundary", () => {
   }
 });
 
+test("preserves age 0 and caps only eligible successful age-1 output", () => {
+  const age0 = sieveMessages([user("first"), user("current"), textResult("fd", "x".repeat(50_000))], 4_000);
+  assert.equal(age0.stats.transformed, 0);
+  assert.equal(age0.stats.skipped.recentWindow, 1);
+
+  const equal = oldResultAtAge(1, "x".repeat(12_000));
+  const over = oldResultAtAge(1, "x".repeat(12_001));
+  assert.equal(equal.stats.transformed, 0);
+  assert.equal(over.stats.transformedBy.ageThreshold, 1);
+
+  const combined = sieveMessages([
+    user("before"),
+    textResult("fd", "x".repeat(12_000)),
+    textResult("fd", "y".repeat(12_000)),
+    user("after"),
+  ], 4_000);
+  assert.equal(combined.stats.transformed, 0, "age-1 outputs do not share the old-output budget");
+
+  assert.equal(oldResultAtAge(1, "x".repeat(50_000), { isError: true }).stats.transformed, 0);
+  const read = sieveMessages([user("before"), textResult("read", "x".repeat(50_000)), user("after")], 4_000);
+  assert.equal(read.stats.transformed, 0);
+});
+
 test("enforces the retained successful-output budget at equality, overflow, and newest-first", () => {
   const budgetContext = (lengths: number[]) => [
     user("before"),
@@ -145,17 +168,17 @@ test("records recent-window and old-result skip reasons, including malformed and
 
   assert.equal(result.messages.at(-2), recent);
   assert.deepEqual(result.stats, {
-    scanned: 8,
+    scanned: 9,
     transformed: 0,
     transformedBy: noTransformTypes,
     omittedChars: 0,
     netCharsSaved: 0,
     skipped: {
-      recentWindow: 1,
+      recentWindow: 0,
       ineligibleTool: 2,
       error: 1,
       nonTextMixedOrEmptyContent: 3,
-      atOrBelowThreshold: 2,
+      atOrBelowThreshold: 3,
     },
   });
 
@@ -170,14 +193,17 @@ test("records recent-window and old-result skip reasons, including malformed and
   });
 });
 
-test("preserves the complete recent window and stored session messages", () => {
+test("preserves age 0 and stored session messages", () => {
   const original = Object.freeze(textResult("fd", "x".repeat(8_001), {
     toolCallId: "preserved-call", isError: false, timestamp: 123, details: { source: "tool" }, custom: true,
   }));
-  const recentError = textResult("bash", "x".repeat(40_001), { isError: true });
-  const recentSuccess = textResult("bash", "x".repeat(8_001));
+  const ageOneError = textResult("bash", "x".repeat(40_001), { isError: true });
+  const ageOneSuccess = textResult("bash", "x".repeat(8_001));
+  const ageZeroSuccess = textResult("bash", "x".repeat(50_000));
   const originalContent = original.content;
-  const result = sieveMessages([user("first"), original, user("second"), recentError, recentSuccess, user("third")]);
+  const result = sieveMessages([
+    user("first"), original, user("second"), ageOneError, ageOneSuccess, user("third"), ageZeroSuccess,
+  ]);
   const transformed: any = result.messages[1];
 
   assert.notEqual(transformed, original);
@@ -187,9 +213,10 @@ test("preserves the complete recent window and stored session messages", () => {
   assert.deepEqual(transformed.details, { source: "tool" });
   assert.equal(original.content, originalContent);
   assert.equal((original.content as any)[0].text.length, 8_001);
-  assert.equal(result.messages[3], recentError);
-  assert.equal(result.messages[4], recentSuccess);
-  assert.equal(result.stats.skipped.recentWindow, 2);
+  assert.equal(result.messages[3], ageOneError);
+  assert.equal(result.messages[4], ageOneSuccess);
+  assert.equal(result.messages[6], ageZeroSuccess);
+  assert.equal(result.stats.skipped.recentWindow, 1);
 });
 
 test("runtime modes, thresholds, cumulative telemetry, and reset-stats", async () => {

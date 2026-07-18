@@ -2,7 +2,7 @@ export const SIEVE_THRESHOLD = 8_000;
 export const ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as const;
 export const READ_TOOL_NAME = "read";
 export const RECENT_WINDOW_POLICY =
-  "Everything from the second-latest user message onward is preserved.";
+  "Age 0 is preserved; successful eligible age-1 output is capped at three times the threshold.";
 export const GIANT_ERROR_TAIL_CHARS = 2_000;
 
 export type EligibleToolName = (typeof ELIGIBLE_TOOL_NAMES)[number];
@@ -173,7 +173,8 @@ export function sieveMessages<T extends ContextMessage>(
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== "toolResult") continue;
-    if (cutoff === undefined || index >= cutoff) {
+    const age = usersAfter[index];
+    if (cutoff === undefined || age === 0) {
       stats.skipped.recentWindow++;
       continue;
     }
@@ -187,7 +188,7 @@ export function sieveMessages<T extends ContextMessage>(
     const sourceLength = textOnlyContentLength(message.content);
     if ((message as { isError?: unknown }).isError === true) {
       const giantThreshold = Math.max(32_000, 4 * threshold);
-      if (sourceLength !== undefined && sourceLength > giantThreshold) {
+      if (age > 1 && sourceLength !== undefined && sourceLength > giantThreshold) {
         const marker = giantErrorMarker(message.toolName, sourceLength);
         const tail = textOnlyContentTail(message.content, GIANT_ERROR_TAIL_CHARS)!;
         replacements.set(index, replaceWithMarker(message, marker + tail));
@@ -206,13 +207,19 @@ export function sieveMessages<T extends ContextMessage>(
       continue;
     }
 
-    if (sourceLength > effectiveThresholdForAge(usersAfter[index], threshold)) {
+    const effectiveThreshold = age === 1 ? 3 * threshold : effectiveThresholdForAge(age, threshold);
+    if (sourceLength > effectiveThreshold) {
       const marker = omissionMarker(message.toolName, sourceLength);
       replacements.set(index, replaceWithMarker(message, marker));
       stats.transformed++;
       stats.transformedBy.ageThreshold++;
       stats.omittedChars += sourceLength;
       stats.netCharsSaved += Math.max(0, sourceLength - marker.length);
+      continue;
+    }
+
+    if (age === 1) {
+      stats.skipped.atOrBelowThreshold++;
       continue;
     }
 
