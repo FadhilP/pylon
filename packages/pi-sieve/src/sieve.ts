@@ -3,6 +3,7 @@ export const ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as
 export const READ_TOOL_NAME = "read";
 export const RECENT_WINDOW_POLICY =
   "Everything from the second-latest user message onward is preserved.";
+export const GIANT_ERROR_TAIL_CHARS = 2_000;
 
 export type EligibleToolName = (typeof ELIGIBLE_TOOL_NAMES)[number];
 
@@ -29,6 +30,12 @@ export type TransformStats = {
   scanned: number;
   /** Results that qualify for replacement (or projection in observe mode). */
   transformed: number;
+  /** Classification of transformations. */
+  transformedBy: {
+    ageThreshold: number;
+    budget: number;
+    giantError: number;
+  };
   /** Source text characters omitted (or projected to be omitted). */
   omittedChars: number;
   /** Omitted text characters less the replacement marker characters. */
@@ -47,6 +54,7 @@ export function emptyTransformStats(): TransformStats {
   return {
     scanned: 0,
     transformed: 0,
+    transformedBy: { ageThreshold: 0, budget: 0, giantError: 0 },
     omittedChars: 0,
     netCharsSaved: 0,
     skipped: {
@@ -63,6 +71,9 @@ export function emptyTransformStats(): TransformStats {
 export function addTransformStats(target: TransformStats, source: TransformStats): TransformStats {
   target.scanned += source.scanned;
   target.transformed += source.transformed;
+  target.transformedBy.ageThreshold += source.transformedBy.ageThreshold;
+  target.transformedBy.budget += source.transformedBy.budget;
+  target.transformedBy.giantError += source.transformedBy.giantError;
   target.omittedChars += source.omittedChars;
   target.netCharsSaved += source.netCharsSaved;
   target.skipped.recentWindow += source.skipped.recentWindow;
@@ -73,24 +84,47 @@ export function addTransformStats(target: TransformStats, source: TransformStats
   return target;
 }
 
-export function omissionMarker(toolName: string, omittedChars: number) {
-  return `[Output from tool "${toolName}" was omitted by pi-sieve (${omittedChars} characters).]`;
+export function omissionMarker(toolName: string, sourceChars: number) {
+  return `[pi-sieve: ${toolName} ${sourceChars} chars omitted]`;
+}
+
+export function giantErrorMarker(toolName: string, sourceChars: number) {
+  return `[pi-sieve: ${toolName} error ${sourceChars} chars truncated]\n`;
+}
+
+function textOnlyBlocks(content: unknown): TextBlock[] | undefined {
+  if (!Array.isArray(content) || !content.length) return undefined;
+  if (
+    content.some(
+      (block) =>
+        !block ||
+        typeof block !== "object" ||
+        (block as { type?: unknown }).type !== "text" ||
+        typeof (block as { text?: unknown }).text !== "string",
+    )
+  )
+    return undefined;
+  return content as TextBlock[];
 }
 
 export function textOnlyContentLength(content: unknown): number | undefined {
-  if (!Array.isArray(content) || !content.length) return undefined;
-  let length = 0;
-  for (const block of content) {
-    if (
-      !block ||
-      typeof block !== "object" ||
-      (block as { type?: unknown }).type !== "text" ||
-      typeof (block as { text?: unknown }).text !== "string"
-    )
-      return undefined;
-    length += (block as TextBlock).text.length;
+  const blocks = textOnlyBlocks(content);
+  return blocks?.reduce((length, block) => length + block.text.length, 0);
+}
+
+function textOnlyContentTail(content: unknown, characters: number): string | undefined {
+  const blocks = textOnlyBlocks(content);
+  if (!blocks) return undefined;
+  let tail = "";
+  for (let index = blocks.length - 1; index >= 0 && tail.length < characters; index--) {
+    tail = blocks[index].text.slice(-(characters - tail.length)) + tail;
   }
-  return length;
+  return tail;
+}
+
+export function effectiveThresholdForAge(age: number, threshold: number) {
+  if (age <= 5) return threshold;
+  return Math.max(1_000, Math.floor(threshold / 2));
 }
 
 function isEligibleTool(message: ContextMessage): message is ContextMessage & {
@@ -103,6 +137,10 @@ function isEligibleTool(message: ContextMessage): message is ContextMessage & {
   return typeof fields.toolName === "string" &&
     eligibleTools.has(fields.toolName) &&
     fields.toolName !== READ_TOOL_NAME;
+}
+
+function replaceWithMarker<T extends ContextMessage>(message: T, marker: string): T {
+  return { ...message, content: [{ type: "text", text: marker }] } as T;
 }
 
 /**
@@ -119,44 +157,81 @@ export function sieveMessages<T extends ContextMessage>(
     return indexes;
   }, []);
   const cutoff = userIndexes.at(-2);
-  const stats = emptyTransformStats();
+  const usersAfter: number[] = [];
+  let userCount = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    usersAfter[index] = userCount;
+    if (messages[index].role === "user") userCount++;
+  }
 
-  const outbound = messages.map((message, index) => {
-    if (message.role !== "toolResult") return message;
+  const stats = emptyTransformStats();
+  const replacements = new Map<number, T>();
+  const retainedBudget = 3 * threshold;
+  let retainedChars = 0;
+
+  // Budget selection is deliberately newest-to-oldest, unlike outbound order.
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== "toolResult") continue;
     if (cutoff === undefined || index >= cutoff) {
       stats.skipped.recentWindow++;
-      return message;
+      continue;
     }
 
     stats.scanned++;
     if (!isEligibleTool(message)) {
       stats.skipped.ineligibleTool++;
-      return message;
+      continue;
     }
+
+    const sourceLength = textOnlyContentLength(message.content);
     if ((message as { isError?: unknown }).isError === true) {
-      stats.skipped.error++;
-      return message;
+      const giantThreshold = Math.max(32_000, 4 * threshold);
+      if (sourceLength !== undefined && sourceLength > giantThreshold) {
+        const marker = giantErrorMarker(message.toolName, sourceLength);
+        const tail = textOnlyContentTail(message.content, GIANT_ERROR_TAIL_CHARS)!;
+        replacements.set(index, replaceWithMarker(message, marker + tail));
+        stats.transformed++;
+        stats.transformedBy.giantError++;
+        stats.omittedChars += sourceLength - tail.length;
+        stats.netCharsSaved += Math.max(0, sourceLength - tail.length - marker.length);
+      } else {
+        stats.skipped.error++;
+      }
+      continue;
     }
 
-    const omittedChars = textOnlyContentLength(message.content);
-    if (omittedChars === undefined) {
+    if (sourceLength === undefined) {
       stats.skipped.nonTextMixedOrEmptyContent++;
-      return message;
-    }
-    if (omittedChars <= threshold) {
-      stats.skipped.atOrBelowThreshold++;
-      return message;
+      continue;
     }
 
-    const marker = omissionMarker(message.toolName, omittedChars);
-    stats.transformed++;
-    stats.omittedChars += omittedChars;
-    stats.netCharsSaved += Math.max(0, omittedChars - marker.length);
-    return {
-      ...message,
-      content: [{ type: "text", text: marker }],
-    } as T;
-  });
+    if (sourceLength > effectiveThresholdForAge(usersAfter[index], threshold)) {
+      const marker = omissionMarker(message.toolName, sourceLength);
+      replacements.set(index, replaceWithMarker(message, marker));
+      stats.transformed++;
+      stats.transformedBy.ageThreshold++;
+      stats.omittedChars += sourceLength;
+      stats.netCharsSaved += Math.max(0, sourceLength - marker.length);
+      continue;
+    }
 
-  return { messages: outbound, stats };
+    if (retainedChars + sourceLength > retainedBudget) {
+      const marker = omissionMarker(message.toolName, sourceLength);
+      replacements.set(index, replaceWithMarker(message, marker));
+      stats.transformed++;
+      stats.transformedBy.budget++;
+      stats.omittedChars += sourceLength;
+      stats.netCharsSaved += Math.max(0, sourceLength - marker.length);
+      continue;
+    }
+
+    retainedChars += sourceLength;
+    stats.skipped.atOrBelowThreshold++;
+  }
+
+  return {
+    messages: messages.map((message, index) => replacements.get(index) ?? message),
+    stats,
+  };
 }

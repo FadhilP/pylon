@@ -20,6 +20,7 @@ function statsText(stats: TransformStats, outcomeLabel: string) {
   return [
     `scanned ${stats.scanned}`,
     `${outcomeLabel} ${stats.transformed}`,
+    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}`,
     `${outcomeLabel.replace("transformations", "gross omitted")} ~${estimatedTokens(stats.omittedChars)} tokens`,
     `${outcomeLabel.replace("transformations", "net saved")} ~${estimatedTokens(stats.netCharsSaved)} tokens`,
     `skips: recent-window ${skipped.recentWindow}, ineligible-tool ${skipped.ineligibleTool}, error ${skipped.error}, non-text/mixed/empty ${skipped.nonTextMixedOrEmptyContent}, at/below-threshold ${skipped.atOrBelowThreshold}`,
@@ -42,6 +43,8 @@ function statusText(
   return [
     `pi-sieve: ${mode}`,
     `Threshold: > ~${estimatedTokens(threshold)} tokens (${threshold} JS characters; estimated at ${CHARS_PER_ESTIMATED_TOKEN} characters/token)`,
+    "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
+    `Retained successful-output budget: ${3 * threshold} characters, newest-to-oldest`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
     `Read exclusion: ${READ_TOOL_NAME} is never transformed`,
     `Recent-window policy: ${RECENT_WINDOW_POLICY}`,
