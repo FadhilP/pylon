@@ -165,6 +165,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     rebuildTokenMeter(ctx);
   });
   pi.on("session_tree", (_event, ctx) => rebuildTokenMeter(ctx));
+  pi.on("agent_settled", (_event, ctx) => rebuildTokenMeter(ctx));
   pi.on("tool_result", (event) => recordToolResult(tokenMeter, event));
   pi.on("session_shutdown", () => {
     disposePolicyListener();

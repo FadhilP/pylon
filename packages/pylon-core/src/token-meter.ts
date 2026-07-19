@@ -2,15 +2,24 @@ const CHARS_PER_ESTIMATED_TOKEN = 4;
 
 export interface ToolUsage {
   calls: number;
-  inputChars: number;
-  outputChars: number;
+  argumentChars: number;
+  resultChars: number;
   images: number;
   errors: number;
+}
+
+export interface ProviderUsage {
+  turns: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 export interface TokenMeter {
   byTool: Map<string, ToolUsage>;
   seenCallIds: Set<string>;
+  provider: ProviderUsage;
 }
 
 interface ContentPart {
@@ -27,7 +36,11 @@ interface ToolResultLike {
 }
 
 export function createTokenMeter(): TokenMeter {
-  return { byTool: new Map(), seenCallIds: new Set() };
+  return {
+    byTool: new Map(),
+    seenCallIds: new Set(),
+    provider: { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
 }
 
 function serializedLength(value: unknown): number {
@@ -43,14 +56,14 @@ export function recordToolResult(meter: TokenMeter, result: ToolResultLike): voi
   meter.seenCallIds.add(result.toolCallId);
   const usage = meter.byTool.get(result.toolName) ?? {
     calls: 0,
-    inputChars: 0,
-    outputChars: 0,
+    argumentChars: 0,
+    resultChars: 0,
     images: 0,
     errors: 0,
   };
   usage.calls++;
-  usage.inputChars += serializedLength(result.input ?? {});
-  usage.outputChars += result.content.reduce(
+  usage.argumentChars += serializedLength(result.input ?? {});
+  usage.resultChars += result.content.reduce(
     (sum, part) => sum + (part.type === "text" && typeof part.text === "string" ? part.text.length : 0),
     0,
   );
@@ -65,6 +78,13 @@ export function meterFromBranch(entries: readonly any[]): TokenMeter {
   for (const entry of entries) {
     const message = entry?.type === "message" ? entry.message : undefined;
     if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    if (message.usage && typeof message.usage === "object") {
+      meter.provider.turns++;
+      meter.provider.input += Number(message.usage.input) || 0;
+      meter.provider.output += Number(message.usage.output) || 0;
+      meter.provider.cacheRead += Number(message.usage.cacheRead) || 0;
+      meter.provider.cacheWrite += Number(message.usage.cacheWrite) || 0;
+    }
     for (const part of message.content) {
       if (part?.type === "toolCall" && typeof part.id === "string" && typeof part.name === "string")
         calls.set(part.id, { name: part.name, input: part.arguments ?? {} });
@@ -90,25 +110,26 @@ export const estimatedTokens = (characters: number): number =>
 
 export function formatTokenMeter(meter: TokenMeter): string {
   const rows = [...meter.byTool.entries()].sort((a, b) => {
-    const aChars = a[1].inputChars + a[1].outputChars;
-    const bChars = b[1].inputChars + b[1].outputChars;
+    const aChars = a[1].argumentChars + a[1].resultChars;
+    const bChars = b[1].argumentChars + b[1].resultChars;
     return bChars - aChars || a[0].localeCompare(b[0]);
   });
-  if (!rows.length)
-    return "Estimated tool payload tokens: no completed tool calls in current session branch.";
-
   let totalCalls = 0, totalInput = 0, totalOutput = 0, totalImages = 0, totalErrors = 0;
   const lines = rows.map(([name, usage]) => {
     totalCalls += usage.calls;
-    totalInput += usage.inputChars;
-    totalOutput += usage.outputChars;
+    totalInput += usage.resultChars;
+    totalOutput += usage.argumentChars;
     totalImages += usage.images;
     totalErrors += usage.errors;
-    return `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.inputChars)}; output ~${estimatedTokens(usage.outputChars)}; total ~${estimatedTokens(usage.inputChars + usage.outputChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`;
+    return `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.resultChars)}; output ~${estimatedTokens(usage.argumentChars)}; total ~${estimatedTokens(usage.argumentChars + usage.resultChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`;
   });
+  const provider = meter.provider;
   return [
-    "Estimated tool payload tokens (serialized arguments + text results; ~4 characters/token):",
-    ...lines,
+    "Estimated model-direction tool payload tokens (input = text results, output = serialized arguments; ~4 characters/token):",
+    ...(lines.length ? lines : ["No completed tool calls in current session branch."]),
     `Total: ${totalCalls} calls; input ~${estimatedTokens(totalInput)}; output ~${estimatedTokens(totalOutput)}; total ~${estimatedTokens(totalInput + totalOutput)} tokens; images ${totalImages}; errors ${totalErrors}`,
+    "",
+    "Provider-reported model usage (all assistant turns; not attributable to individual tools):",
+    `${provider.turns} turns; input ${provider.input}; output ${provider.output}; cache read ${provider.cacheRead}; cache write ${provider.cacheWrite}`,
   ].join("\n");
 }

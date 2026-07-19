@@ -164,14 +164,14 @@ test("Scout registers separate repo and web tools; Web Scout fails closed withou
   try {
     assert.deepEqual([...runtime.tools.keys()].sort(), ["repo_scout", "web_scout"]);
     const repoGuidance = runtime.tools.get("repo_scout").promptGuidelines.join("\n");
-    assert.match(repoGuidance, /only for non-local understanding/i);
-    assert.match(repoGuidance, /skip a self-contained known-file edit/i);
-    assert.match(repoGuidance, /concrete task/i);
-    assert.match(repoGuidance, /gathers cited evidence, not judgment/i);
-    assert.match(repoGuidance, /Do not duplicate cited rereads/i);
-    assert.match(repoGuidance, /only for a real stated gap/i);
+    assert.match(repoGuidance, /before editing when a request needs repository understanding/i);
+    assert.match(repoGuidance, /Do not use repo_scout for a self-contained edit to a known file/i);
+    assert.match(repoGuidance, /concrete reconnaissance work/i);
+    assert.match(repoGuidance, /Delegate evidence gathering, not judgment/i);
+    assert.match(repoGuidance, /do not reread cited source unless an exact edit needs current text/i);
+    assert.match(repoGuidance, /Re-scout only when scope or repository state changed/i);
     assert.match(repoGuidance, /before mutation-capable tools/i);
-    assert.match(repoGuidance, /initial calls receive no parent conversation context/i);
+    assert.match(repoGuidance, /no prior child-session history/i);
     const result = await runtime.tools.get("web_scout").execute("id", { task: "current docs" }, undefined, undefined, context({ hasUI: false }));
     assert.equal(result.details.failureCode, "confirmation_unavailable");
   } finally { runtime.restore(); }

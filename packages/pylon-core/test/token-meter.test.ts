@@ -13,6 +13,7 @@ test("rebuilds per-tool usage for built-in and custom calls", () => {
   const meter = meterFromBranch([
     message("assistant", {
       role: "assistant",
+      usage: { input: 120, output: 30, cacheRead: 400, cacheWrite: 20 },
       content: [
         { type: "toolCall", id: "call-read", name: "read", arguments: { path: "a.ts" } },
         { type: "toolCall", id: "call-custom", name: "repo_scout", arguments: { task: "trace flow" } },
@@ -29,16 +30,22 @@ test("rebuilds per-tool usage for built-in and custom calls", () => {
   ]);
 
   assert.deepEqual(meter.byTool.get("read"), {
-    calls: 1, inputChars: JSON.stringify({ path: "a.ts" }).length,
-    outputChars: 6, images: 0, errors: 0,
+    calls: 1, argumentChars: JSON.stringify({ path: "a.ts" }).length,
+    resultChars: 6, images: 0, errors: 0,
   });
   assert.deepEqual(meter.byTool.get("repo_scout"), {
-    calls: 1, inputChars: JSON.stringify({ task: "trace flow" }).length,
-    outputChars: 7, images: 1, errors: 1,
+    calls: 1, argumentChars: JSON.stringify({ task: "trace flow" }).length,
+    resultChars: 7, images: 1, errors: 1,
   });
   assert.match(formatTokenMeter(meter), /repo_scout: 1 call/);
   assert.match(formatTokenMeter(meter), /images 1; errors 1/);
+  assert.deepEqual(meter.provider, {
+    turns: 1, input: 120, output: 30, cacheRead: 400, cacheWrite: 20,
+  });
+  assert.match(formatTokenMeter(meter), /input = text results, output = serialized arguments/);
   assert.match(formatTokenMeter(meter), /~4 characters\/token/);
+  assert.match(formatTokenMeter(meter), /Provider-reported model usage/);
+  assert.match(formatTokenMeter(meter), /1 turns; input 120; output 30; cache read 400; cache write 20/);
 });
 
 test("counts each completed tool call once across rebuild and events", () => {
@@ -55,8 +62,7 @@ test("counts each completed tool call once across rebuild and events", () => {
 });
 
 test("reports an empty current branch clearly", () => {
-  assert.equal(
-    formatTokenMeter(meterFromBranch([])),
-    "Estimated tool payload tokens: no completed tool calls in current session branch.",
-  );
+  const report = formatTokenMeter(meterFromBranch([]));
+  assert.match(report, /No completed tool calls in current session branch/);
+  assert.match(report, /0 turns; input 0; output 0/);
 });

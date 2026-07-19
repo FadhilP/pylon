@@ -87,9 +87,10 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(guidance, /2–4 outcome-level todos/i);
   assert.match(guidance, /Nonterminal todo updates may be alongside the next independent useful tool/i);
   assert.match(guidance, /Verification is a gate, not a separate todo by default/i);
-  assert.match(guidance, /bulk-complete implementation todos/i);
-  assert.match(guidance, /tool-only assistant turn/i);
-  assert.match(guidance, /no user-facing prose/i);
+  assert.match(guidance, /keep verification out of new todo lists/i);
+  assert.match(guidance, /bulk-complete finished implementation todos/i);
+  assert.match(guidance, /existing final todo that includes verification/i);
+  assert.match(guidance, /run Verify first, then mark that todo done in a tool-only turn/i);
   assert.match(guidance, /exactly one evidence-aware final response/i);
   assert.doesNotMatch(guidance, /verification follows below/i);
   assert.match(guidance, /Continuity completes automatically/i);

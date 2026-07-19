@@ -1,6 +1,6 @@
 {
   "name": "pylon",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "private": true,
   "description": "Complete Pylon package with all extensions and themes.",
   "type": "module",
