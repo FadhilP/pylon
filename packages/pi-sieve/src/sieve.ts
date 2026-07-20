@@ -128,7 +128,7 @@ export function activeOmissionMarker(
   sourceChars: number,
   omittedChars: number,
 ) {
-  return `[pi-sieve: ${toolName} active result ${sourceChars} chars; ${omittedChars} chars omitted; use sieve_recall with toolCallId ${JSON.stringify(toolCallId)}]`;
+  return `[pi-sieve: OUTPUT TRUNCATED for ${toolName}; ${omittedChars} of ${sourceChars} chars omitted. Recover via sieve_recall(toolCallId=${JSON.stringify(toolCallId)}).]`;
 }
 
 function textOnlyBlocks(content: unknown): TextBlock[] | undefined {

@@ -328,6 +328,11 @@ test("keeps recalls visible at age 0 then prunes eligible recalled output with a
 });
 
 test("partially prunes recoverable active results and stores only omitted text", () => {
+  assert.equal(
+    activeOmissionMarker("rg", "call-1", 30_356, 22_347),
+    '[pi-sieve: OUTPUT TRUNCATED for rg; 22347 of 30356 chars omitted. Recover via sieve_recall(toolCallId="call-1").]',
+  );
+
   const successText = "h".repeat(2_001) + "t".repeat(2_000);
   const success = {
     ...textResult("bash", "unused", { toolCallId: "active-success" }),
