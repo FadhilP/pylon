@@ -28,6 +28,7 @@ function harness() {
     failReconcile = false;
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
+  const entries: Array<{ customType: string; data: unknown }> = [];
   const pi = {
     events,
     getActiveTools: () => [...active],
@@ -39,6 +40,7 @@ function harness() {
     },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
+    appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
     exec: async (command: string) => ({ code: command === "git" ? 0 : 1, stdout: "", stderr: "" }),
   };
   extension(pi as any);
@@ -46,6 +48,7 @@ function harness() {
     events,
     handlers,
     commands,
+    entries,
     active: () => active,
     fail: (value: boolean) => { failReconcile = value; },
   };
@@ -298,6 +301,31 @@ test("tokens command rebuilds branch usage and tracks custom tool results", asyn
   assert.match(report, /read: 1 call/);
   assert.match(report, /custom_tool: 1 call/);
   assert.match(report, /Total: 2 calls/);
+});
+
+test("validates, deduplicates, persists, and reports direct model telemetry", async () => {
+  const runtime = harness();
+  const event = {
+    version: 1, eventId: "timeline-call-1", package: "pi-timeline", kind: "model_call",
+    status: "completed", durationMs: 12,
+    usage: { turns: 1, input: 20, output: 4, cacheRead: 5, cacheWrite: 0, cost: 0.01 },
+    context: {
+      request: { characters: 40, hash: "a".repeat(64) },
+      result: { characters: 20, hash: "b".repeat(64) },
+    },
+  };
+  runtime.events.emit("pylon:telemetry", event);
+  runtime.events.emit("pylon:telemetry", event);
+  runtime.events.emit("pylon:telemetry", { ...event, eventId: "bad id", context: { request: { characters: 40, hash: "raw prompt" } } });
+  runtime.events.emit("pylon:telemetry", { ...event, eventId: "timeline-call-2", rawPrompt: "must reject" });
+
+  assert.equal(runtime.entries.length, 1);
+  assert.deepEqual(runtime.entries[0], { customType: "pylon-telemetry", data: event });
+  let report = "";
+  await runtime.commands.get("tokens").handler("", { ui: { notify: (text: string) => { report = text; } } });
+  assert.match(report, /pi-timeline: 1 calls/);
+  assert.match(report, /Total session model cost: \$0\.0100/);
+  assert.doesNotMatch(report, /raw prompt/);
 });
 
 test("acknowledges policy only after successful reconcile", () => {

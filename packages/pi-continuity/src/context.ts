@@ -36,6 +36,41 @@ export function shortlistFacts(facts: Fact[], latest = "", work?: Work, limit = 
     relevant = facts.filter((fact) => fact !== reservedPreference && (score(fact) >= 2 || strongMatch(fact))).sort(rank);
   return [...(reservedPreference ? [reservedPreference] : []), ...relevant].slice(0, limit);
 }
+function factIdentity(fact: Fact): string {
+  return JSON.stringify([
+    fact.scope ?? "project",
+    fact.owner ?? "",
+    fact.key,
+    fact.kind,
+    fact.text.replace(/\r\n/g, "\n").trim(),
+    fact.source,
+    fact.confidence,
+    fact.captureCommit ?? "",
+    fact.branchAtCapture ?? "",
+    (fact.evidencePaths ?? []).map((evidence) => `${evidence.path}:${evidence.sha256}`).sort(),
+  ]);
+}
+
+function dedupeFacts(facts: Fact[]): Fact[] {
+  const seen = new Set<string>();
+  return facts.filter((fact) => {
+    const identity = factIdentity(fact);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const identity = value.replace(/\r\n/g, "\n").trim();
+    if (!identity || seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 export function buildContext(
   work: Work | undefined,
   facts: Fact[],
@@ -44,8 +79,10 @@ export function buildContext(
   parent: Fact[] = [],
   notices: MemoryNotice[] = [],
 ) {
-  const selected = shortlistFacts(facts, latest, work, 3);
-  const selectedParent = shortlistFacts(parent, latest, work, 2);
+  const selected = shortlistFacts(dedupeFacts(facts), latest, work, 3);
+  const selectedIdentities = new Set(selected.map(factIdentity));
+  const selectedParent = shortlistFacts(dedupeFacts(parent), latest, work, 2)
+    .filter((fact) => !selectedIdentities.has(factIdentity(fact)));
   const lines = [
     "Continuity state. Memory may be stale; direct instructions and repository evidence win.",
   ];
@@ -57,7 +94,7 @@ export function buildContext(
       lines.push(
         `Work: planning; goal: ${work.goal.slice(0, 500)}`,
         work.planSummary ? `Plan: ${work.planSummary.slice(0, 900)}` : "",
-        ...work.constraints.slice(0, 6).map((x) => `Constraint: ${x.slice(0, 220)}`),
+        ...dedupeStrings(work.constraints).slice(0, 6).map((x) => `Constraint: ${x.slice(0, 220)}`),
         ...work.todos.map((todo) => `Todo ${todo.id} [${todo.status}]: ${todo.text}`),
         work.latestFailure ? `Blocked: ${work.latestFailure.slice(0, 300)}` : "",
         work.nextAction ? `Next: ${work.nextAction.slice(0, 300)}` : "",
@@ -72,7 +109,7 @@ export function buildContext(
         done.length ? `Done: ${done.length}` : "",
         work.latestFailure ? `Blocked: ${work.latestFailure.slice(0, 260)}` : "",
         work.nextAction ? `Next: ${work.nextAction.slice(0, 260)}` : "",
-        ...work.constraints.slice(0, 2).map((x) => `Constraint: ${x.slice(0, 160)}`),
+        ...dedupeStrings(work.constraints).slice(0, 2).map((x) => `Constraint: ${x.slice(0, 160)}`),
         work.planSummary ? `Plan anchor: ${work.planSummary.slice(0, 360)}` : "",
       );
     }
@@ -81,7 +118,9 @@ export function buildContext(
     ...selected.slice(0, 3).map((f) => `Memory ${f.key}: ${f.text}`),
     ...selectedParent.map((f) => `Parent memory ${f.key}: ${f.text}`),
   );
-  const content = lines.filter(Boolean), noticeLines = notices.slice(0, 2)
+  const uniqueNotices = notices.filter((notice, index) => notices.findIndex((candidate) =>
+    candidate.key === notice.key && candidate.status === notice.status && candidate.reason === notice.reason) === index);
+  const content = lines.filter(Boolean), noticeLines = uniqueNotices.slice(0, 2)
     .map((notice) => `Memory ${notice.key.slice(0, 80)} [${notice.status}]: ${notice.reason.slice(0, 120)}. Inspect evidence; ancestry or age alone never justifies deletion.`);
   if (content.length === 1 && !noticeLines.length) return "";
   const max = budget * 4, noticeText = noticeLines.join("\n"),

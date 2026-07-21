@@ -36,6 +36,14 @@ test("runner honors a caller-local final report cap", async () => {
   assert.match(run.text, /omitted content/i);
 });
 
+test("runner can leave final report uncapped for caller-side wrapping", async () => {
+  const text = "x".repeat(30_000);
+  const child = await fake("scout-report-uncapped-", `if(command.type==='prompt'){emit(${assistant("x".repeat(30_000))});settled();setInterval(()=>{},1000);}`);
+  const run = await runPi([], { cwd: child.dir, prompt: "x", resultMaxBytes: false, invocation: child.invocation });
+  assert.equal(run.text, text);
+  assert.equal(run.truncated, false);
+});
+
 test("context and cache-read sizes remain independent", () => {
   assert.equal(contextTokensFromUsage({ totalTokens: 210_000, cacheRead: 80_000 }), 130_000);
   assert.equal(cacheReadTokensFromUsage({ totalTokens: 210_000, cacheRead: 80_000 }), 80_000);

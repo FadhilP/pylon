@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
-import discover, { keywordRankTools, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
+import discover, { keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 
 class Bus {
@@ -18,6 +18,7 @@ class Bus {
 function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, stdout: "", stderr: "" })) {
   const tools = new Map<string, any>();
   const events = new Bus();
+  const lifecycle = new Bus();
   const active = ["read", "rg", "fd", "relationship_graph", "search_tools"];
   let setActiveCalls = 0;
   const pi: any = {
@@ -35,11 +36,11 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
       { name: "shell", description: "Run shell commands" },
     ],
     setActiveTools: () => { setActiveCalls++; },
-    on: () => {},
+    on: (name: string, handler: (value: any, ctx?: any) => void) => lifecycle.on(name, handler),
     exec,
   };
   discover(pi);
-  return { events, tools, getSetActiveCalls: () => setActiveCalls };
+  return { active, events, lifecycle, tools, getSetActiveCalls: () => setActiveCalls };
 }
 
 test("host and child entrypoints register their intended discovery tools", () => {
@@ -186,6 +187,20 @@ test("keyword ranking is deterministic and excludes active search tool", () => {
   assert.deepEqual(rankInactiveTools([...tools, { name: "search_tools", description: "web search" }], ["beta_search"], "web", 3).map((tool) => tool.name), ["alpha_search"]);
 });
 
+test("query normalization and structured metadata outrank description overlap", () => {
+  assert.equal(normalizedQuery("  Web, SEARCH web! "), "search web");
+  const tools = [
+    { name: "browser", description: "miscellaneous" },
+    { name: "page_reader", capabilities: ["browser"], description: "read pages" },
+    { name: "alpha", description: "browser browser" },
+  ];
+  assert.deepEqual(keywordRankTools(tools, "BROWSER", 3).map((tool) => tool.name), ["browser", "page_reader", "alpha"]);
+  assert.equal(keywordRankTools([
+    { name: "zeta", aliases: ["public web"] },
+    { name: "alpha", capabilities: ["web public"] },
+  ], "Public WEB", 2)[0].name, "alpha");
+});
+
 test("search_tools uses exactly one synchronous capability and activates eligible matches", async () => {
   const { events, tools, getSetActiveCalls } = setup();
   const selected: string[][] = [];
@@ -199,6 +214,87 @@ test("search_tools uses exactly one synchronous capability and activates eligibl
   assert.equal(getSetActiveCalls(), 0);
   assert.match(result.content[0].text, /next model turn/i);
   assert.deepEqual(result.details.matches, ["git_history"]);
+});
+
+test("search_tools caches normalized searches within a turn", async () => {
+  const { events, tools } = setup();
+  const selected: string[][] = [];
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["git_history"],
+    select: (names: string[]) => { selected.push(names); return { selected: names }; },
+    reset: () => ({ selected: [] }),
+  }));
+  const first = await tools.get("search_tools").execute("id-1", { query: "History SEARCH" }, undefined, undefined, {});
+  const second = await tools.get("search_tools").execute("id-2", { query: "search history history" }, undefined, undefined, {});
+  assert.equal(first.details.cacheHit, false);
+  assert.equal(second.details.cacheHit, true);
+  assert.deepEqual(selected, [["git_history"], ["git_history"]]);
+});
+
+test("search_tools marks repeated misses and invalidates them on turn end or inventory change", async () => {
+  const { active, events, lifecycle, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["shell"], select: () => ({ selected: [] }), reset: () => ({ selected: [] }),
+  }));
+  const search = () => tools.get("search_tools").execute("id", { query: "browser" }, undefined, undefined, {});
+  assert.equal((await search()).details.alreadySearched, false);
+  const repeated = await search();
+  assert.equal(repeated.details.alreadySearched, true);
+  assert.match(repeated.content[0].text, /already searched/i);
+  assert.match(repeated.details.missMarker.query, /^[a-f0-9]{16}$/);
+  assert.doesNotMatch(JSON.stringify(repeated.details.missMarker), /browser/);
+  lifecycle.emit("turn_end", {});
+  assert.equal((await search()).details.alreadySearched, false);
+  active.push("other_tool");
+  assert.equal((await search()).details.alreadySearched, false);
+});
+
+test("discovery health exposes aggregate signals without raw queries", async () => {
+  const { events, lifecycle, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["git_history", "shell"],
+    select: (names: string[]) => ({ selected: names, blocked: [] }),
+    reset: () => ({ selected: [] }),
+  }));
+  await tools.get("search_tools").execute("id-1", { query: "private history phrase" }, undefined, undefined, {});
+  lifecycle.emit("tool_call", { toolName: "git_history" });
+  await tools.get("search_tools").execute("id-2", { query: "unmatched browser phrase" }, undefined, undefined, {});
+  const reports: any[] = [];
+  events.emit("pylon:health-request", { version: 1, respond: (value: any) => reports.push(value) });
+  const text = reports[0].lines.join("\n");
+  assert.match(text, /git_history=1/);
+  assert.match(text, /misses: 1/);
+  assert.match(text, /later invoked: git_history=1/);
+  assert.doesNotMatch(text, /private|browser phrase/);
+});
+
+test("selection reports blocked tools and counts only callable tools as later invoked", async () => {
+  const { events, lifecycle, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["git_history", "web_lookup"],
+    select: (names: string[]) => ({ selected: names, blocked: ["git_history", "not_requested"] }),
+    reset: () => ({ selected: [] }),
+  }));
+  const result = await tools.get("search_tools").execute("id", { query: "search" }, undefined, undefined, {});
+  assert.deepEqual(result.details.selected, ["git_history", "web_lookup"]);
+  assert.deepEqual(result.details.blocked, ["git_history"]);
+  assert.match(result.content[0].text, /blocked by current policy: git_history/i);
+  lifecycle.emit("tool_call", { toolName: "git_history" });
+  lifecycle.emit("tool_call", { toolName: "web_lookup" });
+  const reports: any[] = [];
+  events.emit("pylon:health-request", { version: 1, respond: (value: any) => reports.push(value) });
+  assert.match(reports[0].lines.join("\n"), /later invoked: web_lookup=1/);
+});
+
+test("search_tools rejects invalid limits", async () => {
+  const { events, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["git_history"], select: () => ({ selected: [] }), reset: () => ({ selected: [] }),
+  }));
+  for (const limit of [0, 7, 1.5]) {
+    const result = await tools.get("search_tools").execute("id", { query: "history", limit }, undefined, undefined, {});
+    assert.equal(result.details.failureCode, "invalid_limit");
+  }
 });
 
 test("search_tools does not change tools when Pylon coordination is absent", async () => {
@@ -220,13 +316,28 @@ test("selection failures are reported without claiming activation", async () => 
   assert.equal(result.details.failureCode, "selection_failed");
 });
 
-test("reset delegates to the discovery capability", async () => {
+test("successful reset clears repeated-miss state", async () => {
   const { events, tools } = setup();
   let resets = 0;
   events.on("pylon:tool-discovery", (request) => request.respond({
     eligible: () => [], select: () => undefined, reset: () => { resets++; return { reset: true }; },
   }));
-  const result = await tools.get("search_tools").execute("id", { action: "reset" }, undefined, undefined, {});
+  const search = () => tools.get("search_tools").execute("search", { query: "browser" }, undefined, undefined, {});
+  await search();
+  assert.equal((await search()).details.alreadySearched, true);
+  const result = await tools.get("search_tools").execute("reset", { action: "reset" }, undefined, undefined, {});
   assert.equal(resets, 1);
   assert.match(result.content[0].text, /reset/i);
+  assert.equal((await search()).details.alreadySearched, false);
+});
+
+test("failed reset retains repeated-miss state", async () => {
+  const { events, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => [], select: () => undefined, reset: () => ({ error: "forced failure" }),
+  }));
+  const search = () => tools.get("search_tools").execute("search", { query: "browser" }, undefined, undefined, {});
+  await search();
+  await tools.get("search_tools").execute("reset", { action: "reset" }, undefined, undefined, {});
+  assert.equal((await search()).details.alreadySearched, true);
 });

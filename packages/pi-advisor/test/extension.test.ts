@@ -68,6 +68,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
   assert.match(guidance, /Reserve a third advisor call for material contradictions, failures, or unresolved risks/);
   assert.match(guidance, /concrete decision, risk, or approach to review/);
   assert.match(guidance, /only the highest-priority cited file ranges/);
+  assert.match(guidance, /complete decisive definitions, callers, and checks over broad file slices/);
+  assert.match(guidance, /150–300 total evidence lines is a selection signal, not a hard cap/);
   assert.match(guidance, /main model decides, verifies evidence, and performs tools/);
   const model = {
     provider: "test", id: "model", contextWindow: 32_000, maxTokens: 8_192,
@@ -96,6 +98,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.deepEqual(maxTokens, [8_000, 8_000]);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
+    assert.deepEqual(results[0].details.duplicateTelemetry, { records: 0, chars: 0 });
     assert.match(prompts[1], /Prior guidance:\n\nadvice 1/);
   } finally {
     if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -166,4 +169,5 @@ test("advisor call renders the executor request instead of the user prompt", () 
 
   assert.ok(tool.parameters.required.includes("request"));
   assert.equal(tool.parameters.properties.request.maxLength, 8_192);
+  assert.match(tool.parameters.properties.evidence.description, /150–300 total lines/);
 });

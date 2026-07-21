@@ -48,6 +48,39 @@ test("parent context includes bounded verification and checkpoint archaeology", 
   assert.doesNotMatch(context, /secret-ref|secret-index/);
 });
 
+test("parent context deduplicates clipped items and keeps roles distinct", () => {
+  const context = buildParentContext([
+    { type: "message", message: { role: "user", content: "older constraint" } },
+    { type: "message", message: { role: "user", content: "same\r\nevidence" } },
+    { type: "message", message: { role: "user", content: "same\nevidence" } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "same\nevidence" }] } },
+  ], 6000, 3);
+  assert.match(context, /older constraint/);
+  assert.equal(context.match(/same/g)?.length, 2);
+  assert.match(context, /User:/);
+  assert.match(context, /Main assistant:/);
+});
+
+test("parent context keeps complete newest items within its total cap", () => {
+  const context = buildParentContext([
+    { type: "message", message: { role: "user", content: `older ${"alpha ".repeat(150)}` } },
+    { type: "message", message: { role: "user", content: `newest ${"bravo ".repeat(150)}` } },
+  ], 1000, 2);
+  assert.match(context, /newest/);
+  assert.doesNotMatch(context, /older/);
+  assert.ok(context.length <= 1000);
+});
+
+test("parent context removes records that become duplicates after clipping", () => {
+  const shared = "shared words ".repeat(110);
+  const context = buildParentContext([
+    { type: "message", message: { role: "user", content: `${shared}old` } },
+    { type: "message", message: { role: "user", content: `${shared}new` } },
+  ]);
+  assert.equal(context.length, 1200);
+  assert.equal(context.match(/User:/g)?.length, 1);
+});
+
 test("parent context omits recursive scout calls and caps output", () => {
   const context = buildParentContext(
     Array.from({ length: 20 }, (_, i) => ({

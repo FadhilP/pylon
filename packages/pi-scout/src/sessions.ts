@@ -39,6 +39,7 @@ export async function collectSessionEvidence(
   const wanted = terms(query);
   const listed = (await SessionManager.listAll()).slice(0, limit);
   const excerpts: string[] = [];
+  const seen = new Set<string>();
   let redactionCount = 0;
   for (const info of listed) {
     if (signal?.aborted) throw new DOMException("Session search aborted", "AbortError");
@@ -59,10 +60,13 @@ export async function collectSessionEvidence(
       const text = textOf(entry.message.content);
       if (!text || !wanted.some((term) => text.toLowerCase().includes(term)))
         continue;
-      const clean = redact(text.slice(0, 1200));
+      const clean = redact(text);
+      const identity = `${info.id}\0${entry.message.role}\0${clean.text.replace(/\r\n/g, "\n").trim()}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
       redactionCount += clean.count;
       excerpts.push(
-        `### Session ${info.id} (${info.modified.toISOString().slice(0, 10)})\nFile: ${basename(info.path)}\nRole: ${entry.message.role}\n${clean.text}`,
+        `### Session ${info.id} (${info.modified.toISOString().slice(0, 10)})\nFile: ${basename(info.path)}\nRole: ${entry.message.role}\n${clean.text.slice(0, 1200)}`,
       );
       if (excerpts.length >= 12) break;
     }

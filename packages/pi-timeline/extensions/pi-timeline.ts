@@ -117,6 +117,10 @@ export default function timelineExtension(
   completeTitle: typeof complete = complete,
   options: { artifactRoot?: string } = {},
 ) {
+  const emitTelemetry = (value: unknown) => {
+    try { pi.events.emit?.("pylon:telemetry", value); }
+    catch { /* Telemetry must never affect session naming. */ }
+  };
   let records = new Map<string, Bound>(),
     paired = false,
     namingDecided = false,
@@ -159,16 +163,24 @@ export default function timelineExtension(
       ),
       fallback = firstUser && promptTitle(firstUser.message);
     let name = fallback;
+    let modelCall: { eventId: string; started: number; request: string; result: string } | undefined;
     try {
       const model = ctx.model;
       if (firstUser && model) {
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (auth.ok && auth.apiKey) {
+          const request = promptText(firstUser.message);
+          const result = finalAssistant ? promptText(finalAssistant.message) : "";
+          const sessionId = ctx.sessionManager.getSessionId();
+          modelCall = {
+            eventId: createHash("sha256").update(`${sessionId}:${generation}`).digest("hex"),
+            started: Date.now(), request, result,
+          };
           const message: Message = {
             role: "user",
             content: [{
               type: "text",
-              text: `<user-request>\n${promptText(firstUser.message)}\n</user-request>\n<result>\n${finalAssistant ? promptText(finalAssistant.message) : ""}\n</result>`,
+              text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
             }],
             timestamp: Date.now(),
           };
@@ -184,9 +196,20 @@ export default function timelineExtension(
               env: auth.env,
               maxTokens: 32,
               timeoutMs: 10_000,
-              sessionId: ctx.sessionManager.getSessionId(),
+              sessionId,
             },
           );
+          const usage = response.usage ?? {};
+          emitTelemetry({
+            version: 1, eventId: modelCall.eventId, package: "pi-timeline", kind: "model_call",
+            status: response.stopReason === "error" || response.stopReason === "aborted" ? "failed" : "completed",
+            durationMs: Date.now() - modelCall.started,
+            usage: { turns: 1, input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost: usage.cost?.total ?? 0 },
+            context: {
+              request: { characters: request.length, hash: createHash("sha256").update(`${modelCall.eventId}:request:${request}`).digest("hex") },
+              result: { characters: result.length, hash: createHash("sha256").update(`${modelCall.eventId}:result:${result}`).digest("hex") },
+            },
+          });
           const raw = response.content
             .filter((part: any) => part.type === "text")
             .map((part: any) => part.text)
@@ -195,6 +218,16 @@ export default function timelineExtension(
         }
       }
     } catch {
+      if (modelCall)
+        emitTelemetry({
+          version: 1, eventId: modelCall.eventId, package: "pi-timeline", kind: "model_call", status: "failed",
+          durationMs: Date.now() - modelCall.started,
+          usage: { turns: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+          context: {
+            request: { characters: modelCall.request.length, hash: createHash("sha256").update(`${modelCall.eventId}:request:${modelCall.request}`).digest("hex") },
+            result: { characters: modelCall.result.length, hash: createHash("sha256").update(`${modelCall.eventId}:result:${modelCall.result}`).digest("hex") },
+          },
+        });
       name = fallback;
     } finally {
       if (namingInFlight === generation) namingInFlight = undefined;

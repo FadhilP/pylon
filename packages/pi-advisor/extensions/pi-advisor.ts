@@ -20,8 +20,8 @@ import {
   thinkingLevels,
   type ThinkingLevel,
 } from "../src/config.ts";
-import { advisorMaxTokens, buildSnapshot } from "../src/context.ts";
-import { loadEvidence } from "../src/evidence.ts";
+import { advisorMaxTokens, buildSnapshot, type DuplicateTelemetry, type SectionAllocation } from "../src/context.ts";
+import { loadEvidenceRecords, type EvidenceRef } from "../src/evidence.ts";
 
 type FailureCode =
   | "unavailable"
@@ -47,6 +47,9 @@ type Details = {
   redactionCount: number;
   truncated: boolean;
   cacheRetention: "short" | "long";
+  omittedEvidence?: EvidenceRef[];
+  sectionAllocations?: Record<string, SectionAllocation>;
+  duplicateTelemetry?: DuplicateTelemetry;
   failureCode?: FailureCode;
 };
 const emptyUsage = () => ({
@@ -139,7 +142,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     promptGuidelines: [
       "Use two advisor consultations by default for consequential work: cross-module behavior, architecture or API changes, migrations, security or privacy, data-loss risk, or broad regression risk. Skip advisor for trivial or local work.",
       "Use advisor first after focused reads or repo_scout establish evidence, before choosing an approach. Use advisor second after implementation and before final verification, with substantive new evidence such as changed ranges, key decisions, or preliminary test results; do not repeat the first request ceremonially. Reserve a third advisor call for material contradictions, failures, or unresolved risks.",
-      "Give advisor a concrete decision, risk, or approach to review plus only the highest-priority cited file ranges. Advisor critiques evidence, reasoning, risks, and direction; Scout gathers evidence; main model decides, verifies evidence, and performs tools.",
+      "Give advisor a concrete decision, risk, or approach to review plus only the highest-priority cited file ranges. Prefer complete decisive definitions, callers, and checks over broad file slices; 150–300 total evidence lines is a selection signal, not a hard cap, and may be exceeded when decisive context requires it. Advisor critiques evidence, reasoning, risks, and direction; Scout gathers evidence; main model decides, verifies evidence, and performs tools.",
     ],
     parameters: Type.Object(
       {
@@ -155,10 +158,16 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
                 path: Type.String({ minLength: 1, maxLength: 500 }),
                 start: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
                 end: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
+                claim: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+                revision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+                verification: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
               },
               { additionalProperties: false },
             ),
-            { maxItems: 5 },
+            {
+              maxItems: 5,
+              description: "Complete decisive ranges only; usually 150–300 total lines, exceeding that when required for correctness",
+            },
           ),
         ),
       },
@@ -232,12 +241,14 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
         customType: "advisor-request",
         content: params.request.trim(),
       });
-      const evidence = await loadEvidence(ctx.cwd, params.evidence);
-      if (evidence)
+      const evidence = await loadEvidenceRecords(ctx.cwd, params.evidence);
+      for (const record of evidence)
         messages.push({
           role: "custom",
           customType: "advisor-evidence",
-          content: evidence,
+          content: record.text,
+          evidenceRef: record.ref,
+          evidenceUnavailable: record.unavailable,
         });
       const continuationPrefix = previousAdvice
         ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
@@ -254,7 +265,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       if (snapshot.requiredContextOmitted)
         return {
           content: [{ type: "text" as const, text: "Advisor failed nonfatally: required context exceeds the input budget." }],
-          details: { ...base, snapshotEstimatedTokens: 0, truncated: true, failureCode: "context_overflow" as const },
+          details: { ...base, snapshotEstimatedTokens: 0, truncated: true, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: "context_overflow" as const },
         };
       const budget = advisorBudget(
         model,
@@ -269,7 +280,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             : "estimated output budget is exhausted";
         return {
           content: [{ type: "text" as const, text: `Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).` }],
-          details: { ...base, snapshotEstimatedTokens: snapshot.estimatedTokens, redactionCount: snapshot.redactionCount, truncated: snapshot.truncated, failureCode: budget.error === "pricing_unavailable" ? "pricing_unavailable" as const : "budget_exceeded" as const },
+          details: { ...base, snapshotEstimatedTokens: snapshot.estimatedTokens, redactionCount: snapshot.redactionCount, truncated: snapshot.truncated, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: budget.error === "pricing_unavailable" ? "pricing_unavailable" as const : "budget_exceeded" as const },
         };
       }
       if (ctx.hasUI)
@@ -286,6 +297,9 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           snapshotEstimatedTokens: snapshot.estimatedTokens,
           redactionCount: snapshot.redactionCount,
           truncated: snapshot.truncated,
+          omittedEvidence: snapshot.omittedEvidence,
+          sectionAllocations: snapshot.sectionAllocations,
+          duplicateTelemetry: snapshot.duplicateTelemetry,
         },
       });
       const controller = new AbortController();
@@ -366,6 +380,9 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
               snapshotEstimatedTokens: snapshot.estimatedTokens,
               redactionCount: snapshot.redactionCount,
               truncated: snapshot.truncated,
+              omittedEvidence: snapshot.omittedEvidence,
+              sectionAllocations: snapshot.sectionAllocations,
+              duplicateTelemetry: snapshot.duplicateTelemetry,
               failureCode: code,
             },
           };
@@ -386,6 +403,9 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           snapshotEstimatedTokens: snapshot.estimatedTokens,
           redactionCount: snapshot.redactionCount,
           truncated: snapshot.truncated || advice.truncated,
+          omittedEvidence: snapshot.omittedEvidence,
+          sectionAllocations: snapshot.sectionAllocations,
+          duplicateTelemetry: snapshot.duplicateTelemetry,
         };
         return {
           content: [
@@ -415,6 +435,9 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             snapshotEstimatedTokens: snapshot.estimatedTokens,
             redactionCount: snapshot.redactionCount,
             truncated: snapshot.truncated,
+            omittedEvidence: snapshot.omittedEvidence,
+            sectionAllocations: snapshot.sectionAllocations,
+            duplicateTelemetry: snapshot.duplicateTelemetry,
             failureCode: code,
           },
         };

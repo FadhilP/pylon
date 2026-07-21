@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ import {
 import { repoResult } from "../src/checkpoint.ts";
 import { buildParentContext } from "../src/parent-context.ts";
 import { REPO_SCOUT_PROMPT, SESSION_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
-import { capReport, capText, SCOUT_REPORT_MAX_BYTES } from "../src/result.ts";
+import { capReport, capText, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClaims } from "../src/result.ts";
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import {
@@ -112,9 +112,31 @@ function activityText(items: readonly ScoutActivity[]): string {
     .join("\n");
 }
 
+const searchTools = new Set(["search_excerpt", "rg", "grep", "fd", "find"]);
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== "object") return typeof value === "string" ? value.trim() : value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stableValue(item)]));
+}
+export function searchTelemetry(activity: readonly ScoutActivity[], seen: Set<string>) {
+  let searches = 0;
+  let repeatedSearches = 0;
+  for (const item of activity) {
+    if (item.kind !== "call" || !searchTools.has(item.tool)) continue;
+    searches++;
+    let args: unknown = item.text;
+    try { args = JSON.parse(item.text); } catch { /* Hash bounded raw activity text. */ }
+    const key = createHash("sha256").update(`${item.tool}\0${JSON.stringify(stableValue(args))}`).digest("hex");
+    if (seen.has(key)) repeatedSearches++;
+    else seen.add(key);
+  }
+  return { searches, repeatedSearches };
+}
+
 export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
   let repoRuns = 0;
   let repoCallQueue = Promise.resolve();
+  const seenRepoSearches = new Set<string>();
   const repoSessionDirs = new Set<string>();
   let pendingIntent: SessionIntent | undefined;
   let ephemeralFinding: string | undefined;
@@ -205,6 +227,7 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
     if (event.source === "extension") return;
     if (startsNewRepoSequence(event)) {
       repoRuns = 0;
+      seenRepoSearches.clear();
     }
     ephemeralFinding = undefined;
     pendingIntent = parseSessionIntent(event.text);
@@ -423,7 +446,8 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
           signal,
           timeoutMs: repoTimeoutMs(),
           maxCostUsd: scoutMaxCostUsd(),
-          resultMaxBytes: SCOUT_REPORT_MAX_BYTES,
+          // Failure wrapping happens here; cap once afterward so retrieval notices survive.
+          resultMaxBytes: false,
           env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
           onActivity: (_item, all) => {
             lastUpdateAt = Date.now();
@@ -445,9 +469,12 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
           },
         });
         // Include any failure wrapper in the same hard report budget as child output.
-        const text = capReport(repoResult(run.text, run.error), SCOUT_REPORT_MAX_BYTES).text;
+        const report = capReport(repoResult(run.text, run.error), SCOUT_REPORT_MAX_BYTES);
+        const omittedEvidence = mergeEvidenceAnchors([...(run.omittedEvidence ?? []), ...report.omittedEvidence]);
+        const claims = structuredClaims(report.text);
+        const searches = searchTelemetry(run.activity, seenRepoSearches);
         return {
-          content: [{ type: "text" as const, text }],
+          content: [{ type: "text" as const, text: report.text }],
           details: {
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
@@ -460,7 +487,14 @@ export default function scoutExtension(pi: ExtensionAPI, runRepoScout = runPi) {
             turns: run.turns,
             activity: run.activity,
             stopReason: run.stopReason,
-            truncated: run.truncated,
+            truncated: run.truncated || report.truncated,
+            omittedEvidence,
+            structuredClaims: claims,
+            duplicateTelemetry: {
+              reportBlocks: report.deduplicatedBlocks,
+              reportBytes: report.deduplicatedBytes,
+            },
+            searchTelemetry: searches,
             stderr: run.stderr,
             budgetExceeded: run.budgetExceeded,
             finalizationAttempted: run.finalizationAttempted,

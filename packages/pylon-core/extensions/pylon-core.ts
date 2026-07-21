@@ -11,7 +11,9 @@ import {
 import {
   formatTokenMeter,
   meterFromBranch,
+  recordTelemetryEvent,
   recordToolResult,
+  recordVerificationOutcome,
 } from "../src/token-meter.ts";
 import { worktreeFingerprint } from "../src/worktree.ts";
 
@@ -164,6 +166,15 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     if (request?.version === 1 && typeof request.respond === "function")
       request.respond({ version: 1, owner: "pylon-core" });
   });
+  const disposeTelemetryListener = pi.events.on("pylon:telemetry", (value: unknown) => {
+    const event = recordTelemetryEvent(tokenMeter, value);
+    if (!event) return;
+    try { pi.appendEntry?.("pylon-telemetry", event); }
+    catch { /* Telemetry must never disrupt model-calling packages. */ }
+  });
+  const disposeVerifyTelemetry = pi.events.on("pi-verify:result", (value: unknown) => {
+    recordVerificationOutcome(tokenMeter, value);
+  });
 
   const collectHealth = async (): Promise<{ lines: string[]; warning: boolean }> => {
     const pending: Promise<unknown>[] = [];
@@ -254,6 +265,8 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     disposeGuardListener();
     disposeDiscoveryListener();
     disposeWorktreeObserverRequest();
+    disposeTelemetryListener();
+    disposeVerifyTelemetry();
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];

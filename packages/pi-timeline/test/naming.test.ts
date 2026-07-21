@@ -9,9 +9,9 @@ import extension from "../extensions/pi-timeline.ts";
 function namingHarness(entries: any[], completeTitle: any = async () => ({
   content: [{ type: "text", text: "Semantic Timeline Session" }],
 })) {
-  const handlers = new Map<string, Function[]>(), names: string[] = [];
+  const handlers = new Map<string, Function[]>(), names: string[] = [], telemetry: any[] = [];
   const pi: any = {
-    events: { on: () => () => {} },
+    events: { on: () => () => {}, emit: (channel: string, value: unknown) => { if (channel === "pylon:telemetry") telemetry.push(value); } },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand() {},
     setSessionName: (name: string) => names.push(name),
@@ -33,7 +33,7 @@ function namingHarness(entries: any[], completeTitle: any = async () => ({
       getSessionId: () => "naming-test",
     },
   };
-  return { handlers, names, ctx, artifactRoot };
+  return { handlers, names, telemetry, ctx, artifactRoot };
 }
 
 test("same-session start keeps one continuous artifact lease", async () => {
@@ -60,9 +60,12 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
       message: { role: "assistant", content: [{ type: "text", text: "Implemented session naming." }] },
     },
   ];
-  const { handlers, names, ctx } = namingHarness(entries, async (...args: any[]) => {
+  const { handlers, names, telemetry, ctx } = namingHarness(entries, async (...args: any[]) => {
     calls.push(args);
-    return { content: [{ type: "text", text: "Persistent TUI Session Names" }] };
+    return {
+      content: [{ type: "text", text: "Persistent TUI Session Names" }],
+      usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 0, cost: { total: 0.002 } },
+    };
   });
   await handlers.get("session_start")![0]({}, ctx);
   await handlers.get("agent_settled")![0]({}, ctx);
@@ -72,6 +75,11 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
   assert.match(calls[0][1].messages[0].content[0].text, /Can we add session name/);
   assert.match(calls[0][1].messages[0].content[0].text, /Implemented session naming/);
   assert.equal(calls[0][2].maxTokens, 32);
+  assert.equal(telemetry.length, 1);
+  assert.deepEqual(telemetry[0].usage, { turns: 1, input: 12, output: 3, cacheRead: 4, cacheWrite: 0, cost: 0.002 });
+  assert.equal(telemetry[0].context.request.characters, 35);
+  assert.match(telemetry[0].context.request.hash, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(telemetry[0]).includes("Can we add session name"), false);
   assert.equal(handlers.has("before_agent_start"), false);
   assert.equal(handlers.has("message_end"), false);
 });

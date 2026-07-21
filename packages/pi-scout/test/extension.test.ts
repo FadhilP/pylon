@@ -125,13 +125,42 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     assert.ok(childArgs.every((args) => args.includes("--system-prompt")));
     assert.ok(childArgs.every((args) => !args.includes("--append-system-prompt")));
     assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,grep,find,ls")));
-    assert.ok(childOptions.every((options) => options.resultMaxBytes === 12 * 1024));
+    assert.ok(childOptions.every((options) => options.resultMaxBytes === false));
     assert.ok(childOptions.every((options) => options.env.PI_SCOUT_CHILD === "1"));
     assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
     assert.ok(childArgs.every((args) => args.includes("rpc") && !args.some((arg) => arg.includes("Find auth flow"))));
     assert.doesNotMatch(childPrompts[0], /Find auth flow/);
     assert.match(childPrompts[1], /Find auth flow/);
     assert.match(childPrompts[1], /Prior scout gap requiring follow-up: Need prior request context/);
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout reports merged citations, structured claims, and repeated searches", async () => {
+  const run = async (): Promise<ScoutRun> => ({
+    text: "## Findings\n\n- Shared guard. `src/auth.ts:10-20`",
+    stderr: "", durationMs: 1,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    turns: [], truncated: false, exitCode: 0,
+    activity: [{ kind: "call", tool: "search_excerpt", text: JSON.stringify({ path: "src", pattern: "guard" }) }],
+    omittedEvidence: [{ path: "src/auth.ts", start: 15, end: 25 }, { path: "src/auth.ts", start: 24, end: 30 }],
+    budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
+    contextTokens: 1, cacheReadTokens: 0,
+  });
+  const runtime = await harness(run);
+  const ctx = context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } });
+  try {
+    const first = await runtime.tools.get("repo_scout").execute("one", { task: "map guard" }, undefined, undefined, ctx);
+    const second = await runtime.tools.get("repo_scout").execute("two", { task: "map guard", retryReason: "report gap" }, undefined, undefined, ctx);
+    assert.deepEqual(first.details.omittedEvidence, [{ path: "src/auth.ts", start: 15, end: 30 }]);
+    assert.deepEqual(first.details.structuredClaims, [{
+      section: "findings", claim: "Shared guard. `src/auth.ts:10-20`", citations: [{ path: "src/auth.ts", start: 10, end: 20 }],
+    }]);
+    assert.deepEqual(first.details.duplicateTelemetry, { reportBlocks: 0, reportBytes: 0 });
+    assert.deepEqual(first.details.searchTelemetry, { searches: 1, repeatedSearches: 0 });
+    assert.deepEqual(second.details.searchTelemetry, { searches: 1, repeatedSearches: 1 });
+    runtime.handlers.get("input")?.forEach(handler => handler({ source: "interactive", text: "new request" }));
+    const third = await runtime.tools.get("repo_scout").execute("three", { task: "map guard" }, undefined, undefined, ctx);
+    assert.deepEqual(third.details.searchTelemetry, { searches: 1, repeatedSearches: 0 });
   } finally { runtime.restore(); }
 });
 

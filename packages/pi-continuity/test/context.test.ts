@@ -69,6 +69,27 @@ test("context normalizes inflections and conservative workflow synonyms", () => 
   assert.match(buildContext(undefined, [tests], "run tests"), /workflow\.tests/);
   assert.equal(buildContext(undefined, [tests], "check formatting"), "");
 });
+test("context deduplicates identical local and parent facts before clipping", () => {
+  const fact: Fact = {
+    key: "workflow.release", kind: "workflow", text: "Run release check", source: "README",
+    confidence: 1, updatedAt: "2026-01-01", captureCommit: "abc123", branchAtCapture: "main",
+    evidencePaths: [{ path: "README.md", sha256: "hash" }],
+  };
+  const text = buildContext(undefined, [fact], "release check", 450, [{ ...fact, updatedAt: "2026-02-01" }]);
+  assert.equal(text.match(/workflow\.release/g)?.length, 1);
+  assert.doesNotMatch(text, /Parent memory/);
+});
+
+test("context keeps facts from different revisions distinct", () => {
+  const fact: Fact = {
+    key: "workflow.release", kind: "workflow", text: "Run release check", source: "README",
+    confidence: 1, updatedAt: "2026-01-01", captureCommit: "abc123",
+  };
+  const text = buildContext(undefined, [fact], "release check", 450, [{ ...fact, captureCommit: "def456" }]);
+  assert.match(text, /Memory workflow\.release/);
+  assert.match(text, /Parent memory workflow\.release/);
+});
+
 test("context reserves room for active memory and suspect metadata without stale text", () => {
   const active: Fact = {
     key: "workflow.release", kind: "workflow", text: "Run release check", source: "README",
@@ -82,6 +103,15 @@ test("context reserves room for active memory and suspect metadata without stale
   assert.match(text, /ancestry or age alone never justifies deletion/);
   assert.doesNotMatch(text, /obsolete command text/);
 });
+test("context deduplicates constraints before planning limits", () => {
+  const work = fresh("goal");
+  work.mode = "planning";
+  work.constraints = ["Repeated constraint", "Repeated constraint", "Unique constraint"];
+  const text = buildContext(work, [], "", 900);
+  assert.equal(text.match(/Repeated constraint/g)?.length, 1);
+  assert.match(text, /Unique constraint/);
+});
+
 test("context exposes exact todo IDs and status", () => {
   const w = fresh("goal");
   setPlan(w, ["inspect"]);

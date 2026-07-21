@@ -37,6 +37,35 @@ test("snapshot prioritizes advisor request, evidence, continuity, summaries, use
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
 });
 
+test("snapshot deduplicates normalized records before budgeting", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "review" },
+    { role: "custom", customType: "advisor-evidence", content: "same evidence\r\n" },
+    { role: "custom", customType: "advisor-evidence", content: "same evidence\n" },
+  ], 20_000);
+  assert.equal(snapshot.text.match(/same evidence/g)?.length, 1);
+});
+
+test("snapshot deduplicates exact payloads across sections by priority", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "same text" },
+    { role: "custom", customType: "pi-continuity", content: "same text" },
+    { role: "user", content: "same text" },
+  ], 20_000);
+  assert.equal(snapshot.text.match(/same text/g)?.length, 1);
+  assert.equal(snapshot.duplicateTelemetry.records, 2);
+  assert.ok(snapshot.duplicateTelemetry.chars > 0);
+});
+
+test("cross-section identity does not collapse different raw values after redaction", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-one" },
+    { role: "user", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-two" },
+  ], 20_000);
+  assert.equal(snapshot.duplicateTelemetry.records, 0);
+  assert.equal(snapshot.sectionAllocations["latest-user-request"].includedRecords, 1);
+});
+
 test("snapshot includes latest bounded verification metadata", () => {
   const snapshot = buildSnapshot("system", [
     { role: "custom", customType: "pi-verify-result", content: "failed: npm test" },
@@ -76,6 +105,52 @@ test("snapshot omits oversized records whole and keeps later records", () => {
   assert.doesNotMatch(snapshot.text, /EVIDENCE-START|EVIDENCE-END/);
   assert.match(snapshot.text, /small durable state/);
   assert.equal(snapshot.truncated, true);
+  assert.equal(snapshot.requiredContextOmitted, false);
+  assert.deepEqual(snapshot.sectionAllocations["explicit-evidence"], {
+    estimatedTokens: 0,
+    includedRecords: 0,
+    omittedRecords: 1,
+    truncated: true,
+  });
+  assert.equal(snapshot.sectionAllocations["continuity-state"].includedRecords, 1);
+  assert.ok(snapshot.sectionAllocations["continuity-state"].estimatedTokens > 0);
+});
+
+test("snapshot ranks evidence and retains omitted anchors", () => {
+  const relevant = { path: "src/database.ts", start: 10, end: 20, claim: "database migration safety", revision: "git:new", verification: "tested" };
+  const irrelevant = { path: "src/colors.ts", start: 1, end: 5, claim: "color palette" };
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "Review database migration safety" },
+    { role: "custom", customType: "advisor-evidence", content: `COLORS-${"color detail ".repeat(90)}-END`, evidenceRef: irrelevant },
+    { role: "custom", customType: "advisor-evidence", content: `DATABASE-MIGRATION-${"migration detail ".repeat(75)}-END`, evidenceRef: relevant },
+  ], 1_000);
+  assert.match(snapshot.text, /DATABASE-MIGRATION/);
+  assert.doesNotMatch(snapshot.text, /COLORS-/);
+  assert.deepEqual(snapshot.omittedEvidence, [irrelevant]);
+  assert.match(snapshot.text, /src\/colors\.ts:1-5/);
+});
+
+test("evidence relevance ties prefer newer records", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "review evidence" },
+    { role: "custom", customType: "advisor-evidence", content: `OLDER-${"older evidence words ".repeat(65)}`, evidenceRef: { path: "old.ts", start: 1, end: 2 } },
+    { role: "custom", customType: "advisor-evidence", content: `NEWER-${"newer evidence words ".repeat(65)}`, evidenceRef: { path: "new.ts", start: 1, end: 2 } },
+  ], 1_000);
+  assert.match(snapshot.text, /NEWER-/);
+  assert.doesNotMatch(snapshot.text, /OLDER-/);
+});
+
+test("oversized omission anchors stay inside the snapshot budget", () => {
+  const snapshot = buildSnapshot("system", [
+    { role: "custom", customType: "advisor-request", content: "review" },
+    ...Array.from({ length: 5 }, (_, index) => ({
+      role: "custom", customType: "advisor-evidence", content: "record ".repeat(200),
+      evidenceRef: { path: `${"long-path-".repeat(50)}${index}.ts`, start: 1, end: 2 },
+    })),
+  ], 1_000);
+  assert.ok(snapshot.estimatedTokens <= 494);
+  assert.equal(snapshot.sectionAllocations["explicit-evidence"].includedRecords, 1);
+  assert.equal(snapshot.omittedEvidence.length, 4);
   assert.equal(snapshot.requiredContextOmitted, false);
 });
 

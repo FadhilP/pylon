@@ -188,10 +188,12 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
 
       const contextChars = gruntParentContextChars();
       const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
-      const parentContext = contextChars ? buildWorkerContext(entries, contextChars) : "";
       const suggested = params.suggestedPaths ?? [];
       const targetedContext = params.targetedContext?.trim() ?? "";
       const checkCommands = params.checkCommands ?? [];
+      const parentContext = contextChars
+        ? buildWorkerContext(entries, contextChars, 10, [task, targetedContext, ...suggested, ...checkCommands])
+        : "";
       const missingDependencies = isolated
         ? unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd)
         : [];
