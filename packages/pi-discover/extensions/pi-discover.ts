@@ -1,17 +1,17 @@
-import { isAbsolute, relative, resolve } from "node:path";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  truncateHead,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { DISCOVER_CHILD_TOOL_NAMES } from "../src/discover-child-tools.ts";
+import { registerFd } from "../src/fd.ts";
+import { registerRelationshipGraph } from "../src/relationship-graph.ts";
+import { registerRg } from "../src/rg.ts";
 
-const TIMEOUT_MS = 30_000;
-const MAX_MATCHES = 200;
 const MAX_RESULT_CHARS = 2_000;
+const discoverChildToolsExtension = fileURLToPath(new URL("../src/discover-child-tools.ts", import.meta.url));
+
+export { workspacePath } from "../src/search-common.ts";
+export { relationshipRoles } from "../src/relationship-graph.ts";
 
 export type ToolMetadata = { name: string; description?: string };
 export type ToolDiscoveryResult = {
@@ -24,32 +24,6 @@ export type ToolDiscoveryCapability = {
   select(names: string[]): ToolDiscoveryResult;
   reset(): ToolDiscoveryResult;
 };
-
-export function workspacePath(cwd: string, input = "."): string {
-  const clean = input.replace(/^@/, "") || ".";
-  const absolute = resolve(cwd, clean);
-  const within = relative(resolve(cwd), absolute);
-  if (within === ".." || within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(within))
-    throw new Error("Search path must stay within workspace");
-  return within || ".";
-}
-
-function fit(text: string, maxBytes: number): string {
-  let value = text;
-  while (Buffer.byteLength(value, "utf8") > maxBytes) value = value.slice(0, -1);
-  return value;
-}
-
-function bounded(output: string, maxBytes = DEFAULT_MAX_BYTES): string {
-  const result = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes });
-  if (!result.truncated) return result.content;
-  const notice = `\n\n[Output truncated; omitted output after ${result.outputLines}/${result.totalLines} lines and ${formatSize(result.outputBytes)}/${formatSize(result.totalBytes)}. Cap: ${formatSize(maxBytes)}.]`;
-  return `${fit(result.content, maxBytes - Buffer.byteLength(notice, "utf8"))}${notice}`;
-}
-
-function unavailable(error: unknown): boolean {
-  return /ENOENT|not recognized|not found|cannot find/i.test(String(error));
-}
 
 function keywords(query: string): string[] {
   return [...new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? [])];
@@ -89,6 +63,12 @@ function discoveryCapability(pi: ExtensionAPI): ToolDiscoveryCapability | undefi
   return capability as ToolDiscoveryCapability;
 }
 
+function fit(text: string, maxBytes: number): string {
+  let value = text;
+  while (Buffer.byteLength(value, "utf8") > maxBytes) value = value.slice(0, -1);
+  return value;
+}
+
 function resultText(value: unknown): string {
   if (value === undefined) return "";
   const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -96,71 +76,20 @@ function resultText(value: unknown): string {
 }
 
 export default function discoverExtension(pi: ExtensionAPI) {
-  pi.registerTool({
-    name: "rg",
-    label: "ripgrep",
-    description: `Fast read-only content search with line numbers or matching file paths. Output capped at ${formatSize(DEFAULT_MAX_BYTES)}. Use grep if ripgrep is unavailable.`,
-    promptSnippet: "Fast read-only repository content search with line-numbered matches or matching file paths",
-    promptGuidelines: ["Prefer rg for repository content search; use grep when unavailable. Narrow by path or glob; use mode files for broad discovery, then refine truncated output."],
-    parameters: Type.Object({
-      pattern: Type.String({ description: "Regular expression to search" }),
-      path: Type.Optional(Type.String({ description: "Workspace-relative file or directory; default ." })),
-      glob: Type.Optional(Type.String({ description: "Optional file glob, such as *.ts" })),
-      mode: Type.Optional(StringEnum(["lines", "files"] as const, { description: "Return line-numbered matches (default) or only matching file paths" })),
-    }),
-    async execute(_id, params, signal, _update, ctx) {
-      const path = workspacePath(ctx.cwd, params.path);
-      const args = params.mode === "files"
-        ? ["--files-with-matches", "--color=never"]
-        : ["--line-number", "--color=never", "--max-columns=500", "--max-columns-preview", "--max-count", String(MAX_MATCHES)];
-      if (params.glob) args.push("--glob", params.glob);
-      args.push("--", params.pattern, path);
-      try {
-        const result = await pi.exec("rg", args, { signal, timeout: TIMEOUT_MS });
-        if (result.code === 1) return { content: [{ type: "text" as const, text: "No matches found" }], details: { code: 1 } };
-        if (result.code !== 0) {
-          if (unavailable(result.stderr)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
-          throw new Error(`ripgrep failed (${result.code}): ${result.stderr.trim()}`);
-        }
-        return { content: [{ type: "text" as const, text: bounded(result.stdout) || "No matches found" }], details: { code: 0 } };
-      } catch (error) {
-        if (unavailable(error)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
-        throw error;
-      }
-    },
-  });
+  registerRg(pi);
+  registerFd(pi);
+  registerRelationshipGraph(pi);
 
-  pi.registerTool({
-    name: "fd",
-    label: "fd",
-    description: `Fast read-only file-name/path search. Output capped at ${formatSize(DEFAULT_MAX_BYTES)}. Use find if fd/fdfind is unavailable.`,
-    promptSnippet: "Fast read-only repository file-name and path search",
-    promptGuidelines: ["Prefer fd for repository file-name/path search; use find when fd reports it is unavailable."],
-    parameters: Type.Object({
-      pattern: Type.Optional(Type.String({ description: "Regular expression; default lists all entries" })),
-      path: Type.Optional(Type.String({ description: "Workspace-relative directory; default ." })),
-      glob: Type.Optional(Type.Boolean({ description: "Treat pattern as a glob" })),
-    }),
-    async execute(_id, params, signal, _update, ctx) {
-      const path = workspacePath(ctx.cwd, params.path);
-      const args = ["--color", "never", "--max-results", String(DEFAULT_MAX_LINES)];
-      if (params.glob) args.push("--glob");
-      args.push(params.pattern || ".", path);
-      let lastError = "";
-      for (const command of ["fd", "fdfind"]) {
-        try {
-          const result = await pi.exec(command, args, { signal, timeout: TIMEOUT_MS });
-          if (result.code === 0) return { content: [{ type: "text" as const, text: bounded(result.stdout) || "No files found" }], details: { command } };
-          lastError = result.stderr;
-          if (!unavailable(result.stderr)) throw new Error(`${command} failed (${result.code}): ${result.stderr.trim()}`);
-        } catch (error) {
-          if (!unavailable(error)) throw error;
-          lastError = String(error);
-        }
-      }
-      return { content: [{ type: "text" as const, text: "fd/fdfind unavailable; use find instead." }], details: { unavailable: true, error: lastError } };
-    },
+  const disposeChildCapability = pi.events.on("pi-discover:child-tools-capability", (request: any) => {
+    if (request?.version !== 1 || typeof request.respond !== "function") return;
+    request.respond(Object.freeze({
+      version: 1,
+      owner: "pi-discover",
+      childExtensionPath: discoverChildToolsExtension,
+      toolNames: Object.freeze([...DISCOVER_CHILD_TOOL_NAMES]),
+    }));
   });
+  pi.on("session_shutdown", () => disposeChildCapability());
 
   pi.registerTool({
     name: "search_tools",

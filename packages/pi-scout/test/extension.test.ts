@@ -124,7 +124,7 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     assert.ok(childArgs.every((args) => !args.includes("--continue")));
     assert.ok(childArgs.every((args) => args.includes("--system-prompt")));
     assert.ok(childArgs.every((args) => !args.includes("--append-system-prompt")));
-    assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,rg,fd,grep,find,ls")));
+    assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,grep,find,ls")));
     assert.ok(childOptions.every((options) => options.resultMaxBytes === 12 * 1024));
     assert.ok(childOptions.every((options) => options.env.PI_SCOUT_CHILD === "1"));
     assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
@@ -132,6 +132,40 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     assert.doesNotMatch(childPrompts[0], /Find auth flow/);
     assert.match(childPrompts[1], /Find auth flow/);
     assert.match(childPrompts[1], /Prior scout gap requiring follow-up: Need prior request context/);
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout conditionally loads pi-discover child tools and fails closed on duplicate providers", async () => {
+  const childArgs: string[][] = [];
+  const run = async (args: string[]): Promise<ScoutRun> => {
+    childArgs.push(args);
+    return {
+      text: "result", stderr: "", durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 0, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 1, cacheReadTokens: 0,
+    };
+  };
+  const runtime = await harness(run);
+  const childExtensionPath = join(process.cwd(), "..", "pi-discover", "src", "discover-child-tools.ts");
+  const respond = (request: any) => request.respond({
+    version: 1,
+    owner: "pi-discover",
+    childExtensionPath,
+    toolNames: ["rg", "fd", "relationship_graph"],
+  });
+  runtime.events.on("pi-discover:child-tools-capability", respond);
+  try {
+    await runtime.tools.get("repo_scout").execute("one", { task: "map symbol" }, undefined, undefined, context());
+    assert.ok(childArgs[0].includes(childExtensionPath));
+    assert.ok(childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,grep,find,ls"));
+    assert.equal(childArgs[0].filter((arg) => arg === "-e").length, 2);
+
+    runtime.events.on("pi-discover:child-tools-capability", (request) => respond(request));
+    await runtime.tools.get("repo_scout").execute("two", { task: "map symbol again" }, undefined, undefined, context());
+    assert.ok(!childArgs[1].includes(childExtensionPath));
+    assert.ok(childArgs[1].includes("read,search_excerpt,grep,find,ls"));
+    assert.equal(childArgs[1].filter((arg) => arg === "-e").length, 1);
   } finally { runtime.restore(); }
 });
 

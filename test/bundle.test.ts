@@ -102,7 +102,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       "advisor", "continuity", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "memory", "repo_scout", "rg", "search_tools", "sieve_recall", "verify", "web_scout",
+      "advisor", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "verify", "web_scout",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 

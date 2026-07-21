@@ -7,7 +7,6 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 const TIMEOUT_MS = 30_000;
@@ -123,20 +122,19 @@ async function excerptSearch(
 }
 
 export default function scoutChildToolsExtension(pi: ExtensionAPI) {
-  const maxBytes = SCOUT_TOOL_MAX_BYTES;
   const read = createReadToolDefinition(process.cwd());
   pi.registerTool({
-      ...read,
-      description: `Read workspace files with child-local output capped at ${formatSize(SCOUT_TOOL_MAX_BYTES)}. Use offset/limit for focused ranges.`,
-      promptSnippet: "Read a focused workspace file range",
-      promptGuidelines: ["Read the smallest range supported by existing evidence; use offset and limit instead of paging through files."],
-      async execute(id, params, signal, update, ctx) {
-        const result = await createReadToolDefinition(ctx.cwd).execute(id, params, signal, update, ctx);
-        return {
-          ...result,
-          content: result.content.map((part) => part.type === "text" ? { ...part, text: bounded(part.text, SCOUT_TOOL_MAX_BYTES) } : part),
-        };
-      },
+    ...read,
+    description: `Read workspace files with child-local output capped at ${formatSize(SCOUT_TOOL_MAX_BYTES)}. Use offset/limit for focused ranges.`,
+    promptSnippet: "Read a focused workspace file range",
+    promptGuidelines: ["Read the smallest range supported by existing evidence; use offset and limit instead of paging through files."],
+    async execute(id, params, signal, update, ctx) {
+      const result = await createReadToolDefinition(ctx.cwd).execute(id, params, signal, update, ctx);
+      return {
+        ...result,
+        content: result.content.map((part) => part.type === "text" ? { ...part, text: bounded(part.text, SCOUT_TOOL_MAX_BYTES) } : part),
+      };
+    },
   });
 
   pi.registerTool({
@@ -154,75 +152,6 @@ export default function scoutChildToolsExtension(pi: ExtensionAPI) {
     async execute(_id, params, signal, _update, ctx) {
       const result = await excerptSearch(pi, params.pattern, workspacePath(ctx.cwd, params.path), params.glob, params.context ?? 2, signal);
       return { content: [{ type: "text" as const, text: result.text }], details: result.details };
-    },
-  });
-
-  pi.registerTool({
-    name: "rg",
-    label: "ripgrep",
-    description: `Fast read-only content search with line numbers or matching file paths. Output capped at ${formatSize(maxBytes)}. Use grep if ripgrep is unavailable.`,
-    promptSnippet: "Fast read-only repository content search with line-numbered matches or matching file paths",
-    promptGuidelines: ["Prefer search_excerpt for cited context. Use mode files to discover matching paths with rg; use grep when unavailable. Narrow by path/glob; refine truncated output."],
-    parameters: Type.Object({
-      pattern: Type.String({ description: "Regular expression to search" }),
-      path: Type.Optional(Type.String({ description: "Workspace-relative file or directory; default ." })),
-      glob: Type.Optional(Type.String({ description: "Optional file glob, such as *.ts" })),
-      mode: Type.Optional(StringEnum(["lines", "files"] as const, { description: "Return line-numbered matches (default) or only matching file paths" })),
-    }),
-    async execute(_id, params, signal, _update, ctx) {
-      const path = workspacePath(ctx.cwd, params.path);
-      const args = params.mode === "files"
-        ? ["--files-with-matches", "--color=never"]
-        : ["--line-number", "--color=never", "--max-columns=500", "--max-columns-preview", "--max-count", String(MAX_MATCHES)];
-      if (params.glob) args.push("--glob", params.glob);
-      args.push("--", params.pattern, path);
-      try {
-        const result = await pi.exec("rg", args, { signal, timeout: TIMEOUT_MS });
-        if (result.code === 1) return { content: [{ type: "text" as const, text: "No matches found" }], details: { code: 1 } };
-        if (result.code !== 0) {
-          if (unavailable(result.stderr)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
-          throw new Error(`ripgrep failed (${result.code}): ${result.stderr.trim()}`);
-        }
-        const text = params.mode === "files"
-          ? bounded(result.stdout, maxBytes)
-          : boundedSearch(result.stdout, maxBytes);
-        return { content: [{ type: "text" as const, text: text || "No matches found" }], details: { code: 0 } };
-      } catch (error) {
-        if (unavailable(error)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
-        throw error;
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "fd",
-    label: "fd",
-    description: `Fast read-only file-name/path search. Output capped at ${formatSize(maxBytes)}. Use find if fd/fdfind is unavailable.`,
-    promptSnippet: "Fast read-only repository file-name and path search",
-    promptGuidelines: ["Prefer fd for repository file-name/path search; use find when fd reports it is unavailable."],
-    parameters: Type.Object({
-      pattern: Type.Optional(Type.String({ description: "Regular expression; default lists all entries" })),
-      path: Type.Optional(Type.String({ description: "Workspace-relative directory; default ." })),
-      glob: Type.Optional(Type.Boolean({ description: "Treat pattern as a glob" })),
-    }),
-    async execute(_id, params, signal, _update, ctx) {
-      const path = workspacePath(ctx.cwd, params.path);
-      const args = ["--color", "never", "--max-results", String(DEFAULT_MAX_LINES)];
-      if (params.glob) args.push("--glob");
-      args.push(params.pattern || ".", path);
-      let lastError = "";
-      for (const command of ["fd", "fdfind"]) {
-        try {
-          const result = await pi.exec(command, args, { signal, timeout: TIMEOUT_MS });
-          if (result.code === 0) return { content: [{ type: "text" as const, text: bounded(result.stdout, maxBytes) || "No files found" }], details: { command } };
-          lastError = result.stderr;
-          if (!unavailable(result.stderr)) throw new Error(`${command} failed (${result.code}): ${result.stderr.trim()}`);
-        } catch (error) {
-          if (!unavailable(error)) throw error;
-          lastError = String(error);
-        }
-      }
-      return { content: [{ type: "text" as const, text: "fd/fdfind unavailable; use find instead." }], details: { unavailable: true, error: lastError } };
     },
   });
 }

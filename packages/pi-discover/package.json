@@ -1,11 +1,11 @@
 {
   "name": "pi-discover",
   "version": "0.1.0",
-  "description": "General-purpose search and coordinated inactive-tool discovery for Pi",
+  "description": "General-purpose repository relationship and inactive-tool discovery for Pi",
   "type": "module",
   "keywords": ["pi-package"],
   "engines": { "node": ">=22.18.0" },
-  "files": ["extensions", "README.md", "LICENSE"],
+  "files": ["extensions", "src", "README.md", "LICENSE"],
   "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
   "pi": { "extensions": ["./extensions/pi-discover.ts"] },
   "peerDependencies": {
