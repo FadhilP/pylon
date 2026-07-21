@@ -133,7 +133,9 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     promptSnippet:
       "Consult selected strategic model for difficult planning, review, or failure recovery",
     promptGuidelines: [
-      "Use two advisor consultations by default for consequential work: cross-module behavior, architecture or API changes, migrations, security or privacy, data-loss risk, or broad regression risk. Skip trivial or local work. First call: after focused reads or repo_scout establish evidence, before choosing an approach. Second call: after implementation and before final verification, using substantive new evidence such as changed ranges, key decisions, or preliminary test results; do not repeat the first request ceremonially. Third call: reserve for material contradictions, failures, or unresolved risks. Each request must name a concrete decision, risk, or approach to review. Pass only highest-priority cited file ranges through evidence so Advisor can inspect primary source. Advisor critiques evidence, reasoning, risks, and proposed direction; Scout gathers evidence, main model owns the final decision. Advisor recommends; verify evidence and perform tools yourself.",
+      "Use two advisor consultations by default for consequential work: cross-module behavior, architecture or API changes, migrations, security or privacy, data-loss risk, or broad regression risk. Skip advisor for trivial or local work.",
+      "Use advisor first after focused reads or repo_scout establish evidence, before choosing an approach. Use advisor second after implementation and before final verification, with substantive new evidence such as changed ranges, key decisions, or preliminary test results; do not repeat the first request ceremonially. Reserve a third advisor call for material contradictions, failures, or unresolved risks.",
+      "Give advisor a concrete decision, risk, or approach to review plus only the highest-priority cited file ranges. Advisor critiques evidence, reasoning, risks, and direction; Scout gathers evidence; main model decides, verifies evidence, and performs tools.",
     ],
     parameters: Type.Object(
       {
