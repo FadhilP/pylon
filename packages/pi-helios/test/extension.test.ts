@@ -68,7 +68,6 @@ test("registers native capture and constrained browser tools", () => {
 
 test("visibility command changes future owned launches only", async () => {
   let openArgs: string[] = [];
-  let confirmation = "";
   let notification = "";
   const { tools, commands } = runtime({ exec: async (_command: string, args: string[]) => {
     const cliCommand = args.find((arg) => ["open", "tab-list"].includes(arg));
@@ -77,14 +76,12 @@ test("visibility command changes future owned launches only", async () => {
     return { code: 0, stdout: "{}", stderr: "", killed: false };
   } });
   const ctx = context({ ui: {
-    async confirm(_title: string, message: string) { confirmation = message; return true; },
+    async confirm() { throw new Error("owned launch must not request confirmation"); },
     notify(message: string) { notification = message; },
   } });
   await commands.get("helios-visibility").handler("hide", ctx);
   assert.match(notification, /hidden \(headless\)/);
   await tools.get("helios_browser").execute("id", { action: "start" }, undefined, undefined, ctx);
-  assert.match(confirmation, /headless isolated browser/);
-  assert.match(confirmation, /cannot be visually supervised/);
   assert.ok(!openArgs.includes("--headed"));
   await commands.get("helios-visibility").handler("show", ctx);
   assert.match(notification, /Active owned session unchanged/);
@@ -219,14 +216,20 @@ test("window capture consent names resolved title", async () => {
   assert.equal(result.details.declined, true);
 });
 
-test("browser start refuses no UI and decline invokes no CLI", async () => {
-  let calls = 0;
-  const { tools } = runtime({ exec: async () => { calls++; return successfulLookup(); } });
-  const browser = tools.get("helios_browser");
-  await assert.rejects(browser.execute("id", { action: "start" }, undefined, undefined, context({ hasUI: false })), /interactive confirmation/);
-  const declined = await browser.execute("id", { action: "start", browser: "chrome" }, undefined, undefined, context({ ui: { async confirm() { return false; } } }));
-  assert.equal(declined.details.declined, true);
-  assert.equal(calls, 0);
+test("owned browser starts without UI or confirmation", async () => {
+  const commands: string[] = [];
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "tab-list", "close"].includes(value)) ?? "unknown";
+    commands.push(command);
+    if (command === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const ctx = context({ hasUI: false, ui: { async confirm() { throw new Error("owned launch must not request confirmation"); }, notify() {} } });
+  const result = await tools.get("helios_browser").execute("id", { action: "start" }, undefined, undefined, ctx);
+  assert.equal(result.details.ownership, "owned");
+  assert.deepEqual(commands, ["open", "tab-list"]);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  assert.equal(commands.at(-1), "close");
 });
 
 test("browser find returns targeted refs usable by later actions", async () => {
@@ -318,14 +321,14 @@ test("browser single-action result remains unwrapped", async () => {
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });
 
-test("browser batch rejects mixed input and stops after declined consent", async () => {
+test("browser batch rejects mixed input and stops after declined attachment", async () => {
   let calls = 0;
   const { tools } = runtime({ exec: async () => { calls++; return successfulLookup(); } });
   const browser = tools.get("helios_browser");
   await assert.rejects(browser.execute("missing", {}, undefined, undefined, context()), /requires action or actions/);
   await assert.rejects(browser.execute("mixed", { action: "start", actions: [{ action: "start" }] }, undefined, undefined, context()), /only actions/);
   const declined = await browser.execute("declined", {
-    actions: [{ action: "start" }, { action: "navigate", url: "https://example.com" }],
+    actions: [{ action: "attach", attachMode: "cdp", endpoint: "http://127.0.0.1:9222" }, { action: "navigate", url: "https://example.com" }],
   }, undefined, undefined, context({ ui: { async confirm() { return false; } } }));
   assert.equal(declined.details.steps.length, 1);
   assert.equal(declined.details.steps[0].details.declined, true);
@@ -354,10 +357,37 @@ test("browser batch stops after a failed step", async () => {
 
 test("attached endpoint validation happens before consent and remains loopback", async () => {
   const { tools } = runtime({ exec: async () => successfulLookup() });
-  await assert.rejects(tools.get("helios_browser").execute("id", {
+  const browser = tools.get("helios_browser");
+  await assert.rejects(browser.execute("id", {
     action: "attach", attachMode: "cdp", endpoint: "http://example.com:9222",
   }, undefined, undefined, context()), /loopback/);
+  await assert.rejects(browser.execute("id", {
+    action: "attach", attachMode: "cdp", endpoint: "http://127.0.0.1:9222",
+  }, undefined, undefined, context({ hasUI: false })), /interactive confirmation/);
   assert.equal(loopbackUrl("http://[::1]:9222", ["http:"]).port, "9222");
+});
+
+test("attached browser still requires consent to close a user tab", async () => {
+  const commands: string[] = [];
+  const confirmations: string[] = [];
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["attach", "tab-list", "tab-close", "detach"].includes(value)) ?? "unknown";
+    commands.push(command);
+    if (command === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const ctx = context({ ui: {
+    async confirm(title: string) { confirmations.push(title); return title === "Attach to existing browser?"; },
+    notify() {},
+  } });
+  const browser = tools.get("helios_browser");
+  await browser.execute("attach", { action: "attach", attachMode: "cdp", endpoint: "http://127.0.0.1:9222" }, undefined, undefined, ctx);
+  const result = await browser.execute("close-tab", { action: "tabs", tabAction: "close", tabIndex: 0 }, undefined, undefined, ctx);
+  assert.equal(result.details.declined, true);
+  assert.deepEqual(confirmations, ["Attach to existing browser?", "Close user browser tab?"]);
+  assert.ok(!commands.includes("tab-close"));
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  assert.equal(commands.at(-1), "detach");
 });
 
 test("owned browser screenshot uses Playwright CLI, attaches image, and cleans artifacts", async () => {

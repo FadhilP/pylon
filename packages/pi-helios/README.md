@@ -79,7 +79,7 @@ Check pinned CLI readiness without launching a browser:
 /helios-doctor
 ```
 
-Compatible browser launch remains verified during consented `start`; Helios never installs a browser automatically.
+Compatible owned-browser launch remains verified during `start`; Helios never installs a browser automatically.
 
 CDP/extension sessions are user-owned: Helios only `detach`s, never closes browser, kills process, or deletes profile. Shutdown cleanup is best effort after abrupt process termination.
 
@@ -87,13 +87,13 @@ Text-only models may use approved bounded snapshots and interactions. Screenshot
 
 ## Consent and privacy
 
-Starting owned browser requires interactive session grant. Attaching to existing browser always requires separate confirmation naming endpoint/browser and warns that existing tabs, logins, and page data may be exposed. Grant lasts for current Pi browser session. Closing attached user tab requires fresh confirmation.
+Starting an isolated Helios-owned browser requires no confirmation. Attaching to an existing browser requires confirmation naming endpoint/browser and warns that existing tabs, logins, and page data may be exposed. Attachment grant lasts for current Pi browser session. Closing attached user tab requires fresh confirmation.
 
 Snapshots and screenshots can contain passwords, private messages, tokens, customer data, and form content. Snapshot form values and common textual credential patterns are redacted, with redaction/truncation counts returned in tool details, but users must still supervise. Screenshots cannot be text-redacted. Selected model provider receives returned page text/images and page metadata; Pi session history retains tool results and attachments. Temporary Helios artifacts are private and removed after use/session cleanup.
 
 Consequential generic clicks cannot always be classified reliably. Supervise purchases, sending messages, publishing, destructive actions, permission prompts, and secret entry. Uploads, downloads, clipboard, dialogs, storage, cookies, user-controlled network interception, tracing, video, PDF, arbitrary scripts, and browser chrome are not supported.
 
-No UI means session creation, attachment, screenshots, and browser control are refused. Declined consent invokes no browser command. Cancellation stops current CLI command while preserving healthy session when possible. Uncertain lifecycle cleanup leaves a retryable `cleanup-required` session; use `close` for owned sessions or `detach` for attached sessions.
+Without UI, isolated owned-browser sessions remain available; attachment and Windows-window capture are refused because they require confirmation. Declined consent invokes no browser command. Cancellation stops current CLI command while preserving healthy session when possible. Uncertain lifecycle cleanup leaves a retryable `cleanup-required` session; use `close` for owned sessions or `detach` for attached sessions.
 
 ## Web Scout broker
 

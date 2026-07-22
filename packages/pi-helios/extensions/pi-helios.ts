@@ -195,7 +195,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
       try {
         const version = await diagnosePlaywrightCli(exec);
         healthDiagnostic = Promise.resolve(version);
-        ctx.ui.notify(`Helios CLI ready: ${version}. Compatible browser launch is verified by consented browser start.`, "info");
+        ctx.ui.notify(`Helios CLI ready: ${version}. CLI compatibility is verified.`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "Helios CLI diagnostic failed", "error");
       }
@@ -255,8 +255,8 @@ export default function heliosExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "helios_browser",
     label: "Helios Browser",
-    description: "Use one consented browser session for constrained navigation, targeted snapshot search, bounded/continued page snapshots, element-reference interaction, screenshots, and tabs. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
-    promptSnippet: "Use one consented browser session through constrained Playwright actions",
+    description: "Use one owned browser session with an isolated profile, or one consented attached browser session, for constrained navigation, targeted snapshot search, bounded/continued page snapshots, element-reference interaction, screenshots, and tabs. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
+    promptSnippet: "Use one owned browser with an isolated profile or one consented attached browser through constrained Playwright actions",
     promptGuidelines: [
       "Use helios_browser only for user-requested browser work; call start or attach first, then close or detach when done.",
       "Use helios_browser snapshot element references for page actions; never guess selectors.",
@@ -273,11 +273,6 @@ export default function heliosExtension(pi: ExtensionAPI) {
         const id = sessionId(ctx);
       if (params.action === "start") {
         rejectExtra(params, ["url", "browser"]);
-        if (!ctx.hasUI) throw new Error("Helios browser control requires interactive confirmation");
-        const visibility = ownedHeaded ? "visible" : "headless";
-        const supervision = ownedHeaded ? "Keep browser visible while supervising consequential actions." : "Headless interaction cannot be visually supervised; do not use it for purchases, messages, publishing, permissions, or destructive actions.";
-        const approved = await ctx.ui.confirm("Allow browser control?", `Helios will launch a ${visibility} isolated browser and allow page observation and normal interaction for this Pi session. ${supervision} Page text and screenshots may contain secrets and may be sent to selected model provider and retained in Pi session history.`);
-        if (!approved) return { content: [{ type: "text" as const, text: "User declined browser session." }], details: { declined: true } };
         const result = await withBrowserStatus(ctx, "start", () => manager.start(id, params.url, signal, ownedHeaded));
         return { content: [{ type: "text" as const, text: describe(result) }], details: result };
       }

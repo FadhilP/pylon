@@ -1,7 +1,7 @@
 {
   "name": "pi-helios",
   "version": "0.2.0",
-  "description": "Consent-gated browser use and Windows-window screenshots for Pi",
+  "description": "Owned browsers with isolated profiles, consent-gated browser attachment, and Windows-window screenshots for Pi",
   "type": "module",
   "keywords": [
     "pi-package"
