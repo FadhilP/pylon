@@ -216,22 +216,19 @@ test("Grunt guidance favors high-displacement work and retains Main ownership", 
   assert.deepEqual(tool.parameters.properties.thinking.enum, ["medium", "high"]);
   assert.equal(tool.parameters.properties.targetedContext.maxLength, 4000);
   assert.equal(tool.parameters.properties.checkCommands.maxItems, 8);
-  assert.match(tool.description, /unlimited per original user prompt/i);
+  assert.match(tool.description, /Main model reviews and verifies/i);
   assert.match(guidance, /expected main-model effort avoided, not changed LOC alone/i);
   assert.match(guidance, /ordinary semantic changes around 50–300 LOC in the main model/i);
-  assert.match(guidance, /mechanical or repetitive multi-file work/i);
+  assert.match(guidance, /mechanical multi-file work/i);
   assert.match(guidance, /typically 300–500\+ LOC/i);
-  assert.match(guidance, /medium thinking for mechanical or bounded semantic work/i);
-  assert.match(guidance, /inspect its applied changes, run focused verification, then invoke the next Grunt/i);
-  assert.match(guidance, /Main model owns difficult architecture/i);
-  assert.match(guidance, /advisor at least once when available/i);
-  assert.match(guidance, /Make every grunt task self-contained/i);
-  assert.match(guidance, /Add targetedContext only for directly applicable snippets or project instructions/i);
-  assert.match(guidance, /Omit uncertain paths or context rather than adding noise/i);
-  assert.match(guidance, /main model owns recovery/i);
-  assert.match(guidance, /fix small\/local defects.*directly/i);
-  assert.match(guidance, /Do not call grunt merely to verify or repair the previous worker/i);
-  assert.match(guidance, /remaining work is still medium or large/i);
+  assert.match(guidance, /Use medium thinking unless high clearly saves work/i);
+  assert.match(guidance, /dependent slices sequentially, inspecting and checking each result first/i);
+  assert.match(guidance, /main model owns integration and recovery/i);
+  assert.match(guidance, /Fix small remaining defects directly/i);
+  assert.match(guidance, /Never call grunt only to verify or repair its previous result/i);
+  assert.match(guidance, /self-contained medium or large work/i);
+  assert.match(guidance, /without rollback, stale-parent checks, changed-path detection/i);
+  assert.ok(guidance.length < 1_000);
 
   const theme = {
     fg: (_color: string, text: string) => text,

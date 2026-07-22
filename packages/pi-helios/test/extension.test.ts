@@ -62,8 +62,16 @@ test("registers native capture and constrained browser tools", () => {
   assert.deepEqual([...tools.keys()].sort(), ["helios_browser", "helios_capture"]);
   assert.match(tools.get("helios_capture").description, /Windows window/);
   assert.doesNotMatch(tools.get("helios_capture").description, /browser viewport/);
-  assert.equal(tools.get("helios_browser").parameters.anyOf, undefined);
-  assert.ok(tools.get("helios_browser").parameters.properties.actions);
+  const browser = tools.get("helios_browser");
+  assert.equal(browser.parameters.anyOf, undefined);
+  assert.ok(browser.parameters.properties.actions);
+  const guidance = browser.promptGuidelines.join("\n");
+  assert.ok(guidance.length < 1_000);
+  assert.match(guidance, /Never monitor/i);
+  assert.match(guidance, /never guess selectors/i);
+  assert.match(guidance, /continuation cursors/i);
+  assert.match(guidance, /Batch only predetermined, non-consequential actions/i);
+  assert.match(guidance, /User must supervise purchases/i);
 });
 
 test("visibility command changes future owned launches only", async () => {
