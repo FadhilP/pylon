@@ -61,7 +61,7 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 - **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
 - **[pi-heartbeat](./packages/pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
 - **[pi-helios](./packages/pi-helios)** — Provides owned Playwright browsers with isolated profiles, consent-gated browser attachment, and named Windows-window screenshots.
-- **[pi-discover](./packages/pi-discover)** — Provides general-purpose read-only search and coordinated inactive-tool discovery.
+- **[pi-discover](./packages/pi-discover)** — Indexes supported source files in local SQLite for symbol and lexical code search, provides read-only repository search, and coordinates inactive-tool discovery.
 - **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance, fresh-browser isolated public-web research, and explicit Pi-session search.
 - **[pi-sieve](./packages/pi-sieve)** — Limits old bulky successful tool output in outbound context without modifying stored session messages.
 - **[pi-timeline](./packages/pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
