@@ -5,8 +5,10 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { DISCOVER_CHILD_TOOL_NAMES } from "../src/discover-child-tools.ts";
 import { registerFd } from "../src/fd.ts";
+import { registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 import { registerRg } from "../src/rg.ts";
+import { boundedError } from "../src/search-common.ts";
 
 const MAX_RESULT_CHARS = 2_000;
 const discoverChildToolsExtension = fileURLToPath(new URL("../src/discover-child-tools.ts", import.meta.url));
@@ -107,6 +109,32 @@ export default function discoverExtension(pi: ExtensionAPI) {
   registerRg(pi);
   registerFd(pi);
   registerRelationshipGraph(pi);
+  const indexes = new Map<string, WorkspaceIndex>();
+  const indexFor = (cwd: string) => {
+    let index = indexes.get(cwd);
+    if (!index) {
+      index = new WorkspaceIndex(cwd, async (command, args, options) => {
+        const result = await pi.exec(command, args, options);
+        return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
+      });
+      indexes.set(cwd, index);
+    }
+    return index;
+  };
+  registerIndexTools(pi, indexFor);
+  const configureIndexStatusTool = () => {
+    let coordinated = false;
+    pi.events.emit("pylon:tool-policy", {
+      version: 1,
+      kind: "register",
+      owner: "pi-discover",
+      managedTools: ["index_status"],
+      enabledTools: ["index_status"],
+      deferredTools: ["index_status"],
+      acknowledge: () => { coordinated = true; },
+    });
+    if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "index_status"));
+  };
 
   type CachedSearch = { names: string[]; missMarker?: { query: string; inventory: string } };
   const searchCache = new Map<string, CachedSearch>();
@@ -116,6 +144,18 @@ export default function discoverExtension(pi: ExtensionAPI) {
   const invoked = new Map<string, number>();
   const selectedTools = new Set<string>();
   const metrics = { searches: 0, cacheHits: 0, misses: 0, repeatedMisses: 0, selectionFailures: 0 };
+  let latestIndexError: string | undefined;
+  let indexReady = false;
+  const refreshIndex = async (ctx?: { cwd?: string }) => {
+    if (!ctx?.cwd) return;
+    try {
+      await indexFor(ctx.cwd).refresh();
+      latestIndexError = undefined;
+      indexReady = true;
+    } catch (error) {
+      latestIndexError = boundedError(error);
+    }
+  };
   const increment = (counts: Map<string, number>, names: readonly string[]) => {
     for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
   };
@@ -136,9 +176,9 @@ export default function discoverExtension(pi: ExtensionAPI) {
     .join(", ") || "none";
 
   const disposeChildCapability = pi.events.on("pi-discover:child-tools-capability", (request: any) => {
-    if (request?.version !== 1 || typeof request.respond !== "function") return;
+    if (request?.version !== 2 || typeof request.respond !== "function") return;
     request.respond(Object.freeze({
-      version: 1,
+      version: 2,
       owner: "pi-discover",
       childExtensionPath: discoverChildToolsExtension,
       toolNames: Object.freeze([...DISCOVER_CHILD_TOOL_NAMES]),
@@ -154,19 +194,57 @@ export default function discoverExtension(pi: ExtensionAPI) {
         `Searches: ${metrics.searches}; cache hits: ${metrics.cacheHits}; misses: ${metrics.misses}; repeated misses: ${metrics.repeatedMisses}`,
         `Offered: ${countText(offered)}`,
         `Selected: ${countText(selected)}; blocked: ${countText(blocked)}; later invoked: ${countText(invoked)}; selection failures: ${metrics.selectionFailures}`,
+        `Index: ${latestIndexError ? `refresh failed: ${latestIndexError}` : indexReady ? "ready" : "not initialized"}`,
       ],
-      warning: false,
+      warning: Boolean(latestIndexError),
     });
   });
-  pi.on("session_start", clearSessionState);
-  pi.on("turn_end", clearTurnState);
+  pi.on("session_start", async (_event, ctx) => {
+    clearSessionState();
+    configureIndexStatusTool();
+    await refreshIndex(ctx);
+  });
+  pi.on("turn_end", async (_event, ctx) => {
+    clearTurnState();
+    await refreshIndex(ctx);
+  });
   pi.on("tool_call", (event: any) => {
     if (selectedTools.has(event?.toolName)) increment(invoked, [event.toolName]);
   });
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     disposeChildCapability();
     disposeHealth();
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-discover" });
     clearSessionState();
+    await Promise.all([...indexes.values()].map((index) => index.close()));
+    indexes.clear();
+  });
+
+  pi.registerCommand("discover-index", {
+    description: "Refresh, rebuild, or report the local pi-discover index",
+    async handler(args, ctx) {
+      const action = args.trim() || "refresh";
+      if (!["refresh", "rebuild", "status"].includes(action)) {
+        ctx.ui.notify("Usage: /discover-index [refresh|rebuild|status]", "error");
+        return;
+      }
+      await ctx.waitForIdle?.();
+      ctx.ui.setStatus("pi-discover-index", action === "status" ? "Reading index status..." : `${action === "rebuild" ? "Rebuilding" : "Refreshing"} index...`);
+      try {
+        const index = indexFor(ctx.cwd);
+        if (action === "refresh") await index.refresh();
+        else if (action === "rebuild") await index.rebuild();
+        const status = await index.status();
+        latestIndexError = undefined;
+        indexReady = true;
+        ctx.ui.notify(`pi-discover index ${action === "status" ? "status" : `${action} complete`}: ${JSON.stringify(status)}`, "info");
+      } catch (error) {
+        latestIndexError = boundedError(error);
+        ctx.ui.notify(`pi-discover index ${action} failed: ${latestIndexError}`, "error");
+      } finally {
+        ctx.ui.setStatus("pi-discover-index", undefined);
+      }
+    },
   });
 
   pi.registerTool({

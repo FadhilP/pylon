@@ -325,8 +325,15 @@ export default function timelineExtension(
       );
   };
   const deleteRefs = async (snapshot: Snapshot) => {
-    await git(snapshot.gitRoot, ["update-ref", "-d", snapshot.worktreeRef]);
-    await git(snapshot.gitRoot, ["update-ref", "-d", snapshot.indexRef]);
+    const repositories = [{
+      gitRoot: snapshot.gitRoot,
+      worktreeRef: snapshot.worktreeRef,
+      indexRef: snapshot.indexRef,
+    }, ...(snapshot.nested ?? [])];
+    for (const repository of repositories) {
+      await git(repository.gitRoot, ["update-ref", "-d", repository.worktreeRef]);
+      await git(repository.gitRoot, ["update-ref", "-d", repository.indexRef]);
+    }
   };
   async function checkpoint(ctx: any): Promise<Snapshot | undefined> {
     const branch = ctx.sessionManager.getBranch(),
@@ -348,9 +355,8 @@ export default function timelineExtension(
     const continuation = ctx.sessionManager.getLeafId();
     let snap: Snapshot | undefined;
     try {
-      const checkpointRoot = await git(ctx.cwd, ["rev-parse", "--show-toplevel"]);
-      await recordTimelineOwner(artifactRoot, sessionId, checkpointRoot);
-      snap = await capture(ctx.cwd, sessionId);
+      snap = await capture(ctx.cwd, sessionId, (root) =>
+        recordTimelineOwner(artifactRoot, sessionId, root));
       const identity = await worktreeId(ctx.cwd),
         verification = latestVerification?.worktreeId === identity && latestVerification.state === "passed"
           ? {

@@ -1,5 +1,12 @@
 export const SIEVE_THRESHOLD = 8_192;
-export const ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as const;
+export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as const;
+export const RANKED_SEARCH_TOOL_NAMES = ["symbol_search", "code_search"] as const;
+export const RELATIONSHIP_GRAPH_TOOL_NAME = "relationship_graph";
+export const ELIGIBLE_TOOL_NAMES = [
+  ...PLAIN_ELIGIBLE_TOOL_NAMES,
+  ...RANKED_SEARCH_TOOL_NAMES,
+  RELATIONSHIP_GRAPH_TOOL_NAME,
+] as const;
 export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
@@ -27,6 +34,7 @@ export type SkipStats = {
   ineligibleTool: number;
   error: number;
   nonTextMixedOrEmptyContent: number;
+  malformedStructuredContent: number;
   atOrBelowThreshold: number;
   recoveryUnavailable: number;
 };
@@ -64,6 +72,7 @@ export type TransformResult<T extends ContextMessage> = {
 };
 
 const eligibleTools = new Set<string>(ELIGIBLE_TOOL_NAMES);
+const rankedSearchTools = new Set<string>(RANKED_SEARCH_TOOL_NAMES);
 
 export function emptyTransformStats(): TransformStats {
   return {
@@ -77,6 +86,7 @@ export function emptyTransformStats(): TransformStats {
       ineligibleTool: 0,
       error: 0,
       nonTextMixedOrEmptyContent: 0,
+      malformedStructuredContent: 0,
       atOrBelowThreshold: 0,
       recoveryUnavailable: 0,
     },
@@ -97,6 +107,7 @@ export function addTransformStats(target: TransformStats, source: TransformStats
   target.skipped.ineligibleTool += source.skipped.ineligibleTool;
   target.skipped.error += source.skipped.error;
   target.skipped.nonTextMixedOrEmptyContent += source.skipped.nonTextMixedOrEmptyContent;
+  target.skipped.malformedStructuredContent += source.skipped.malformedStructuredContent;
   target.skipped.atOrBelowThreshold += source.skipped.atOrBelowThreshold;
   target.skipped.recoveryUnavailable += source.skipped.recoveryUnavailable;
   return target;
@@ -166,13 +177,20 @@ export function effectiveThresholdForAge(age: number, threshold: number) {
   return Math.max(1_000, Math.floor(threshold / 2));
 }
 
-type SieveSource = { toolName: string; isError: boolean; recalled: boolean };
+type SieveKind = "plain" | "rankedSearch" | "relationshipGraph";
+type SieveSource = { toolName: string; isError: boolean; recalled: boolean; kind: SieveKind };
+
+function sourceKind(toolName: string): SieveKind {
+  if (rankedSearchTools.has(toolName)) return "rankedSearch";
+  if (toolName === RELATIONSHIP_GRAPH_TOOL_NAME) return "relationshipGraph";
+  return "plain";
+}
 
 function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource | undefined {
   const fields = message as Record<string, unknown>;
   if (fields.role !== "toolResult" || typeof fields.toolName !== "string") return undefined;
   if (eligibleTools.has(fields.toolName)) {
-    return { toolName: fields.toolName, isError: fields.isError === true, recalled: false };
+    return { toolName: fields.toolName, isError: fields.isError === true, recalled: false, kind: sourceKind(fields.toolName) };
   }
   if (!allowRecall || fields.toolName !== RECALL_TOOL_NAME || fields.isError === true) return undefined;
   const details = fields.details;
@@ -184,7 +202,12 @@ function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource
     !eligibleTools.has(recall.sourceToolName) ||
     typeof recall.sourceIsError !== "boolean"
   ) return undefined;
-  return { toolName: recall.sourceToolName, isError: recall.sourceIsError, recalled: true };
+  return {
+    toolName: recall.sourceToolName,
+    isError: recall.sourceIsError,
+    recalled: true,
+    kind: sourceKind(recall.sourceToolName),
+  };
 }
 
 function replaceWithMarker<T extends ContextMessage>(message: T, marker: string): T {
@@ -193,6 +216,170 @@ function replaceWithMarker<T extends ContextMessage>(message: T, marker: string)
 
 type ActiveSlice = { outboundText: string; omittedText: string };
 type OldSuccessSlice = ActiveSlice & { retainedChars: number };
+type StructuredSlice = { outboundText: string; omittedChars: number; retainedChars: number };
+
+type JsonObject = Record<string, unknown>;
+
+function jsonObject(value: unknown): JsonObject | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : undefined;
+}
+
+function structuredPruneMetadata(
+  source: SieveSource,
+  sourceChars: number,
+  omittedKey: "omittedResults" | "omittedLocations",
+  omittedCount: number,
+  toolCallId?: string,
+): JsonObject {
+  return {
+    pruned: true,
+    sourceToolName: source.toolName,
+    sourceChars,
+    [omittedKey]: omittedCount,
+    ...(toolCallId ? { recoverVia: { tool: RECALL_TOOL_NAME, toolCallId } } : {}),
+  };
+}
+
+function structuredMarker(source: SieveSource, sourceChars: number, toolCallId?: string): string {
+  return JSON.stringify({
+    piSieve: {
+      pruned: true,
+      sourceToolName: source.toolName,
+      sourceChars,
+      omitted: true,
+      ...(toolCallId ? { recoverVia: { tool: RECALL_TOOL_NAME, toolCallId } } : {}),
+    },
+  });
+}
+
+function parseJsonText(blocks: TextBlock[]): JsonObject | undefined {
+  try {
+    return jsonObject(JSON.parse(blocks.map((block) => block.text).join("")));
+  } catch {
+    return undefined;
+  }
+}
+
+function validStructuredContent(blocks: TextBlock[], kind: Exclude<SieveKind, "plain">): boolean {
+  const parsed = parseJsonText(blocks);
+  if (!parsed) return false;
+  if (kind === "rankedSearch")
+    return Array.isArray(parsed.results) && parsed.results.every((result) => jsonObject(result) !== undefined);
+  if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return false;
+  const nodeIds = new Set<string>();
+  for (const node of parsed.nodes) {
+    const value = jsonObject(node);
+    if (!value || typeof value.id !== "string" || typeof value.kind !== "string" || nodeIds.has(value.id)) return false;
+    nodeIds.add(value.id);
+  }
+  return parsed.edges.every((edge) => {
+    const value = jsonObject(edge);
+    return value !== undefined &&
+      typeof value.from === "string" &&
+      typeof value.to === "string" &&
+      typeof value.type === "string" &&
+      nodeIds.has(value.from) &&
+      nodeIds.has(value.to);
+  });
+}
+
+function sliceRankedSearch(
+  blocks: TextBlock[],
+  source: SieveSource,
+  maxOutboundChars: number,
+  toolCallId?: string,
+  maxRetainedChars = Number.POSITIVE_INFINITY,
+): StructuredSlice | undefined {
+  const text = blocks.map((block) => block.text).join("");
+  const parsed = parseJsonText(blocks);
+  if (!parsed || !Array.isArray(parsed.results)) return undefined;
+  const results = parsed.results;
+  const base = { ...parsed };
+  delete base.results;
+  delete base.piSieve;
+  for (let returned = results.length; returned >= 0; returned--) {
+    const selected = results.slice(0, returned);
+    const withoutMarker = JSON.stringify({ ...base, results: selected });
+    const outboundText = JSON.stringify({
+      ...base,
+      results: selected,
+      piSieve: structuredPruneMetadata(source, text.length, "omittedResults", results.length - returned, toolCallId),
+    });
+    if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
+      return {
+        outboundText,
+        omittedChars: Math.max(0, text.length - withoutMarker.length),
+        retainedChars: withoutMarker.length,
+      };
+    }
+  }
+  return undefined;
+}
+
+function sliceRelationshipGraph(
+  blocks: TextBlock[],
+  source: SieveSource,
+  maxOutboundChars: number,
+  maxRetainedChars = Number.POSITIVE_INFINITY,
+): StructuredSlice | undefined {
+  const text = blocks.map((block) => block.text).join("");
+  const parsed = parseJsonText(blocks);
+  if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return undefined;
+  const locations = parsed.nodes.filter((node) => jsonObject(node)?.kind === "location");
+  const base = { ...parsed };
+  delete base.nodes;
+  delete base.edges;
+  delete base.piSieve;
+
+  for (let returned = locations.length; returned >= 0; returned--) {
+    const selectedLocationIds = new Set(
+      locations.slice(0, returned).map((node) => jsonObject(node)?.id).filter((id): id is string => typeof id === "string"),
+    );
+    const selectedEdges = parsed.edges.filter((edge) => {
+      const value = jsonObject(edge);
+      return value && (
+        (value.type === "contains" && selectedLocationIds.has(String(value.to))) ||
+        (value.type === "mentions" && selectedLocationIds.has(String(value.from)))
+      );
+    });
+    const selectedNodeIds = new Set<string>();
+    for (const edge of selectedEdges) {
+      const value = jsonObject(edge)!;
+      selectedNodeIds.add(String(value.from));
+      selectedNodeIds.add(String(value.to));
+    }
+    const selectedNodes = parsed.nodes.filter((node) => {
+      const value = jsonObject(node);
+      return typeof value?.id === "string" && selectedNodeIds.has(value.id);
+    });
+    const originalMetadata = jsonObject(parsed.metadata) ?? {};
+    const graph = {
+      ...base,
+      nodes: selectedNodes,
+      edges: selectedEdges,
+      metadata: {
+        ...originalMetadata,
+        returnedCount: returned,
+        truncated: originalMetadata.truncated === true || returned < locations.length,
+      },
+    };
+    const withoutMarker = JSON.stringify(graph);
+    const outboundText = JSON.stringify({
+      ...graph,
+      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locations.length - returned),
+    });
+    if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
+      return {
+        outboundText,
+        omittedChars: Math.max(0, text.length - withoutMarker.length),
+        retainedChars: withoutMarker.length,
+      };
+    }
+  }
+  return undefined;
+}
 
 function sliceOldSuccess(
   blocks: TextBlock[],
@@ -318,8 +505,16 @@ export function sieveMessages<T extends ContextMessage>(
         stats.skipped.nonTextMixedOrEmptyContent++;
         continue;
       }
+      if (source.kind === "relationshipGraph" && !source.isError) {
+        stats.skipped.recentWindow++;
+        continue;
+      }
       if (sourceLength <= threshold) {
         stats.skipped.atOrBelowThreshold++;
+        continue;
+      }
+      if (source.kind === "rankedSearch" && !source.isError && !validStructuredContent(blocks, source.kind)) {
+        stats.skipped.malformedStructuredContent++;
         continue;
       }
       const toolCallId = (message as Record<string, unknown>).toolCallId;
@@ -329,6 +524,25 @@ export function sieveMessages<T extends ContextMessage>(
         activeToolCallIdCounts.get(toolCallId) !== 1
       ) {
         stats.skipped.recoveryUnavailable++;
+        continue;
+      }
+      if (source.kind === "rankedSearch" && !source.isError) {
+        const sliced = sliceRankedSearch(blocks, source, threshold, toolCallId);
+        if (!sliced || sliced.outboundText.length >= sourceLength) {
+          stats.skipped.recoveryUnavailable++;
+          continue;
+        }
+        replacements.set(index, replaceWithMarker(message, sliced.outboundText));
+        recoverableActiveResults.push({
+          toolCallId,
+          toolName: source.toolName,
+          content: blocks.map((block) => ({ ...block })),
+          isError: false,
+        });
+        stats.transformed++;
+        stats.transformedBy.activeThreshold++;
+        stats.omittedChars += sliced.omittedChars;
+        stats.netCharsSaved += sourceLength - sliced.outboundText.length;
         continue;
       }
       const sliced = sliceActiveResult(blocks, source, toolCallId, threshold);
@@ -384,10 +598,34 @@ export function sieveMessages<T extends ContextMessage>(
       stats.skipped.nonTextMixedOrEmptyContent++;
       continue;
     }
+    const blocks = textOnlyBlocks((message as Record<string, unknown>).content)!;
+
+    if (source.kind === "relationshipGraph" && age === 1) {
+      stats.skipped.recentWindow++;
+      continue;
+    }
+    if (source.kind !== "plain" && !validStructuredContent(blocks, source.kind)) {
+      stats.skipped.malformedStructuredContent++;
+      continue;
+    }
 
     const effectiveThreshold = age === 1
       ? (options.pruneActive ? threshold : 3 * threshold)
       : effectiveThresholdForAge(age, threshold);
+    if (source.kind === "relationshipGraph" && age >= 6) {
+      const marker = structuredMarker(source, sourceLength);
+      if (marker.length >= sourceLength) {
+        retainedChars += sourceLength;
+        stats.skipped.atOrBelowThreshold++;
+        continue;
+      }
+      replacements.set(index, replaceWithMarker(message, marker));
+      stats.transformed++;
+      stats.transformedBy.ageThreshold++;
+      stats.omittedChars += sourceLength;
+      stats.netCharsSaved += sourceLength - marker.length;
+      continue;
+    }
     if (age === 1 && sourceLength <= effectiveThreshold) {
       stats.skipped.atOrBelowThreshold++;
       continue;
@@ -402,7 +640,33 @@ export function sieveMessages<T extends ContextMessage>(
 
     const byAgeThreshold = sourceLength > effectiveThreshold;
     const maxOutboundChars = byAgeThreshold ? effectiveThreshold : Math.max(0, sourceLength - 1);
-    const blocks = textOnlyBlocks((message as Record<string, unknown>).content)!;
+    if (source.kind !== "plain") {
+      const maxRetainedChars = age === 1 ? Number.POSITIVE_INFINITY : Math.max(0, remainingBudget);
+      const sliced = source.kind === "rankedSearch"
+        ? sliceRankedSearch(blocks, source, maxOutboundChars, undefined, maxRetainedChars)
+        : sliceRelationshipGraph(blocks, source, maxOutboundChars, maxRetainedChars);
+      if (sliced && sliced.outboundText.length < sourceLength) {
+        replacements.set(index, replaceWithMarker(message, sliced.outboundText));
+        if (age > 1) retainedChars += sliced.retainedChars;
+        stats.omittedChars += sliced.omittedChars;
+        stats.netCharsSaved += sourceLength - sliced.outboundText.length;
+      } else {
+        const marker = structuredMarker(source, sourceLength);
+        if (marker.length >= sourceLength) {
+          if (age > 1) retainedChars += sourceLength;
+          stats.skipped.atOrBelowThreshold++;
+          continue;
+        }
+        replacements.set(index, replaceWithMarker(message, marker));
+        stats.omittedChars += sourceLength;
+        stats.netCharsSaved += sourceLength - marker.length;
+      }
+      stats.transformed++;
+      if (byAgeThreshold) stats.transformedBy.ageThreshold++;
+      else stats.transformedBy.budget++;
+      continue;
+    }
+
     const sliced = sliceOldSuccess(blocks, source, maxOutboundChars, remainingBudget);
     if (sliced) {
       replacements.set(index, replaceWithMarker(message, sliced.outboundText));

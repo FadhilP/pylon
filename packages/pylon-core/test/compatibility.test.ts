@@ -87,7 +87,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     const capabilities: any[] = [];
     events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => capabilities.push(value) });
     assert.equal(capabilities.length, 1);
-    assert.deepEqual(capabilities[0].eligible(), ["web_scout"]);
+    assert.deepEqual(capabilities[0].eligible(), ["index_status", "web_scout"]);
     capabilities[0].select(["web_scout"]);
     assert.ok(active.includes("web_scout"));
     await commands.get("plan").handler("compatibility", ctx);

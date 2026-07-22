@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
-export async function preflight(cwd: string) {
-  const root = await git(cwd, ["rev-parse", "--show-toplevel"]),
+import { discoverRepositories, type Repository } from "./repositories.ts";
+
+export type RepositoryState = Repository & { head: string };
+
+async function inspect(repository: Repository): Promise<RepositoryState> {
+  const { root } = repository,
     bare = await git(root, ["rev-parse", "--is-bare-repository"]),
     head = await git(root, ["rev-parse", "HEAD"]);
   if (bare === "true") throw Error("Bare repositories unsupported.");
   if ((await git(root, ["ls-files", "-u"])).trim())
-    throw Error("Unmerged index unsupported.");
-  if ((await git(root, ["submodule", "status"])).trim())
-    throw Error("Submodules unsupported.");
+    throw Error(`Unmerged index unsupported: ${repository.prefix || "."}`);
   const raw = await git(root, ["rev-parse", "--git-dir"]),
     gd = raw.startsWith("/") || /^[A-Za-z]:/.test(raw) ? raw : join(root, raw);
   for (const f of [
@@ -20,7 +22,8 @@ export async function preflight(cwd: string) {
     "rebase-merge",
     "rebase-apply",
   ])
-    if (existsSync(join(gd, f))) throw Error("Git operation in progress.");
+    if (existsSync(join(gd, f)))
+      throw Error(`Git operation in progress: ${repository.prefix || "."}`);
   const unsafe = (
     await git(root, ["ls-files", "--others", "--exclude-standard"])
   )
@@ -30,6 +33,13 @@ export async function preflight(cwd: string) {
         p,
       ),
     );
-  if (unsafe.length) throw Error(`Unsafe untracked path: ${unsafe[0]}`);
-  return { root, head };
+  if (unsafe.length)
+    throw Error(`Unsafe untracked path: ${repository.prefix ? `${repository.prefix}/` : ""}${unsafe[0]}`);
+  return { ...repository, head };
+}
+
+export async function preflight(cwd: string) {
+  const repositories = await discoverRepositories(cwd),
+    states = await Promise.all(repositories.map(inspect));
+  return { root: states[0].root, head: states[0].head, repositories: states };
 }

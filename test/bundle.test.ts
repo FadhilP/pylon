@@ -99,10 +99,10 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "continuity", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
+      "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "verify", "web_scout",
+      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "symbol_search", "verify", "web_scout",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 
@@ -121,6 +121,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(active.includes("continuity_update"));
     assert.ok(active.includes("memory"));
     assert.ok(!active.includes("grunt"));
+    assert.ok(!active.includes("index_status"));
     assert.ok(!active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
     assert.ok(!active.includes("advisor"));

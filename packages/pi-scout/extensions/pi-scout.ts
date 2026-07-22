@@ -36,10 +36,10 @@ const WEB_SCOUT_TIMEOUT_MS = 5 * 60 * 1000;
 const WEB_SCOUT_GRANT_ENV = "PI_HELIOS_WEB_SCOUT_GRANT";
 
 type DiscoverChildToolsCapability = {
-  version: 1;
+  version: 2;
   owner: "pi-discover";
   childExtensionPath: string;
-  toolNames: readonly ["rg", "fd", "relationship_graph"];
+  toolNames: readonly ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status"];
 };
 
 function regularFile(path: string): boolean {
@@ -49,21 +49,24 @@ function regularFile(path: string): boolean {
 
 function discoverChildToolsCapability(pi: ExtensionAPI): DiscoverChildToolsCapability | undefined {
   const responses: unknown[] = [];
-  pi.events.emit("pi-discover:child-tools-capability", { version: 1, respond: (value: unknown) => responses.push(value) });
+  pi.events.emit("pi-discover:child-tools-capability", { version: 2, respond: (value: unknown) => responses.push(value) });
   if (responses.length !== 1) return undefined;
   const value = responses[0] as Partial<DiscoverChildToolsCapability>;
   if (
-    value?.version !== 1 ||
+    value?.version !== 2 ||
     value.owner !== "pi-discover" ||
     typeof value.childExtensionPath !== "string" ||
     !isAbsolute(value.childExtensionPath) ||
     basename(value.childExtensionPath) !== "discover-child-tools.ts" ||
     !regularFile(value.childExtensionPath) ||
     !Array.isArray(value.toolNames) ||
-    value.toolNames.length !== 3 ||
+    value.toolNames.length !== 6 ||
     value.toolNames[0] !== "rg" ||
     value.toolNames[1] !== "fd" ||
-    value.toolNames[2] !== "relationship_graph"
+    value.toolNames[2] !== "relationship_graph" ||
+    value.toolNames[3] !== "symbol_search" ||
+    value.toolNames[4] !== "code_search" ||
+    value.toolNames[5] !== "index_status"
   ) return undefined;
   return value as DiscoverChildToolsCapability;
 }

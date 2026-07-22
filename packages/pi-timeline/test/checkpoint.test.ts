@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -208,6 +208,53 @@ test("capture completes and restore preserves ignored files", { timeout: 20_000 
     );
     assert.equal(await readFile(join(root, "ignored.log"), "utf8"), "ignored-later\n");
     await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("capture and restore include initialized gitlinks without .gitmodules", { timeout: 20_000 }, async () => {
+  const { root, git } = await repository(), child = join(root, "vendor", "child");
+  const childGit = async (...args: string[]) =>
+    (await exec("git", args, { cwd: child, windowsHide: true })).stdout.trim();
+  try {
+    await mkdir(child, { recursive: true });
+    await childGit("init", "-q");
+    await childGit("config", "user.email", "timeline@test.local");
+    await childGit("config", "user.name", "timeline-test");
+    await writeFile(join(child, "child.txt"), "base\n");
+    await childGit("add", "child.txt");
+    await childGit("commit", "-qm", "base");
+    await git("add", "vendor/child");
+    await git("commit", "-qm", "add nested repository");
+    await assert.rejects(access(join(root, ".gitmodules")));
+
+    await writeFile(join(child, "child.txt"), "checkpoint worktree\n");
+    await writeFile(join(child, "staged.txt"), "checkpoint index\n");
+    await childGit("add", "staged.txt");
+    await writeFile(join(child, "staged.txt"), "checkpoint worktree\n");
+    await writeFile(join(child, "ordinary.txt"), "checkpoint ordinary\n");
+    const ownedRoots: string[] = [], snapshot = await capture(
+      root,
+      "nested-session",
+      async (repositoryRoot) => { ownedRoots.push(repositoryRoot); },
+    );
+    assert.deepEqual(new Set(ownedRoots), new Set([root, child]));
+    assert.equal(snapshot.nested?.length, 1);
+    assert.equal(snapshot.nested![0].prefix, "vendor/child");
+
+    await writeFile(join(child, "child.txt"), "later\n");
+    await writeFile(join(child, "staged.txt"), "later\n");
+    await rm(join(child, "ordinary.txt"));
+    await childGit("add", "-A");
+    await restore(snapshot);
+
+    assert.equal((await readFile(join(child, "child.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint worktree\n");
+    assert.equal((await readFile(join(child, "staged.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint worktree\n");
+    assert.equal((await readFile(join(child, "ordinary.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint ordinary\n");
+    assert.equal(await childGit("show", ":staged.txt"), "checkpoint index");
+    await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+    await deleteRefs(child, [snapshot.nested![0].worktreeRef, snapshot.nested![0].indexRef]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

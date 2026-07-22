@@ -178,16 +178,16 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
   const runtime = await harness(run);
   const childExtensionPath = join(process.cwd(), "..", "pi-discover", "src", "discover-child-tools.ts");
   const respond = (request: any) => request.respond({
-    version: 1,
+    version: 2,
     owner: "pi-discover",
     childExtensionPath,
-    toolNames: ["rg", "fd", "relationship_graph"],
+    toolNames: ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status"],
   });
   runtime.events.on("pi-discover:child-tools-capability", respond);
   try {
     await runtime.tools.get("repo_scout").execute("one", { task: "map symbol" }, undefined, undefined, context());
     assert.ok(childArgs[0].includes(childExtensionPath));
-    assert.ok(childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,grep,find,ls"));
+    assert.ok(childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,symbol_search,code_search,index_status,grep,find,ls"));
     assert.equal(childArgs[0].filter((arg) => arg === "-e").length, 2);
 
     runtime.events.on("pi-discover:child-tools-capability", (request) => respond(request));

@@ -34,6 +34,7 @@ const noSkips = {
   ineligibleTool: 0,
   error: 0,
   nonTextMixedOrEmptyContent: 0,
+  malformedStructuredContent: 0,
   atOrBelowThreshold: 0,
   recoveryUnavailable: 0,
 };
@@ -41,6 +42,41 @@ const noTransformTypes = { ageThreshold: 0, budget: 0, giantError: 0, activeThre
 
 function oldResultAtAge(age: number, text: string, extra: Record<string, unknown> = {}) {
   return sieveMessages([user("before"), textResult("bash", text, extra), ...Array.from({ length: age }, (_, index) => user(`after-${index}`))], 4_000);
+}
+
+function rankedSearchText(kind: "symbol" | "code", count = 20) {
+  const key = kind === "symbol" ? "heuristic" : "semantic";
+  return JSON.stringify({
+    [key]: kind === "symbol",
+    results: Array.from({ length: count }, (_, index) => ({
+      path: `src/result-${index}.ts`,
+      line: index + 1,
+      text: `${index}:` + "x".repeat(120),
+    })),
+  });
+}
+
+function relationshipGraphText(count = 12) {
+  const queryId = "query:run";
+  const nodes: any[] = [{ id: queryId, kind: "query", label: "run" }];
+  const edges: any[] = [];
+  for (let index = 0; index < count; index++) {
+    const fileId = `file:src/file-${index}.ts`;
+    const locationId = `location:src/file-${index}.ts:${index + 1}`;
+    nodes.push({ id: fileId, kind: "file", label: `src/file-${index}.ts` });
+    nodes.push({ id: locationId, kind: "location", path: `src/file-${index}.ts`, line: index + 1, text: "x".repeat(120), roles: ["reference"] });
+    edges.push({ from: fileId, to: locationId, type: "contains" });
+    edges.push({ from: locationId, to: queryId, type: "mentions" });
+  }
+  nodes.push({ id: "file:orphan.ts", kind: "file", label: "src/orphan.ts" });
+  return JSON.stringify({
+    query: "run",
+    scope: ".",
+    heuristic: true,
+    nodes,
+    edges,
+    metadata: { observedMatchCount: count, returnedCount: count, truncated: false },
+  });
 }
 
 function assertPartialOutput(output: string, source: string, toolName: string, recalled = false) {
@@ -201,6 +237,92 @@ test("keeps read output, including giant successes and errors, fully preserved",
   assert.equal(result.stats.skipped.ineligibleTool, 2);
 });
 
+test("structure-aware ranked search pruning preserves valid JSON, rank order, and active recall", () => {
+  for (const [toolName, kind] of [["symbol_search", "symbol"], ["code_search", "code"]] as const) {
+    const source = rankedSearchText(kind);
+    const active = textResult(toolName, source, { toolCallId: `${toolName}-active` });
+    const activeResult = sieveMessages([user("current"), active], 1_000, { pruneActive: true });
+    const activeOutput = JSON.parse((activeResult.messages[1].content as any)[0].text);
+
+    assert.ok(activeOutput.results.length > 0);
+    assert.ok(activeOutput.results.length < 20);
+    assert.deepEqual(
+      activeOutput.results.map((result: any) => result.path),
+      Array.from({ length: activeOutput.results.length }, (_, index) => `src/result-${index}.ts`),
+    );
+    assert.deepEqual(activeOutput.piSieve.recoverVia, {
+      tool: "sieve_recall",
+      toolCallId: `${toolName}-active`,
+    });
+    assert.equal(activeResult.recoverableActiveResults[0].content[0].text, source);
+    assert.equal(activeResult.stats.transformedBy.activeThreshold, 1);
+
+    const aged = sieveMessages([user("before"), active, user("second"), user("third")], 1_000);
+    const agedOutput = JSON.parse((aged.messages[1].content as any)[0].text);
+    assert.ok(agedOutput.results.length < 20);
+    assert.equal(agedOutput.results[0].path, "src/result-0.ts");
+    assert.equal(agedOutput.piSieve.recoverVia, undefined);
+    assert.equal(aged.stats.transformedBy.ageThreshold, 1);
+  }
+
+  const malformed = textResult("code_search", "{" + "x".repeat(2_000), { toolCallId: "malformed" });
+  const malformedResult = sieveMessages([user("current"), malformed], 1_000, { pruneActive: true });
+  assert.equal(malformedResult.messages[1], malformed, "malformed structured output fails open");
+  assert.equal(malformedResult.stats.skipped.malformedStructuredContent, 1);
+  const malformedAged = sieveMessages([user("before"), malformed, user("second"), user("third")], 1_000);
+  assert.equal(malformedAged.messages[1], malformed, "malformed aged search output fails open");
+  assert.equal(malformedAged.stats.skipped.malformedStructuredContent, 1);
+});
+
+test("relationship graph keeps recent output, prunes complete graph records, then becomes marker-only", () => {
+  const source = relationshipGraphText();
+  const graph = textResult("relationship_graph", source, { toolCallId: "graph" });
+  const active = sieveMessages([user("current"), graph], 1_000, { pruneActive: true });
+  assert.equal(active.messages[1], graph);
+
+  const ageOne = sieveMessages([user("before"), graph, user("after")], 1_000, { pruneActive: true });
+  assert.equal(ageOne.messages[1], graph);
+
+  const aged = sieveMessages([user("before"), graph, user("second"), user("third")], 1_000);
+  const agedGraph = JSON.parse((aged.messages[1].content as any)[0].text);
+  const nodeIds = new Set(agedGraph.nodes.map((node: any) => node.id));
+  assert.ok(agedGraph.metadata.returnedCount < 12);
+  assert.equal(agedGraph.metadata.truncated, true);
+  assert.equal(agedGraph.piSieve.omittedLocations, 12 - agedGraph.metadata.returnedCount);
+  assert.ok(agedGraph.edges.every((edge: any) => nodeIds.has(edge.from) && nodeIds.has(edge.to)));
+  assert.equal(nodeIds.has("file:orphan.ts"), false);
+  assert.equal(aged.stats.transformedBy.ageThreshold, 1);
+
+  const old = sieveMessages([
+    user("before"), graph,
+    ...Array.from({ length: 6 }, (_, index) => user(`after-${index}`)),
+  ], 10_000);
+  assert.deepEqual(JSON.parse((old.messages[1].content as any)[0].text), {
+    piSieve: {
+      pruned: true,
+      sourceToolName: "relationship_graph",
+      sourceChars: source.length,
+      omitted: true,
+    },
+  });
+
+  const malformedGraphValue = JSON.parse(source);
+  malformedGraphValue.edges[0].from = "file:missing.ts";
+  const malformedGraph = textResult("relationship_graph", JSON.stringify(malformedGraphValue));
+  for (const age of [2, 6]) {
+    const result = sieveMessages([
+      user("before"), malformedGraph,
+      ...Array.from({ length: age }, (_, index) => user(`malformed-after-${index}`)),
+    ], 1_000);
+    assert.equal(result.messages[1], malformedGraph, `malformed graph fails open at age ${age}`);
+    assert.equal(result.stats.skipped.malformedStructuredContent, 1);
+  }
+
+  const status = textResult("index_status", "x".repeat(20_000));
+  const statusResult = sieveMessages([user("before"), status, user("second"), user("third")], 1_000);
+  assert.equal(statusResult.messages[1], status);
+});
+
 test("records recent-window and old-result skip reasons, including malformed and empty blocks", () => {
   const old = [
     textResult("bash", "x".repeat(SIEVE_THRESHOLD)),
@@ -227,6 +349,7 @@ test("records recent-window and old-result skip reasons, including malformed and
       ineligibleTool: 2,
       error: 1,
       nonTextMixedOrEmptyContent: 3,
+      malformedStructuredContent: 0,
       atOrBelowThreshold: 3,
       recoveryUnavailable: 0,
     },
