@@ -137,6 +137,23 @@ export function searchTelemetry(activity: readonly ScoutActivity[], seen: Set<st
   return { searches, repeatedSearches };
 }
 
+export function repoScoutOrientationGuidance(selectedTools?: readonly string[]): string | undefined {
+  const selected = new Set(selectedTools ?? []);
+  if (!selected.has("repo_scout")) return undefined;
+  const uses = [
+    selected.has("symbol_search") && "`symbol_search` for identifiers",
+    selected.has("code_search") && "`code_search` for concepts",
+    selected.has("relationship_graph") && "`relationship_graph` for known tokens",
+    selected.has("fd") && "`fd` for live paths",
+    selected.has("rg") && "`rg` for live content, regex, config, or index misses",
+    selected.has("find") && "`find` for paths",
+    selected.has("grep") && "`grep` for live content or regex",
+    selected.has("read") && "`read` for narrow source ranges",
+  ].filter((value): value is string => Boolean(value));
+  if (!uses.length) return undefined;
+  return `Repo Scout orientation tools currently visible: ${uses.join("; ")}. Unless exact anchors already exist, use 1–3 targeted searches, then prompt repo_scout with concrete anchors; leave non-local tracing to Scout.`;
+}
+
 export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
   let repoRuns = 0;
   let repoCallQueue = Promise.resolve();
@@ -237,10 +254,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     pendingIntent = parseSessionIntent(event.text);
   });
 
-  pi.on("before_agent_start", async (_event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const orientationGuidance = repoScoutOrientationGuidance(event.systemPromptOptions?.selectedTools);
+    const result = (content?: string) => {
+      const message = content ? findingMessage(content) : undefined;
+      if (!orientationGuidance) return message;
+      return {
+        ...message,
+        systemPrompt: `${event.systemPrompt}\n\n${orientationGuidance}`,
+      };
+    };
     const intent = pendingIntent;
     pendingIntent = undefined;
-    if (!intent || !isScoutEnabled(await loadConfig())) return;
+    if (!intent || !isScoutEnabled(await loadConfig())) return result();
     if (ctx.hasUI)
       ctx.ui.setStatus("pi-scout", "scout: searching Pi sessions…");
     try {
@@ -252,19 +278,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       if (!evidence.excerptCount) {
         ephemeralFinding =
           "Historical Pi-session result. No matching eligible Pi-session text found.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const model = await resolveModel(ctx);
       if (!model) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: no selected model.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: selected model has no credentials.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const args = [
         "--mode",
@@ -305,7 +331,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     } finally {
       if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
     }
-    return ephemeralFinding ? findingMessage(ephemeralFinding) : undefined;
+    return result(ephemeralFinding);
   });
 
   pi.registerEntryRenderer("pi-scout-session", (entry, _options, theme) => {
@@ -328,7 +354,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     promptSnippet:
       "Map concrete repository paths, symbols, patterns, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty",
     promptGuidelines: [
-      "Use repo_scout before edits needing non-local repository, architecture, data-flow, or cross-file understanding. If no anchor is known, first do one bounded fd/rg/read orientation. Skip repo_scout for known-file self-contained edits; otherwise call it before mutation.",
+      "Default to repo_scout for non-local, architecture, data-flow, cross-file, or unfamiliar-code plans, diagnoses, reviews, and edits. Before calling, do 1–3 targeted searches with currently visible orientation tools to find exact anchors and sharpen the task. Skip orientation when exact anchors already exist. Leave non-local tracing to Scout. Skip repo_scout only for known-file self-contained work.",
       "Give repo_scout an observable action, concrete scope anchors, required evidence, and a finite stopping boundary that permits directly relevant callers, config, registries, and tests. Scout reports cited facts and uncertainty; the main model evaluates them.",
       "Treat repo_scout citations as the working set. Reread only for an exact edit, evidence gap/conflict, or changed state. For follow-ups, pass relevant prior facts and the unresolved gap because each child session starts fresh.",
     ],

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
+import scout, { repoScoutOrientationGuidance, startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
@@ -52,6 +52,53 @@ test("historical findings use one persistent before-agent message", async () => 
   try {
     assert.equal(runtime.handlers.has("context"), false);
     assert.equal(runtime.handlers.get("before_agent_start")?.length, 1);
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout orientation guidance follows currently selected tools", async () => {
+  assert.equal(repoScoutOrientationGuidance(["read", "symbol_search"]), undefined);
+  const indexed = repoScoutOrientationGuidance(["repo_scout", "symbol_search", "rg", "read"]);
+  assert.match(indexed!, /symbol_search.*identifiers/);
+  assert.match(indexed!, /rg.*live content/);
+  assert.match(indexed!, /read.*narrow source ranges/);
+  assert.doesNotMatch(indexed!, /`(?:code_search|relationship_graph|fd|grep|find)`/);
+  const standalone = repoScoutOrientationGuidance(["repo_scout", "grep", "find", "read"]);
+  assert.match(standalone!, /find.*paths/);
+  assert.match(standalone!, /grep.*live content/);
+  assert.doesNotMatch(standalone!, /`(?:symbol_search|code_search|relationship_graph|fd|rg)`/);
+
+  const runtime = await harness();
+  try {
+    const result = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "BASE",
+      systemPromptOptions: { selectedTools: ["repo_scout", "code_search", "read"] },
+    }, context());
+    assert.match(result.systemPrompt, /^BASE\n\nRepo Scout orientation tools currently visible:/);
+    assert.match(result.systemPrompt, /code_search.*concepts/);
+    assert.match(result.systemPrompt, /Unless exact anchors already exist, use 1–3 targeted searches/);
+    assert.doesNotMatch(result.systemPrompt, /`(?:symbol_search|relationship_graph|fd|rg|grep|find)`/);
+
+    runtime.handlers.get("input")?.forEach(handler => handler({
+      source: "interactive",
+      text: "Search my Pi sessions for absent evidence",
+    }));
+    const combined = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "CHAINED",
+      systemPromptOptions: { selectedTools: ["repo_scout", "grep", "read"] },
+    }, context());
+    assert.match(combined.message.content, /No matching eligible Pi-session text found/);
+    assert.match(combined.systemPrompt, /^CHAINED\n\nRepo Scout orientation tools currently visible:/);
+
+    runtime.handlers.get("input")?.forEach(handler => handler({
+      source: "interactive",
+      text: "Search my Pi sessions for absent evidence",
+    }));
+    const messageOnly = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "CHAINED",
+      systemPromptOptions: { selectedTools: ["read"] },
+    }, context());
+    assert.match(messageOnly.message.content, /No matching eligible Pi-session text found/);
+    assert.equal("systemPrompt" in messageOnly, false);
   } finally { runtime.restore(); }
 });
 
@@ -256,8 +303,13 @@ test("Scout registers separate repo and web tools", async () => {
     assert.equal(repoGuidelines.length, 3);
     assert.ok(repoGuidance.length < 1_000);
     assert.ok(repoGuidelines.every((guideline) => /repo_scout/i.test(guideline)));
-    assert.match(repoGuidance, /before edits needing non-local repository/i);
-    assert.match(repoGuidance, /Skip repo_scout for known-file self-contained edits/i);
+    assert.match(repoGuidance, /Default to repo_scout for non-local, architecture, data-flow, cross-file, or unfamiliar-code plans, diagnoses, reviews, and edits/i);
+    assert.match(repoGuidance, /targeted searches with currently visible orientation tools/i);
+    assert.match(repoGuidance, /find exact anchors and sharpen the task/i);
+    assert.doesNotMatch(repoGuidance, /symbol_search|code_search|relationship_graph|fd\/rg/i);
+    assert.match(repoGuidance, /Skip orientation when exact anchors already exist/i);
+    assert.match(repoGuidance, /Leave non-local tracing to Scout/i);
+    assert.match(repoGuidance, /Skip repo_scout only for known-file self-contained work/i);
     assert.match(repoGuidance, /observable action/i);
     assert.match(repoGuidance, /concrete scope anchors/i);
     assert.match(repoGuidance, /required evidence/i);
@@ -266,7 +318,6 @@ test("Scout registers separate repo and web tools", async () => {
     assert.match(repoGuidance, /main model evaluates/i);
     assert.match(repoGuidance, /Reread only for an exact edit, evidence gap\/conflict, or changed state/i);
     assert.match(repoGuidance, /each child session starts fresh/i);
-    assert.match(repoGuidance, /otherwise call it before mutation/i);
     assert.doesNotMatch(repoGuidance, /Replace ['"]|Across packages\/a|Within named auth entrypoints/i);
     assert.match(runtime.tools.get("web_scout").description, /fresh temporary Helios browser/);
   } finally { runtime.restore(); }
