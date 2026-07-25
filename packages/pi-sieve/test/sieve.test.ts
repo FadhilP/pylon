@@ -57,24 +57,14 @@ function rankedSearchText(kind: "symbol" | "code", count = 20) {
 }
 
 function relationshipGraphText(count = 12) {
-  const queryId = "query:run";
-  const nodes: any[] = [{ id: queryId, kind: "query", label: "run" }];
-  const edges: any[] = [];
-  for (let index = 0; index < count; index++) {
-    const fileId = `file:src/file-${index}.ts`;
-    const locationId = `location:src/file-${index}.ts:${index + 1}`;
-    nodes.push({ id: fileId, kind: "file", label: `src/file-${index}.ts` });
-    nodes.push({ id: locationId, kind: "location", path: `src/file-${index}.ts`, line: index + 1, text: "x".repeat(120), roles: ["reference"] });
-    edges.push({ from: fileId, to: locationId, type: "contains" });
-    edges.push({ from: locationId, to: queryId, type: "mentions" });
-  }
-  nodes.push({ id: "file:orphan.ts", kind: "file", label: "src/orphan.ts" });
   return JSON.stringify({
     query: "run",
     scope: ".",
     heuristic: true,
-    nodes,
-    edges,
+    files: Array.from({ length: count }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      locations: [{ line: index + 1, text: "x".repeat(120), roles: ["reference"] }],
+    })),
     metadata: { observedMatchCount: count, returnedCount: count, truncated: false },
   });
 }
@@ -246,6 +236,8 @@ test("structure-aware ranked search pruning preserves valid JSON, rank order, an
 
     assert.ok(activeOutput.results.length > 0);
     assert.ok(activeOutput.results.length < 20);
+    assert.equal(activeOutput.returned, activeOutput.results.length);
+    assert.equal(activeOutput.truncated, true);
     assert.deepEqual(
       activeOutput.results.map((result: any) => result.path),
       Array.from({ length: activeOutput.results.length }, (_, index) => `src/result-${index}.ts`),
@@ -260,6 +252,8 @@ test("structure-aware ranked search pruning preserves valid JSON, rank order, an
     const aged = sieveMessages([user("before"), active, user("second"), user("third")], 1_000);
     const agedOutput = JSON.parse((aged.messages[1].content as any)[0].text);
     assert.ok(agedOutput.results.length < 20);
+    assert.equal(agedOutput.returned, agedOutput.results.length);
+    assert.equal(agedOutput.truncated, true);
     assert.equal(agedOutput.results[0].path, "src/result-0.ts");
     assert.equal(agedOutput.piSieve.recoverVia, undefined);
     assert.equal(aged.stats.transformedBy.ageThreshold, 1);
@@ -285,12 +279,10 @@ test("relationship graph keeps recent output, prunes complete graph records, the
 
   const aged = sieveMessages([user("before"), graph, user("second"), user("third")], 1_000);
   const agedGraph = JSON.parse((aged.messages[1].content as any)[0].text);
-  const nodeIds = new Set(agedGraph.nodes.map((node: any) => node.id));
   assert.ok(agedGraph.metadata.returnedCount < 12);
   assert.equal(agedGraph.metadata.truncated, true);
   assert.equal(agedGraph.piSieve.omittedLocations, 12 - agedGraph.metadata.returnedCount);
-  assert.ok(agedGraph.edges.every((edge: any) => nodeIds.has(edge.from) && nodeIds.has(edge.to)));
-  assert.equal(nodeIds.has("file:orphan.ts"), false);
+  assert.equal(agedGraph.files.reduce((count: number, file: any) => count + file.locations.length, 0), agedGraph.metadata.returnedCount);
   assert.equal(aged.stats.transformedBy.ageThreshold, 1);
 
   const old = sieveMessages([
@@ -307,7 +299,7 @@ test("relationship graph keeps recent output, prunes complete graph records, the
   });
 
   const malformedGraphValue = JSON.parse(source);
-  malformedGraphValue.edges[0].from = "file:missing.ts";
+  malformedGraphValue.files[0].locations[0].line = "bad";
   const malformedGraph = textResult("relationship_graph", JSON.stringify(malformedGraphValue));
   for (const age of [2, 6]) {
     const result = sieveMessages([

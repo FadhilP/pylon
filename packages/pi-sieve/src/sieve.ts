@@ -267,22 +267,19 @@ function validStructuredContent(blocks: TextBlock[], kind: Exclude<SieveKind, "p
   if (!parsed) return false;
   if (kind === "rankedSearch")
     return Array.isArray(parsed.results) && parsed.results.every((result) => jsonObject(result) !== undefined);
-  if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return false;
-  const nodeIds = new Set<string>();
-  for (const node of parsed.nodes) {
-    const value = jsonObject(node);
-    if (!value || typeof value.id !== "string" || typeof value.kind !== "string" || nodeIds.has(value.id)) return false;
-    nodeIds.add(value.id);
+  if (!Array.isArray(parsed.files)) return false;
+  const paths = new Set<string>();
+  for (const file of parsed.files) {
+    const value = jsonObject(file);
+    if (!value || typeof value.path !== "string" || paths.has(value.path) || !Array.isArray(value.locations)) return false;
+    paths.add(value.path);
+    for (const location of value.locations) {
+      const item = jsonObject(location);
+      if (!item || typeof item.line !== "number" || typeof item.text !== "string" || !Array.isArray(item.roles)
+        || item.roles.some((role) => typeof role !== "string")) return false;
+    }
   }
-  return parsed.edges.every((edge) => {
-    const value = jsonObject(edge);
-    return value !== undefined &&
-      typeof value.from === "string" &&
-      typeof value.to === "string" &&
-      typeof value.type === "string" &&
-      nodeIds.has(value.from) &&
-      nodeIds.has(value.to);
-  });
+  return true;
 }
 
 function sliceRankedSearch(
@@ -301,10 +298,15 @@ function sliceRankedSearch(
   delete base.piSieve;
   for (let returned = results.length; returned >= 0; returned--) {
     const selected = results.slice(0, returned);
-    const withoutMarker = JSON.stringify({ ...base, results: selected });
-    const outboundText = JSON.stringify({
+    const ranked = {
       ...base,
       results: selected,
+      returned,
+      truncated: base.truncated === true || returned < results.length,
+    };
+    const withoutMarker = JSON.stringify(ranked);
+    const outboundText = JSON.stringify({
+      ...ranked,
       piSieve: structuredPruneMetadata(source, text.length, "omittedResults", results.length - returned, toolCallId),
     });
     if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
@@ -326,49 +328,39 @@ function sliceRelationshipGraph(
 ): StructuredSlice | undefined {
   const text = blocks.map((block) => block.text).join("");
   const parsed = parseJsonText(blocks);
-  if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return undefined;
-  const locations = parsed.nodes.filter((node) => jsonObject(node)?.kind === "location");
+  if (!parsed || !Array.isArray(parsed.files)) return undefined;
+  const locationCount = parsed.files.reduce((count, file) => {
+    const value = jsonObject(file);
+    return count + (Array.isArray(value?.locations) ? value.locations.length : 0);
+  }, 0);
   const base = { ...parsed };
-  delete base.nodes;
-  delete base.edges;
+  delete base.files;
   delete base.piSieve;
 
-  for (let returned = locations.length; returned >= 0; returned--) {
-    const selectedLocationIds = new Set(
-      locations.slice(0, returned).map((node) => jsonObject(node)?.id).filter((id): id is string => typeof id === "string"),
-    );
-    const selectedEdges = parsed.edges.filter((edge) => {
-      const value = jsonObject(edge);
-      return value && (
-        (value.type === "contains" && selectedLocationIds.has(String(value.to))) ||
-        (value.type === "mentions" && selectedLocationIds.has(String(value.from)))
-      );
-    });
-    const selectedNodeIds = new Set<string>();
-    for (const edge of selectedEdges) {
-      const value = jsonObject(edge)!;
-      selectedNodeIds.add(String(value.from));
-      selectedNodeIds.add(String(value.to));
+  for (let returned = locationCount; returned >= 0; returned--) {
+    let remaining = returned;
+    const selectedFiles: JsonObject[] = [];
+    for (const file of parsed.files) {
+      if (remaining <= 0) break;
+      const value = jsonObject(file)!;
+      const locations = (value.locations as unknown[]).slice(0, remaining);
+      if (locations.length) selectedFiles.push({ ...value, locations });
+      remaining -= locations.length;
     }
-    const selectedNodes = parsed.nodes.filter((node) => {
-      const value = jsonObject(node);
-      return typeof value?.id === "string" && selectedNodeIds.has(value.id);
-    });
     const originalMetadata = jsonObject(parsed.metadata) ?? {};
     const graph = {
       ...base,
-      nodes: selectedNodes,
-      edges: selectedEdges,
+      files: selectedFiles,
       metadata: {
         ...originalMetadata,
         returnedCount: returned,
-        truncated: originalMetadata.truncated === true || returned < locations.length,
+        truncated: originalMetadata.truncated === true || returned < locationCount,
       },
     };
     const withoutMarker = JSON.stringify(graph);
     const outboundText = JSON.stringify({
       ...graph,
-      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locations.length - returned),
+      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locationCount - returned),
     });
     if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
       return {

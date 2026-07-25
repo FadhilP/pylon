@@ -10,7 +10,6 @@ import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 import { registerRg } from "../src/rg.ts";
 import { boundedError } from "../src/search-common.ts";
 
-const MAX_RESULT_CHARS = 2_000;
 const discoverChildToolsExtension = fileURLToPath(new URL("../src/discover-child-tools.ts", import.meta.url));
 
 export { workspacePath } from "../src/search-common.ts";
@@ -93,18 +92,6 @@ function discoveryCapability(pi: ExtensionAPI): ToolDiscoveryCapability | undefi
   return capability as ToolDiscoveryCapability;
 }
 
-function fit(text: string, maxBytes: number): string {
-  let value = text;
-  while (Buffer.byteLength(value, "utf8") > maxBytes) value = value.slice(0, -1);
-  return value;
-}
-
-function resultText(value: unknown): string {
-  if (value === undefined) return "";
-  const text = typeof value === "string" ? value : JSON.stringify(value);
-  return fit(text ?? "", MAX_RESULT_CHARS);
-}
-
 export default function discoverExtension(pi: ExtensionAPI) {
   registerRg(pi);
   registerFd(pi);
@@ -122,18 +109,19 @@ export default function discoverExtension(pi: ExtensionAPI) {
     return index;
   };
   registerIndexTools(pi, indexFor);
-  const configureIndexStatusTool = () => {
+  const configureDeferredTools = () => {
     let coordinated = false;
+    const deferredTools = ["relationship_graph", "index_status"];
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-discover",
-      managedTools: ["index_status"],
-      enabledTools: ["index_status"],
-      deferredTools: ["index_status"],
+      managedTools: deferredTools,
+      enabledTools: deferredTools,
+      deferredTools,
       acknowledge: () => { coordinated = true; },
     });
-    if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "index_status"));
+    if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter((name) => !deferredTools.includes(name)));
   };
 
   type CachedSearch = { names: string[]; missMarker?: { query: string; inventory: string } };
@@ -201,7 +189,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_event, ctx) => {
     clearSessionState();
-    configureIndexStatusTool();
+    configureDeferredTools();
     await refreshIndex(ctx);
   });
   pi.on("turn_end", async (_event, ctx) => {
@@ -278,10 +266,9 @@ export default function discoverExtension(pi: ExtensionAPI) {
         }
         clearTurnState();
         selectedTools.clear();
-        const result = resultText(reset);
         return {
-          content: [{ type: "text" as const, text: `Pylon tool selection reset.${result ? ` ${result}` : ""} Definitions update next model turn.` }],
-          details: { action: "reset" },
+          content: [{ type: "text" as const, text: "Pylon tool selection reset. Definitions update next model turn." }],
+          details: { action: "reset", coordinator: reset },
         };
       }
       const query = params.query?.trim() ?? "";
@@ -352,12 +339,11 @@ export default function discoverExtension(pi: ExtensionAPI) {
       increment(blocked, blockedNames);
       selectedTools.clear();
       for (const name of selectedNames) if (!blockedSet.has(name)) selectedTools.add(name);
-      const extra = resultText(selection);
       const summary = selectedNames.length ? `Selected: ${selectedNames.join(", ")}.` : "No tools selected.";
       const blockedSummary = blockedNames.length ? ` Blocked by current policy: ${blockedNames.join(", ")}.` : "";
       return {
-        content: [{ type: "text" as const, text: `${summary}${blockedSummary} Callable definitions update next model turn.${extra ? ` ${extra}` : ""}` }],
-        details: { action: "search", matches: names, selected: selectedNames, cacheHit, blocked: blockedNames },
+        content: [{ type: "text" as const, text: `${summary}${blockedSummary} Callable definitions update next model turn.` }],
+        details: { action: "search", matches: names, selected: selectedNames, cacheHit, blocked: blockedNames, coordinator: selection },
       };
     },
   });

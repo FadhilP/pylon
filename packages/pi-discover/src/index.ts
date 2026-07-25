@@ -11,11 +11,13 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { bounded, boundedError, SEARCH_TIMEOUT_MS, workspacePath } from "./search-common.ts";
+import { boundedError, SEARCH_TIMEOUT_MS, workspacePath } from "./search-common.ts";
 
 const MAX_FILE_BYTES = 512 * 1024;
-const DEFAULT_RESULTS = 30;
+const DEFAULT_SYMBOL_RESULTS = 30;
+const DEFAULT_CODE_RESULTS = 10;
 const MAX_RESULTS = 100;
+const MAX_EXCERPT_CHARS = 240;
 
 type SymbolRow = { name: string; kind: string; line: number; column: number; signature: string };
 type PreparedFile = {
@@ -113,7 +115,23 @@ export function extractSymbols(content: string, language: string): SymbolRow[] {
       continue;
     }
     if (["javascript", "typescript", "vue", "svelte"].includes(language)) {
-      match = /^\s*(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.exec(source);
+      match = /^\s*(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=;]+)?=>|[A-Za-z_$][\w$]*\s*=>)/.exec(source);
+      if (match) {
+        add(match[1], "function", index + 1, source.indexOf(match[1]) + 1, source);
+        continue;
+      }
+      match = /^\s*(?:(?:public|private|protected|static|abstract|readonly|override)\s+)*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*(?:<[^;{}()=]+>)?\s*\([^;{}]*\)\s*(?::[^;{=]+)?\s*(?:\{|=>)/.exec(source);
+      if (match && !["if", "for", "while", "switch", "catch", "function"].includes(match[1]))
+        add(match[1], "function", index + 1, source.indexOf(match[1]) + 1, source);
+      continue;
+    }
+    if (["java", "csharp", "kotlin", "swift"].includes(language)) {
+      match = /^\s*(?:(?:public|private|protected|internal|static|abstract|final|virtual|override|synchronized|native|async|open)\s+)*(?:[A-Za-z_$][\w$<>,.?\[\]]*\s+)+([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:throws\s+[^;{]+)?\s*(?:\{|;|=>)/.exec(source);
+      if (match) add(match[1], "function", index + 1, source.indexOf(match[1]) + 1, source);
+      continue;
+    }
+    if (["c", "cpp"].includes(language)) {
+      match = /^\s*(?:(?:static|inline|extern|virtual|constexpr|consteval|constinit|unsigned|signed)\s+)*(?:[A-Za-z_]\w*(?:\s*<[^;{}()]+>)?\s*[*&]*\s+)+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\s*)?(?:\{|;)/.exec(source);
       if (match) add(match[1], "function", index + 1, source.indexOf(match[1]) + 1, source);
     }
   }
@@ -153,23 +171,51 @@ function ftsQuery(query: string): string {
     .join(" AND ");
 }
 
-function lineAt(content: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset; index++) if (content.charCodeAt(index) === 10) line++;
-  return line;
-}
-
 function excerpt(content: string, query: string): { line: number; text: string } {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const lower = content.toLowerCase();
-  const found = terms.map((term) => lower.indexOf(term)).filter((index) => index >= 0).sort((a, b) => a - b)[0] ?? 0;
-  const start = Math.max(0, content.lastIndexOf("\n", Math.max(0, found - 160)) + 1);
-  const endAt = content.indexOf("\n", found + 240);
-  const end = endAt < 0 ? Math.min(content.length, found + 240) : endAt;
-  return { line: lineAt(content, found), text: content.slice(start, end).trim().slice(0, 500) };
+  const terms = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
+  const lines = content.split(/\r?\n/);
+  let bestLine = 0;
+  let bestScore = -1;
+  for (let index = 0; index < lines.length; index++) {
+    const lower = lines[index].toLowerCase();
+    const score = terms.filter((term) => lower.includes(term)).length;
+    if (score > bestScore) { bestLine = index; bestScore = score; }
+  }
+  const source = lines[bestLine].trim();
+  if (source.length <= MAX_EXCERPT_CHARS) return { line: bestLine + 1, text: source };
+  const lower = source.toLowerCase();
+  const found = terms.map((term) => lower.indexOf(term)).filter((offset) => offset >= 0).sort((a, b) => a - b)[0] ?? 0;
+  const start = Math.max(0, Math.min(found - 80, source.length - MAX_EXCERPT_CHARS));
+  const prefix = start ? "…" : "";
+  const suffix = start + MAX_EXCERPT_CHARS < source.length ? "…" : "";
+  const text = source.slice(start, start + MAX_EXCERPT_CHARS - prefix.length - suffix.length);
+  return { line: bestLine + 1, text: `${prefix}${text}${suffix}` };
 }
 
-const SCHEMA_VERSION = 2;
+type RankedRows<T> = T[] & { moreAvailable?: boolean };
+
+function structuredResults(base: Record<string, unknown>, results: Record<string, unknown>[], maxBytes: number, moreAvailable = false): string {
+  const observed = results.length;
+  for (let returned = observed; returned >= 0; returned--) {
+    const text = JSON.stringify({
+      ...base,
+      results: results.slice(0, returned),
+      observed,
+      returned,
+      truncated: returned < observed || moreAvailable,
+      ...(moreAvailable ? { moreAvailable: true } : {}),
+    });
+    if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  }
+  const minimum = "{\"results\":[]}";
+  return Buffer.byteLength(minimum, "utf8") <= maxBytes ? minimum : "{}";
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
+const SCHEMA_VERSION = 3;
 
 function createSchema(db: DatabaseSync): void {
   db.exec(`
@@ -207,9 +253,9 @@ function createSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS workspace_repositories_repo ON workspace_repositories(repo_id);
   `);
   try {
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(path, content, tokenize='trigram');");
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(content, tokenize='trigram');");
   } catch {
-    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(path, content);");
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(content);");
   }
 }
 
@@ -242,6 +288,7 @@ export class WorkspaceIndex {
   private workspaceId?: number;
   private root?: string;
   private pending: Promise<void> = Promise.resolve();
+  private freshening?: Promise<void>;
   private readonly cwd: string;
   private readonly exec: IndexExecutor;
   private readonly path: string;
@@ -427,7 +474,7 @@ export class WorkspaceIndex {
     const updateFile = db.prepare("UPDATE files SET language=?,content=?,hash=?,size=?,dirty=? WHERE id=?");
     const removeSymbols = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const insertSymbol = db.prepare("INSERT INTO symbols(file_id,name,kind,line,column_no,signature) VALUES (?,?,?,?,?,?)");
-    const insertFts = db.prepare("INSERT INTO code_fts(rowid,path,content) VALUES (?,?,?)");
+    const insertFts = db.prepare("INSERT INTO code_fts(rowid,content) VALUES (?,?)");
     db.exec("BEGIN IMMEDIATE");
     try {
       const currentGeneration = Number((db.prepare("SELECT generation FROM repository_states WHERE repo_id=?").get(repoId) as { generation: number }).generation);
@@ -453,7 +500,7 @@ export class WorkspaceIndex {
         } else {
           fileId = Number(insertFile.run(repoId, file.path, file.language, file.content, file.hash, file.size, Number(file.dirty)).lastInsertRowid);
         }
-        insertFts.run(fileId, file.path, file.content);
+        insertFts.run(fileId, file.content);
         for (const symbol of file.symbols) insertSymbol.run(fileId, symbol.name, symbol.kind, symbol.line, symbol.column, symbol.signature);
       }
       db.prepare("UPDATE repositories SET root=?,head=?,branch=?,indexed_at=? WHERE id=?")
@@ -476,26 +523,26 @@ export class WorkspaceIndex {
         FROM repositories r JOIN repository_states s ON s.repo_id=r.id WHERE r.id=?
       `).get(repoId) as { head: string; indexed_at?: number; generation: number };
       const full = forceFull || !state.indexed_at || state.head !== identity.head;
-      let current: Set<string>;
+      const dirty = statusPaths((await this.gitAt(identity.root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+      let inventory: Set<string> | undefined;
       let candidates: Set<string>;
       if (full) {
-        current = new Set(parseNul((await this.gitAt(identity.root, ["ls-files", "--full-name", "-co", "--exclude-standard", "-z"])).stdout));
-        candidates = current;
+        inventory = new Set(parseNul((await this.gitAt(identity.root, ["ls-files", "--full-name", "-co", "--exclude-standard", "-z"])).stdout));
+        candidates = inventory;
       } else {
-        current = statusPaths((await this.gitAt(identity.root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
         const prior = db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>;
-        candidates = new Set([...current, ...prior.map((row) => row.path)]);
+        candidates = new Set([...dirty, ...prior.map((row) => row.path)]);
       }
       const prepared: PreparedFile[] = [];
       const removals: string[] = [];
       for (const path of candidates) {
-        const file = await this.prepare(identity.root, path, !full && current.has(path));
+        const file = await this.prepare(identity.root, path, dirty.has(path));
         if (file) prepared.push(file);
         else removals.push(path.replaceAll("\\", "/"));
       }
-      if (full) {
+      if (inventory) {
         const existing = db.prepare("SELECT path FROM files WHERE repo_id=?").all(repoId) as Array<{ path: string }>;
-        for (const { path } of existing) if (!current.has(path)) removals.push(path);
+        for (const { path } of existing) if (!inventory.has(path)) removals.push(path);
       }
       if ((await this.identityAt(identity.root)).head !== identity.head) continue;
       if (this.apply(repoId, prepared, [...new Set(removals)], identity, state.generation)) return;
@@ -553,6 +600,17 @@ export class WorkspaceIndex {
     return next;
   }
 
+  async ensureFresh(): Promise<void> {
+    if (this.freshening) return this.freshening;
+    let current!: Promise<void>;
+    current = (async () => {
+      try { await this.refresh(); }
+      finally { if (this.freshening === current) this.freshening = undefined; }
+    })();
+    this.freshening = current;
+    return current;
+  }
+
   private async ready(): Promise<void> {
     await this.pending;
     if (!this.workspaceId) this.ensureWorkspace(await this.identity());
@@ -566,32 +624,53 @@ export class WorkspaceIndex {
   }
 
   async searchSymbols(cwd: string, options: { query: string; path?: string; language?: string; kind?: string; limit?: number }) {
-    await this.ready();
-    const limit = options.limit ?? DEFAULT_RESULTS;
+    await this.ensureFresh();
+    const query = options.query.trim();
+    if (!query) throw new Error("Symbol query must contain a non-whitespace token");
+    const limit = options.limit ?? DEFAULT_SYMBOL_RESULTS;
+    const target = limit + 1;
     const scope = this.scopedPath(cwd, options.path);
     const projectedPath = "CASE WHEN wr.prefix='' THEN f.path ELSE wr.prefix||'/'||f.path END";
-    const clauses = ["wr.workspace_id=?", "instr(lower(s.name),lower(?))>0"];
-    const args: Array<string | number> = [this.workspaceId!, options.query];
+    const commonClauses = ["wr.workspace_id=?"];
+    const commonArgs: Array<string | number> = [this.workspaceId!];
     if (scope) {
-      clauses.push(`(${projectedPath}=? OR substr(${projectedPath},1,length(?)+1)=?||'/')`);
-      args.push(scope, scope, scope);
+      commonClauses.push(`(${projectedPath}=? OR substr(${projectedPath},1,length(?)+1)=?||'/')`);
+      commonArgs.push(scope, scope, scope);
     }
-    if (options.language) { clauses.push("f.language=?"); args.push(options.language); }
-    if (options.kind) { clauses.push("s.kind=?"); args.push(options.kind); }
-    args.push(options.query, options.query, options.query, limit);
-    return this.database().prepare(`
-      SELECT s.name,s.kind,${projectedPath} AS path,f.language,s.line,s.column_no AS column,s.signature
-      FROM symbols s JOIN files f ON f.id=s.file_id JOIN workspace_repositories wr ON wr.repo_id=f.repo_id
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY lower(s.name)=lower(?) DESC, substr(lower(s.name),1,length(?))=lower(?) DESC, s.name COLLATE NOCASE, path, s.line LIMIT ?
-    `).all(...args);
+    if (options.language) { commonClauses.push("f.language=?"); commonArgs.push(options.language); }
+    if (options.kind) { commonClauses.push("s.kind=?"); commonArgs.push(options.kind); }
+    const stages = [
+      { clause: "s.name=? COLLATE NOCASE", args: [query] },
+      { clause: "s.name LIKE ? ESCAPE '\\' COLLATE NOCASE AND s.name<>? COLLATE NOCASE", args: [`${escapeLike(query)}%`, query] },
+      { clause: "instr(lower(s.name),lower(?))>0 AND s.name NOT LIKE ? ESCAPE '\\' COLLATE NOCASE", args: [query, `${escapeLike(query)}%`] },
+    ];
+    const rows: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    for (const stage of stages) {
+      if (rows.length >= target) break;
+      const found = this.database().prepare(`
+        SELECT s.id,s.name,s.kind,${projectedPath} AS path,f.language,s.line,s.column_no AS column,s.signature
+        FROM symbols s JOIN files f ON f.id=s.file_id JOIN workspace_repositories wr ON wr.repo_id=f.repo_id
+        WHERE ${[...commonClauses, stage.clause].join(" AND ")}
+        ORDER BY s.name COLLATE NOCASE,path,s.line LIMIT ?
+      `).all(...commonArgs, ...stage.args, target - rows.length) as Array<Record<string, unknown>>;
+      for (const row of found) {
+        const key = `${row.id}\0${row.path}`;
+        if (!seen.has(key)) { seen.add(key); const { id: _id, ...displayed } = row; rows.push(displayed); }
+      }
+    }
+    const selected = rows.slice(0, limit) as RankedRows<Record<string, unknown>>;
+    if (rows.length > limit) selected.moreAvailable = true;
+    return selected;
   }
 
   async searchCode(cwd: string, options: { query: string; path?: string; language?: string; limit?: number }) {
-    await this.ready();
-    const limit = options.limit ?? DEFAULT_RESULTS;
+    await this.ensureFresh();
+    const sourceQuery = options.query.trim();
+    if (!sourceQuery) throw new Error("Code query must contain a non-whitespace token");
+    const limit = options.limit ?? DEFAULT_CODE_RESULTS;
     const scope = this.scopedPath(cwd, options.path);
-    const query = ftsQuery(options.query);
+    const query = ftsQuery(sourceQuery);
     const projectedPath = "CASE WHEN wr.prefix='' THEN f.path ELSE wr.prefix||'/'||f.path END";
     const clauses = ["wr.workspace_id=?"];
     const args: Array<string | number> = [this.workspaceId!];
@@ -602,21 +681,25 @@ export class WorkspaceIndex {
     if (options.language) { clauses.push("f.language=?"); args.push(options.language); }
     let statement: StatementSync;
     if (query) {
-      clauses.push("code_fts MATCH ?"); args.push(query, limit);
+      clauses.push("code_fts MATCH ?"); args.push(query, limit + 1);
       statement = this.database().prepare(`
         SELECT ${projectedPath} AS path,f.language,f.content,bm25(code_fts) AS rank
         FROM code_fts JOIN files f ON f.id=code_fts.rowid JOIN workspace_repositories wr ON wr.repo_id=f.repo_id
         WHERE ${clauses.join(" AND ")} ORDER BY rank,path LIMIT ?
       `);
     } else {
-      clauses.push("instr(lower(f.content),lower(?))>0"); args.push(options.query, limit);
+      clauses.push("instr(lower(f.content),lower(?))>0"); args.push(sourceQuery, limit + 1);
       statement = this.database().prepare(`
         SELECT ${projectedPath} AS path,f.language,f.content,0 AS rank
         FROM files f JOIN workspace_repositories wr ON wr.repo_id=f.repo_id
         WHERE ${clauses.join(" AND ")} ORDER BY path LIMIT ?
       `);
     }
-    return (statement.all(...args) as Array<{ path: string; language: string; content: string; rank: number }>).map(({ content, ...row }) => ({ ...row, ...excerpt(content, options.query) }));
+    const rows = (statement.all(...args) as Array<{ path: string; language: string; content: string; rank: number }>)
+      .map(({ content, ...row }) => ({ ...row, ...excerpt(content, sourceQuery) }));
+    const selected = rows.slice(0, limit) as RankedRows<(typeof rows)[number]>;
+    if (rows.length > limit) selected.moreAvailable = true;
+    return selected;
   }
 
   async status() {
@@ -648,14 +731,15 @@ export function registerIndexTools(pi: ExtensionAPI, indexFor: IndexProvider, ma
     promptSnippet: "Search indexed repository symbols by name, kind, language, or path",
     promptGuidelines: ["Use symbol_search for fast symbol discovery; confirm heuristic matches from source before editing."],
     parameters: Type.Object({
-      query: Type.String({ minLength: 1, maxLength: 200 }),
+      query: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }),
       path: Type.Optional(Type.String()), language: Type.Optional(Type.String()), kind: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_RESULTS })),
     }, { additionalProperties: false }),
     async execute(_id, params, _signal, _update, ctx) {
       const results = await indexFor(ctx.cwd).searchSymbols(ctx.cwd, params);
       const displayed = results.map(({ name, kind, path, line }) => ({ name, kind, path, line }));
-      return { content: [{ type: "text" as const, text: bounded(JSON.stringify({ heuristic: true, results: displayed }), maxBytes) }], details: { count: results.length, heuristic: true } };
+      const text = structuredResults({ heuristic: true }, displayed, maxBytes, results.moreAvailable === true);
+      return { content: [{ type: "text" as const, text }], details: { observed: results.length, returned: JSON.parse(text).returned ?? 0, heuristic: true } };
     },
   });
   pi.registerTool({
@@ -665,13 +749,14 @@ export function registerIndexTools(pi: ExtensionAPI, indexFor: IndexProvider, ma
     promptSnippet: "Search the local lexical code index with ranked snippets",
     promptGuidelines: ["Use code_search for fast lexical discovery across indexed source; use rg when regex or current fallback search is needed."],
     parameters: Type.Object({
-      query: Type.String({ minLength: 1, maxLength: 500 }), path: Type.Optional(Type.String()), language: Type.Optional(Type.String()),
+      query: Type.String({ minLength: 1, maxLength: 500, pattern: "\\S" }), path: Type.Optional(Type.String()), language: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_RESULTS })),
     }, { additionalProperties: false }),
     async execute(_id, params, _signal, _update, ctx) {
       const results = await indexFor(ctx.cwd).searchCode(ctx.cwd, params);
-      const displayed = results.map(({ path, language, line, text }) => ({ path, language, line, text }));
-      return { content: [{ type: "text" as const, text: bounded(JSON.stringify({ semantic: false, results: displayed }), maxBytes) }], details: { count: results.length, semantic: false } };
+      const displayed = results.map(({ path, line, text }) => ({ path, line, text }));
+      const text = structuredResults({ semantic: false }, displayed, maxBytes, results.moreAvailable === true);
+      return { content: [{ type: "text" as const, text }], details: { observed: results.length, returned: JSON.parse(text).returned ?? 0, semantic: false } };
     },
   });
   pi.registerTool({
