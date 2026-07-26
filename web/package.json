@@ -1,0 +1,29 @@
+{
+  "name": "@pylon/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-transform-types src/server/index.ts",
+    "build": "tsc -b && vite build",
+    "start": "node --experimental-transform-types src/server/index.ts --production",
+    "preview": "npm run start",
+    "test": "node --experimental-transform-types --test test/*.test.ts",
+    "typecheck": "tsc -b --pretty false",
+    "verify": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.81.1",
+    "@tabler/icons-react": "^3.31.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

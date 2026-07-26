@@ -24,7 +24,7 @@ Schema upgrades are transactional. Upgrading an older derived cache purges incom
 
 `symbol_search` performs case-insensitive exact, prefix, then substring name search with optional path, language, and kind filters. Symbol extraction is lightweight and language-aware, but heuristic; confirm declarations from source. `code_search` uses content-only FTS5 lexical ranking and returns at most ten one-line excerpts by default; callers can request more. It is not embedding-based semantic search. Both searches refresh current Git state before querying and return parseable byte-bounded JSON with observed, returned, and truncated counts. `index_status` reports current workspace root, commit, branch, deduplicated file count, symbol count, and refresh time. Pylon defers `index_status` by default, so the model loads it through `search_tools` only when needed.
 
-Users can control indexing directly with `/discover-index refresh`, `/discover-index rebuild`, and `/discover-index status`. `refresh` reconciles current Git changes, while `rebuild` forces a complete current-workspace pass.
+Users can control indexing directly with `/discover-index refresh`, `/discover-index rebuild`, `/discover-index prune`, and `/discover-index status`. `refresh` reconciles current Git changes, `rebuild` forces a complete current-workspace pass, and `prune` removes indexed workspaces and repositories whose recorded roots are no longer directories.
 
 Indexed source files are limited to 512 KiB and supported language extensions. Binary files, symlinks, ignored files, and unsupported extensions are skipped. Existing `rg`, `fd`, and `relationship_graph` remain available as live-workspace fallbacks.
 

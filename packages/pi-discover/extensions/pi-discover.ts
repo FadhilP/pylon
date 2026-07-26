@@ -209,23 +209,28 @@ export default function discoverExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("discover-index", {
-    description: "Refresh, rebuild, or report the local pi-discover index",
+    description: "Refresh, rebuild, prune, or report the local pi-discover index",
     async handler(args, ctx) {
       const action = args.trim() || "refresh";
-      if (!["refresh", "rebuild", "status"].includes(action)) {
-        ctx.ui.notify("Usage: /discover-index [refresh|rebuild|status]", "error");
+      if (!["refresh", "rebuild", "prune", "status"].includes(action)) {
+        ctx.ui.notify("Usage: /discover-index [refresh|rebuild|prune|status]", "error");
         return;
       }
       await ctx.waitForIdle?.();
-      ctx.ui.setStatus("pi-discover-index", action === "status" ? "Reading index status..." : `${action === "rebuild" ? "Rebuilding" : "Refreshing"} index...`);
+      const activity = action === "status" ? "Reading index status..." : action === "prune" ? "Pruning stale index entries..." : `${action === "rebuild" ? "Rebuilding" : "Refreshing"} index...`;
+      ctx.ui.setStatus("pi-discover-index", activity);
       try {
         const index = indexFor(ctx.cwd);
-        if (action === "refresh") await index.refresh();
-        else if (action === "rebuild") await index.rebuild();
-        const status = await index.status();
+        let result;
+        if (action === "prune") result = await index.prune();
+        else {
+          if (action === "refresh") await index.refresh();
+          else if (action === "rebuild") await index.rebuild();
+          result = await index.status();
+        }
         latestIndexError = undefined;
         indexReady = true;
-        ctx.ui.notify(`pi-discover index ${action === "status" ? "status" : `${action} complete`}: ${JSON.stringify(status)}`, "info");
+        ctx.ui.notify(`pi-discover index ${action === "status" ? "status" : `${action} complete`}: ${JSON.stringify(result)}`, "info");
       } catch (error) {
         latestIndexError = boundedError(error);
         ctx.ui.notify(`pi-discover index ${action} failed: ${latestIndexError}`, "error");

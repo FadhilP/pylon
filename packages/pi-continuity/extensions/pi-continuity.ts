@@ -62,6 +62,7 @@ import {
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
+import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
@@ -139,6 +140,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     approvalContext: any,
     approvalSelectionOpen = false,
     sessionGeneration = 0,
+    stateRevision = 0,
     releaseSessionLease: ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
     leasedSessionId = "",
     ephemeralSession = false,
@@ -269,6 +271,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
       notices,
     };
   };
+  const stateSnapshot = (available = true) =>
+    continuityStateSnapshot(leasedSessionId, stateRevision, work, available);
+  const publishState = (available = true) => {
+    stateRevision++;
+    pi.events.emit("pi-continuity:state-change", stateSnapshot(available));
+  };
+  const disposeStateRequest = pi.events.on("pi-continuity:state-request", (request: any) => {
+    if (request?.version !== CONTINUITY_STATE_VERSION || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
+    try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Continuity. */ }
+  });
   const saveWork = async () => {
     if (work) {
       assertSafe(
@@ -280,6 +292,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ...work.todos.map((t) => t.text),
       );
       await writeJson(paths().work, work);
+      publishState();
     }
   };
   const refresh = (ctx: any) => {
@@ -530,11 +543,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
     gate(work?.mode === "planning");
     tasksVisible = true;
     refresh(ctx);
+    publishState();
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration++;
     pendingApproval = undefined;
     approvalContext = undefined;
+    publishState(false);
+    disposeStateRequest();
     disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();

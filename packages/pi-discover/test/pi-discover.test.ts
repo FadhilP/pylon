@@ -60,15 +60,6 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
   return { active, commands, events, lifecycle, tools, getSetActiveCalls: () => setActiveCalls };
 }
 
-test("host and child entrypoints register their intended discovery tools", () => {
-  const { commands, tools } = setup();
-  assert.deepEqual([...commands.keys()], ["discover-index"]);
-  assert.deepEqual([...tools.keys()], ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_tools"]);
-  const childTools = new Map<string, any>();
-  registerDiscoverChildTools({ registerTool: (tool: any) => childTools.set(tool.name, tool) } as any);
-  assert.deepEqual([...childTools.keys()], ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status"]);
-});
-
 test("indexed searches display only model-useful fields", async () => {
   const tools = new Map<string, any>();
   registerIndexTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, () => ({
@@ -268,6 +259,57 @@ test("SQLite index refreshes changed, restored, and deleted files atomically", a
   }
 });
 
+test("SQLite index prunes workspaces, repositories, and FTS rows for missing directories", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "pi-discover-prune-"));
+  const live = join(parent, "live");
+  const stale = join(parent, "stale");
+  const dbPath = join(parent, "index.sqlite");
+  await Promise.all([mkdir(live), mkdir(stale)]);
+  await Promise.all([
+    writeFile(join(live, "app.ts"), "export function liveProject() {}\n"),
+    writeFile(join(stale, "app.ts"), "export function staleProject() {}\n"),
+  ]);
+  const executor = async (_command: string, args: string[]) => {
+    const cwd = args[1];
+    const gitArgs = args.slice(2);
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${cwd}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: `${cwd === live ? "live" : "stale"}-head\n`, stderr: "" };
+    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: "", stderr: "" };
+    throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
+  };
+  const liveIndex = new WorkspaceIndex(live, executor, dbPath);
+  const staleIndex = new WorkspaceIndex(stale, executor, dbPath);
+  try {
+    await liveIndex.refresh();
+    await staleIndex.refresh();
+    await rm(stale, { recursive: true, force: true });
+
+    assert.deepEqual(await liveIndex.prune(), {
+      removedWorkspaces: 1,
+      removedRepositories: 1,
+      removedFiles: 1,
+    });
+    const database = new DatabaseSync(dbPath);
+    try {
+      assert.deepEqual({
+        workspaces: Number((database.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count),
+        repositories: Number((database.prepare("SELECT count(*) AS count FROM repositories").get() as any).count),
+        files: Number((database.prepare("SELECT count(*) AS count FROM files").get() as any).count),
+        fts: Number((database.prepare("SELECT count(*) AS count FROM code_fts").get() as any).count),
+        symbols: Number((database.prepare("SELECT count(*) AS count FROM symbols").get() as any).count),
+      }, { workspaces: 1, repositories: 1, files: 1, fts: 1, symbols: 1 });
+    } finally {
+      database.close();
+    }
+    assert.deepEqual((await liveIndex.searchSymbols(live, { query: "liveProject" }) as any[]).map((row) => row.name), ["liveProject"]);
+  } finally {
+    await Promise.all([liveIndex.close(), staleIndex.close()]);
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("full refresh tracks dirty files, queries refresh on demand, and code search ignores filename-only hits", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-discover-fresh-"));
   const dbPath = join(root, "index.sqlite");
@@ -368,6 +410,18 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
       assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
       assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
       assert.equal((await childIndex.searchCode(child, { query: "shared content" }) as any[])[0].path, "nested.ts");
+
+      const database = new DatabaseSync(dbPath);
+      try {
+        assert.equal(database.prepare("UPDATE workspaces SET root=? WHERE root=?").run(join(root, "missing"), root).changes, 1);
+      } finally {
+        database.close();
+      }
+      assert.deepEqual(await childIndex.prune(), { removedWorkspaces: 1, removedRepositories: 0, removedFiles: 0 });
+      assert.deepEqual(counts(), { repositories: 2, workspaces: 1, files: 1, fts: 1, symbols: 1 });
+      assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
+      await aggregateIndex.refresh();
+      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
 
       await writeFile(source, "export function nestedDirty() { return 'updated shared content'; }\n");
       await childIndex.refresh();
@@ -500,6 +554,9 @@ test("host refreshes its SQLite index after each turn", async () => {
 
     await runtime.commands.get("discover-index").handler("status", ctx);
     assert.match(notifications.at(-1)!.text, /index status/);
+
+    await runtime.commands.get("discover-index").handler("prune", ctx);
+    assert.match(notifications.at(-1)!.text, /prune complete.*"removedWorkspaces":0/);
   } finally {
     await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;

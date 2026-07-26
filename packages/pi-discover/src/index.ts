@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -213,6 +213,15 @@ function structuredResults(base: Record<string, unknown>, results: Record<string
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (error: any) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
 }
 
 const SCHEMA_VERSION = 3;
@@ -597,6 +606,44 @@ export class WorkspaceIndex {
   rebuild(): Promise<void> {
     const next = this.pending.then(() => this.refreshNow(true));
     this.pending = next.catch(() => undefined);
+    return next;
+  }
+
+  prune(): Promise<{ removedWorkspaces: number; removedRepositories: number; removedFiles: number }> {
+    const next = this.pending.then(async () => {
+      const db = this.database();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const workspaces = db.prepare("SELECT id,root FROM workspaces").all() as Array<{ id: number; root: string }>;
+        const repositories = db.prepare("SELECT id,root FROM repositories").all() as Array<{ id: number; root: string }>;
+        const missingWorkspaces = (await Promise.all(workspaces.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
+          .filter((id): id is number => id !== undefined);
+        const missingRepositories = (await Promise.all(repositories.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
+          .filter((id): id is number => id !== undefined);
+        let removedWorkspaces = 0;
+        let removedRepositories = 0;
+        let removedFiles = 0;
+        const removeWorkspace = db.prepare("DELETE FROM workspaces WHERE id=?");
+        for (const id of missingWorkspaces) removedWorkspaces += Number(removeWorkspace.run(id).changes);
+        const countFiles = db.prepare("SELECT count(*) AS count FROM files WHERE repo_id=?");
+        const removeFts = db.prepare("DELETE FROM code_fts WHERE rowid IN (SELECT id FROM files WHERE repo_id=?)");
+        const removeRepository = db.prepare("DELETE FROM repositories WHERE id=?");
+        for (const id of missingRepositories) {
+          const files = Number((countFiles.get(id) as { count: number }).count);
+          removeFts.run(id);
+          const removed = Number(removeRepository.run(id).changes);
+          removedRepositories += removed;
+          if (removed) removedFiles += files;
+        }
+        db.exec("COMMIT");
+        if (this.workspaceId && missingWorkspaces.includes(this.workspaceId)) this.workspaceId = undefined;
+        return { removedWorkspaces, removedRepositories, removedFiles };
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+    this.pending = next.then(() => undefined, () => undefined);
     return next;
   }
 

@@ -123,6 +123,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
       ?.data;
+    if (latestContext) pi.events.emit("pi-verify:lifecycle", latestContext);
   });
   pi.on("tool_call", (event) => {
     if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))

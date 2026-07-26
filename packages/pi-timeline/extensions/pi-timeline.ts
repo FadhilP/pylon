@@ -36,6 +36,7 @@ import {
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
+import { TIMELINE_STATE_VERSION, timelineStateSnapshot } from "../src/state.ts";
 type RecordV3 = Snapshot & {
   version: 3;
   kind: "pi-prompt-checkpoint";
@@ -122,6 +123,7 @@ export default function timelineExtension(
     paired = false,
     namingDecided = false,
     namingGeneration = 0,
+    stateRevision = 0,
     namingInFlight: number | undefined,
     pendingContext = "",
     activeRun: RunEntry | undefined,
@@ -145,6 +147,27 @@ export default function timelineExtension(
   });
   const artifactRoot = options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
+  const stateSnapshot = (available = true) => timelineStateSnapshot(
+    currentSessionId,
+    stateRevision,
+    [...records].map(([id, bound]) => ({
+      id,
+      title: bound.preview.split(/\r?\n/, 1)[0] || "Checkpoint",
+      createdAt: bound.record.createdAt,
+      ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
+      verified: bound.record.verification?.state === "passed",
+      ownerSessionId: bound.record.ownerSessionId,
+    })),
+    available,
+  );
+  const publishState = (available = true) => {
+    stateRevision++;
+    pi.events.emit?.("pi-timeline:state-change", stateSnapshot(available));
+  };
+  const disposeStateRequest = pi.events.on("pi-timeline:state-request", (request: any) => {
+    if (request?.version !== TIMELINE_STATE_VERSION || request.sessionId !== currentSessionId || typeof request.respond !== "function") return;
+    try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Timeline. */ }
+  });
   const nameSession = async (ctx: any) => {
     if (namingDecided || namingInFlight !== undefined) return;
     const generation = namingGeneration;
@@ -388,6 +411,7 @@ export default function timelineExtension(
       });
       paired = true;
       refresh(ctx);
+      publishState();
       return record;
     } catch (e: any) {
       if (snap) await deleteRefs(snap).catch(() => {});
@@ -423,10 +447,13 @@ export default function timelineExtension(
       .getEntries()
       .some((entry: any) => entry.type === "session_info");
     refresh(ctx);
+    publishState();
   });
   pi.on("session_shutdown", async () => {
     namingGeneration++;
     namingInFlight = undefined;
+    publishState(false);
+    disposeStateRequest();
     disposeVerify();
     disposeCheckpoint();
     disposeWorktreeChange();
@@ -525,6 +552,7 @@ export default function timelineExtension(
         pi.appendEntry("pi-timeline-clear", cleared);
         for (const [id] of owned) records.delete(id);
         refresh(ctx);
+        publishState();
         return;
       }
       if (ctx.mode !== "tui" && ctx.mode !== "rpc") {

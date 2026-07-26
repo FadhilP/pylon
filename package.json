@@ -3,7 +3,8 @@
   "version": "0.16.2",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "web"
   ],
   "description": "Complete Pylon package with all extensions and themes.",
   "type": "module",
@@ -14,7 +15,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "verify": "npm run test:bundle && node scripts/run-packages.mjs verify",
+    "verify": "npm run test:bundle && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
     "test:bundle": "node --experimental-transform-types --test-isolation=none --test-force-exit --test test/bundle.test.ts",
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test",
@@ -48,5 +49,9 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-tui": "0.81.1"
   }
 }
