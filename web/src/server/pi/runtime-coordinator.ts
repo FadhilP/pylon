@@ -1,7 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type { PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
-import { DirectSdkDriver, type DirectSdkDriverOptions } from "./direct-sdk-driver.ts";
+import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
   DeleteSessionInput,
   DriverEvent,
@@ -25,7 +25,7 @@ const SLEEP_AFTER_MS = 30 * 60 * 1000;
 const VIEW_ONLY_SLEEP_AFTER_MS = 60 * 1000;
 const SLEEP_CHECK_MS = 60 * 1000;
 
-export interface PooledSdkDriverOptions extends DirectSdkDriverOptions {
+export interface RuntimeCoordinatorOptions extends SessionRuntimeOptions {
   sleepAfterMs?: number;
   viewOnlySleepAfterMs?: number;
   sleepCheckMs?: number;
@@ -33,7 +33,7 @@ export interface PooledSdkDriverOptions extends DirectSdkDriverOptions {
 
 interface RuntimeSlot {
   id: string;
-  driver: DirectSdkDriver;
+  driver: SessionRuntime;
   target: RuntimeTarget;
   innerGeneration: number;
   lastActivityAt: number;
@@ -44,7 +44,7 @@ interface RuntimeSlot {
 }
 
 /** Keeps visited SDK sessions alive while preserving one server-wide selection. */
-export class PooledSdkDriver implements PiDriver {
+export class RuntimeCoordinator implements PiDriver {
   private readonly slots = new Map<string, RuntimeSlot>();
   private readonly listeners = new Set<DriverEventListener>();
   private readonly sessionIndex = new SessionIndex();
@@ -55,7 +55,7 @@ export class PooledSdkDriver implements PiDriver {
   private lifecycleBusy = false;
   private disposed = false;
 
-  constructor(private readonly options: PooledSdkDriverOptions = {}) {}
+  constructor(private readonly options: RuntimeCoordinatorOptions = {}) {}
 
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.target || this.disposed) throw new Error("driver cannot be started twice");
@@ -210,7 +210,7 @@ export class PooledSdkDriver implements PiDriver {
   }
 
   private async createSlot(target: RuntimeTarget): Promise<RuntimeSlot> {
-    const driver = new DirectSdkDriver(this.options);
+    const driver = new SessionRuntime(this.options);
     const handle = await driver.start(target);
     const slot: RuntimeSlot = {
       id: handle.sessionId,

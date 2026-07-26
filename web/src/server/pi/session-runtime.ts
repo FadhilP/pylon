@@ -74,13 +74,13 @@ const OPTIONAL_TOOLS = [
   "heartbeat_cancel",
 ] as const;
 
-export interface DirectSdkDriverOptions {
+export interface SessionRuntimeOptions {
   dialogTimeoutMs?: number;
   extensionFactories?: InlineExtension[];
   onShutdownRequested?: () => void;
 }
 
-export class DirectSdkDriver implements PiDriver {
+export class SessionRuntime implements PiDriver {
   private runtime?: AgentSessionRuntime;
   private readonly gate = new GenerationGate();
   private readonly eventBus: EventBusController = createEventBus();
@@ -104,7 +104,7 @@ export class DirectSdkDriver implements PiDriver {
   private readonly sessionIndex = new SessionIndex();
   private disposed = false;
 
-  constructor(private readonly options: DirectSdkDriverOptions = {}) {
+  constructor(private readonly options: SessionRuntimeOptions = {}) {
     this.ui = new RemoteUiBridge(
       (request) => this.publishUi(request),
       options.dialogTimeoutMs,

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { deleteSessionFile, DirectSdkDriver } from "../src/server/pi/direct-sdk-driver.ts";
+import { deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -90,7 +90,7 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     },
   };
 
-  const driver = new DirectSdkDriver({
+  const driver = new SessionRuntime({
     extensionFactories: [recoveryCanceller, probe],
     onShutdownRequested: () => {},
   });
@@ -263,7 +263,7 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
   const otherCwd = join(root, "other-workspace");
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(otherCwd), mkdir(agentDir)]);
-  const driver = new DirectSdkDriver();
+  const driver = new SessionRuntime();
   const deletable = SessionManager.create(otherCwd);
   persistSession(deletable, "Deletable session");
   const switchable = SessionManager.create(otherCwd);
@@ -291,7 +291,7 @@ test("driver starts without a root manifest or local packages", { timeout: 20_00
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-  const driver = new DirectSdkDriver();
+  const driver = new SessionRuntime();
   try {
     await driver.start({ cwd, agentDir, repositoryRoot: root });
     const snapshot = await driver.snapshot();

@@ -1,5 +1,5 @@
-import type { AcceptedCommand, WebCommand } from "../shared/protocol/commands";
-import type { BootstrapSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../shared/protocol/snapshots";
+import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands";
+import type { BootstrapSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;

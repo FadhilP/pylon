@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { PooledSdkDriver } from "./pi/pooled-sdk-driver.ts";
+import { RuntimeCoordinator } from "./pi/runtime-coordinator.ts";
 import type { PiDriver } from "./pi/pi-driver.ts";
 import { ServerTransport } from "./http/router.ts";
 import { applySecurityHeaders, hostAllowed } from "./http/security.ts";
@@ -32,7 +32,7 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   if (host !== "127.0.0.1" && host !== "::1") throw new Error("Pylon server must bind to a loopback address");
   const port = options.port ?? 3141;
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) throw new Error("invalid server port");
-  const driver = options.driver ?? new PooledSdkDriver();
+  const driver = options.driver ?? new RuntimeCoordinator();
   const repositoryRoot = options.repositoryRoot ?? resolve(webRoot, "..");
   await driver.start({
     cwd: options.cwd ?? repositoryRoot,

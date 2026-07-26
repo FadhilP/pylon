@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { groupConversationMessages } from "../src/shared/conversation.ts";
+import { groupConversationMessages } from "../src/shared/transcript.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 
 const message = (id: string, role: MessageReadModel["role"]): MessageReadModel => ({

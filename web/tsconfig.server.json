@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["src/server", "src/shared", "src/session-navigation.ts", "test"]
+  "include": ["src/server", "src/shared", "test"]
 }

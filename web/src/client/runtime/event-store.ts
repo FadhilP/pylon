@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from "react";
-import type { WebCommand } from "../shared/protocol/commands";
-import { PROTOCOL_VERSION, type WebEvent } from "../shared/protocol/envelope";
-import type { ConnectionState, ConversationReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../shared/protocol/events";
-import type { SessionRuntimeState } from "../shared/protocol/events";
-import type { PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../shared/protocol/snapshots";
-import type { PromptImage } from "../shared/protocol/commands";
-import { isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../shared/protocol/validation";
+import type { WebCommand } from "../../shared/protocol/commands";
+import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
+import type { ConnectionState, ConversationReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
+import type { SessionRuntimeState } from "../../shared/protocol/events";
+import type { PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { PromptImage } from "../../shared/protocol/commands";
+import { isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../../shared/protocol/validation";
 import { ApiClient } from "./api-client";
 
 export interface RuntimeStoreSnapshot {

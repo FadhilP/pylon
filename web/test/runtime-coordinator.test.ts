@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { PooledSdkDriver } from "../src/server/pi/pooled-sdk-driver.ts";
+import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -90,7 +90,7 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
       pi.on("session_start", () => { starts++; });
     },
   };
-  const driver = new PooledSdkDriver({
+  const driver = new RuntimeCoordinator({
     extensionFactories: [probe],
     sleepAfterMs: 500,
     viewOnlySleepAfterMs: 20,
