@@ -60,3 +60,47 @@ test("package catalog supports a standalone repository with no manifest or packa
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("package catalog confines and delegates package-owned settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-package-settings-"));
+  const packageRoot = join(root, "packages", "pi-settings");
+  const agentDir = join(root, "agent");
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, "extension.ts"), "export default () => {};\n");
+    await writeFile(join(packageRoot, "settings.mjs"), `
+      let current = { kind: "helios", headed: true };
+      const expectedAgentDir = ${JSON.stringify(agentDir)};
+      export async function readSettings(context) {
+        if (context.agentDir !== expectedAgentDir) throw new Error("wrong agent directory");
+        return current;
+      }
+      export async function updateSettings(value, context) {
+        if (context.agentDir !== expectedAgentDir) throw new Error("wrong agent directory");
+        current = value;
+      }
+    `);
+    await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+      name: "pi-settings",
+      pi: { extensions: ["./extension.ts"] },
+      pylon: { settings: "./settings.mjs" },
+    }));
+    const catalog = new PackageCatalog(root, agentDir);
+    const state = await catalog.scan();
+    assert.ok(state.packages[0]?.settingsPath?.endsWith("settings.mjs"));
+    assert.deepEqual(await catalog.readSettings("pi-settings", state), { kind: "helios", headed: true });
+    const previous = await catalog.updateSettings("pi-settings", { kind: "helios", headed: false });
+    assert.deepEqual(previous, { kind: "helios", headed: true });
+    assert.deepEqual(await catalog.readSettings("pi-settings"), { kind: "helios", headed: false });
+
+    await writeFile(join(packageRoot, "package.json"), JSON.stringify({
+      name: "pi-settings",
+      pi: { extensions: ["./extension.ts"] },
+      pylon: { settings: "../../outside.mjs" },
+    }));
+    await writeFile(join(root, "outside.mjs"), "export async function readSettings() {}\n");
+    assert.equal((await catalog.scan()).packages[0]?.settingsPath, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

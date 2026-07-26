@@ -21,6 +21,11 @@ function role(value: unknown): MessageReadModel["role"] {
   if (value === "system" || value === "custom") return "system";
   return "user";
 }
+function thinkingLevel(value: unknown): MessageReadModel["thinkingLevel"] {
+  return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(value))
+    ? value as MessageReadModel["thinkingLevel"]
+    : undefined;
+}
 function attachmentCount(value: unknown): number | undefined {
   const content = object(value).content;
   if (!Array.isArray(content)) return undefined;
@@ -107,6 +112,7 @@ export class RuntimeProjection {
   private updateBytes = 0;
   private activeMessageId?: string;
   private messageCounter = 0;
+  private readonly turnMessages = new Map<string, string>();
   pendingUi?: UiRequestReadModel;
 
   constructor(private runtime: RuntimeSnapshot, private readonly publish: Publish) {
@@ -137,12 +143,22 @@ export class RuntimeProjection {
       ...this.runtime,
       ready: runtime.ready,
       cwdLabel: runtime.cwdLabel,
+      projectAvailable: runtime.projectAvailable,
+      sessionName: runtime.sessionName,
+      gitBranch: runtime.gitBranch,
       activeTools: [...runtime.activeTools],
       availableTools: [...runtime.availableTools],
       optionalCapabilities: { ...runtime.optionalCapabilities },
       diagnostics: [...runtime.diagnostics],
       sessionControls: structuredClone(runtime.sessionControls),
       metrics: { ...runtime.metrics },
+      discoverIndex: runtime.discoverIndex ? { ...runtime.discoverIndex } : undefined,
+      conversation: {
+        ...this.runtime.conversation,
+        workStartedAt: runtime.conversation.workStartedAt,
+        workModelName: runtime.conversation.workModelName,
+        workThinkingLevel: runtime.conversation.workThinkingLevel,
+      },
       operational: cloneOperational(runtime.operational),
     };
     this.publish("session.controls", this.runtime.sessionControls);
@@ -154,6 +170,7 @@ export class RuntimeProjection {
     this.runtime = runtime;
     this.messages.clear();
     this.tools.clear();
+    this.turnMessages.clear();
     for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
     for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
     this.pendingUi = undefined;
@@ -170,6 +187,10 @@ export class RuntimeProjection {
   dispose(): void { this.discardPending(); }
 
   apply(event: DriverEvent): void {
+    if (event.type === "projects.changed") {
+      this.publish("projects.changed", {});
+      return;
+    }
     if (event.type === "session.status") {
       this.publish("session.status", { sessionId: event.sessionId.slice(0, 128), state: event.state });
       return;
@@ -251,10 +272,68 @@ export class RuntimeProjection {
     if (kind === "auto_retry_start" || kind === "auto_retry_end" || kind === "retry" || kind === "retry_start" || kind === "retry_end") return this.retry(raw, kind);
     if (kind === "compaction" || kind === "compaction_start" || kind === "compaction_end") return this.compaction(raw, kind);
     if (kind === "metrics" || kind === "session_stats" || kind === "usage") return this.metrics(object(raw.metrics ?? raw.stats ?? raw));
-    if (kind === "agent_start" || kind === "agent_end" || kind === "agent_error") {
+    if (kind === "worktree_summary") return this.worktreeSummary(raw);
+    if (kind === "discover_index") {
+      const value = object(raw.value);
+      this.runtime.discoverIndex = ["idle", "indexing", "error"].includes(String(value.state))
+        ? value as unknown as RuntimeSnapshot["discoverIndex"]
+        : undefined;
+      this.publish("discover.index", this.runtime.discoverIndex ?? {});
+      return;
+    }
+    if (kind === "session_info_changed") {
+      this.runtime.sessionName = text(raw.name, 200) || undefined;
+      this.publish("session.info", { sessionId: this.runtime.sessionId, name: this.runtime.sessionName });
+      return;
+    }
+    if (kind === "agent_start") {
+      if (raw.metrics) this.metrics(object(raw.metrics));
+      const startedAt = typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
+        ? raw.workStartedAt
+        : new Date().toISOString();
+      this.runtime.conversation.workStartedAt = startedAt;
+      this.runtime.conversation.workModelName = text(raw.modelName, 200) || undefined;
+      this.runtime.conversation.workThinkingLevel = thinkingLevel(raw.thinkingLevel);
+      this.publish("agent.start", {
+        startedAt,
+        turnId: id(raw.turnId, ""),
+        modelName: this.runtime.conversation.workModelName,
+        thinkingLevel: this.runtime.conversation.workThinkingLevel,
+      });
+      return;
+    }
+    if (kind === "agent_end" || kind === "agent_error") {
+      if (kind === "agent_end" && raw.metrics) this.metrics(object(raw.metrics));
+      if (kind === "agent_end") {
+        this.runtime.gitBranch = typeof raw.gitBranch === "string" ? text(raw.gitBranch, 200) || undefined : undefined;
+      }
+      const durationMs = Number.isSafeInteger(raw.workDurationMs)
+        ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, raw.workDurationMs as number))
+        : undefined;
+      const assistant = [...this.messages.values()].reverse().find((message) => message.role === "assistant");
+      const turnId = id(raw.turnId, "");
+      if (assistant && turnId) {
+        this.turnMessages.set(turnId, assistant.id);
+        trimMap(this.turnMessages, 20);
+      }
+      if (assistant && durationMs !== undefined) {
+        assistant.workDurationMs = durationMs;
+        assistant.modelName = text(raw.modelName, 200) || undefined;
+        assistant.thinkingLevel = thinkingLevel(raw.thinkingLevel);
+        this.messages.set(assistant.id, assistant);
+      }
+      this.runtime.conversation.workStartedAt = undefined;
+      this.runtime.conversation.workModelName = undefined;
+      this.runtime.conversation.workThinkingLevel = undefined;
       this.publish(`agent.${kind.slice(6)}`, {
         willRetry: raw.willRetry === true,
         message: text(raw.errorMessage, 1_000) || undefined,
+        durationMs,
+        turnId,
+        messageId: assistant?.id,
+        modelName: assistant?.modelName,
+        thinkingLevel: assistant?.thinkingLevel,
+        gitBranch: this.runtime.gitBranch,
       });
     }
   }
@@ -336,6 +415,29 @@ export class RuntimeProjection {
     if (typeof raw.model === "string") current.model = raw.model.slice(0, 200);
     if (typeof raw.provider === "string") current.provider = raw.provider.slice(0, 200);
     this.publish("metrics.update", this.runtime.metrics);
+  }
+  private worktreeSummary(raw: Record<string, unknown>): void {
+    const turnId = id(raw.turnId, "");
+    const messageId = this.turnMessages.get(turnId) ?? id(raw.messageId, "");
+    const message = this.messages.get(messageId);
+    if (!message || message.role !== "assistant" || !Array.isArray(raw.files)) return;
+    const files: NonNullable<MessageReadModel["changedFiles"]> = [];
+    for (const value of raw.files.slice(0, 100)) {
+      const file = object(value);
+      const path = text(file.path, 500);
+      if (!path) continue;
+      if (file.binary === true) {
+        files.push({ path, binary: true });
+        continue;
+      }
+      if (Number.isSafeInteger(file.additions) && Number.isSafeInteger(file.deletions)) {
+        files.push({ path, additions: file.additions as number, deletions: file.deletions as number });
+      }
+    }
+    message.changedFiles = files;
+    this.messages.set(messageId, message);
+    if (turnId) this.turnMessages.delete(turnId);
+    this.publish("turn.changes", { messageId, files });
   }
   flush(): void { if (this.updateTimer) clearTimeout(this.updateTimer); this.updateTimer = undefined; if (this.pendingUpdate) this.publish("message.update", this.pendingUpdate); this.pendingUpdate = undefined; this.updateBytes = 0; }
 }

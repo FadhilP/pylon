@@ -16,24 +16,33 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
-import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { PackageListSnapshot, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ChangedFileReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, DiscoverIndexReadModel, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
+  DeleteContinuityMemoryInput,
   DriverEvent,
   DriverEventListener,
   ForkInput,
   NewSessionInput,
   PiDriver,
+  ProjectInput,
+  ProjectArchiveInput,
   PromptInput,
+  RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
   RuntimeTarget,
+  RenameSessionInput,
   SetModelInput,
   SetPackageEnabledInput,
+  SetSessionActiveInput,
   SetThinkingLevelInput,
+  SessionArchiveInput,
   SwitchSessionInput,
+  UpdateContinuityMemoryInput,
+  UpdatePackageSettingsInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
 import { createPylonRuntimeFactory } from "./runtime-factory.ts";
@@ -41,6 +50,7 @@ import { applyOperationalEvent, cloneOperational, initialOperational, withOperat
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { projectMessages } from "./projections.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
+import { ProjectRegistry } from "./project-registry.ts";
 
 interface TrashAttempt {
   status: number | null;
@@ -50,6 +60,17 @@ interface TrashAttempt {
 
 function moveToTrash(sessionPath: string): TrashAttempt {
   return spawnSync("trash", sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath], { encoding: "utf8", timeout: 1_000, windowsHide: true });
+}
+
+export function readGitBranch(cwd: string): string | undefined {
+  const result = spawnSync("git", ["branch", "--show-current"], {
+    cwd,
+    encoding: "utf8",
+    timeout: 1_000,
+    windowsHide: true,
+  });
+  const branch = result.status === 0 ? result.stdout.trim() : "";
+  return branch ? branch.slice(0, 200) : undefined;
 }
 
 export async function deleteSessionFile(sessionPath: string, trash: (path: string) => TrashAttempt = moveToTrash): Promise<void> {
@@ -73,11 +94,20 @@ const OPTIONAL_TOOLS = [
   "heartbeat_status",
   "heartbeat_cancel",
 ] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+function supportedThinkingLevels(model: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }): readonly ThinkingLevel[] {
+  if (!model.reasoning) return ["off"] as const;
+  if (!model.thinkingLevelMap) return THINKING_LEVELS;
+  return THINKING_LEVELS.filter((level) => model.thinkingLevelMap?.[level] !== null);
+}
 
 export interface SessionRuntimeOptions {
   dialogTimeoutMs?: number;
   extensionFactories?: InlineExtension[];
   onShutdownRequested?: () => void;
+  projectRegistry?: ProjectRegistry;
 }
 
 export class SessionRuntime implements PiDriver {
@@ -100,8 +130,23 @@ export class SessionRuntime implements PiDriver {
   private packageCatalog?: PackageCatalog;
   private packageState?: PackageCatalogState;
   private packageUpdate = false;
+  private indexUpdate = false;
   private sessionMutation?: "lifecycle" | "delete";
   private readonly sessionIndex = new SessionIndex();
+  private projectRegistry?: ProjectRegistry;
+  private readonly workDurations = new Map<string, number>();
+  private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
+  private readonly turnChanges = new Map<string, ChangedFileReadModel[]>();
+  private timingSessionId?: string;
+  private workStartedAt?: string;
+  private workStartedAtMs?: number;
+  private workModelName?: string;
+  private workThinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"];
+  private workTurnId?: string;
+  private nextTurnId = 0;
+  private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string }> = [];
+  private discoverIndex?: DiscoverIndexReadModel;
+  private gitBranch?: string;
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -115,6 +160,13 @@ export class SessionRuntime implements PiDriver {
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.runtime || this.disposed) throw new Error("driver cannot be started twice");
     this.target = target;
+    this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
+    if (!this.options.projectRegistry) {
+      const knownSessions = await SessionManager.listAll();
+      await this.projectRegistry.load([target.cwd, ...knownSessions.map((session) => session.cwd)]);
+    }
+    this.sessionIndex.setProjectRegistry(this.projectRegistry);
+    this.gitBranch = readGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
     this.packageState = await this.packageCatalog.scan();
     const generation = this.gate.start();
@@ -133,7 +185,9 @@ export class SessionRuntime implements PiDriver {
         agentDir: target.agentDir,
         sessionManager: target.sessionPath
           ? SessionManager.open(target.sessionPath)
-          : SessionManager.create(target.cwd, undefined, target.parentSessionPath ? { parentSession: target.parentSessionPath } : undefined),
+          : target.inMemory
+            ? SessionManager.inMemory(target.cwd)
+            : SessionManager.create(target.cwd, undefined, target.parentSessionPath ? { parentSession: target.parentSessionPath } : undefined),
       });
       this.runtime = runtime;
       this.runtimeDisposable = true;
@@ -186,6 +240,16 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
+  async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    return this.sessionIndex.listArchived(input, {
+      activeId: runtime.session.sessionId,
+      generation: this.gate.generation,
+      stateFor: () => "sleeping",
+    });
+  }
+
   async listPackages(): Promise<PackageListSnapshot> {
     const catalog = this.packageCatalog;
     const runtime = this.requireRuntime();
@@ -194,24 +258,33 @@ export class SessionRuntime implements PiDriver {
     const extensions = runtime.services.resourceLoader.getExtensions();
     const loaded = new Set(extensions.extensions.map((item) => resolve(item.resolvedPath)));
     const failed = new Set(extensions.errors.map((item) => resolve(item.path)));
+    const packages = await Promise.all(state.packages.map(async (item) => {
+      let settings: PackageSettingsReadModel | undefined;
+      let settingsError: string | undefined;
+      try {
+        settings = await catalog.readSettings(item.id, state);
+      } catch (error) {
+        settingsError = error instanceof Error ? error.message.slice(0, 500) : "Settings unavailable";
+      }
+      const enabled = state.enabledIds.has(item.id);
+      const active = enabled && item.extensionPaths.every((path) => loaded.has(resolve(path)));
+      return {
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        enabled,
+        active,
+        extensionCount: item.extensionPaths.length,
+        ...(settings ? { settings } : {}),
+        ...(!active && enabled && item.extensionPaths.some((path) => failed.has(resolve(path)))
+          ? { error: "One or more extensions failed to load." }
+          : settingsError ? { error: settingsError } : {}),
+      };
+    }));
     return {
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: this.gate.generation,
-      packages: state.packages.map((item) => {
-        const enabled = state.enabledIds.has(item.id);
-        const active = enabled && item.extensionPaths.every((path) => loaded.has(resolve(path)));
-        return {
-          id: item.id,
-          name: item.name,
-          description: item.description,
-          enabled,
-          active,
-          extensionCount: item.extensionPaths.length,
-          ...(!active && enabled && item.extensionPaths.some((path) => failed.has(resolve(path)))
-            ? { error: "One or more extensions failed to load." }
-            : {}),
-        };
-      }),
+      packages,
     };
   }
 
@@ -251,10 +324,40 @@ export class SessionRuntime implements PiDriver {
     await this.runtime.session.abort();
   }
 
+  addProject(_input: ProjectInput): Promise<ReplacementResult> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
+  removeProject(_input: RemoveProjectInput): Promise<ReplacementResult> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
+  archiveProject(_input: ProjectArchiveInput): Promise<ReplacementResult> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
+  restoreProject(_input: ProjectArchiveInput): Promise<void> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
+  archiveSession(_input: SessionArchiveInput): Promise<ReplacementResult> {
+    return Promise.reject(new Error("session archiving requires the runtime coordinator"));
+  }
+
+  restoreSession(_input: SessionArchiveInput): Promise<void> {
+    return Promise.reject(new Error("session archiving requires the runtime coordinator"));
+  }
+
   newSession(input?: NewSessionInput): Promise<ReplacementResult> {
     return this.withSessionMutation("lifecycle", async () => {
+      if (input?.expectedGeneration !== undefined) this.gate.assert(input.expectedGeneration);
       const parent = input?.parentSessionId ? await this.resolveSession(input.parentSessionId) : undefined;
+      const project = input?.projectId ? this.projectRegistry?.get(input.projectId) : undefined;
+      if (input?.projectId && (!project || project.archivedAt)) throw new Error("project is unavailable");
       const runtime = this.requireRuntime();
+      if (project && projectIdForCwd(project.cwd) !== projectIdForCwd(runtime.cwd)) {
+        throw new Error("cross-project session creation requires the runtime coordinator");
+      }
       const crossProject = parent && projectIdForCwd(parent.cwd) !== projectIdForCwd(runtime.cwd);
       if (crossProject) {
         const switched = await this.replace(() => runtime.switchSession(parent.path));
@@ -289,53 +392,159 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
+  async renameSession(input: RenameSessionInput): Promise<void> {
+    const runtime = this.requireRuntime();
+    const name = input.name.trim();
+    if (input.sessionId === runtime.session.sessionId) {
+      this.controlSession().setSessionName(name);
+      this.refreshSnapshot();
+    } else {
+      const session = await this.resolveSession(input.sessionId);
+      SessionManager.open(session.path).appendSessionInfo(name);
+    }
+    this.sessionIndex.invalidate();
+  }
+
+  setSessionActive(input: SetSessionActiveInput): Promise<void> {
+    const current = this.requireRuntime().session.sessionId;
+    if (input.sessionId === current && input.active) return Promise.resolve();
+    if (input.sessionId === current) return Promise.reject(new Error("cannot deactivate the selected session"));
+    return Promise.reject(new Error("manual session activation requires the runtime coordinator"));
+  }
+
   fork(input: ForkInput): Promise<ReplacementResult> {
     return this.withSessionMutation("lifecycle", () => this.replace(() => this.requireRuntime().fork(input.entryId, { position: input.position })));
   }
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {
+    const catalog = this.packageCatalog;
+    if (!catalog) throw new Error("runtime is not ready");
+    return this.changePackages(async (previous) => {
+      if (previous.enabledIds.has(input.packageId) === input.enabled) {
+        return { next: previous, rollback: async () => undefined, changed: false };
+      }
+      return {
+        next: await catalog.setEnabled(input.packageId, input.enabled),
+        rollback: () => catalog.restoreEnabled(previous.enabledIds),
+      };
+    });
+  }
+
+  async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
+    const catalog = this.packageCatalog;
+    if (!catalog) throw new Error("runtime is not ready");
+    this.assertPackageModels(input.settings);
+    return this.changePackages(async (previous) => {
+      const oldSettings = await catalog.updateSettings(input.packageId, input.settings);
+      return {
+        next: await catalog.scan(),
+        rollback: () => catalog.updateSettings(input.packageId, oldSettings).then(() => undefined),
+      };
+    });
+  }
+
+  async rebuildDiscoverIndex(): Promise<void> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready || this.indexUpdate || !this.canSleep()) {
+      throw new Error("the index can only rebuild while the session is idle");
+    }
+    this.indexUpdate = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let handled = false;
+        this.eventBus.emit("pi-discover:index-action", {
+          version: 1,
+          action: "rebuild",
+          acknowledge: () => { handled = true; },
+          resolve,
+          reject,
+        });
+        if (!handled) reject(new Error("pi-discover indexing is unavailable"));
+      });
+      this.refreshSnapshot();
+    } finally {
+      this.indexUpdate = false;
+      if (runtime === this.runtime) this.refreshSnapshot();
+    }
+  }
+
+  private async changePackages(
+    mutate: (previous: PackageCatalogState) => Promise<{ next: PackageCatalogState; rollback: () => Promise<void>; changed?: boolean }>,
+  ): Promise<ReplacementResult> {
     const runtime = this.requireRuntime();
     const catalog = this.packageCatalog;
-    if (!catalog || !this.createRuntime || !this.gate.ready) throw new Error("runtime is not ready");
+    if (!catalog || !this.createRuntime || !this.target || !this.gate.ready) throw new Error("runtime is not ready");
     if (this.packageUpdate || this.sessionMutation || runtime.session.isStreaming || this.ui.hasPendingDialog
       || this.operational.jobs.items.some((job) => job.state === "running")) {
       throw new Error("packages can only change while the session is idle");
     }
+    const sessionFile = runtime.session.sessionFile;
+    if (!sessionFile) throw new Error("the current session must be persisted before packages can change");
+    const session = { cwd: runtime.cwd, path: sessionFile };
     this.packageUpdate = true;
+    const previous = await catalog.scan().catch((error) => {
+      this.packageUpdate = false;
+      throw error;
+    });
+    const previousFactory = this.createRuntime;
+    let rollback: (() => Promise<void>) | undefined;
     try {
-      const previous = await catalog.scan();
-      if (previous.enabledIds.has(input.packageId) === input.enabled) {
+      const change = await mutate(previous);
+      rollback = change.rollback;
+      if (change.changed === false) {
         return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
       }
-
-      const sessionFile = runtime.session.sessionFile;
-      if (!sessionFile) throw new Error("the current session must be persisted before packages can change");
-      const session = { cwd: runtime.cwd, path: sessionFile };
-      const previousFactory = this.createRuntime;
-      try {
-        const next = await catalog.setEnabled(input.packageId, input.enabled);
-        const nextFactory = await createPylonRuntimeFactory({
-          agentDir: this.target!.agentDir,
-          additionalExtensionPaths: next.extensionPaths,
-          extensionFactories: this.options.extensionFactories,
-          eventBus: this.eventBus,
-        });
-        this.packageState = next;
-        await this.rebuildSession(session, nextFactory, false);
-        this.createRuntime = nextFactory;
-        return { cancelled: false, sessionId: this.requireRuntime().session.sessionId, sessionGeneration: this.gate.generation };
-      } catch (error) {
-        await catalog.restoreEnabled(previous.enabledIds).catch(() => undefined);
-        this.packageState = previous;
-        if (!this.gate.ready) {
-          await this.rebuildSession(session, previousFactory, true).catch((recoveryError) => {
-            this.recordError(recoveryError);
-          });
-        }
-        throw error;
+      const nextFactory = await createPylonRuntimeFactory({
+        agentDir: this.target.agentDir,
+        additionalExtensionPaths: change.next.extensionPaths,
+        extensionFactories: this.options.extensionFactories,
+        eventBus: this.eventBus,
+      });
+      this.packageState = change.next;
+      await this.rebuildSession(session, nextFactory, false);
+      this.createRuntime = nextFactory;
+      return { cancelled: false, sessionId: this.requireRuntime().session.sessionId, sessionGeneration: this.gate.generation };
+    } catch (error) {
+      await rollback?.().catch(() => undefined);
+      this.packageState = previous;
+      if (!this.gate.ready) {
+        await this.rebuildSession(session, previousFactory, true).catch((recoveryError) => this.recordError(recoveryError));
       }
+      throw error;
     } finally {
       this.packageUpdate = false;
+    }
+  }
+
+  private assertPackageModels(settings: PackageSettingsReadModel): void {
+    const runtime = this.requireRuntime();
+    const available = new Map(runtime.services.modelRuntime.getAvailableSnapshot()
+      .map((model) => [`${model.provider}/${model.id}`, model]));
+    const assertProfile = (modelRef: string | undefined, thinking: string | undefined) => {
+      const model = modelRef ? available.get(modelRef) : undefined;
+      if (!model) throw new Error("package model is unavailable or has no configured credentials");
+      if (thinking && !supportedThinkingLevels(model).includes(thinking as ThinkingLevel)) {
+        throw new Error("package thinking level is unavailable for the selected model");
+      }
+    };
+    if (settings.kind === "continuity") {
+      if (settings.planner) assertProfile(settings.planner.model, settings.planner.thinking);
+      if (settings.executor) assertProfile(settings.executor.model, settings.executor.thinking);
+      return;
+    }
+    if (settings.kind === "advisor" || settings.kind === "scout") {
+      if (settings.mode === "disabled") return;
+      if (settings.mode === "model") {
+        assertProfile(settings.model, settings.thinking);
+        return;
+      }
+      if (settings.thinking && !runtime.session.getAvailableThinkingLevels().includes(settings.thinking)) {
+        throw new Error("package thinking level is unavailable for the session model");
+      }
+      return;
+    }
+    if (settings.kind === "grunt" && settings.mode === "model") {
+      assertProfile(settings.model, undefined);
     }
   }
 
@@ -355,6 +564,24 @@ export class SessionRuntime implements PiDriver {
     this.refreshSnapshot();
   }
 
+  updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
+    return this.continuityMemoryMutation({
+      action: "update",
+      key: input.key,
+      text: input.text,
+      kind: input.kind,
+      expectedUpdatedAt: input.expectedUpdatedAt,
+    }, input.expectedGeneration);
+  }
+
+  deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void> {
+    return this.continuityMemoryMutation({
+      action: "delete",
+      key: input.key,
+      expectedUpdatedAt: input.expectedUpdatedAt,
+    }, input.expectedGeneration);
+  }
+
   async answerUiRequest(input: UiResponse): Promise<void> {
     this.ui.answer(input);
   }
@@ -367,13 +594,13 @@ export class SessionRuntime implements PiDriver {
   runtimeState(): SessionRuntimeState {
     const runtime = this.requireRuntime();
     if (this.ui.hasPendingDialog) return "attention";
-    if (runtime.session.isStreaming || runtime.session.pendingMessageCount > 0
+    if (runtime.session.isStreaming || runtime.session.pendingMessageCount > 0 || this.indexUpdate
       || this.operational.jobs.items.some((job) => job.state === "running")) return "running";
     return "idle";
   }
 
   canSleep(): boolean {
-    return this.runtimeState() === "idle" && !this.sessionMutation && !this.packageUpdate;
+    return this.runtimeState() === "idle" && !this.sessionMutation && !this.packageUpdate && !this.indexUpdate;
   }
 
   runtimeDetails(): {
@@ -454,6 +681,21 @@ export class SessionRuntime implements PiDriver {
   }
 
   private async bindSession(session: AgentSession, generation: number): Promise<void> {
+    if (this.timingSessionId !== session.sessionId) {
+      this.timingSessionId = session.sessionId;
+      this.workStartedAt = undefined;
+      this.workStartedAtMs = undefined;
+      this.workDurations.clear();
+      this.turnControls.clear();
+      this.turnChanges.clear();
+      this.pendingWorktreeTurns.length = 0;
+      this.nextTurnId = 0;
+      this.workTurnId = undefined;
+      this.discoverIndex = undefined;
+      this.workModelName = undefined;
+      this.workThinkingLevel = undefined;
+      this.gitBranch = readGitBranch(session.sessionManager.getCwd());
+    }
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context(session.sessionId, generation),
@@ -473,11 +715,76 @@ export class SessionRuntime implements PiDriver {
     });
     this.unsubscribeSession = session.subscribe((payload) => {
       if (!this.gate.accepts(generation)) return;
+      const raw = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload as Record<string, unknown>
+        : {};
+      const kind = String(raw.type ?? "");
+      let forwarded: unknown = payload;
+      if (kind === "agent_start") {
+        this.workTurnId = `turn-${++this.nextTurnId}`;
+        this.workStartedAtMs = Date.now();
+        this.workStartedAt = new Date(this.workStartedAtMs).toISOString();
+        this.workModelName = session.model?.name;
+        this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;
+        this.sessionIndex.invalidate();
+        this.refreshSnapshot();
+        forwarded = {
+          ...raw,
+          workStartedAt: this.workStartedAt,
+          turnId: this.workTurnId,
+          modelName: this.workModelName,
+          thinkingLevel: this.workThinkingLevel,
+          metrics: this.lastSnapshot?.metrics,
+        };
+      } else if (kind === "agent_end") {
+        const duration = Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
+        const messages = session.state.messages;
+        let assistantIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index--) {
+          if (messages[index]?.role === "assistant") {
+            assistantIndex = index;
+            break;
+          }
+        }
+        const messageId = assistantIndex >= 0 ? `history-${assistantIndex}` : undefined;
+        if (messageId) {
+          this.workDurations.set(messageId, duration);
+          this.turnControls.set(messageId, {
+            modelName: this.workModelName,
+            thinkingLevel: this.workThinkingLevel,
+          });
+        }
+        const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
+        this.pendingWorktreeTurns.push({ turnId, messageId });
+        if (this.pendingWorktreeTurns.length > 20) this.pendingWorktreeTurns.shift();
+        const modelName = this.workModelName;
+        const thinkingLevel = this.workThinkingLevel;
+        this.workStartedAt = undefined;
+        this.workStartedAtMs = undefined;
+        this.workModelName = undefined;
+        this.workThinkingLevel = undefined;
+        this.workTurnId = undefined;
+        this.sessionIndex.invalidate();
+        this.gitBranch = readGitBranch(session.sessionManager.getCwd());
+        this.refreshSnapshot();
+        forwarded = {
+          ...raw,
+          workDurationMs: duration,
+          turnId,
+          modelName,
+          thinkingLevel,
+          gitBranch: this.gitBranch,
+          metrics: this.lastSnapshot?.metrics,
+        };
+      } else if (kind === "session_info_changed") {
+        this.sessionIndex.invalidate();
+        this.refreshSnapshot();
+      }
       this.emit({
         type: "session.event",
         sessionId: session.sessionId,
         sessionGeneration: generation,
-        payload,
+        payload: forwarded,
       });
     });
   }
@@ -640,6 +947,28 @@ export class SessionRuntime implements PiDriver {
     return runtime.session;
   }
 
+  private continuityMemoryMutation(
+    mutation: Record<string, unknown>,
+    expectedGeneration = this.gate.generation,
+  ): Promise<void> {
+    this.gate.assert(expectedGeneration);
+    const session = this.controlSession();
+    return new Promise<void>((resolve, reject) => {
+      let answered = false;
+      this.eventBus.emit("pi-continuity:memory-mutation", {
+        version: 1,
+        sessionId: session.sessionId,
+        ...mutation,
+        respond: (result: unknown | Promise<unknown>) => {
+          if (answered) return;
+          answered = true;
+          Promise.resolve(result).then(() => resolve(), reject);
+        },
+      });
+      if (!answered) reject(new Error("Continuity memory is unavailable"));
+    });
+  }
+
   private async resolveSession(sessionId: string): Promise<SessionInfo> {
     const matches = (await SessionManager.listAll()).filter((session) => session.id === sessionId);
     if (matches.length !== 1) throw new Error(matches.length ? "session id is ambiguous" : "session is unavailable");
@@ -660,11 +989,37 @@ export class SessionRuntime implements PiDriver {
     const messages = session.state.messages.length > 0
       ? session.state.messages
       : session.sessionManager.buildSessionContext().messages;
+    const projectedMessages = projectMessages(messages).map((message) => {
+      const workDurationMs = this.workDurations.get(message.id);
+      const controls = this.turnControls.get(message.id);
+      const changedFiles = this.turnChanges.get(message.id);
+      return workDurationMs === undefined && !controls && !changedFiles
+        ? message
+        : {
+            ...message,
+            ...(workDurationMs === undefined ? {} : { workDurationMs }),
+            ...controls,
+            ...(changedFiles ? { changedFiles: changedFiles.map((file) => ({ ...file })) } : {}),
+          };
+    });
     const model = session.model;
     const models = runtime.services.modelRuntime.getAvailableSnapshot().slice(0, 500)
-      .map((item) => ({ provider: item.provider, id: item.id, name: item.name }))
+      .map((item) => ({
+        provider: item.provider,
+        id: item.id,
+        name: item.name,
+        thinkingLevels: [...supportedThinkingLevels(item)],
+      }))
       .sort((left, right) => left.provider.localeCompare(right.provider) || left.name.localeCompare(right.name));
+    const commands = runtime.services.resourceLoader.getExtensions().runtime.getCommands()
+      .slice(0, 200)
+      .map((command) => ({
+        name: command.name.slice(0, 120),
+        ...(command.description ? { description: command.description.slice(0, 300) } : {}),
+        source: command.source,
+      }));
     const loadedExtensions = runtime.services.resourceLoader.getExtensions().extensions.map((extension) => basename(extension.resolvedPath));
+    const selectedProject = this.projectRegistry?.get(projectIdForCwd(runtime.cwd));
     this.operational = withOperationalCapabilities(this.operational, availableTools, loadedExtensions, this.diagnostics);
     this.requestPackageStates(session.sessionId);
     this.lastSnapshot = {
@@ -673,6 +1028,9 @@ export class SessionRuntime implements PiDriver {
       sessionGeneration: this.gate.generation,
       ready: this.gate.ready,
       cwdLabel: basename(runtime.cwd) || runtime.cwd,
+      projectAvailable: !this.target?.inMemory && Boolean(selectedProject && !selectedProject.archivedAt),
+      sessionName: session.sessionManager.getSessionName(),
+      gitBranch: this.gitBranch,
       activeTools: session.getActiveToolNames().sort(),
       availableTools,
       optionalCapabilities: Object.fromEntries(
@@ -680,9 +1038,12 @@ export class SessionRuntime implements PiDriver {
       ),
       diagnostics: [...this.diagnostics],
       conversation: {
-        messages: projectMessages(messages),
+        messages: projectedMessages,
         tools: [],
         streaming: session.isStreaming,
+        workStartedAt: this.workStartedAt,
+        workModelName: this.workModelName,
+        workThinkingLevel: this.workThinkingLevel,
         queue: { steering: 0, followUp: 0 },
         retry: { active: false },
         compaction: { active: false },
@@ -692,6 +1053,7 @@ export class SessionRuntime implements PiDriver {
         models,
         thinkingLevel: session.supportsThinking() ? session.thinkingLevel : undefined,
         thinkingLevels: session.getAvailableThinkingLevels(),
+        commands,
       },
       operational: this.operational,
       metrics: {
@@ -708,12 +1070,38 @@ export class SessionRuntime implements PiDriver {
         assistantMessages: stats.assistantMessages,
         toolCalls: stats.toolCalls,
       },
+      ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
     };
   }
 
   private installBusHooks(generation: number): void {
     this.detachBus();
+    this.busUnsubscribers.push(this.eventBus.on("pi-discover:index-state", (payload) => {
+      if (!this.gate.accepts(generation)) return;
+      const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
+      if (raw?.version !== 1) return;
+      if (raw.available === false) {
+        this.discoverIndex = undefined;
+      } else if (["idle", "indexing", "error"].includes(String(raw.state))) {
+        this.discoverIndex = {
+          state: raw.state as DiscoverIndexReadModel["state"],
+          ...(Number.isSafeInteger(raw.files) && (raw.files as number) >= 0 ? { files: raw.files as number } : {}),
+          ...(Number.isSafeInteger(raw.symbols) && (raw.symbols as number) >= 0 ? { symbols: raw.symbols as number } : {}),
+          ...(typeof raw.indexedAt === "string" && !Number.isNaN(Date.parse(raw.indexedAt)) ? { indexedAt: raw.indexedAt } : {}),
+          ...(typeof raw.error === "string" && raw.error ? { error: raw.error.slice(0, 500) } : {}),
+        };
+      } else {
+        return;
+      }
+      const sessionId = this.runtime?.session.sessionId;
+      if (sessionId) this.emit({
+        type: "session.event",
+        sessionId,
+        sessionGeneration: generation,
+        payload: { type: "discover_index", value: this.discoverIndex },
+      });
+    }));
     for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {
         const active = this.gate.accepts(generation);
@@ -740,6 +1128,39 @@ export class SessionRuntime implements PiDriver {
         });
       }));
     }
+    this.busUnsubscribers.push(this.eventBus.on("pylon:worktree-summary", (payload) => {
+      if (!this.gate.accepts(generation)) return;
+      const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
+      if (raw?.version !== 1 || typeof raw.known !== "boolean" || !Array.isArray(raw.files)) return;
+      const turn = this.pendingWorktreeTurns.shift();
+      if (!turn || raw.known !== true || !turn.messageId) return;
+      const files: ChangedFileReadModel[] = [];
+      for (const value of raw.files.slice(0, 100)) {
+        const file = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+        const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/").slice(0, 500) : "";
+        if (!path || path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..")) continue;
+        if (file?.binary === true) {
+          files.push({ path, binary: true });
+          continue;
+        }
+        if (Number.isSafeInteger(file?.additions) && Number.isSafeInteger(file?.deletions)) {
+          files.push({
+            path,
+            additions: Math.min(1_000_000, Math.max(0, file!.additions as number)),
+            deletions: Math.min(1_000_000, Math.max(0, file!.deletions as number)),
+          });
+        }
+      }
+      const messageId = turn.messageId;
+      this.turnChanges.set(messageId, files);
+      const sessionId = this.runtime!.session.sessionId;
+      this.emit({
+        type: "session.event",
+        sessionId,
+        sessionGeneration: generation,
+        payload: { type: "worktree_summary", turnId: turn.turnId, messageId, files },
+      });
+    }));
   }
 
   private requestPackageStates(sessionId: string): void {
@@ -747,7 +1168,7 @@ export class SessionRuntime implements PiDriver {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: 1,
+          version: channel.startsWith("pi-continuity") ? 2 : 1,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;

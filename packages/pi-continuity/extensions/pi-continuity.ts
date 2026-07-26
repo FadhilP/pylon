@@ -271,8 +271,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       notices,
     };
   };
+  const projectMemory = () => project
+    ? memoryFacts.filter((fact) => fact.scope === "project" && fact.owner === project!.owner)
+    : [];
   const stateSnapshot = (available = true) =>
-    continuityStateSnapshot(leasedSessionId, stateRevision, work, available);
+    continuityStateSnapshot(leasedSessionId, stateRevision, work, available, projectMemory());
   const publishState = (available = true) => {
     stateRevision++;
     pi.events.emit("pi-continuity:state-change", stateSnapshot(available));
@@ -280,6 +283,69 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const disposeStateRequest = pi.events.on("pi-continuity:state-request", (request: any) => {
     if (request?.version !== CONTINUITY_STATE_VERSION || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
     try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Continuity. */ }
+  });
+  const disposeMemoryMutation = pi.events.on("pi-continuity:memory-mutation", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
+    const operation = (async () => {
+      if (request.action !== "update" && request.action !== "delete") throw new Error("invalid memory action");
+      if (typeof request.key !== "string" || !request.key.trim() || request.key.length > 200
+        || typeof request.expectedUpdatedAt !== "string") throw new Error("invalid memory target");
+      project = await resolveProject(currentCwd);
+      await withStateLock(memoryDirectory(), async () => {
+        const latest = await readMemory();
+        const index = latest.facts.findIndex((fact) =>
+          fact.scope === "project" && fact.owner === project!.owner && fact.key === request.key,
+        );
+        if (index < 0) {
+          memoryFacts = latest.facts;
+          facts = memoryFacts;
+          publishState();
+          throw new Error("memory fact is unavailable");
+        }
+        const existing = latest.facts[index]!;
+        if (existing.updatedAt !== request.expectedUpdatedAt) {
+          memoryFacts = latest.facts;
+          facts = memoryFacts;
+          publishState();
+          throw new Error("memory fact changed; review the latest value");
+        }
+        if (request.action === "delete") {
+          latest.facts.splice(index, 1);
+        } else {
+          const checked = candidate({
+            action: "replace",
+            scope: "project",
+            key: existing.key,
+            kind: request.kind,
+            text: request.text,
+            source: existing.source,
+            confidence: existing.confidence,
+          }, {
+            owner: existing.owner,
+            scope: "project",
+            captureCommit: existing.captureCommit,
+            branchAtCapture: existing.branchAtCapture,
+            evidencePaths: existing.evidencePaths,
+          });
+          latest.facts[index] = {
+            ...existing,
+            kind: checked.kind!,
+            text: checked.text!,
+            updatedAt: new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString(),
+          };
+        }
+        memoryFacts = latest.facts;
+        facts = memoryFacts;
+        await writeJson(paths().memory, {
+          schemaVersion: MEMORY_SCHEMA_VERSION,
+          facts: memoryFacts,
+          updatedAt: new Date().toISOString(),
+        });
+      });
+      publishState();
+      return { updated: true };
+    })();
+    request.respond(operation);
   });
   const saveWork = async () => {
     if (work) {
@@ -551,6 +617,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     approvalContext = undefined;
     publishState(false);
     disposeStateRequest();
+    disposeMemoryMutation();
     disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();

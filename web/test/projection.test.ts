@@ -84,6 +84,74 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
   assert.equal(messages[3]?.text, "done");
 });
 
+test("projection publishes live session names and agent timing metadata", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  const startedAt = new Date().toISOString();
+
+  projection.apply(session({
+    type: "agent_start",
+    turnId: "turn-1",
+    workStartedAt: startedAt,
+    modelName: "GPT-5",
+    thinkingLevel: "high",
+    metrics: { userMessages: 1 },
+  }));
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  projection.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-1",
+    workDurationMs: 1_234,
+    modelName: "GPT-5",
+    thinkingLevel: "high",
+    gitBranch: "main",
+    metrics: { userMessages: 1, cost: 0.25 },
+  }));
+  projection.apply(session({
+    type: "worktree_summary",
+    turnId: "turn-1",
+    messageId: "history-999",
+    files: [{ path: "src/app.ts", additions: 4, deletions: 2, binary: false }],
+  }));
+  projection.apply(session({ type: "session_info_changed", name: "Renamed by timeline" }));
+
+  const snapshot = projection.snapshot();
+  assert.equal(snapshot.sessionName, "Renamed by timeline");
+  assert.equal(snapshot.gitBranch, "main");
+  assert.equal(snapshot.metrics.userMessages, 1);
+  assert.equal(snapshot.metrics.cost, 0.25);
+  assert.equal(snapshot.conversation.workStartedAt, undefined);
+  assert.equal(snapshot.conversation.messages.at(-1)?.workDurationMs, 1_234);
+  assert.equal(snapshot.conversation.messages.at(-1)?.modelName, "GPT-5");
+  assert.equal(snapshot.conversation.messages.at(-1)?.thinkingLevel, "high");
+  assert.deepEqual(snapshot.conversation.messages.at(-1)?.changedFiles, [
+    { path: "src/app.ts", additions: 4, deletions: 2 },
+  ]);
+  assert.deepEqual(published.filter((event) => event.type === "session.info").map((event) => event.payload), [
+    { sessionId: "session", name: "Renamed by timeline" },
+  ]);
+  assert.equal((published.find((event) => event.type === "agent.start")?.payload as { startedAt: string }).startedAt, startedAt);
+  assert.equal((published.find((event) => event.type === "agent.end")?.payload as { durationMs: number }).durationMs, 1_234);
+  assert.ok(published.some((event) => event.type === "turn.changes"));
+});
+
+test("projection publishes bounded discover index state", () => {
+  const published: string[] = [];
+  const projection = new RuntimeProjection(runtime(), (type) => published.push(type));
+  projection.apply(session({
+    type: "discover_index",
+    value: { state: "idle", files: 1_200, symbols: 3_400, indexedAt: new Date(0).toISOString() },
+  }));
+  assert.deepEqual(projection.snapshot().discoverIndex, {
+    state: "idle",
+    files: 1_200,
+    symbols: 3_400,
+    indexedAt: new Date(0).toISOString(),
+  });
+  assert.ok(published.includes("discover.index"));
+});
+
 test("projection retains bounded extension UI state and publishes mutation events", () => {
   const published: string[] = [];
   const projection = new RuntimeProjection(runtime(), (type) => published.push(type));

@@ -4,6 +4,10 @@ export interface MessageReadModel {
   text: string;
   streaming: boolean;
   attachmentCount?: number;
+  workDurationMs?: number;
+  modelName?: string;
+  thinkingLevel?: ThinkingLevelReadModel;
+  changedFiles?: ChangedFileReadModel[];
   systemSource?: string;
   tool?: {
     id: string;
@@ -11,6 +15,13 @@ export interface MessageReadModel {
     input?: string;
     status: "running" | "completed" | "failed";
   };
+}
+
+export interface ChangedFileReadModel {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  binary?: boolean;
 }
 
 export type SessionRuntimeState = "sleeping" | "idle" | "running" | "attention";
@@ -44,6 +55,9 @@ export interface ConversationReadModel {
   messages: MessageReadModel[];
   tools: ToolActivityReadModel[];
   streaming: boolean;
+  workStartedAt?: string;
+  workModelName?: string;
+  workThinkingLevel?: ThinkingLevelReadModel;
   queue: QueueReadModel;
   retry: RetryReadModel;
   compaction: CompactionReadModel;
@@ -70,6 +84,7 @@ export interface ModelOptionReadModel {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: ThinkingLevelReadModel[];
 }
 
 export interface SessionControlsReadModel {
@@ -77,6 +92,13 @@ export interface SessionControlsReadModel {
   models: ModelOptionReadModel[];
   thinkingLevel?: ThinkingLevelReadModel;
   thinkingLevels: ThinkingLevelReadModel[];
+  commands?: SlashCommandReadModel[];
+}
+
+export interface SlashCommandReadModel {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
 }
 
 export interface UiRequestReadModel {
@@ -174,7 +196,24 @@ export interface ContinuityWorkReadModel {
   todos: ContinuityTodoReadModel[];
 }
 
-export interface ContinuityReadModel { availability: FeatureState; revision: number; work?: ContinuityWorkReadModel; }
+export interface ContinuityMemoryFactReadModel {
+  key: string;
+  kind: "workflow" | "structure" | "architecture" | "warning" | "preference";
+  text: string;
+  source: string;
+  confidence: number;
+  updatedAt: string;
+  captureCommit?: string;
+  branchAtCapture?: string;
+  evidencePaths?: Array<{ path: string; sha256: string }>;
+}
+
+export interface ContinuityReadModel {
+  availability: FeatureState;
+  revision: number;
+  memory: ContinuityMemoryFactReadModel[];
+  work?: ContinuityWorkReadModel;
+}
 
 export interface TimelineCheckpointReadModel {
   id: string;

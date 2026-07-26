@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { PackageSettingsReadModel } from "../../shared/protocol/snapshots.ts";
+import { validPackageSettings } from "../../shared/protocol/validation.ts";
 
 interface PiManifest {
   name?: unknown;
   description?: unknown;
   pi?: { extensions?: unknown };
+  pylon?: { settings?: unknown };
 }
 
 interface PackageConfig {
@@ -18,6 +22,7 @@ export interface PackageDefinition {
   name: string;
   description: string;
   extensionPaths: string[];
+  settingsPath?: string;
 }
 
 export interface PackageCatalogState {
@@ -28,6 +33,11 @@ export interface PackageCatalogState {
 
 const PACKAGE_ID = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/;
 const MAX_ID_LENGTH = 128;
+
+interface PackageSettingsAdapter {
+  readSettings(context: { agentDir: string }): Promise<unknown>;
+  updateSettings(value: unknown, context: { agentDir: string }): Promise<void>;
+}
 
 function inside(parent: string, child: string): boolean {
   const path = relative(parent, child);
@@ -49,6 +59,16 @@ async function extensionPaths(base: string, value: unknown, confined: boolean): 
   return paths;
 }
 
+async function confinedFile(base: string, value: unknown): Promise<string | undefined> {
+  if (typeof value !== "string" || !value || value.length > 500) return undefined;
+  const [realBase, candidate] = await Promise.all([
+    realpath(base),
+    realpath(isAbsolute(value) ? value : resolve(base, value)).catch(() => undefined),
+  ]);
+  if (!candidate || !inside(realBase, candidate) || !(await stat(candidate)).isFile()) return undefined;
+  return candidate;
+}
+
 async function readManifest(path: string): Promise<PiManifest | undefined> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -61,8 +81,9 @@ async function readManifest(path: string): Promise<PiManifest | undefined> {
 export class PackageCatalog {
   private readonly packagesRoot: string;
   private readonly configPath: string;
+  private readonly adapters = new Map<string, Promise<PackageSettingsAdapter>>();
 
-  constructor(private readonly repositoryRoot: string, agentDir: string) {
+  constructor(private readonly repositoryRoot: string, private readonly agentDir: string) {
     this.packagesRoot = resolve(repositoryRoot, "packages");
     this.configPath = resolve(agentDir, "pylon-web", "packages.json");
   }
@@ -99,6 +120,30 @@ export class PackageCatalog {
     await this.writeEnabled(enabledIds);
   }
 
+  async readSettings(packageId: string, state?: PackageCatalogState): Promise<PackageSettingsReadModel | undefined> {
+    const definition = (state ?? await this.scan()).packages.find((item) => item.id === packageId);
+    if (!definition?.settingsPath) return undefined;
+    const value = await (await this.adapter(definition.settingsPath)).readSettings({ agentDir: this.agentDir });
+    if (!validPackageSettings(value)) throw new Error(`${packageId} returned invalid settings`);
+    return value;
+  }
+
+  async updateSettings(packageId: string, value: PackageSettingsReadModel): Promise<PackageSettingsReadModel> {
+    const definition = (await this.scan()).packages.find((item) => item.id === packageId);
+    if (!definition?.settingsPath) throw new Error("package has no configurable settings");
+    const adapter = await this.adapter(definition.settingsPath);
+    const context = { agentDir: this.agentDir };
+    const previous = await adapter.readSettings(context);
+    if (!validPackageSettings(previous)) throw new Error(`${packageId} returned invalid settings`);
+    await adapter.updateSettings(value, context);
+    const updated = await adapter.readSettings(context);
+    if (!validPackageSettings(updated)) {
+      await adapter.updateSettings(previous, context).catch(() => undefined);
+      throw new Error(`${packageId} saved invalid settings`);
+    }
+    return previous;
+  }
+
   private async discoverPackages(): Promise<PackageDefinition[]> {
     const entries = await readdir(this.packagesRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
@@ -119,9 +164,23 @@ export class PackageCatalog {
         name: id,
         description: typeof manifest.description === "string" ? manifest.description.slice(0, 500) : "",
         extensionPaths: paths,
+        settingsPath: await confinedFile(packageRoot, manifest.pylon?.settings).catch(() => undefined),
       });
     }
     return packages.sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  private adapter(path: string): Promise<PackageSettingsAdapter> {
+    let adapter = this.adapters.get(path);
+    if (adapter) return adapter;
+    adapter = import(pathToFileURL(path).href).then((module: Record<string, unknown>) => {
+      if (typeof module.readSettings !== "function" || typeof module.updateSettings !== "function") {
+        throw new Error("package settings adapter is invalid");
+      }
+      return module as unknown as PackageSettingsAdapter;
+    });
+    this.adapters.set(path, adapter);
+    return adapter;
   }
 
   private async rootExtensionPaths(): Promise<string[]> {

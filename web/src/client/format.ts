@@ -3,6 +3,11 @@ export function displayTime(value: string): string {
   return Number.isNaN(time) ? "Unknown" : new Date(time).toLocaleString();
 }
 
+export function displayDate(value: string): string {
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? "Unknown" : new Date(time).toLocaleDateString();
+}
+
 export function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "—";
   if (value < 1_000) return `${Math.round(value)}ms`;

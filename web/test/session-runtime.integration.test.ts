@@ -223,6 +223,24 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
       /only change while the session is idle/,
     );
     assert.equal((await unchanged).sessionGeneration, 9);
+
+    const sieve = (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings;
+    assert.equal(sieve?.kind, "sieve");
+    if (sieve?.kind !== "sieve") throw new Error("pi-sieve settings are unavailable");
+    const threshold = sieve.threshold === 1_000 ? 2_000 : 1_000;
+    const configured = await driver.updatePackageSettings({
+      packageId: "pi-sieve",
+      settings: { ...sieve, threshold },
+    });
+    assert.equal(configured.sessionGeneration, 10);
+    assert.deepEqual(
+      (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings,
+      { ...sieve, threshold },
+    );
+    await assert.rejects(driver.updatePackageSettings({
+      packageId: "pi-advisor",
+      settings: { kind: "advisor", mode: "model", model: "missing/model" },
+    }), /unavailable/);
   } finally {
     unsubscribe();
     await driver.dispose();
@@ -231,7 +249,7 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     await rm(root, { recursive: true, force: true });
   }
 
-  assert.equal(observations.shutdowns, 8);
+  assert.equal(observations.shutdowns, 9);
 });
 
 test("session deletion only falls back when trash is unavailable", async () => {

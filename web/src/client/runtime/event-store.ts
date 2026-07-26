@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from "react";
 import type { WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
-import type { ConnectionState, ConversationReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
+import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 import type { PromptImage } from "../../shared/protocol/commands";
-import { isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../../shared/protocol/validation";
+import { isArchiveListSnapshot, isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../../shared/protocol/validation";
 import { ApiClient } from "./api-client";
 
 export interface RuntimeStoreSnapshot {
@@ -15,12 +15,14 @@ export interface RuntimeStoreSnapshot {
   sequence: number;
   generation?: number;
   agentActive?: boolean;
+  sessionRevision?: number;
   sessionStatuses?: Record<string, SessionRuntimeState>;
   error?: string;
+  errorRevision?: number;
 }
 
-const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "tool.start", "tool.end", "queue.update", "retry.update", "compaction.update", "metrics.update", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
+const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
+const eventNames = ["message.start", "message.update", "message.end", "tool.start", "tool.end", "turn.changes", "discover.index", "queue.update", "retry.update", "compaction.update", "metrics.update", "session.controls", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
 
 function commandId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -49,6 +51,7 @@ export class RuntimeEventStore {
     if (!runtime || this.snapshot.connection !== "connected" || !runtime.ready) throw new Error("Runtime is not connected");
     const type = runtime.conversation.streaming ? "followUp" : "prompt";
     await this.sendCommand({ type, message, ...(images?.length ? { images } : {}), commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+    this.set({ ...this.snapshot, sessionRevision: (this.snapshot.sessionRevision ?? 0) + 1 });
   }
 
   async abort(): Promise<void> {
@@ -64,10 +67,40 @@ export class RuntimeEventStore {
     return sessions;
   }
 
-  async newSession(parentSessionId?: string): Promise<void> {
+  async addProject(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "addProject", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const archives = await this.api.archives(input);
+    if (!isArchiveListSnapshot(archives) || archives.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Archive list is stale or invalid");
+    }
+    return archives;
+  }
+
+  async removeProject(projectId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "removeProject", projectId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async archiveProject(projectId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "archiveProject", projectId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async restoreProject(projectId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "restoreProject", projectId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async newSession(projectId?: string, parentSessionId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
       type: "newSession",
+      ...(projectId ? { projectId } : {}),
       ...(parentSessionId ? { parentSessionId } : {}),
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
@@ -94,6 +127,26 @@ export class RuntimeEventStore {
     });
   }
 
+  async updatePackageSettings(packageId: string, settings: PackageSettingsReadModel): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updatePackageSettings",
+      packageId,
+      settings,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
+  async rebuildDiscoverIndex(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "rebuildDiscoverIndex",
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async setModel(provider: string, modelId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "setModel", provider, modelId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
@@ -104,6 +157,30 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "setThinkingLevel", level, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async updateContinuityMemory(fact: ContinuityMemoryFactReadModel, text: string, kind: ContinuityMemoryFactReadModel["kind"]): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updateContinuityMemory",
+      key: fact.key,
+      text,
+      kind,
+      expectedUpdatedAt: fact.updatedAt,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
+  async deleteContinuityMemory(fact: ContinuityMemoryFactReadModel): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "deleteContinuityMemory",
+      key: fact.key,
+      expectedUpdatedAt: fact.updatedAt,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async switchSession(sessionId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "switchSession", sessionId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
@@ -112,6 +189,26 @@ export class RuntimeEventStore {
   async deleteSession(sessionId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "deleteSession", sessionId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async archiveSession(sessionId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "archiveSession", sessionId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async restoreSession(sessionId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "restoreSession", sessionId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async renameSession(sessionId: string, name: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "renameSession", sessionId, name, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async setSessionActive(sessionId: string, active: boolean): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "setSessionActive", sessionId, active, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
   async timeline(action: "restore" | "fork" | "clear", checkpointId?: string): Promise<void> {
@@ -132,7 +229,16 @@ export class RuntimeEventStore {
 
   private async sendCommand(command: WebCommand): Promise<void> {
     try { await this.api.command(command); }
-    catch (error) { this.set({ ...this.snapshot, error: error instanceof Error ? error.message : "Command failed" }); throw error; }
+    catch (error) {
+      if (!["setPackageEnabled", "updatePackageSettings", "timeline", "updateContinuityMemory", "deleteContinuityMemory"].includes(command.type)) {
+        this.set({
+          ...this.snapshot,
+          error: error instanceof Error ? error.message : "Command failed",
+          errorRevision: (this.snapshot.errorRevision ?? 0) + 1,
+        });
+      }
+      throw error;
+    }
   }
 
   private requireReadyRuntime(): RuntimeSnapshot {
@@ -229,7 +335,18 @@ export class RuntimeEventStore {
       }
       if (event.type === "ui.closed") pendingUi = undefined;
     }
-    this.set({ ...current, runtime, pendingUi, generation: event.sessionGeneration, sequence: event.sequence, agentActive: event.type === "agent.start" ? true : event.type === "agent.end" ? false : current.agentActive, connection: "connected", error: undefined }, true);
+    const sessionChanged = event.type === "agent.start" || event.type === "agent.end" || event.type === "session.info" || event.type === "projects.changed";
+    this.set({
+      ...current,
+      runtime,
+      pendingUi,
+      generation: event.sessionGeneration,
+      sequence: event.sequence,
+      agentActive: event.type === "agent.start" ? true : event.type === "agent.end" ? false : current.agentActive,
+      sessionRevision: (current.sessionRevision ?? 0) + (sessionChanged ? 1 : 0),
+      connection: "connected",
+      error: undefined,
+    }, true);
   }
 
   private reset(): void {
@@ -279,11 +396,76 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
     }
     case "tool.start": return { ...runtime, conversation: { ...conversation, tools: replaceTool(conversation.tools, payload as ToolActivityReadModel) } };
     case "tool.end": return { ...runtime, conversation: { ...conversation, tools: replaceTool(conversation.tools, payload as ToolActivityReadModel) } };
+    case "turn.changes": {
+      const update = asRecord(payload);
+      if (typeof update.messageId !== "string" || !Array.isArray(update.files)) return runtime;
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          messages: conversation.messages.map((message) => message.id === update.messageId
+            ? { ...message, changedFiles: update.files as MessageReadModel["changedFiles"] }
+            : message),
+        },
+      };
+    }
     case "session.controls": return { ...runtime, sessionControls: payload as SessionControlsReadModel };
     case "queue.update": return { ...runtime, conversation: { ...conversation, queue: payload as ConversationReadModel["queue"] } };
     case "retry.update": return { ...runtime, conversation: { ...conversation, retry: payload as ConversationReadModel["retry"] } };
     case "compaction.update": return { ...runtime, conversation: { ...conversation, compaction: payload as ConversationReadModel["compaction"] } };
     case "metrics.update": return { ...runtime, metrics: payload as SessionMetricsReadModel };
+    case "discover.index": {
+      const value = asRecord(payload);
+      return {
+        ...runtime,
+        discoverIndex: ["idle", "indexing", "error"].includes(String(value.state))
+          ? value as unknown as RuntimeSnapshot["discoverIndex"]
+          : undefined,
+      };
+    }
+    case "session.info": {
+      const info = asRecord(payload);
+      return {
+        ...runtime,
+        sessionName: typeof info.name === "string" ? info.name.slice(0, 200) || undefined : undefined,
+      };
+    }
+    case "agent.start": {
+      const info = asRecord(payload);
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          workStartedAt: typeof info.startedAt === "string" ? info.startedAt : new Date().toISOString(),
+          workModelName: typeof info.modelName === "string" ? info.modelName : undefined,
+          workThinkingLevel: typeof info.thinkingLevel === "string" ? info.thinkingLevel as ConversationReadModel["workThinkingLevel"] : undefined,
+        },
+      };
+    }
+    case "agent.end": {
+      const info = asRecord(payload);
+      const durationMs = Number.isSafeInteger(info.durationMs) ? info.durationMs as number : undefined;
+      const messageId = typeof info.messageId === "string" ? info.messageId : undefined;
+      const messages = durationMs === undefined || !messageId
+        ? conversation.messages
+        : conversation.messages.map((message) => message.id === messageId ? {
+            ...message,
+            workDurationMs: durationMs,
+            modelName: typeof info.modelName === "string" ? info.modelName : undefined,
+            thinkingLevel: typeof info.thinkingLevel === "string" ? info.thinkingLevel as MessageReadModel["thinkingLevel"] : undefined,
+          } : message);
+      return {
+        ...runtime,
+        gitBranch: typeof info.gitBranch === "string" ? info.gitBranch.slice(0, 200) || undefined : undefined,
+        conversation: {
+          ...conversation,
+          messages,
+          workStartedAt: undefined,
+          workModelName: undefined,
+          workThinkingLevel: undefined,
+        },
+      };
+    }
     case "ui.notify": return { ...runtime, extensionUi: { ...runtime.extensionUi, notifications: [...runtime.extensionUi.notifications.filter((item) => item.id !== (payload as { id?: string }).id), payload as RuntimeSnapshot["extensionUi"]["notifications"][number]].slice(-10) } };
     case "ui.status": {
       const item = payload as { key?: string; text?: string };

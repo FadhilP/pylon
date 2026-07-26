@@ -529,14 +529,19 @@ test("host refreshes its SQLite index after each turn", async () => {
     },
   };
   let policy: any;
+  const indexStates: any[] = [];
   runtime.events.on("pylon:tool-policy", (value) => {
     if (value?.kind === "register" && value?.owner === "pi-discover") policy = value;
   });
+  runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
     assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status"]);
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
+    assert.equal(indexStates.at(-1)?.state, "idle");
+    assert.equal(indexStates.at(-1)?.files, 1);
+    assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
     let result = await runtime.tools.get("symbol_search").execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "beforeTurn");
 
@@ -545,6 +550,16 @@ test("host refreshes its SQLite index after each turn", async () => {
     result = await runtime.tools.get("symbol_search").execute("manual", { query: "manualRebuild" }, undefined, undefined, ctx);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "manualRebuild");
     assert.match(notifications.at(-1)!.text, /rebuild complete/);
+
+    await new Promise<void>((resolve, reject) => runtime.events.emit("pi-discover:index-action", {
+      version: 1,
+      action: "rebuild",
+      acknowledge() {},
+      resolve,
+      reject,
+    }));
+    assert.ok(indexStates.some((state) => state.state === "indexing"));
+    assert.equal(indexStates.at(-1)?.state, "idle");
 
     await writeFile(sourcePath, "export function afterTurn() {}\n");
     status = " M app.ts\0";

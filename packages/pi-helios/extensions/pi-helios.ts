@@ -7,6 +7,7 @@ import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-
 import { Type, type Static } from "typebox";
 import { BrowserSessionManager, validateCdpEndpoint } from "../src/browser-session.ts";
 import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
+import { configPath, loadConfig, saveConfig } from "../src/config.ts";
 import { diagnosePlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { issueWebScoutGrant } from "../src/web-scout-grant.ts";
 
@@ -120,7 +121,8 @@ async function withBrowserStatus<T>(ctx: any, action: string, operation: () => P
   finally { if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", undefined); }
 }
 
-export default function heliosExtension(pi: ExtensionAPI) {
+export default function heliosExtension(pi: ExtensionAPI, options: { configPath?: string } = {}) {
+  const settingsPath = options.configPath ?? configPath();
   const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => pi.exec(command, args, options);
   const manager = new BrowserSessionManager(exec);
   let healthDiagnostic: Promise<string> | undefined;
@@ -167,8 +169,8 @@ export default function heliosExtension(pi: ExtensionAPI) {
     })());
   });
   let ownedHeaded = true;
-  pi.on("session_start", () => {
-    ownedHeaded = true;
+  pi.on("session_start", async () => {
+    ownedHeaded = (await loadConfig(settingsPath)).headed ?? true;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -213,6 +215,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
       if (action === "toggle") ownedHeaded = !ownedHeaded;
       if (action === "show") ownedHeaded = true;
       if (action === "hide") ownedHeaded = false;
+      if (action !== "status") await saveConfig({ version: 1, headed: ownedHeaded }, settingsPath);
       const active = manager.get(sessionId(ctx));
       const unchanged = active?.ownership === "owned" ? " Active owned session unchanged." : "";
       ctx.ui.notify(`Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.${unchanged}`, "info");

@@ -1,19 +1,14 @@
-import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { basename } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { SessionListSnapshot, SessionProjectPage, SessionSummary } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ArchivedProjectSummary, ArchivedSessionSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../../shared/protocol/snapshots.ts";
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
+import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
 
 const REFRESH_MS = 60_000;
 
-export function projectIdForCwd(cwd: string): string {
-  if (!cwd) return "project-legacy";
-  const normalized = resolve(cwd).replaceAll("\\", "/");
-  const identity = process.platform === "win32" ? normalized.toLowerCase() : normalized;
-  return `project-${createHash("sha256").update(identity).digest("base64url").slice(0, 22)}`;
-}
+export { projectIdForCwd } from "./project-registry.ts";
 
 function encodeCursor(sessionId: string): string {
   return Buffer.from(sessionId).toString("base64url");
@@ -32,6 +27,7 @@ export interface SessionIndexOptions {
   activeId: string;
   generation: number;
   stateFor: (sessionId: string) => SessionRuntimeState;
+  activeFor?: (sessionId: string) => boolean;
   activeFallback?: SessionInfo;
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
@@ -42,6 +38,13 @@ export class SessionIndex {
   private userCounts = new Map<string, number>();
   private scannedAt = 0;
   private scan?: Promise<void>;
+
+  constructor(private registry?: ProjectRegistry) {}
+
+  setProjectRegistry(registry: ProjectRegistry): void {
+    this.registry = registry;
+    this.invalidate();
+  }
 
   async resolve(sessionId: string): Promise<SessionInfo | undefined> {
     await this.refresh();
@@ -59,9 +62,17 @@ export class SessionIndex {
 
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
     await this.refresh();
+    const registered = this.registry?.list();
+    const registeredIds = registered ? new Set(registered.map((project) => project.id)) : undefined;
     const fallbacks = options.fallbacks ?? (options.activeFallback ? [options.activeFallback] : []);
-    const missing = fallbacks.filter((fallback) => !this.sessions.some((session) => session.id === fallback.id));
-    const source = [...missing, ...this.sessions].sort((left, right) => right.modified.getTime() - left.modified.getTime());
+    const missing = fallbacks.filter((fallback) => {
+      if (this.sessions.some((session) => session.id === fallback.id)) return false;
+      return (options.userCountFor?.(fallback.id) ?? fallback.messageCount) > 0;
+    });
+    const source = [...missing, ...this.sessions]
+      .filter((session) => !registeredIds || registeredIds.has(projectIdForCwd(session.cwd)))
+      .filter((session) => !this.registry?.isSessionArchived(session.id))
+      .sort((left, right) => right.modified.getTime() - left.modified.getTime());
     const query = input.query?.trim().toLowerCase() ?? "";
     const filtered = query
       ? source.filter((session) => `${session.name ?? ""} ${session.firstMessage} ${session.allMessagesText} ${session.cwd}`.toLowerCase().includes(query))
@@ -78,13 +89,19 @@ export class SessionIndex {
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
     const limit = Math.min(100, Math.max(1, input.limit ?? 10));
     const projects: SessionProjectPage[] = [];
-    for (const [id, sessions] of [...grouped].slice(0, 100)) {
+    const projectEntries = registered
+      ? registered
+          .filter((project) => !input.projectId || project.id === input.projectId)
+          .filter((project) => !query || `${project.label} ${project.cwd}`.toLowerCase().includes(query) || grouped.has(project.id))
+          .map((project) => [project.id, grouped.get(project.id) ?? [], project.label] as const)
+      : [...grouped].slice(0, 100).map(([id, sessions]) => [id, sessions, labels.get(id)] as const);
+    for (const [id, sessions, registeredLabel] of projectEntries) {
       const offset = cursorId ? sessions.findIndex((session) => session.id === cursorId) + 1 : 0;
       if (cursorId && offset === 0) continue;
       const page = sessions.slice(offset, offset + limit);
       projects.push({
         id,
-        label: labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
+        label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
         totalCount: sessions.length,
         sessions: page.map((session) => this.summary(session, options)),
         ...(offset + page.length < sessions.length && page.length
@@ -92,7 +109,54 @@ export class SessionIndex {
           : {}),
       });
     }
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, projects };
+    const activeSessions = source
+      .filter((session) => options.activeFor?.(session.id) ?? options.stateFor(session.id) !== "sleeping")
+      .slice(0, 100)
+      .map((session) => this.summary(session, options));
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, activeSessions, projects };
+  }
+
+  async listArchived(input: ArchiveListQuery, options: SessionIndexOptions): Promise<ArchiveListSnapshot> {
+    await this.refresh();
+    const registry = this.registry;
+    if (!registry) {
+      return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, projects: [], sessions: [], totalSessionCount: 0 };
+    }
+    const query = input.query?.trim().toLowerCase() ?? "";
+    const archivedProjects = registry.listArchived();
+    const archivedProjectIds = new Set(archivedProjects.map((project) => project.id));
+    const projects: ArchivedProjectSummary[] = archivedProjects
+      .filter((project) => !query || `${project.label} ${project.cwd}`.toLowerCase().includes(query))
+      .map((project) => ({
+        id: project.id,
+        label: project.label,
+        sessionCount: this.sessions.filter((session) => projectIdForCwd(session.cwd) === project.id).length,
+        archivedAt: project.archivedAt!,
+      }));
+    const archiveRecords = new Map(registry.listArchivedSessions().map((record) => [record.id, record.archivedAt]));
+    const source = this.sessions
+      .filter((session) => archiveRecords.has(session.id))
+      .filter((session) => !archivedProjectIds.has(projectIdForCwd(session.cwd)))
+      .filter((session) => !query || `${session.name ?? ""} ${session.firstMessage} ${session.allMessagesText} ${session.cwd}`.toLowerCase().includes(query))
+      .sort((left, right) => Date.parse(archiveRecords.get(right.id)!) - Date.parse(archiveRecords.get(left.id)!));
+    const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
+    const offset = cursorId ? source.findIndex((session) => session.id === cursorId) + 1 : 0;
+    const limit = Math.min(100, Math.max(1, input.limit ?? 20));
+    const page = cursorId && offset === 0 ? [] : source.slice(offset, offset + limit);
+    const sessions: ArchivedSessionSummary[] = page.map((session) => ({
+      ...this.summary(session, options),
+      active: false,
+      runtimeState: "sleeping",
+      archivedAt: archiveRecords.get(session.id)!,
+    }));
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: options.generation,
+      projects,
+      sessions,
+      totalSessionCount: source.length,
+      ...(offset + page.length < source.length && page.length ? { nextCursor: encodeCursor(page.at(-1)!.id) } : {}),
+    };
   }
 
   private async refresh(): Promise<void> {

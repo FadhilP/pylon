@@ -64,6 +64,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/bootstrap") return this.bootstrap(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
@@ -188,6 +189,22 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
+  private async archiveList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const query = url.searchParams.get("q")?.trim() || undefined;
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 20 : Number(rawLimit);
+    if (cursor && (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor))) throw httpError(400, "invalid cursor");
+    if (query && query.length > 200) throw httpError(400, "query is too long");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid limit");
+    const result = await this.driver.listArchived({ cursor, query, limit });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing archives");
+    this.send(response, 200, result);
+  }
+
   private async uiResponse(request: IncomingMessage, response: ServerResponse, requestId: string): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
@@ -241,9 +258,21 @@ export class ServerTransport {
       case "steer": return this.driver.steer(command);
       case "followUp": return this.driver.followUp(command);
       case "abort": return this.driver.abort().then(() => accepted(command.expectedGeneration));
-      case "newSession": return this.driver.newSession({ parentSessionId: command.parentSessionId }).then((result) => accepted(result.sessionGeneration));
+      case "addProject": return this.driver.addProject({ expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
+      case "removeProject": return this.driver.removeProject({ projectId: command.projectId, expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
+      case "archiveProject": return this.driver.archiveProject(command).then((result) => accepted(result.sessionGeneration));
+      case "restoreProject": return this.driver.restoreProject(command).then(() => accepted(command.expectedGeneration));
+      case "newSession": return this.driver.newSession({
+        parentSessionId: command.parentSessionId,
+        projectId: command.projectId,
+        expectedGeneration: command.expectedGeneration,
+      }).then((result) => accepted(result.sessionGeneration));
       case "switchSession": return this.driver.switchSession({ sessionId: command.sessionId }).then((result) => accepted(result.sessionGeneration));
       case "deleteSession": return this.driver.deleteSession({ sessionId: command.sessionId }).then(() => accepted(command.expectedGeneration));
+      case "archiveSession": return this.driver.archiveSession(command).then((result) => accepted(result.sessionGeneration));
+      case "restoreSession": return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
+      case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
+      case "setSessionActive": return this.driver.setSessionActive({ sessionId: command.sessionId, active: command.active }).then(() => accepted(command.expectedGeneration));
       case "fork": return this.driver.fork({ entryId: command.entryId, position: command.position }).then((result) => accepted(result.sessionGeneration));
       case "timeline": {
         const action = command.action === "restore" ? "jump" : command.action;
@@ -254,6 +283,12 @@ export class ServerTransport {
         if (this.projection.pendingUi) return Promise.reject(httpError(409, "packages cannot change while a UI request is pending"));
         return this.driver.setPackageEnabled({ packageId: command.packageId, enabled: command.enabled })
           .then((result) => accepted(result.sessionGeneration));
+      case "updatePackageSettings":
+        if (this.projection.pendingUi) return Promise.reject(httpError(409, "packages cannot change while a UI request is pending"));
+        return this.driver.updatePackageSettings({ packageId: command.packageId, settings: command.settings })
+          .then((result) => accepted(result.sessionGeneration));
+      case "rebuildDiscoverIndex":
+        return this.driver.rebuildDiscoverIndex().then(() => accepted(command.expectedGeneration));
       case "setModel":
         return this.driver.setModel({ provider: command.provider, modelId: command.modelId })
           .then(async () => { this.projection.refresh(await this.driver.snapshot()); return accepted(command.expectedGeneration); });
@@ -261,6 +296,10 @@ export class ServerTransport {
         return Promise.resolve()
           .then(() => this.driver.setThinkingLevel({ level: command.level }))
           .then(async () => { this.projection.refresh(await this.driver.snapshot()); return accepted(command.expectedGeneration); });
+      case "updateContinuityMemory":
+        return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
+      case "deleteContinuityMemory":
+        return this.driver.deleteContinuityMemory(command).then(() => accepted(command.expectedGeneration));
     }
   }
 

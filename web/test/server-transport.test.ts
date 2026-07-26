@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AcceptedCommand } from "../src/shared/protocol/commands.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type { DriverEvent, DriverEventListener, PiDriver, PromptInput, ReplacementResult, RuntimeHandle, RuntimeTarget } from "../src/server/pi/pi-driver.ts";
@@ -36,12 +36,22 @@ class FakeDriver implements PiDriver {
   promptImages: PromptInput["images"][] = [];
   answers: UiResponse[] = [];
   deletedSessions: string[] = [];
+  renamedSessions: Array<{ sessionId: string; name: string }> = [];
+  activatedSessions: Array<{ sessionId: string; active: boolean }> = [];
   selectedModels: Array<{ provider: string; modelId: string }> = [];
   selectedThinking: string[] = [];
+  packageSettingsUpdates: unknown[] = [];
+  indexRebuilds = 0;
   newSessionParent?: string;
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
-  listSessions(): Promise<SessionListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [{ id: "project-workspace", label: "workspace", totalCount: 1, sessions: [{ id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, runtimeState: "idle" }] }] }); }
+  listSessions(): Promise<SessionListSnapshot> {
+    const session = { id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, runtimeState: "idle" as const };
+    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, activeSessions: [session], projects: [{ id: "project-workspace", label: "workspace", totalCount: 1, sessions: [session] }] });
+  }
+  listArchived(): Promise<ArchiveListSnapshot> {
+    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [], sessions: [], totalSessionCount: 0 });
+  }
   listPackages(): Promise<PackageListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, packages: [{ id: "pi-test", name: "pi-test", description: "Test package", enabled: true, active: true, extensionCount: 1 }] }); }
   prompt(input: PromptInput): Promise<AcceptedCommand> {
     this.prompts.push(input.message);
@@ -53,14 +63,27 @@ class FakeDriver implements PiDriver {
   steer(input: PromptInput): Promise<AcceptedCommand> { return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true }); }
   followUp(input: PromptInput): Promise<AcceptedCommand> { return this.steer(input); }
   abort(): Promise<void> { return Promise.resolve(); }
+  addProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project", "project-workspace")); }
+  removeProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-removed", "workspace")); }
+  archiveProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-archived", "workspace")); }
+  restoreProject(): Promise<void> { return Promise.resolve(); }
+  archiveSession(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-archived", "workspace")); }
+  restoreSession(): Promise<void> { return Promise.resolve(); }
   newSession(input?: { parentSessionId?: string }): Promise<ReplacementResult> {
     this.newSessionParent = input?.parentSessionId;
     return Promise.resolve(this.replace("session-2", "other-workspace"));
   }
   switchSession(input: { sessionId: string }): Promise<ReplacementResult> { return Promise.resolve(this.replace(input.sessionId, "switched-workspace")); }
   deleteSession(input: { sessionId: string }): Promise<void> { this.deletedSessions.push(input.sessionId); return Promise.resolve(); }
+  renameSession(input: { sessionId: string; name: string }): Promise<void> { this.renamedSessions.push(input); return Promise.resolve(); }
+  setSessionActive(input: { sessionId: string; active: boolean }): Promise<void> { this.activatedSessions.push(input); return Promise.resolve(); }
   fork(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-fork", this.current.cwdLabel)); }
   setPackageEnabled(): Promise<ReplacementResult> { return Promise.resolve(this.replace(this.current.sessionId, this.current.cwdLabel)); }
+  updatePackageSettings(input: unknown): Promise<ReplacementResult> {
+    this.packageSettingsUpdates.push(input);
+    return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration });
+  }
+  rebuildDiscoverIndex(): Promise<void> { this.indexRebuilds++; return Promise.resolve(); }
   setModel(input: { provider: string; modelId: string }): Promise<void> {
     this.selectedModels.push(input);
     this.current.sessionControls.model = { provider: input.provider, id: input.modelId, name: input.modelId };
@@ -70,6 +93,8 @@ class FakeDriver implements PiDriver {
     this.selectedThinking.push(input.level);
     this.current.sessionControls.thinkingLevel = input.level;
   }
+  updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
+  deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
   subscribe(listener: DriverEventListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   dispose(): Promise<void> { return Promise.resolve(); }
@@ -191,12 +216,34 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
 
     const sessions = await fetch(`${origin}/api/v1/sessions`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(sessions.status, 200);
-    assert.equal(((await body(sessions)).projects as unknown[]).length, 1);
+    const sessionList = await body(sessions);
+    assert.equal((sessionList.projects as unknown[]).length, 1);
+    assert.equal((sessionList.activeSessions as unknown[]).length, 1);
     const invalidCursor = await fetch(`${origin}/api/v1/sessions?cursor=not-valid`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(invalidCursor.status, 400);
+    const archives = await fetch(`${origin}/api/v1/archives`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(archives.status, 200);
+    assert.deepEqual((await body(archives)).projects, []);
+    const invalidArchiveCursor = await fetch(`${origin}/api/v1/archives?cursor=not-valid`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(invalidArchiveCursor.status, 400);
     const packages = await fetch(`${origin}/api/v1/packages`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(packages.status, 200);
     assert.equal(((await body(packages)).packages as unknown[]).length, 1);
+    const settingsCommand = {
+      type: "updatePackageSettings",
+      packageId: "pi-advisor",
+      settings: { kind: "advisor", mode: "session", thinking: "high" },
+      commandId: "settings-once",
+      expectedGeneration: 1,
+    };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(settingsCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(settingsCommand) })).status, 200);
+    assert.equal(driver.packageSettingsUpdates.length, 1);
+    const indexCommand = { type: "rebuildDiscoverIndex", commandId: "index-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);
+    assert.equal(driver.indexRebuilds, 1);
+
     const timeline = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "timeline", action: "fork", checkpointId: "session-1:checkpoint-1", commandId: "timeline-fork", expectedGeneration: 1 }) });
     assert.equal(timeline.status, 200);
     assert.equal(driver.prompts.at(-1), "/timeline fork session-1:checkpoint-1");
@@ -209,6 +256,15 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.deepEqual(driver.selectedModels, [{ provider: "mock", modelId: "next" }]);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "setThinkingLevel", level: "high", commandId: "thinking-once", expectedGeneration: 1 }) })).status, 200);
     assert.deepEqual(driver.selectedThinking, ["high"]);
+
+    const renameCommand = { type: "renameSession", sessionId: "session-old", name: "Renamed", commandId: "rename-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameCommand) })).status, 200);
+    assert.deepEqual(driver.renamedSessions, [{ sessionId: "session-old", name: "Renamed" }]);
+    const activeCommand = { type: "setSessionActive", sessionId: "session-old", active: true, commandId: "active-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(activeCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(activeCommand) })).status, 200);
+    assert.deepEqual(driver.activatedSessions, [{ sessionId: "session-old", active: true }]);
 
     const deleteCommand = { type: "deleteSession", sessionId: "session-old", commandId: "delete-once", expectedGeneration: 1 };
     const deleted = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(deleteCommand) });

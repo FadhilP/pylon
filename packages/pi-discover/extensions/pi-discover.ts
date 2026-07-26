@@ -134,14 +134,50 @@ export default function discoverExtension(pi: ExtensionAPI) {
   const metrics = { searches: 0, cacheHits: 0, misses: 0, repeatedMisses: 0, selectionFailures: 0 };
   let latestIndexError: string | undefined;
   let indexReady = false;
+  let activeCwd = "";
+  let indexing = false;
+  const publishIndexState = async (cwd = activeCwd) => {
+    if (!cwd) return;
+    if (indexing) {
+      pi.events.emit("pi-discover:index-state", { version: 1, available: true, state: "indexing" });
+      return;
+    }
+    if (latestIndexError) {
+      pi.events.emit("pi-discover:index-state", { version: 1, available: true, state: "error", error: latestIndexError });
+      return;
+    }
+    try {
+      const status = await indexFor(cwd).status() as Record<string, unknown>;
+      const indexedAt = Number.isSafeInteger(status.indexed_at) && (status.indexed_at as number) >= 0
+        ? new Date(status.indexed_at as number).toISOString()
+        : undefined;
+      pi.events.emit("pi-discover:index-state", {
+        version: 1,
+        available: true,
+        state: "idle",
+        files: status.files,
+        symbols: status.symbols,
+        indexedAt,
+      });
+    } catch (error) {
+      latestIndexError = boundedError(error);
+      pi.events.emit("pi-discover:index-state", { version: 1, available: true, state: "error", error: latestIndexError });
+    }
+  };
   const refreshIndex = async (ctx?: { cwd?: string }) => {
     if (!ctx?.cwd) return;
+    activeCwd = ctx.cwd;
+    indexing = true;
+    await publishIndexState();
     try {
       await indexFor(ctx.cwd).refresh();
       latestIndexError = undefined;
       indexReady = true;
     } catch (error) {
       latestIndexError = boundedError(error);
+    } finally {
+      indexing = false;
+      await publishIndexState();
     }
   };
   const increment = (counts: Map<string, number>, names: readonly string[]) => {
@@ -187,6 +223,32 @@ export default function discoverExtension(pi: ExtensionAPI) {
       warning: Boolean(latestIndexError),
     });
   });
+  const disposeIndexActions = pi.events.on("pi-discover:index-action", (request: any) => {
+    if (request?.version !== 1 || request.action !== "rebuild"
+      || typeof request.acknowledge !== "function"
+      || typeof request.resolve !== "function"
+      || typeof request.reject !== "function") return;
+    request.acknowledge();
+    void (async () => {
+      if (!activeCwd || indexing) throw new Error(indexing ? "the index is already rebuilding" : "pi-discover has no active workspace");
+      indexing = true;
+      await publishIndexState();
+      let failure: Error | undefined;
+      try {
+        await indexFor(activeCwd).rebuild();
+        latestIndexError = undefined;
+        indexReady = true;
+      } catch (error) {
+        latestIndexError = boundedError(error);
+        failure = new Error(latestIndexError);
+      } finally {
+        indexing = false;
+        await publishIndexState();
+      }
+      if (failure) request.reject(failure);
+      else request.resolve();
+    })().catch((error) => request.reject(error));
+  });
   pi.on("session_start", async (_event, ctx) => {
     clearSessionState();
     configureDeferredTools();
@@ -202,6 +264,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     disposeChildCapability();
     disposeHealth();
+    disposeIndexActions();
+    pi.events.emit("pi-discover:index-state", { version: 1, available: false });
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-discover" });
     clearSessionState();
     await Promise.all([...indexes.values()].map((index) => index.close()));
@@ -219,6 +283,9 @@ export default function discoverExtension(pi: ExtensionAPI) {
       await ctx.waitForIdle?.();
       const activity = action === "status" ? "Reading index status..." : action === "prune" ? "Pruning stale index entries..." : `${action === "rebuild" ? "Rebuilding" : "Refreshing"} index...`;
       ctx.ui.setStatus("pi-discover-index", activity);
+      activeCwd = ctx.cwd;
+      indexing = action !== "status";
+      await publishIndexState();
       try {
         const index = indexFor(ctx.cwd);
         let result;
@@ -235,6 +302,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
         latestIndexError = boundedError(error);
         ctx.ui.notify(`pi-discover index ${action} failed: ${latestIndexError}`, "error");
       } finally {
+        indexing = false;
+        await publishIndexState();
         ctx.ui.setStatus("pi-discover-index", undefined);
       }
     },

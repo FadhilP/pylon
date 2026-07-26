@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
+import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -67,6 +68,27 @@ test("session index pages projects, counts user messages, and searches unloaded 
 
     const search = await index.list({ query: "Second searchable" }, options);
     assert.equal(search.projects[0]?.sessions[0]?.id, second.getSessionId());
+
+    const draft = {
+      id: "draft-session",
+      path: "",
+      cwd,
+      created: new Date(),
+      modified: new Date(),
+      messageCount: 0,
+      firstMessage: "",
+      allMessagesText: "",
+    };
+    const withoutDraft = await index.list({}, { ...options, activeId: draft.id, fallbacks: [draft], userCountFor: () => 0 });
+    assert.equal(withoutDraft.activeSessions.some((session) => session.id === draft.id), false);
+    const withPrompt = await index.list({}, {
+      ...options,
+      activeId: draft.id,
+      fallbacks: [{ ...draft, messageCount: 1 }],
+      userCountFor: (id) => id === draft.id ? 1 : undefined,
+      stateFor: (id) => id === draft.id ? "idle" : "sleeping",
+    });
+    assert.equal(withPrompt.activeSessions.some((session) => session.id === draft.id), true);
   } finally {
     await Promise.all([first.getSessionFile(), second.getSessionFile()].map((path) => path ? rm(path, { force: true }) : undefined));
     await rm(root, { recursive: true, force: true });
@@ -93,7 +115,7 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
   const driver = new RuntimeCoordinator({
     extensionFactories: [probe],
     sleepAfterMs: 500,
-    viewOnlySleepAfterMs: 20,
+    viewOnlySleepAfterMs: 100,
     sleepCheckMs: 5,
   });
   const states: Array<[string, string]> = [];
@@ -107,8 +129,9 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal((await driver.snapshot()).metrics.userMessages, 0);
     await driver.switchSession({ sessionId: other.getSessionId() });
     assert.equal(starts, 2);
+    assert.equal((await driver.listSessions()).activeSessions.some((session) => session.id === other.getSessionId()), false);
     const awakeSessions = await driver.listSessions({ projectId: projectIdForCwd(cwd) });
-    assert.ok(awakeSessions.projects[0]?.sessions.some((session) => session.id === initial.sessionId));
+    assert.equal(awakeSessions.projects[0]?.sessions.some((session) => session.id === initial.sessionId) ?? false, false);
 
     const warmStartedAt = Date.now();
     const warm = await driver.switchSession({ sessionId: initial.sessionId });
@@ -117,12 +140,88 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.ok(Date.now() - warmStartedAt < 500);
 
     await waitFor(() => states.some(([id, state]) => id === other.getSessionId() && state === "sleeping"));
-    await driver.switchSession({ sessionId: other.getSessionId() });
+    await driver.setSessionActive({ sessionId: other.getSessionId(), active: true });
     assert.equal(starts, 3);
+    await driver.renameSession({ sessionId: other.getSessionId(), name: "Manually active" });
+    const active = await driver.listSessions();
+    assert.equal(active.activeSessions.find((session) => session.id === other.getSessionId())?.name, "Manually active");
+    await driver.setSessionActive({ sessionId: other.getSessionId(), active: false });
+    assert.ok(states.some(([id, state]) => id === other.getSessionId() && state === "sleeping"));
+    const selectedOther = await driver.switchSession({ sessionId: other.getSessionId() });
+    assert.equal(starts, 4);
+    const archived = await driver.archiveSession({ sessionId: other.getSessionId(), expectedGeneration: selectedOther.sessionGeneration });
+    assert.equal((await driver.listSessions()).projects.some((project) => project.sessions.some((session) => session.id === other.getSessionId())), false);
+    assert.equal((await driver.listArchived()).sessions[0]?.id, other.getSessionId());
+    await driver.restoreSession({ sessionId: other.getSessionId(), expectedGeneration: archived.sessionGeneration });
+    assert.equal((await driver.listArchived()).sessions.length, 0);
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
     await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("empty project registry uses parking runtime and add/remove keeps the workspace", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-projects-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await ProjectRegistry.forAgentDir(agentDir).load([]);
+  let selectedDirectory: string | undefined;
+  const driver = new RuntimeCoordinator({ pickDirectory: async () => selectedDirectory });
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    assert.equal((await driver.snapshot()).projectAvailable, false);
+    assert.deepEqual((await driver.listSessions()).projects, []);
+
+    assert.equal((await driver.addProject({ expectedGeneration: 1 })).cancelled, true);
+    selectedDirectory = cwd;
+    const added = await driver.addProject({ expectedGeneration: 1 });
+    assert.equal(added.cancelled, false);
+    assert.equal((await driver.snapshot()).projectAvailable, true);
+    assert.equal((await driver.listSessions()).projects[0]?.totalCount, 0);
+
+    const archived = await driver.archiveProject({ projectId: projectIdForCwd(cwd), expectedGeneration: added.sessionGeneration });
+    assert.equal((await driver.snapshot()).projectAvailable, false);
+    assert.equal((await driver.listArchived()).projects[0]?.id, projectIdForCwd(cwd));
+    await driver.restoreProject({ projectId: projectIdForCwd(cwd), expectedGeneration: archived.sessionGeneration });
+    assert.equal((await driver.listSessions()).projects[0]?.id, projectIdForCwd(cwd));
+
+    await driver.removeProject({ projectId: projectIdForCwd(cwd), expectedGeneration: archived.sessionGeneration });
+    assert.equal((await driver.snapshot()).projectAvailable, false);
+    assert.deepEqual((await driver.listSessions()).projects, []);
+    await assert.doesNotReject(() => mkdir(join(cwd, "still-here")));
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("disposing the coordinator aborts and clears an open directory picker", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-picker-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await ProjectRegistry.forAgentDir(agentDir).load([]);
+  let aborted = false;
+  const driver = new RuntimeCoordinator({
+    pickDirectory: (signal) => new Promise((_, reject) => signal?.addEventListener("abort", () => {
+      aborted = true;
+      reject(new Error("directory picker was closed"));
+    }, { once: true })),
+  });
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    const pending = driver.addProject({ expectedGeneration: 1 });
+    const rejected = assert.rejects(pending, /picker was closed/);
+    await assert.rejects(driver.addProject({ expectedGeneration: 1 }), /already open/);
+    await driver.dispose();
+    await rejected;
+    assert.equal(aborted, true);
+  } finally {
+    await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
 });

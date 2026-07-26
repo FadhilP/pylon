@@ -1,17 +1,31 @@
-import { IconArrowUp, IconPhoto, IconTool, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { groupConversationMessages } from "../shared/transcript";
+import { IconArrowUp, IconCheck, IconChevronDown, IconCopy, IconPhoto, IconTool, IconX } from "@tabler/icons-react";
+import DOMPurify from "dompurify";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
+import { formatWorkDuration } from "../shared/format";
+import { renderMarkdown } from "../shared/markdown";
 import type { PromptImage } from "../shared/protocol/commands";
 import type { MessageReadModel } from "../shared/protocol/events";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
-export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
+const markdownTags = ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"];
+const markdownAttributes = ["alt", "checked", "class", "data-language", "disabled", "href", "src", "title", "type"];
+
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.nodeName !== "A") return;
+  (node as HTMLAnchorElement).target = "_blank";
+  (node as HTMLAnchorElement).rel = "noopener noreferrer";
+});
+
+export function ConversationPanel({ live, projectAvailable = true }: { live: RuntimeStoreSnapshot; projectAvailable?: boolean }) {
   const [message, setMessage] = useState("");
   const [images, setImages] = useState<Array<PromptImage & { id: string }>>([]);
   const [imageError, setImageError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [controlBusy, setControlBusy] = useState("");
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const runtime = live.runtime;
   const controls = runtime?.sessionControls;
@@ -24,13 +38,32 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
     });
     return () => cancelAnimationFrame(frame);
   }, [runtime?.sessionId]);
-  const connected = live.connection === "connected" && runtime?.ready === true;
+  const connected = live.connection === "connected" && runtime?.ready === true && projectAvailable;
   const streaming = runtime?.conversation.streaming === true;
   const visibleMessages = runtime?.conversation.messages.filter((item) => {
     const text = item.text.trim();
     return item.role !== "assistant" || !["", "...", "…"].includes(text);
   }) ?? [];
-  const conversationBlocks = groupConversationMessages(visibleMessages, streaming);
+  const conversationBlocks = useMemo(
+    () => groupConversationMessages(visibleMessages, Boolean(runtime?.conversation.workStartedAt)),
+    [runtime?.conversation.messages, runtime?.conversation.workStartedAt],
+  );
+  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [runtime?.conversation.messages]);
+  const latestTurnTimer = latestTimedAssistant(visibleMessages);
+  const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
+  const slashMatch = /^\/([^\s]*)$/.exec(message);
+  const suggestions = slashMatch && !suggestionsDismissed
+    ? (controls?.commands ?? [])
+        .filter((command) => command.name.toLowerCase().startsWith(slashMatch[1]!.toLowerCase()))
+        .slice(0, 8)
+    : [];
+  useEffect(() => { setSuggestionIndex(0); }, [message, controls?.commands]);
+  const chooseSuggestion = (index: number) => {
+    const suggestion = suggestions[index];
+    if (!suggestion) return;
+    setMessage(`/${suggestion.name} `);
+    setSuggestionIndex(0);
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
@@ -89,6 +122,23 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
   };
   const controlsDisabled = !connected || streaming || submitting || Boolean(controlBusy);
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggestions.length) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setSuggestionIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
+        event.preventDefault();
+        chooseSuggestion(suggestionIndex);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSuggestionsDismissed(true);
+        return;
+      }
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
@@ -100,23 +150,39 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
       {live.connection === "disconnected" && <div className="conversation-state">Disconnected. Waiting to reconnect…</div>}
       {runtime && <div ref={streamRef} className="message-stream" aria-live="polite">
         {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
-        {conversationBlocks.map((block) => "tools" in block
-          ? <ToolTurnGroup key={block.id} tools={block.tools} />
-          : block.role === "tool"
-            ? <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />
-            : block.role === "system"
-              ? <SystemDisclosure key={block.id} message={block} />
-              : <article className={`conversation-message role-${block.role}`} key={block.id}>
-                <small>{block.role}{block.streaming ? " · streaming" : ""}</small>
-                {block.text && <p>{block.text}</p>}
-                {Boolean(block.attachmentCount) && <span className="message-attachments"><IconPhoto size={14} />{block.attachmentCount} {block.attachmentCount === 1 ? "image" : "images"}</span>}
-              </article>)}
-        {runtime.conversation.tools.filter((tool) => tool.status === "running").map((tool) => <ToolDisclosure key={tool.id} name={tool.name || "Tool"} status={tool.status} input={tool.input} output={tool.summary} />)}
+        {conversationBlocks.map((block) => {
+          if ("tools" in block) return <ToolTurnGroup key={block.id} tools={block.tools} />;
+          if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
+          if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
+          return <Fragment key={block.id}>
+            <article className={`conversation-message role-${block.role}`}>
+              <small>{block.role}{block.streaming ? " · streaming" : ""}</small>
+              {block.text && <MarkdownContent text={block.text} />}
+              {Boolean(block.attachmentCount) && <span className="message-attachments"><IconPhoto size={14} />{block.attachmentCount} {block.attachmentCount === 1 ? "image" : "images"}</span>}
+              {block.text && (block.role === "user" || copyableAssistants.has(block.id)) && <CopyMessageButton text={block.text} label={`Copy ${block.role === "user" ? "prompt" : "response"}`} />}
+            </article>
+            {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
+            {block.role === "assistant" && block.id !== latestTurnTimer?.id && block.workDurationMs !== undefined && <WorkTimer
+              durationMs={block.workDurationMs}
+              modelName={block.modelName}
+              thinkingLevel={block.thinkingLevel}
+            />}
+          </Fragment>;
+        })}
+        {runningTools.map((tool) => <ToolDisclosure key={tool.id} name={tool.name || "Tool"} status={tool.status} input={tool.input} output={tool.summary} />)}
+        {runtime.conversation.workStartedAt ? <WorkTimer
+          startedAt={runtime.conversation.workStartedAt}
+          modelName={runtime.conversation.workModelName}
+          thinkingLevel={runtime.conversation.workThinkingLevel}
+        /> : latestTurnTimer && <WorkTimer
+          durationMs={latestTurnTimer.workDurationMs}
+          modelName={latestTurnTimer.modelName}
+          thinkingLevel={latestTurnTimer.thinkingLevel}
+        />}
       </div>}
-      {live.error && live.connection === "connected" && <p className="conversation-note">{live.error}</p>}
       {runtime?.conversation.retry.active && <p className="conversation-note">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
       {runtime?.conversation.compaction.active && <p className="conversation-note">Compacting context…</p>}
-      {runtime && <ExtensionUiSurface runtime={runtime} placement="aboveEditor" />}
+      {runtime && <ExtensionUiSurface runtime={runtime} />}
       <form className="prompt-form" onSubmit={submit}>
         {images.length > 0 && <div className="prompt-images" aria-label="Attached images">
           {images.map((image, index) => <div className="prompt-image" key={image.id}>
@@ -125,7 +191,35 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
           </div>)}
         </div>}
         <label className="sr-only" htmlFor="runtime-prompt">Message</label>
-        <textarea id="runtime-prompt" rows={1} value={message} onChange={(event) => setMessage(event.target.value)} onPaste={(event) => void onPaste(event)} onKeyDown={onPromptKeyDown} placeholder={connected ? (streaming ? "Send follow-up" : "Send a prompt") : "Runtime must be connected"} disabled={!connected || submitting} />
+        <div className="prompt-input-wrap">
+          {suggestions.length > 0 && <div className="slash-suggestions" id="slash-command-suggestions" role="listbox" aria-label="Slash commands">
+            {suggestions.map((command, index) => <button
+              className={index === suggestionIndex ? "is-selected" : ""}
+              type="button"
+              role="option"
+              aria-selected={index === suggestionIndex}
+              key={`${command.source}-${command.name}`}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => chooseSuggestion(index)}
+            >
+              <strong>/{command.name}</strong>
+              {command.description && <span>{command.description}</span>}
+            </button>)}
+          </div>}
+          <textarea
+            id="runtime-prompt"
+            rows={1}
+            value={message}
+            onChange={(event) => { setMessage(event.target.value); setSuggestionsDismissed(false); }}
+            onPaste={(event) => void onPaste(event)}
+            onKeyDown={onPromptKeyDown}
+            placeholder={!projectAvailable ? "Add a project to start" : connected ? (streaming ? "Send follow-up" : "Send a prompt") : "Runtime must be connected"}
+            disabled={!connected || submitting}
+            aria-autocomplete="list"
+            aria-controls={suggestions.length ? "slash-command-suggestions" : undefined}
+            aria-expanded={suggestions.length > 0}
+          />
+        </div>
         {imageError && <p className="prompt-error" role="alert">{imageError}</p>}
         <div className="prompt-toolbar">
           <div className="prompt-controls">
@@ -138,7 +232,7 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
                 disabled={controlsDisabled || !controls?.models.length}
               >
                 {!controls?.model && <option value="">No model</option>}
-                {controls?.models.map((model) => <option value={`${model.provider}/${model.id}`} key={`${model.provider}/${model.id}`}>{model.name} · {model.provider}</option>)}
+                {controls?.models.map((model) => <option value={`${model.provider}/${model.id}`} key={`${model.provider}/${model.id}`}>{model.name}</option>)}
               </select>
             </label>
             <label>
@@ -154,15 +248,95 @@ export function ConversationPanel({ live }: { live: RuntimeStoreSnapshot }) {
               </select>
             </label>
           </div>
+          <div className="prompt-metrics" aria-label="Session usage">
+            <span title={`${runtime?.metrics.contextTokens.toLocaleString() ?? 0} of ${runtime?.metrics.contextLimit.toLocaleString() ?? 0} tokens`}>
+              {runtime ? `${runtime.metrics.contextPercent.toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : "—"}
+            </span>
+            <span>{runtime ? `$${runtime.metrics.cost.toFixed(2)}` : "—"}</span>
+          </div>
           <div className="prompt-actions">
             {streaming && <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected} aria-label="Stop response"><IconX size={15} /></button>}
             <button className="prompt-send" disabled={!connected || submitting || (!message.trim() && images.length === 0) || !controls?.model} type="submit" aria-label={streaming ? "Send follow-up" : "Send message"}><IconArrowUp size={16} /></button>
           </div>
         </div>
       </form>
-      {runtime && <ExtensionUiSurface runtime={runtime} placement="belowEditor" />}
     </section>
   );
+}
+
+const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+  const html = useMemo(() => DOMPurify.sanitize(renderMarkdown(text), {
+    ALLOWED_ATTR: markdownAttributes,
+    ALLOWED_TAGS: markdownTags,
+  }), [text]);
+
+  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
+function CopyMessageButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setState("copied");
+      window.setTimeout(() => setState("idle"), 1_500);
+    } catch {
+      setState("error");
+    }
+  };
+  return <button className={`message-copy ${state !== "idle" ? `is-${state}` : ""}`} type="button" onClick={() => void copy()} aria-label={state === "error" ? `${label} failed` : label} title={state === "copied" ? "Copied" : label}>
+    {state === "copied" ? <IconCheck size={14} /> : <IconCopy size={14} />}
+  </button>;
+}
+
+function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
+  const result = new Set<string>();
+  let final: MessageReadModel | undefined;
+  for (const message of messages) {
+    if (message.role === "user") {
+      if (final) result.add(final.id);
+      final = undefined;
+    } else if (message.role === "assistant" && message.text.trim()) {
+      final = message;
+    }
+  }
+  if (final) result.add(final.id);
+  return result;
+}
+
+function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedFiles"]> }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? files : files.slice(0, 3);
+  const remaining = files.length - 3;
+  return <section className="changed-files" aria-label="Files changed in this turn">
+    {visible.map((file) => <div className="changed-file" key={file.path}>
+      <code>{file.path}</code>
+      <span>{file.binary
+        ? <small>binary</small>
+        : <><ins>+{file.additions ?? 0}</ins><del>-{file.deletions ?? 0}</del></>}</span>
+    </div>)}
+    {files.length > 3 && <button type="button" onClick={() => setExpanded((current) => !current)}>
+      {expanded ? "Show less" : `Show ${remaining} more`}
+      <IconChevronDown className={expanded ? "is-expanded" : ""} size={14} />
+    </button>}
+  </section>;
+}
+
+function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"] }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
+  return <div className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
+    {startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
+    {modelName && <> · {modelName}</>}
+    {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+  </div>;
 }
 
 function ToolTurnGroup({ tools }: { tools: MessageReadModel[] }) {
@@ -214,13 +388,10 @@ function ToolDisclosure({ name, status, input, output }: { name: string; status:
   </details>;
 }
 
-function ExtensionUiSurface({ runtime, placement }: { runtime: NonNullable<RuntimeStoreSnapshot["runtime"]>; placement: "aboveEditor" | "belowEditor" }) {
-  const widgets = runtime.extensionUi.widgets.filter((widget) => (widget.placement ?? "aboveEditor") === placement);
-  if (placement === "belowEditor" && runtime.extensionUi.notifications.length === 0 && runtime.extensionUi.statuses.length === 0 && widgets.length === 0) return null;
-  if (placement === "aboveEditor" && widgets.length === 0) return null;
-  return <div className={`extension-ui extension-ui-${placement}`}>
+function ExtensionUiSurface({ runtime }: { runtime: NonNullable<RuntimeStoreSnapshot["runtime"]> }) {
+  const widgets = runtime.extensionUi.widgets.filter((widget) => (widget.placement ?? "aboveEditor") === "aboveEditor");
+  if (widgets.length === 0) return null;
+  return <div className="extension-ui extension-ui-aboveEditor">
     {widgets.map((widget) => <section className="extension-widget" key={widget.key} aria-label={widget.key}>{widget.lines.map((line, index) => <p key={index}>{line}</p>)}</section>)}
-    {placement === "belowEditor" && runtime.extensionUi.statuses.length > 0 && <dl className="extension-statuses">{runtime.extensionUi.statuses.map((status) => <div key={status.key}><dt>{status.key}</dt><dd>{status.text}</dd></div>)}</dl>}
-    {placement === "belowEditor" && <div className="extension-notifications" aria-live="polite" aria-atomic="true">{runtime.extensionUi.notifications.slice(-3).map((item) => <p className={`tone-${item.type}`} key={item.id}>{item.message}</p>)}</div>}
   </div>;
 }

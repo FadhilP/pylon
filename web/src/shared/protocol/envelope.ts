@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 export interface WebEvent<T = unknown> {
   protocolVersion: typeof PROTOCOL_VERSION;

@@ -1,31 +1,24 @@
 import {
-  IconActivity,
-  IconArrowUpRight,
-  IconBolt,
   IconCheck,
-  IconChevronRight,
   IconCircle,
   IconClock,
-  IconCpu,
+  IconDatabase,
   IconGitBranch,
   IconLayoutDashboard,
   IconListCheck,
   IconSearch,
-  IconSettings,
   IconShieldCheck,
-  IconStack2,
-  IconTerminal2,
   IconTimeline,
   IconTool,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
-import type { PackageSummary } from "../shared/protocol/snapshots";
+import { formatCompactNumber } from "../shared/format";
 import { displayTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
-export type ViewId = "overview" | "timeline" | "tools" | "settings";
+export type ViewId = "overview" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
 type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
 
@@ -35,13 +28,13 @@ const navigation: Array<{ label: string; items: Array<{ id: ViewId; label: strin
     items: [
       { id: "overview", label: "Overview", icon: IconLayoutDashboard, hint: "Run summary" },
       { id: "timeline", label: "Timeline", icon: IconTimeline, hint: "Checkpoints" },
+      { id: "memory", label: "Memory", icon: IconDatabase, hint: "Continuity facts" },
     ],
   },
   {
     label: "System",
     items: [
-      { id: "tools", label: "Tools", icon: IconTool, hint: "Policies and usage" },
-      { id: "settings", label: "Settings", icon: IconSettings, hint: "Optional packages" },
+      { id: "tools", label: "Tools", icon: IconTool, hint: "Policies and availability" },
     ],
   },
 ];
@@ -49,29 +42,23 @@ const navigation: Array<{ label: string; items: Array<{ id: ViewId; label: strin
 const viewCopy: Record<ViewId, { title: string; description: string }> = {
   overview: { title: "Workspace overview", description: "Live state for the active Pylon session." },
   timeline: { title: "Timeline", description: "Recoverable checkpoints across the current run." },
-  tools: { title: "Tools", description: "Package policies, availability, and session usage." },
-  settings: { title: "Settings", description: "Choose which local Pi packages run in every session." },
+  memory: { title: "Project memory", description: "Durable facts Continuity keeps for this project." },
+  tools: { title: "Tools", description: "Package policies and tool availability." },
 };
 
 interface InspectorProps {
   current: ViewId;
   live: RuntimeStoreSnapshot;
-  packages: PackageSummary[];
-  packagesLoading: boolean;
-  packagesError: string;
-  packageBusy: string;
   availableViews: Set<ViewId>;
   isOpen: boolean;
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
-  onSetPackageEnabled: (item: PackageSummary, enabled: boolean) => void;
 }
 
-export function Inspector({ current, live, packages, packagesLoading, packagesError, packageBusy, availableViews, isOpen, overlay, onClose, onNavigate, onSetPackageEnabled }: InspectorProps) {
+export function Inspector({ current, live, availableViews, isOpen, overlay, onClose, onNavigate }: InspectorProps) {
   const copy = viewCopy[current];
   const items = navigation.flatMap((group) => group.items).filter((item) => availableViews.has(item.id));
-  const activePackages = new Set(packages.filter((item) => item.active).map((item) => item.id));
   return (
     <aside id="session-inspector" className={`inspector ${isOpen ? "is-open" : ""}`} aria-label="Session inspector" aria-hidden={!isOpen} inert={!isOpen}>
       <header className="inspector-header">
@@ -88,44 +75,31 @@ export function Inspector({ current, live, packages, packagesLoading, packagesEr
       </div>
       <p className="inspector-description">{copy.description}</p>
       <div className="inspector-scroll" role="tabpanel">
-        {current === "overview" && <Overview onNavigate={onNavigate} live={live} activePackages={activePackages} />}
+        {current === "overview" && <Overview live={live} />}
         {current === "timeline" && <Timeline live={live} />}
-        {current === "tools" && <Tools live={live} pylonPolicies={activePackages.has("pylon-core")} />}
-        {current === "settings" && <Settings
-          live={live}
-          packages={packages}
-          loading={packagesLoading}
-          error={packagesError}
-          busy={packageBusy}
-          onSetEnabled={onSetPackageEnabled}
-        />}
+        {current === "memory" && <Memory live={live} />}
+        {current === "tools" && <Tools live={live} pylonPolicies={live.runtime?.operational.tools.availability === "available"} />}
       </div>
     </aside>
   );
 }
 
-function Overview({ onNavigate, live, activePackages }: { onNavigate: (view: ViewId) => void; live: RuntimeStoreSnapshot; activePackages: Set<string> }) {
+function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime;
-  const metrics = runtime?.metrics;
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
-  const recentActivity = [
-    activePackages.has("pi-guard") && operational?.guard.decision ? { id: "guard", source: "Guard", action: operational.guard.reason || operational.guard.decision, tone: operational.guard.decision === "blocked" ? "warning" as Tone : "success" as Tone } : undefined,
-    activePackages.has("pi-verify") && operational?.verification.state ? { id: "verify", source: "Verify", action: `Verification ${operational.verification.state}`, tone: operational.verification.state === "passed" ? "success" as Tone : "neutral" as Tone } : undefined,
-    ...(activePackages.has("pi-heartbeat") ? (operational?.jobs.items ?? []).slice(-2).reverse().map((job) => ({ id: job.id, source: "Heartbeat", action: `${job.label}: ${job.state}`, tone: job.state === "failed" ? "warning" as Tone : "neutral" as Tone })) : []),
-  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
   return (
     <div className="page-grid">
-      <section className="metric-strip" aria-label="Session metrics">
-        <Metric label="Context used" value={metrics ? `${metrics.contextPercent.toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : "—"} detail={metrics ? `${metrics.contextTokens.toLocaleString()} of ${metrics.contextLimit.toLocaleString()}` : "No metrics yet"} icon={IconCpu} />
-        <Metric label="Tool calls" value={metrics ? String(metrics.toolCalls) : "—"} detail={runtime?.conversation.streaming ? "Agent streaming" : "Agent idle"} icon={IconActivity} />
-        <Metric label="Session cost" value={metrics ? `$${metrics.cost.toFixed(2)}` : "—"} detail={metrics?.model || "No model connected"} icon={IconTerminal2} />
+      <section className="usage-strip" aria-label="Session usage">
+        <div><small>Input</small><strong>{runtime ? formatCompactNumber(runtime.metrics.inputTokens) : "—"}</strong><span>tokens</span></div>
+        <div><small>Output</small><strong>{runtime ? formatCompactNumber(runtime.metrics.outputTokens) : "—"}</strong><span>tokens</span></div>
+        <div><small>Cache reads</small><strong>{runtime ? formatCompactNumber(runtime.metrics.cacheReadTokens) : "—"}</strong><span>tokens</span></div>
+        <div><small>Tool calls</small><strong>{runtime ? formatCompactNumber(runtime.metrics.toolCalls) : "—"}</strong><span>session total</span></div>
       </section>
-
       <div className="overview-columns">
-        {activePackages.has("pi-continuity") && <section className="panel run-panel">
+        {operational?.continuity.availability === "available" && <section className="panel run-panel">
           <PanelHeader title="Current run" meta={work ? displayTime(work.updatedAt) : undefined} />
-          {operational?.continuity.availability === "unavailable" ? <FeatureUnavailable name="Continuity" /> : work ? <>
+          {work ? <>
             <div className="run-title-row">
               <div className="run-icon"><IconListCheck size={20} /></div>
               <div><h2>{work.goal}</h2><p className="mono">{work.runId || "Current session"}</p></div>
@@ -138,25 +112,13 @@ function Overview({ onNavigate, live, activePackages }: { onNavigate: (view: Vie
           </> : <div className="empty-state"><IconListCheck size={20} /><strong>No active work</strong><span>Continuity has no plan for this session.</span></div>}
         </section>}
 
-        {(activePackages.has("pi-guard") || activePackages.has("pi-verify") || activePackages.has("pi-heartbeat")) && <section className="panel activity-panel">
-          <PanelHeader title="Activity" meta="Live package state" />
-          <div className="activity-list">
-            {recentActivity.map((event) => (
-              <div className="activity-row" key={event.id}>
-                <span className={`activity-icon tone-${event.tone}`}><IconBolt size={14} /></span>
-                <div><strong>{event.source}</strong><p>{event.action}</p></div>
-              </div>
-            ))}
-            {recentActivity.length === 0 && <div className="conversation-state">No operational activity yet.</div>}
-          </div>
-          {activePackages.has("pi-timeline") && <button className="text-button" type="button" onClick={() => onNavigate("timeline")}>View full timeline<IconArrowUpRight size={14} /></button>}
-        </section>}
+        {runtime?.discoverIndex && <DiscoverIndex live={live} />}
       </div>
 
       <div className="overview-lower">
-        {activePackages.has("pi-verify") && <section className="panel verification-panel">
+        {operational?.verification.availability === "available" && <section className="panel verification-panel">
           <PanelHeader title="Verification" meta={operational?.verification.scope || "No run"} />
-          {operational?.verification.availability === "unavailable" ? <FeatureUnavailable name="Verify" /> : <div className="check-list">
+          <div className="check-list">
             {operational?.verification.checks.map((check) => (
               <div className="check-row" key={check.id}>
                 <span className={`check-icon ${check.status}`}>
@@ -167,24 +129,115 @@ function Overview({ onNavigate, live, activePackages }: { onNavigate: (view: Vie
               </div>
             ))}
             {operational?.verification.checks.length === 0 && <div className="conversation-state">{operational?.verification.message || (operational?.verification.state ? `Verification ${operational.verification.state}.` : "No verification run yet.")}</div>}
-          </div>}
+          </div>
         </section>}
 
-        <section className="panel tools-summary">
-          <PanelHeader title="Tool surface" meta={`${operational?.tools.policies.length ?? 0} policies`} action="Manage" onAction={() => onNavigate("tools")} />
-          <div className="tool-summary-grid">
-            <div><span>{runtime?.activeTools.length ?? 0}</span><small>Active tools</small></div>
-            <div><span>{operational?.tools.policies.reduce((total, policy) => total + policy.deferredTools.length, 0) ?? 0}</span><small>Deferred</small></div>
-            <div><span>{activePackages.has("pi-guard") ? operational?.guard.blocked ?? 0 : runtime?.availableTools.length ?? 0}</span><small>{activePackages.has("pi-guard") ? "Blocked" : "Available"}</small></div>
-          </div>
-          {activePackages.has("pi-guard") && <div className="policy-note"><IconShieldCheck size={16} /><span><strong>{operational?.guard.availability === "available" ? "Guard available" : "Guard unavailable"}</strong><small>{operational?.guard.reason || "Destructive writes require package confirmation."}</small></span></div>}
-        </section>
       </div>
     </div>
   );
 }
 
+function DiscoverIndex({ live }: { live: RuntimeStoreSnapshot }) {
+  const [busy, setBusy] = useState(false);
+  const index = live.runtime!.discoverIndex!;
+  const idle = live.connection === "connected"
+    && live.runtime?.ready === true
+    && !live.runtime.conversation.workStartedAt
+    && !live.pendingUi
+    && !busy
+    && index.state !== "indexing";
+  return <section className="panel index-panel">
+    <PanelHeader title="File index" meta={index.state === "indexing" ? "Rebuilding…" : index.state} />
+    <dl className="index-metrics">
+      <div><dt>Files</dt><dd>{index.files === undefined ? "—" : formatCompactNumber(index.files)}</dd></div>
+      <div><dt>Symbols</dt><dd>{index.symbols === undefined ? "—" : formatCompactNumber(index.symbols)}</dd></div>
+      <div><dt>Updated</dt><dd>{index.indexedAt ? displayTime(index.indexedAt) : "Not indexed"}</dd></div>
+    </dl>
+    {index.error && <p className="index-error" role="alert">{index.error}</p>}
+    <button className="secondary-button" type="button" disabled={!idle} onClick={() => {
+      setBusy(true);
+      void runtimeStore.rebuildDiscoverIndex().catch(() => undefined).finally(() => setBusy(false));
+    }}>{busy || index.state === "indexing" ? "Rebuilding…" : "Rebuild index"}</button>
+  </section>;
+}
 
+
+
+function Memory({ live }: { live: RuntimeStoreSnapshot }) {
+  const memory = live.runtime?.operational.continuity.memory ?? [];
+  const [editing, setEditing] = useState("");
+  const [text, setText] = useState("");
+  const [kind, setKind] = useState<(typeof memory)[number]["kind"]>("workflow");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const idle = live.connection === "connected"
+    && live.runtime?.ready === true
+    && live.runtime.conversation.streaming === false
+    && !live.pendingUi
+    && !busy;
+  const edit = (fact: (typeof memory)[number]) => {
+    setEditing(fact.key);
+    setText(fact.text);
+    setKind(fact.kind);
+    setError("");
+  };
+  const save = async (fact: (typeof memory)[number]) => {
+    if (!idle || !text.trim()) return;
+    setBusy(fact.key);
+    setError("");
+    try {
+      await runtimeStore.updateContinuityMemory(fact, text.trim(), kind);
+      setEditing("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to update memory");
+    } finally {
+      setBusy("");
+    }
+  };
+  const remove = async (fact: (typeof memory)[number]) => {
+    if (!idle || !window.confirm(`Delete project memory "${fact.key}"?`)) return;
+    setBusy(fact.key);
+    setError("");
+    try {
+      await runtimeStore.deleteContinuityMemory(fact);
+      setEditing("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to delete memory");
+    } finally {
+      setBusy("");
+    }
+  };
+  if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
+  return <div className="memory-page">
+    <section className="panel memory-panel">
+      <PanelHeader title="Saved facts" meta={`${memory.length} project facts`} />
+      {memory.map((fact) => <article className="memory-fact" key={fact.key}>
+        <header>
+          <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
+          <time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time>
+        </header>
+        {editing === fact.key ? <div className="memory-editor">
+          <label>Kind<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}>
+            {["workflow", "structure", "architecture", "warning", "preference"].map((value) => <option value={value} key={value}>{value}</option>)}
+          </select></label>
+          <label>Fact<textarea value={text} maxLength={1_000} rows={5} onChange={(event) => setText(event.target.value)} /></label>
+          <div><button className="primary-button" type="button" disabled={!idle || !text.trim()} onClick={() => void save(fact)}>{busy === fact.key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
+        </div> : <>
+          <p>{fact.text}</p>
+          <dl>
+            <div><dt>Confidence</dt><dd>{Math.round(fact.confidence * 100)}%</dd></div>
+            <div><dt>Source</dt><dd>{fact.source}</dd></div>
+            <div><dt>Evidence</dt><dd>{fact.evidencePaths?.length ?? 0} files</dd></div>
+          </dl>
+          <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(fact)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => void remove(fact)}><IconTrash size={13} />Delete</button></footer>
+        </>}
+      </article>)}
+      {memory.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
+      {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
+      {error && <p className="ui-request-error" role="alert">{error}</p>}
+    </section>
+  </div>;
+}
 
 function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
   const timeline = live.runtime?.operational.timeline;
@@ -243,16 +296,8 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
     const items = tools.map((name) => ({ name, active: runtime?.activeTools.includes(name) === true }));
     return normalized ? items.filter((item) => item.name.toLowerCase().includes(normalized)) : items;
   }, [query, runtime?.activeTools, tools]);
-  const metrics = runtime?.metrics;
-
   return (
     <div className="tools-page">
-      <section className="usage-strip">
-        <div><small>Input</small><strong>{metrics?.inputTokens.toLocaleString() ?? "—"}</strong><span>tokens</span></div>
-        <div><small>Output</small><strong>{metrics?.outputTokens.toLocaleString() ?? "—"}</strong><span>tokens</span></div>
-        <div><small>Cache reads</small><strong>{metrics?.cacheReadTokens.toLocaleString() ?? "—"}</strong><span>tokens</span></div>
-        <div><small>Tool calls</small><strong>{metrics?.toolCalls ?? "—"}</strong><span>session total</span></div>
-      </section>
       <section className="panel tool-table-panel">
         <div className="table-toolbar">
           <div><h2>Available tools</h2><p>Effective state for this session.</p></div>
@@ -287,52 +332,6 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
   );
 }
 
-function Settings({ live, packages, loading, error, busy, onSetEnabled }: {
-  live: RuntimeStoreSnapshot;
-  packages: PackageSummary[];
-  loading: boolean;
-  error: string;
-  busy: string;
-  onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
-}) {
-  const runningJob = live.runtime?.operational.jobs.items.some((job) => job.state === "running") === true;
-  const idle = live.connection === "connected"
-    && live.runtime?.ready === true
-    && live.runtime.conversation.streaming === false
-    && !live.pendingUi
-    && !runningJob
-    && !busy;
-  return <div className="settings-page">
-    <section className="panel package-settings">
-      <PanelHeader title="Local Pi packages" meta={`${packages.filter((item) => item.active).length} active`} />
-      <p className="settings-note">Packages are detected from this installation's <span className="mono">packages/</span> directory. Changes apply globally and reload the current session.</p>
-      {loading && <div className="conversation-state">Detecting packages...</div>}
-      {!loading && packages.map((item) => {
-        const state = item.error ? "failed" : item.active ? "active" : item.enabled ? "unavailable" : "disabled";
-        return <label className="package-row" key={item.id}>
-          <span className="package-copy">
-            <strong>{item.name}</strong>
-            <small>{item.description || `${item.extensionCount} Pi extension${item.extensionCount === 1 ? "" : "s"}`}</small>
-            {item.error && <span className="package-error">{item.error}</span>}
-          </span>
-          <span className={`package-state is-${state}`}>{state}</span>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={item.enabled}
-            disabled={!idle}
-            onChange={(event) => onSetEnabled(item, event.target.checked)}
-            aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
-          />
-        </label>;
-      })}
-      {!loading && packages.length === 0 && <div className="empty-state"><IconStack2 size={20} /><strong>No local Pi packages</strong><span>The web runtime remains available with Pi's standard workspace configuration.</span></div>}
-      {!idle && !loading && <p className="settings-note" role="status">Package changes are available when the session and background work are idle.</p>}
-      {error && <p className="ui-request-error" role="alert">{error}</p>}
-    </section>
-  </div>;
-}
-
 function TodoList({ work }: { work: NonNullable<NonNullable<RuntimeStoreSnapshot["runtime"]>["operational"]["continuity"]["work"]> }) {
   return <ol className="todo-list">
     {work.todos.map((todo) => {
@@ -350,12 +349,8 @@ function FeatureUnavailable({ name }: { name: string }) {
   return <div className="empty-state" role="status"><IconX size={20} /><strong>{name} unavailable</strong><span>Installed package version does not expose compatible state.</span></div>;
 }
 
-function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: IconComponent }) {
-  return <div className="metric"><span className="metric-icon"><Icon size={16} /></span><div><small>{label}</small><strong>{value}</strong><span>{detail}</span></div></div>;
-}
-
-function PanelHeader({ title, meta, action, onAction }: { title: string; meta?: string; action?: string; onAction?: () => void }) {
-  return <header className="panel-header"><div><h2>{title}</h2>{meta && <span>{meta}</span>}</div>{action && onAction && <button className="text-button" type="button" onClick={onAction}>{action}<IconChevronRight size={14} /></button>}</header>;
+function PanelHeader({ title, meta }: { title: string; meta?: string }) {
+  return <header className="panel-header"><div><h2>{title}</h2>{meta && <span>{meta}</span>}</div></header>;
 }
 
 function Status({ tone, children }: { tone: Tone; children: ReactNode }) {

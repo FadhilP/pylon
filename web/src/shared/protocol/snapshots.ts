@@ -14,6 +14,9 @@ export interface RuntimeSnapshot {
   sessionGeneration: number;
   ready: boolean;
   cwdLabel: string;
+  projectAvailable?: boolean;
+  sessionName?: string;
+  gitBranch?: string;
   activeTools: string[];
   availableTools: string[];
   optionalCapabilities: Record<string, FeatureAvailability>;
@@ -21,8 +24,17 @@ export interface RuntimeSnapshot {
   conversation: ConversationReadModel;
   sessionControls: SessionControlsReadModel;
   metrics: SessionMetricsReadModel;
+  discoverIndex?: DiscoverIndexReadModel;
   operational: OperationalReadModel;
   extensionUi: ExtensionUiReadModel;
+}
+
+export interface DiscoverIndexReadModel {
+  state: "idle" | "indexing" | "error";
+  files?: number;
+  symbols?: number;
+  indexedAt?: string;
+  error?: string;
 }
 
 export interface BootstrapSnapshot {
@@ -64,7 +76,34 @@ export interface SessionListQuery {
 export interface SessionListSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
+  activeSessions: SessionSummary[];
   projects: SessionProjectPage[];
+}
+
+export interface ArchivedProjectSummary {
+  id: string;
+  label: string;
+  sessionCount: number;
+  archivedAt: string;
+}
+
+export interface ArchivedSessionSummary extends SessionSummary {
+  archivedAt: string;
+}
+
+export interface ArchiveListQuery {
+  cursor?: string;
+  query?: string;
+  limit?: number;
+}
+
+export interface ArchiveListSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  projects: ArchivedProjectSummary[];
+  sessions: ArchivedSessionSummary[];
+  totalSessionCount: number;
+  nextCursor?: string;
 }
 
 export interface PackageSummary {
@@ -74,7 +113,43 @@ export interface PackageSummary {
   enabled: boolean;
   active: boolean;
   extensionCount: number;
+  settings?: PackageSettingsReadModel;
   error?: string;
+}
+
+export type PackageModelMode = "disabled" | "session" | "model";
+
+export type PackageSettingsReadModel =
+  | {
+      kind: "advisor" | "scout";
+      mode: PackageModelMode;
+      model?: string;
+      thinking?: import("./events.ts").ThinkingLevelReadModel;
+    }
+  | {
+      kind: "grunt";
+      mode: PackageModelMode;
+      model?: string;
+      executionMode: "isolated" | "direct" | "dynamic";
+    }
+  | {
+      kind: "continuity";
+      planner?: PackageModelProfileReadModel;
+      executor?: PackageModelProfileReadModel;
+    }
+  | {
+      kind: "sieve";
+      activePruning: boolean;
+      threshold: number;
+    }
+  | {
+      kind: "helios";
+      headed: boolean;
+    };
+
+export interface PackageModelProfileReadModel {
+  model: string;
+  thinking?: import("./events.ts").ThinkingLevelReadModel;
 }
 
 export interface PackageListSnapshot {

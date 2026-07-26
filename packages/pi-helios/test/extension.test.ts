@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +10,8 @@ import { consumeWebScoutGrant, issueWebScoutGrant, WEB_SCOUT_GRANT_ENV } from ".
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const WINDOW = { handle: 42, processId: 7, title: "Visual Studio Code" };
+const SETTINGS_PATH = join(tmpdir(), `pi-helios-test-${process.pid}.json`);
+after(() => rm(SETTINGS_PATH, { force: true }));
 
 function runtime(pi: Record<string, unknown> = {}) {
   const tools = new Map<string, any>();
@@ -28,7 +30,7 @@ function runtime(pi: Record<string, unknown> = {}) {
     registerTool(value: any) { tools.set(value.name, value); },
     registerCommand(name: string, value: any) { commands.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any);
+  } as any, { configPath: SETTINGS_PATH });
   return { tools, commands, handlers, eventHandlers };
 }
 

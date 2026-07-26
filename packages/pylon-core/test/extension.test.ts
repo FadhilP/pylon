@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -134,6 +134,33 @@ test("shared worktree observer fingerprints one shell tool batch per turn", asyn
   assert.equal(changes[0].changed, true);
   assert.equal(changes[0].known, true);
   assert.deepEqual(changes[0].toolCallIds, ["one", "two"]);
+});
+
+test("run summary survives the final shell turn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-run-summary-"));
+  try {
+    await exec("git", ["init", "-q"], { cwd: root });
+    await exec("git", ["config", "user.email", "pylon@test.local"], { cwd: root });
+    await exec("git", ["config", "user.name", "pylon-test"], { cwd: root });
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await exec("git", ["add", "tracked.txt"], { cwd: root });
+    await exec("git", ["commit", "-qm", "base"], { cwd: root });
+
+    const runtime = harness();
+    const summaries: any[] = [];
+    const ctx = { cwd: root, sessionManager: { getBranch: () => [] } };
+    runtime.events.on("pylon:worktree-summary", (event) => summaries.push(event));
+
+    await runtime.handlers.get("agent_start")![0]({}, ctx);
+    await runtime.handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "shell" }, ctx);
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+    await runtime.handlers.get("turn_end")![0]({}, ctx);
+    await runtime.handlers.get("agent_settled")![0]({}, ctx);
+
+    assert.deepEqual(summaries[0]?.files, [{ path: "tracked.txt", additions: 1, deletions: 1 }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("doctor reports quarantined state and unavailable configured models", async () => {

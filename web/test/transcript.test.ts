@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { groupConversationMessages } from "../src/shared/transcript.ts";
+import { groupConversationMessages, latestTimedAssistant } from "../src/shared/transcript.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 
 const message = (id: string, role: MessageReadModel["role"]): MessageReadModel => ({
@@ -28,4 +28,15 @@ test("completed turns group tools while the streaming turn keeps them visible", 
     "user-2",
     "tool-3",
   ]);
+});
+
+test("the latest completed turn timer follows any trailing tool activity", () => {
+  const messages = [
+    { ...message("user-1", "user") },
+    { ...message("assistant-1", "assistant"), workDurationMs: 1_000 },
+    message("tool-1", "tool"),
+  ];
+
+  assert.equal(latestTimedAssistant(messages)?.id, "assistant-1");
+  assert.equal(latestTimedAssistant([...messages, message("user-2", "user")]), undefined);
 });

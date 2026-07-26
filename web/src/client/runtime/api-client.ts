@@ -1,5 +1,5 @@
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands";
-import type { BootstrapSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -65,6 +65,17 @@ export class ApiClient {
 
   async packages(): Promise<PackageListSnapshot> {
     return json<PackageListSnapshot>(await fetch("/api/v1/packages", {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async archives(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
+    const query = new URLSearchParams();
+    if (input.cursor) query.set("cursor", input.cursor);
+    if (input.query) query.set("q", input.query);
+    if (input.limit) query.set("limit", String(input.limit));
+    return json<ArchiveListSnapshot>(await fetch(`/api/v1/archives${query.size ? `?${query}` : ""}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));

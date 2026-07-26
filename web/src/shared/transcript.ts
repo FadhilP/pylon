@@ -2,7 +2,7 @@ import type { MessageReadModel } from "./protocol/events.ts";
 
 export type ConversationBlock = MessageReadModel | { id: string; tools: MessageReadModel[] };
 
-export function groupConversationMessages(messages: MessageReadModel[], streaming: boolean): ConversationBlock[] {
+export function groupConversationMessages(messages: MessageReadModel[], activeTurn: boolean): ConversationBlock[] {
   const blocks: ConversationBlock[] = [];
   let turn: MessageReadModel[] = [];
 
@@ -26,6 +26,15 @@ export function groupConversationMessages(messages: MessageReadModel[], streamin
     if (message.role === "user" && turn.length) flush(false);
     turn.push(message);
   }
-  flush(streaming);
+  flush(activeTurn);
   return blocks;
+}
+
+export function latestTimedAssistant(messages: MessageReadModel[]): MessageReadModel | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role === "user") return;
+    if (message.role === "assistant" && message.workDurationMs !== undefined) return message;
+  }
+  return undefined;
 }

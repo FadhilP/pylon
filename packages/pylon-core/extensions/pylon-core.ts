@@ -15,7 +15,7 @@ import {
   recordToolResult,
   recordVerificationOutcome,
 } from "../src/token-meter.ts";
-import { worktreeFingerprint } from "../src/worktree.ts";
+import { worktreeDiff, worktreeFingerprint, worktreeSnapshot, type WorktreeSnapshot } from "../src/worktree.ts";
 
 export default function pylonCoreExtension(pi: ExtensionAPI) {
   const baseline = new Set<string>();
@@ -31,6 +31,8 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   let shellBaseline: Promise<string | undefined> | undefined;
   let shellCwd = "";
   let shellToolCallIds: string[] = [];
+  let runBaseline: Promise<WorktreeSnapshot | undefined> | undefined;
+  let runCwd = "";
 
   const hasGate = () => [...policies.values()].some((policy) => policy.allowOnly);
   const managedTools = () =>
@@ -227,12 +229,34 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];
+    runBaseline = undefined;
+    runCwd = "";
     captureBaseline();
     reconcile();
     rebuildTokenMeter(ctx);
   });
   pi.on("session_tree", (_event, ctx) => rebuildTokenMeter(ctx));
-  pi.on("agent_settled", (_event, ctx) => rebuildTokenMeter(ctx));
+  pi.on("agent_start", async (_event, ctx) => {
+    runCwd = ctx.cwd;
+    runBaseline = worktreeSnapshot(ctx.cwd);
+    await runBaseline;
+  });
+  pi.on("agent_settled", async (_event, ctx) => {
+    rebuildTokenMeter(ctx);
+    const beforePromise = runBaseline;
+    const cwd = runCwd || ctx.cwd;
+    runBaseline = undefined;
+    runCwd = "";
+    if (!beforePromise) return;
+    const [before, after] = await Promise.all([beforePromise, worktreeSnapshot(cwd)]);
+    const files = before && after ? await worktreeDiff(before, after) : undefined;
+    pi.events.emit("pylon:worktree-summary", {
+      version: 1,
+      cwd,
+      known: Boolean(files),
+      files: files ?? [],
+    });
+  });
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
     if (!shellBaseline) {
@@ -270,6 +294,8 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];
+    runBaseline = undefined;
+    runCwd = "";
     selectedTools.clear();
     policies.clear();
     managedByOwner.clear();

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, validateCommand } from "../src/shared/protocol/validation.ts";
+import { isArchiveListSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v2 commands and images", () => {
+test("command validation allowlists bounded v5 commands and images", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -25,12 +25,27 @@ test("command validation allowlists bounded v2 commands and images", () => {
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "pi-verify", enabled: false, commandId: "package", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "", enabled: false, commandId: "package", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "pi-verify", enabled: "yes", commandId: "package", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-advisor", settings: { kind: "advisor", mode: "session", thinking: "high" }, commandId: "settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 999 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "rebuildDiscoverIndex", commandId: "index", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "setModel", provider: "openai", modelId: "gpt-5", commandId: "model", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "setModel", provider: "", modelId: "gpt-5", commandId: "model", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "setThinkingLevel", level: "high", commandId: "thinking", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "setThinkingLevel", level: "extreme", commandId: "thinking", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "deleteSession", sessionId: "session-1", commandId: "delete", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "deleteSession", sessionId: "", commandId: "delete", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "renameSession", sessionId: "session-1", name: "New name", commandId: "rename", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "renameSession", sessionId: "session-1", name: " ", commandId: "rename", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "setSessionActive", sessionId: "session-1", active: true, commandId: "active", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "setSessionActive", sessionId: "session-1", active: "yes", commandId: "active", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "addProject", commandId: "project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "removeProject", projectId: "project-one", commandId: "project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "archiveProject", projectId: "project-one", commandId: "archive-project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "restoreSession", sessionId: "session-one", commandId: "restore-session", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "archiveSession", sessionId: "x".repeat(129), commandId: "archive-session", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "newSession", projectId: "project-one", parentSessionId: "session-1", commandId: "new", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "Use the coordinator", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, false);
   const image = { mimeType: "image/png", data: Buffer.from("image").toString("base64") };
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: [image] }).ok, true);
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: [{ ...image, mimeType: "image/svg+xml" }] }).ok, false);
@@ -69,7 +84,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     },
     sessionControls: {
       model: { provider: "provider", id: "model", name: "Model" },
-      models: [{ provider: "provider", id: "model", name: "Model" }],
+      models: [{ provider: "provider", id: "model", name: "Model", thinkingLevels: ["off", "high"] }],
       thinkingLevel: "high",
       thinkingLevels: ["low", "medium", "high"],
     },
@@ -86,14 +101,43 @@ test("event and snapshot validators reject incompatible versions", () => {
     extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
+  const timedSnapshot = {
+    ...snapshot,
+    projectAvailable: true,
+    sessionName: "Live rename",
+    gitBranch: "codex/session-ui",
+    conversation: {
+      ...snapshot.conversation,
+      workStartedAt: new Date().toISOString(),
+      messages: [{ id: "assistant-1", role: "assistant", text: "Done", streaming: false, workDurationMs: 1_234 }],
+    },
+    discoverIndex: { state: "idle", files: 12, symbols: 34, indexedAt: new Date(0).toISOString() },
+  };
+  assert.equal(isRuntimeSnapshot(timedSnapshot), true);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, projectAvailable: "yes" }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, sessionName: "x".repeat(201) }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, gitBranch: "x".repeat(201) }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, workStartedAt: "invalid" } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, messages: [{ ...timedSnapshot.conversation.messages[0], workDurationMs: 8 * 24 * 60 * 60 * 1_000 }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...snapshot, optionalCapabilities: { verify: "maybe" } }), false);
 
-  const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, projects: [{ id: "project-one", label: "repo", totalCount: 1, sessions: [{ id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, runtimeState: "idle" }] }] };
+  const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, runtimeState: "idle" };
+  const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", totalCount: 1, sessions: [session] }] };
   assert.equal(isSessionListSnapshot(sessions), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", totalCount: 0, sessions: [] }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], projectId: "" }] }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], preview: "x".repeat(501) }] }] }), false);
+  const archived = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    projects: [{ id: "project-one", label: "repo", sessionCount: 1, archivedAt: new Date(0).toISOString() }],
+    sessions: [{ ...session, active: false, runtimeState: "sleeping", archivedAt: new Date(0).toISOString() }],
+    totalSessionCount: 1,
+  };
+  assert.equal(isArchiveListSnapshot(archived), true);
+  assert.equal(isArchiveListSnapshot({ ...archived, projects: [{ ...archived.projects[0], archivedAt: "invalid" }] }), false);
 
-  const packages = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, packages: [{ id: "pi-verify", name: "pi-verify", description: "Verification", enabled: true, active: true, extensionCount: 1 }] };
+  const packages = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, packages: [{ id: "pi-advisor", name: "pi-advisor", description: "Advisor", enabled: true, active: true, extensionCount: 1, settings: { kind: "advisor", mode: "session", thinking: "high" } }] };
   assert.equal(isPackageListSnapshot(packages), true);
   assert.equal(isPackageListSnapshot({ ...packages, packages: [{ ...packages.packages[0], id: "" }] }), false);
   assert.equal(isPackageListSnapshot({ ...packages, packages: [{ ...packages.packages[0], extensionCount: 0 }] }), false);

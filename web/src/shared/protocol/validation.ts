@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
+import type { ArchiveListSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -11,6 +11,7 @@ const commandNames = new Set<string>(COMMAND_NAMES);
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
+const memoryKinds = new Set(["workflow", "structure", "architecture", "warning", "preference"]);
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -47,6 +48,36 @@ function validImages(value: unknown): boolean {
   return totalBytes <= MAX_IMAGE_TOTAL_BYTES;
 }
 
+export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
+  if (!record(value) || typeof value.kind !== "string") return false;
+  const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
+  const model = value.model === undefined || boundedString(value.model, 400);
+  const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));
+  if (value.kind === "advisor" || value.kind === "scout") {
+    return modelMode && model && thinking && (value.mode !== "model" || boundedString(value.model, 400));
+  }
+  if (value.kind === "grunt") {
+    return modelMode && model
+      && (value.mode !== "model" || boundedString(value.model, 400))
+      && ["isolated", "direct", "dynamic"].includes(String(value.executionMode));
+  }
+  if (value.kind === "continuity") {
+    return ["planner", "executor"].every((key) => {
+      const profile = value[key];
+      return profile === undefined || record(profile)
+        && boundedString(profile.model, 400)
+        && (profile.thinking === undefined || thinkingLevels.has(String(profile.thinking)));
+    });
+  }
+  if (value.kind === "sieve") {
+    return typeof value.activePruning === "boolean"
+      && Number.isSafeInteger(value.threshold)
+      && (value.threshold as number) >= 1_000
+      && (value.threshold as number) <= 50_000;
+  }
+  return value.kind === "helios" && typeof value.headed === "boolean";
+}
+
 export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (!record(value)) return { ok: false, error: "command must be an object" };
   if (typeof value.type !== "string" || !commandNames.has(value.type)) {
@@ -61,8 +92,17 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     }
     if (!validImages(value.images)) return { ok: false, error: "invalid images" };
   }
-  if ((value.type === "switchSession" || value.type === "deleteSession") && !identifier(value.sessionId)) {
+  if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
+  }
+  if (["removeProject", "archiveProject", "restoreProject"].includes(value.type) && !identifier(value.projectId)) {
+    return { ok: false, error: "invalid projectId" };
+  }
+  if (value.type === "renameSession" && (!boundedString(value.name) || !value.name.trim())) {
+    return { ok: false, error: "invalid session name" };
+  }
+  if (value.type === "setSessionActive" && typeof value.active !== "boolean") {
+    return { ok: false, error: "invalid session active state" };
   }
   if (value.type === "fork") {
     if (!identifier(value.entryId)) return { ok: false, error: "invalid entryId" };
@@ -72,6 +112,12 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (value.type === "newSession" && value.parentSessionId !== undefined && !identifier(value.parentSessionId)) {
     return { ok: false, error: "invalid parentSessionId" };
+  }
+  if (value.type === "newSession" && value.projectId !== undefined && !identifier(value.projectId)) {
+    return { ok: false, error: "invalid projectId" };
+  }
+  if (value.type === "newSession" && value.projectId !== undefined && value.parentSessionId !== undefined) {
+    return { ok: false, error: "newSession accepts either projectId or parentSessionId" };
   }
   if (value.type === "timeline") {
     if (value.action !== "restore" && value.action !== "fork" && value.action !== "clear") {
@@ -87,11 +133,23 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     if (!identifier(value.packageId)) return { ok: false, error: "invalid packageId" };
     if (typeof value.enabled !== "boolean") return { ok: false, error: "invalid package enabled state" };
   }
+  if (value.type === "updatePackageSettings") {
+    if (!identifier(value.packageId)) return { ok: false, error: "invalid packageId" };
+    if (!validPackageSettings(value.settings)) return { ok: false, error: "invalid package settings" };
+  }
   if (value.type === "setModel" && (!boundedString(value.provider) || !boundedString(value.modelId))) {
     return { ok: false, error: "invalid model" };
   }
   if (value.type === "setThinkingLevel" && !thinkingLevels.has(String(value.level))) {
     return { ok: false, error: "invalid thinking level" };
+  }
+  if (value.type === "updateContinuityMemory" || value.type === "deleteContinuityMemory") {
+    if (!boundedString(value.key, 200) || typeof value.expectedUpdatedAt !== "string"
+      || Number.isNaN(Date.parse(value.expectedUpdatedAt))) return { ok: false, error: "invalid memory target" };
+  }
+  if (value.type === "updateContinuityMemory"
+    && (!boundedString(value.text, 1_000) || !value.text.trim() || !memoryKinds.has(String(value.kind)))) {
+    return { ok: false, error: "invalid memory update" };
   }
 
   return { ok: true, value: value as unknown as WebCommand };
@@ -107,6 +165,7 @@ export function isPackageListSnapshot(value: unknown): value is PackageListSnaps
     && typeof item.enabled === "boolean"
     && typeof item.active === "boolean"
     && Number.isSafeInteger(item.extensionCount) && (item.extensionCount as number) > 0 && (item.extensionCount as number) <= 50
+    && (item.settings === undefined || validPackageSettings(item.settings))
     && (item.error === undefined || typeof item.error === "string" && item.error.length <= 500));
 }
 
@@ -124,6 +183,8 @@ export function isWebEvent(value: unknown): value is WebEvent {
 
 export function isSessionListSnapshot(value: unknown): value is SessionListSnapshot {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !Array.isArray(value.activeSessions) || value.activeSessions.length > 100
+    || !value.activeSessions.every((session) => validSessionSummary(session))
     || !Array.isArray(value.projects) || value.projects.length > 100) return false;
   return value.projects.every((project) => record(project)
     && identifier(project.id)
@@ -131,23 +192,46 @@ export function isSessionListSnapshot(value: unknown): value is SessionListSnaps
     && Number.isSafeInteger(project.totalCount) && (project.totalCount as number) >= 0
     && (project.nextCursor === undefined || identifier(project.nextCursor))
     && Array.isArray(project.sessions) && project.sessions.length <= 100
-    && project.sessions.every((session) => record(session)
-      && identifier(session.id)
-      && session.projectId === project.id
-      && (session.name === undefined || typeof session.name === "string" && session.name.length <= 200)
-      && typeof session.cwdLabel === "string" && session.cwdLabel.length <= 500
-      && typeof session.createdAt === "string" && !Number.isNaN(Date.parse(session.createdAt))
-      && typeof session.modifiedAt === "string" && !Number.isNaN(Date.parse(session.modifiedAt))
-      && Number.isSafeInteger(session.userMessageCount) && (session.userMessageCount as number) >= 0
-      && typeof session.preview === "string" && session.preview.length <= 500
-      && typeof session.active === "boolean"
-      && runtimeStates.has(String(session.runtimeState))));
+    && project.sessions.every((session) => validSessionSummary(session, project.id as string)));
+}
+
+export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnapshot {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !Array.isArray(value.projects) || value.projects.length > 100
+    || !Array.isArray(value.sessions) || value.sessions.length > 100
+    || !Number.isSafeInteger(value.totalSessionCount) || (value.totalSessionCount as number) < 0
+    || (value.nextCursor !== undefined && !identifier(value.nextCursor))) return false;
+  if (!value.projects.every((project) => record(project)
+    && identifier(project.id)
+    && boundedString(project.label, 500)
+    && Number.isSafeInteger(project.sessionCount) && (project.sessionCount as number) >= 0
+    && typeof project.archivedAt === "string" && !Number.isNaN(Date.parse(project.archivedAt)))) return false;
+  return value.sessions.every((session) => validSessionSummary(session)
+    && typeof session.archivedAt === "string" && !Number.isNaN(Date.parse(session.archivedAt)));
+}
+
+function validSessionSummary(value: unknown, projectId?: string): boolean {
+  return record(value)
+    && identifier(value.id)
+    && identifier(value.projectId)
+    && (projectId === undefined || value.projectId === projectId)
+    && (value.name === undefined || typeof value.name === "string" && value.name.length <= 200)
+    && typeof value.cwdLabel === "string" && value.cwdLabel.length <= 500
+    && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
+    && typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt))
+    && Number.isSafeInteger(value.userMessageCount) && (value.userMessageCount as number) >= 0
+    && typeof value.preview === "string" && value.preview.length <= 500
+    && typeof value.active === "boolean"
+    && runtimeStates.has(String(value.runtimeState));
 }
 
 export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean") return false;
   if (typeof value.cwdLabel !== "string" || !Array.isArray(value.activeTools) || !Array.isArray(value.availableTools)) return false;
+  if (value.projectAvailable !== undefined && typeof value.projectAvailable !== "boolean") return false;
+  if (value.sessionName !== undefined && (typeof value.sessionName !== "string" || value.sessionName.length > 200)) return false;
+  if (value.gitBranch !== undefined && (typeof value.gitBranch !== "string" || value.gitBranch.length > 200)) return false;
   if (!value.activeTools.every((item) => typeof item === "string") || !value.availableTools.every((item) => typeof item === "string")) return false;
   if (!record(value.optionalCapabilities) || !Object.values(value.optionalCapabilities).every((item) => item === "available" || item === "unavailable")) return false;
   if (!Array.isArray(value.diagnostics) || !value.diagnostics.every((item) => record(item)
@@ -156,11 +240,24 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   const conversation = value.conversation;
   if (!record(conversation) || !Array.isArray(conversation.messages) || !Array.isArray(conversation.tools)
     || typeof conversation.streaming !== "boolean" || !record(conversation.queue) || !record(conversation.retry) || !record(conversation.compaction)) return false;
+  if (conversation.workStartedAt !== undefined
+    && (typeof conversation.workStartedAt !== "string" || Number.isNaN(Date.parse(conversation.workStartedAt)))) return false;
+  if (conversation.workModelName !== undefined && (typeof conversation.workModelName !== "string" || conversation.workModelName.length > 200)) return false;
+  if (conversation.workThinkingLevel !== undefined && !thinkingLevels.has(String(conversation.workThinkingLevel))) return false;
   if (conversation.messages.length > 100 || conversation.tools.length > 100) return false;
   if (!conversation.messages.every((message) => record(message) && identifier(message.id)
     && ["user", "assistant", "system", "tool"].includes(message.role as string)
     && typeof message.text === "string" && message.text.length <= MAX_MESSAGE_LENGTH && typeof message.streaming === "boolean"
     && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount) && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
+    && (message.workDurationMs === undefined || Number.isSafeInteger(message.workDurationMs)
+      && (message.workDurationMs as number) >= 0 && (message.workDurationMs as number) <= 7 * 24 * 60 * 60 * 1_000)
+    && (message.modelName === undefined || typeof message.modelName === "string" && message.modelName.length <= 200)
+    && (message.thinkingLevel === undefined || thinkingLevels.has(String(message.thinkingLevel)))
+    && (message.changedFiles === undefined || Array.isArray(message.changedFiles) && message.changedFiles.length <= 100
+      && message.changedFiles.every((file) => record(file)
+        && typeof file.path === "string" && file.path.length > 0 && file.path.length <= 500
+        && (file.binary === true || Number.isSafeInteger(file.additions) && (file.additions as number) >= 0
+          && Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0)))
     && (message.systemSource === undefined || typeof message.systemSource === "string" && message.systemSource.length <= 200)
     && (message.tool === undefined || record(message.tool)
       && identifier(message.tool.id)
@@ -177,12 +274,28 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!record(controls) || !Array.isArray(controls.models) || controls.models.length > 500
     || !Array.isArray(controls.thinkingLevels) || !controls.thinkingLevels.every((level) => thinkingLevels.has(String(level)))
     || (controls.thinkingLevel !== undefined && !thinkingLevels.has(String(controls.thinkingLevel)))) return false;
-  const model = (value: unknown) => record(value) && boundedString(value.provider) && boundedString(value.id) && boundedString(value.name);
+  if (controls.commands !== undefined && (!Array.isArray(controls.commands) || controls.commands.length > 200
+    || !controls.commands.every((command) => record(command)
+      && boundedString(command.name, 120)
+      && (command.description === undefined || typeof command.description === "string" && command.description.length <= 300)
+      && ["extension", "prompt", "skill"].includes(String(command.source))))) return false;
+  const model = (value: unknown) => record(value) && boundedString(value.provider) && boundedString(value.id) && boundedString(value.name)
+    && (value.thinkingLevels === undefined || Array.isArray(value.thinkingLevels)
+      && value.thinkingLevels.length <= 7
+      && value.thinkingLevels.every((level) => thinkingLevels.has(String(level))));
   if (!controls.models.every(model) || controls.model !== undefined && !model(controls.model)) return false;
   const metrics = value.metrics;
   if (!record(metrics) || typeof metrics.model !== "string" || typeof metrics.provider !== "string"
     || !["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]
       .every((key) => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number))) return false;
+  if (value.discoverIndex !== undefined) {
+    const index = value.discoverIndex;
+    if (!record(index) || !["idle", "indexing", "error"].includes(String(index.state))
+      || (index.files !== undefined && (!Number.isSafeInteger(index.files) || (index.files as number) < 0))
+      || (index.symbols !== undefined && (!Number.isSafeInteger(index.symbols) || (index.symbols as number) < 0))
+      || (index.indexedAt !== undefined && (typeof index.indexedAt !== "string" || Number.isNaN(Date.parse(index.indexedAt))))
+      || (index.error !== undefined && (typeof index.error !== "string" || index.error.length > 500))) return false;
+  }
   const operational = value.operational;
   if (!record(operational) || !record(operational.verification) || !record(operational.jobs) || !record(operational.guard)
     || !record(operational.continuity) || !record(operational.timeline) || !record(operational.tools) || !record(operational.health)) return false;
@@ -194,6 +307,15 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !available(operational.timeline) || !Number.isSafeInteger(operational.timeline.revision) || !Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100
     || !available(operational.tools) || !Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100
     || !["healthy", "degraded", "unavailable"].includes(String(operational.health.status)) || !Array.isArray(operational.health.issues) || operational.health.issues.length > 20) return false;
+  if (operational.continuity.memory !== undefined
+    && (!Array.isArray(operational.continuity.memory) || operational.continuity.memory.length > 30
+      || !operational.continuity.memory.every((fact) => record(fact)
+        && boundedString(fact.key, 200)
+        && memoryKinds.has(String(fact.kind))
+        && boundedString(fact.text, 1_000)
+        && boundedString(fact.source, 500)
+        && typeof fact.confidence === "number" && fact.confidence >= 0 && fact.confidence <= 1
+        && typeof fact.updatedAt === "string" && !Number.isNaN(Date.parse(fact.updatedAt))))) return false;
   const extensionUi = value.extensionUi;
   return record(extensionUi)
     && Array.isArray(extensionUi.notifications) && extensionUi.notifications.length <= 10
