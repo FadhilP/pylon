@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
 export const GRUNT_CONTEXT_LIMIT = 262_144;
 
@@ -59,12 +60,16 @@ function capText(text: string, maxBytes = 16 * 1024): { text: string; truncated:
 }
 
 export function getPiInvocation(args: string[]): Invocation {
+  const packageDir = getPackageDir();
+  const cli = join(packageDir, "dist", "cli.js");
   const script = process.argv[1];
-  if (script && !script.startsWith("/$bunfs/root/") && existsSync(script))
+  const piEntrypoints = [cli, join(packageDir, "dist", "rpc-entry.js"), join(packageDir, "src", "cli.ts"), join(packageDir, "src", "cli-new.ts"), join(packageDir, "src", "rpc-entry.ts")]
+    .map((path) => resolve(path));
+  if (script && !script.startsWith("/$bunfs/root/") && existsSync(script) && piEntrypoints.includes(resolve(script)))
     return { command: process.execPath, args: [script, ...args] };
   if (!/^(node|bun)(\.exe)?$/i.test(basename(process.execPath)))
     return { command: process.execPath, args };
-  return { command: process.platform === "win32" ? "pi.cmd" : "pi", args };
+  return { command: process.execPath, args: [cli, ...args] };
 }
 
 function terminate(child: ChildProcess): void {

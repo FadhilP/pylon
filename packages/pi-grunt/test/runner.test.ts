@@ -3,7 +3,32 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { GRUNT_CONTEXT_LIMIT, contextTokensFromUsage, runPi } from "../src/runner.ts";
+import { GRUNT_CONTEXT_LIMIT, contextTokensFromUsage, getPiInvocation, runPi } from "../src/runner.ts";
+
+test("child invocation does not mistake an embedding web host for the Pi CLI", async () => {
+  const originalScript = process.argv[1];
+  const originalMarker = process.env.PI_CODING_AGENT;
+  const dir = await mkdtemp(join(tmpdir(), "grunt-host-"));
+  const host = join(dir, "web-server.mjs");
+  await writeFile(host, "");
+  try {
+    process.argv[1] = host;
+    delete process.env.PI_CODING_AGENT;
+    const embedded = getPiInvocation(["--mode", "json"]);
+    assert.equal(embedded.command, process.execPath);
+    assert.notEqual(embedded.args[0], host);
+    assert.match(embedded.args[0]!, /[\\/]dist[\\/]cli\.js$/);
+
+    process.env.PI_CODING_AGENT = "true";
+    assert.notEqual(getPiInvocation(["--mode", "json"]).args[0], host);
+    process.argv[1] = embedded.args[0]!;
+    assert.deepEqual(getPiInvocation(["--mode", "json"]).args, [embedded.args[0], "--mode", "json"]);
+  } finally {
+    process.argv[1] = originalScript;
+    if (originalMarker === undefined) delete process.env.PI_CODING_AGENT;
+    else process.env.PI_CODING_AGENT = originalMarker;
+  }
+});
 
 test("runner selects final assistant, sums usage, and exposes activity", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-runner-"));

@@ -13,7 +13,7 @@
     "verify": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.81.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
     "@tabler/icons-react": "^3.31.0",
     "dompurify": "^3.4.12",
     "highlight.js": "^11.11.1",
