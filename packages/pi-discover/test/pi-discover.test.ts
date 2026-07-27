@@ -60,6 +60,14 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
   return { active, commands, events, lifecycle, tools, getSetActiveCalls: () => setActiveCalls };
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not met");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("indexed searches display only model-useful fields", async () => {
   const tools = new Map<string, any>();
   registerIndexTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, () => ({
@@ -539,6 +547,7 @@ test("host refreshes its SQLite index after each turn", async () => {
     assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status"]);
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
+    await waitFor(() => indexStates.at(-1)?.state === "idle");
     assert.equal(indexStates.at(-1)?.state, "idle");
     assert.equal(indexStates.at(-1)?.files, 1);
     assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -574,6 +583,37 @@ test("host refreshes its SQLite index after each turn", async () => {
     assert.match(notifications.at(-1)!.text, /prune complete.*"removedWorkspaces":0/);
   } finally {
     await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
+    if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
+    else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic indexing does not block session startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-discover-background-"));
+  const previousPath = process.env.PI_DISCOVER_INDEX_PATH;
+  process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
+  let releaseIndex!: () => void;
+  let markStarted!: () => void;
+  const release = new Promise<void>((resolve) => { releaseIndex = resolve; });
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const runtime = setup(async () => {
+    markStarted();
+    await release;
+    return { code: 1, stdout: "", stderr: "stopped" };
+  });
+  const ctx = { cwd: root };
+  try {
+    const startup = runtime.lifecycle.emitAsync("session_start", {}, ctx);
+    assert.equal(await Promise.race([
+      startup.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]), true);
+    await started;
+    releaseIndex();
+    await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
+  } finally {
+    releaseIndex();
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
     else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
     await rm(root, { recursive: true, force: true });

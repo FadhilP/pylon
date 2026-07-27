@@ -6,6 +6,7 @@ import {
   createAgentSessionRuntime,
   createEventBus,
   SessionManager,
+  sessionEntryToContextMessages,
   type AgentSession,
   type SessionInfo,
   type EventBusController,
@@ -15,21 +16,23 @@ import {
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
-import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
+import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { ChangedFileReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, DiscoverIndexReadModel, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, DiscoverIndexReadModel, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
   DriverEvent,
   DriverEventListener,
+  EditPromptInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
   ProjectInput,
   ProjectArchiveInput,
   PromptInput,
+  QueueMutationInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -39,6 +42,7 @@ import type {
   SetPackageEnabledInput,
   SetSessionActiveInput,
   SetThinkingLevelInput,
+  SetSessionControlsInput,
   SessionArchiveInput,
   SwitchSessionInput,
   UpdateContinuityMemoryInput,
@@ -48,7 +52,8 @@ import { RemoteUiBridge, type UiRequest, type UiResponse } from "./remote-ui-con
 import { createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
-import { projectMessages } from "./projections.ts";
+import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
+import { decodeHistoryCursor, encodeHistoryCursor, HISTORY_PAGE_SIZE, projectConversation } from "./projections.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
 
@@ -56,6 +61,13 @@ interface TrashAttempt {
   status: number | null;
   error?: NodeJS.ErrnoException;
   stderr?: string | null;
+}
+
+interface TimelineEditTransaction {
+  apply(): Promise<void>;
+  rollback(): Promise<void>;
+  commit(): Promise<void>;
+  cancel(): Promise<void>;
 }
 
 function moveToTrash(sessionPath: string): TrashAttempt {
@@ -133,6 +145,7 @@ export class SessionRuntime implements PiDriver {
   private indexUpdate = false;
   private sessionMutation?: "lifecycle" | "delete";
   private readonly sessionIndex = new SessionIndex();
+  private readonly promptAttachments = new PromptAttachmentBridge();
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
@@ -147,6 +160,7 @@ export class SessionRuntime implements PiDriver {
   private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string }> = [];
   private discoverIndex?: DiscoverIndexReadModel;
   private gitBranch?: string;
+  private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -162,8 +176,10 @@ export class SessionRuntime implements PiDriver {
     this.target = target;
     this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
     if (!this.options.projectRegistry) {
-      const knownSessions = await SessionManager.listAll();
-      await this.projectRegistry.load([target.cwd, ...knownSessions.map((session) => session.cwd)]);
+      await this.projectRegistry.load(async () => {
+        const knownSessions = await SessionManager.listAll();
+        return [target.cwd, ...knownSessions.map((session) => session.cwd)];
+      });
     }
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     this.gitBranch = readGitBranch(target.cwd);
@@ -174,7 +190,7 @@ export class SessionRuntime implements PiDriver {
     const createRuntime = await createPylonRuntimeFactory({
       agentDir: target.agentDir,
       additionalExtensionPaths: this.packageState.extensionPaths,
-      extensionFactories: this.options.extensionFactories,
+      extensionFactories: [this.promptAttachments.extension, ...(this.options.extensionFactories ?? [])],
       eventBus: this.eventBus,
     });
     this.createRuntime = createRuntime;
@@ -213,6 +229,26 @@ export class SessionRuntime implements PiDriver {
       sessionGeneration: this.gate.generation,
       ready: this.gate.ready,
       diagnostics: [...this.diagnostics],
+    };
+  }
+
+  async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    const before = decodeHistoryCursor(input.cursor);
+    if (before === undefined) throw new Error("history cursor is invalid");
+    const messages = this.transcriptMessages(runtime.session);
+    const end = Math.min(before, messages.length);
+    const limit = Math.min(HISTORY_PAGE_SIZE, Math.max(1, input.limit ?? HISTORY_PAGE_SIZE));
+    const start = Math.max(0, end - limit);
+    const projected = projectConversation(messages, { start, end, includeDelegated: false }).messages;
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: runtime.session.sessionId,
+      sessionGeneration: this.gate.generation,
+      messages: projected,
+      remaining: start,
+      ...(start > 0 ? { nextCursor: encodeHistoryCursor(start) } : {}),
     };
   }
 
@@ -290,12 +326,35 @@ export class SessionRuntime implements PiDriver {
 
   prompt(input: PromptInput): Promise<AcceptedCommand> {
     const session = this.sessionFor(input.expectedGeneration);
+    return this.sendPrompt(session, input);
+  }
+
+  private async sendPrompt(session: AgentSession, input: PromptInput): Promise<AcceptedCommand> {
+    if (!input.planMode) return this.acceptPrompt(session, input);
+    const plan = this.requireRuntime().services.resourceLoader.getExtensions().runtime.getCommands()
+      .find((command) => command.name === "plan" && command.source === "extension");
+    if (!plan) throw new Error("Plan mode is unavailable");
+    await session.prompt("/plan", { source: "rpc" });
+    try {
+      return await this.acceptPrompt(session, input);
+    } catch (error) {
+      await session.prompt("/plan cancel", { source: "rpc" }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private acceptPrompt(session: AgentSession, input: PromptInput): Promise<AcceptedCommand> {
+    const files = input.files ?? [];
+    if (files.length) this.promptAttachments.stage(input.commandId, files);
     return new Promise<AcceptedCommand>((resolve, reject) => {
       let decided = false;
       const finish = (accepted: boolean) => {
         if (decided) return;
         decided = true;
+        const filesConsumed = !files.length || this.promptAttachments.consumed(input.commandId);
+        this.promptAttachments.clear(input.commandId);
         if (!accepted) reject(new Error("prompt was rejected before acceptance"));
+        else if (!filesConsumed) reject(new Error("text files require a prompt that starts a model turn"));
         else resolve(this.accepted(input.commandId));
       };
       void session.prompt(input.message, {
@@ -303,19 +362,44 @@ export class SessionRuntime implements PiDriver {
         images: input.images?.map((image) => ({ type: "image", ...image })),
         preflightResult: finish,
       }).catch((error) => {
+        this.promptAttachments.clear(input.commandId);
         this.failImplicitReplacement(error);
         reject(error);
       });
     });
   }
 
+  queuePrompt(_input: PromptInput): Promise<AcceptedCommand> {
+    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
+  }
+
+  queuedPrompt(_input: QueueMutationInput): Promise<QueuedPromptPayload> {
+    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
+  }
+
+  restoreQueuedPrompt(_input: QueueMutationInput): Promise<void> {
+    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
+  }
+
+  steerQueuedPrompt(_input: QueueMutationInput): Promise<AcceptedCommand> {
+    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
+  }
+
   async steer(input: PromptInput): Promise<AcceptedCommand> {
-    await this.sessionFor(input.expectedGeneration).steer(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    const session = this.sessionFor(input.expectedGeneration);
+    await session.steer(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    if (input.files?.length) {
+      await session.sendCustomMessage(promptFilesMessage(input.files), { deliverAs: "steer" });
+    }
     return this.accepted(input.commandId);
   }
 
   async followUp(input: PromptInput): Promise<AcceptedCommand> {
-    await this.sessionFor(input.expectedGeneration).followUp(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    const session = this.sessionFor(input.expectedGeneration);
+    await session.followUp(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    if (input.files?.length) {
+      await session.sendCustomMessage(promptFilesMessage(input.files), { deliverAs: "followUp" });
+    }
     return this.accepted(input.commandId);
   }
 
@@ -412,6 +496,47 @@ export class SessionRuntime implements PiDriver {
     return Promise.reject(new Error("manual session activation requires the runtime coordinator"));
   }
 
+  editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
+    return this.withSessionMutation("lifecycle", async () => {
+      const session = this.sessionFor(input.expectedGeneration);
+      if (this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+        throw new Error("prompts can only be edited while the session is idle");
+      }
+      const target = session.sessionManager.getBranch().find((entry) => entry.id === input.entryId);
+      if (target?.type !== "message" || target.message.role !== "user") {
+        throw new Error("the selected prompt is not on the active branch");
+      }
+      const oldLeaf = session.sessionManager.getLeafId();
+      if (!oldLeaf || oldLeaf === target.id) throw new Error("the selected turn has not completed");
+
+      const timeline = await this.prepareTimelineEdit(session, target.id, input.rollbackFiles);
+      let navigated = false;
+      try {
+        const result = await session.navigateTree(target.id, { summarize: false });
+        if (result.cancelled) {
+          throw new Error("prompt editing was cancelled");
+        }
+        navigated = true;
+        await timeline?.apply();
+        const accepted = await this.sendPrompt(session, input);
+        await timeline?.commit().catch((cleanupError) => this.recordError(cleanupError));
+        this.transcriptCache = undefined;
+        this.refreshSnapshot();
+        return accepted;
+      } catch (error) {
+        if (navigated) {
+          await timeline?.rollback().catch((rollbackError) => this.recordError(rollbackError));
+          await session.navigateTree(oldLeaf, { summarize: false }).catch((rollbackError) => this.recordError(rollbackError));
+        } else {
+          await timeline?.cancel().catch((rollbackError) => this.recordError(rollbackError));
+        }
+        this.transcriptCache = undefined;
+        this.refreshSnapshot();
+        throw error;
+      }
+    });
+  }
+
   fork(input: ForkInput): Promise<ReplacementResult> {
     return this.withSessionMutation("lifecycle", () => this.replace(() => this.requireRuntime().fork(input.entryId, { position: input.position })));
   }
@@ -497,7 +622,7 @@ export class SessionRuntime implements PiDriver {
       const nextFactory = await createPylonRuntimeFactory({
         agentDir: this.target.agentDir,
         additionalExtensionPaths: change.next.extensionPaths,
-        extensionFactories: this.options.extensionFactories,
+        extensionFactories: [this.promptAttachments.extension, ...(this.options.extensionFactories ?? [])],
         eventBus: this.eventBus,
       });
       this.packageState = change.next;
@@ -562,6 +687,30 @@ export class SessionRuntime implements PiDriver {
     if (!session.getAvailableThinkingLevels().includes(input.level)) throw new Error("thinking level is unavailable for this model");
     session.setThinkingLevel(input.level);
     this.refreshSnapshot();
+  }
+
+  async setSessionControls(input: SetSessionControlsInput): Promise<void> {
+    const session = this.controlSession();
+    const model = this.requireRuntime().services.modelRuntime.getAvailableSnapshot()
+      .find((item) => item.provider === input.provider && item.id === input.modelId);
+    if (!model) throw new Error("model is unavailable or has no configured credentials");
+    if (!supportedThinkingLevels(model).includes(input.thinkingLevel)) {
+      throw new Error("thinking level is unavailable for this model");
+    }
+    const previousModel = session.model;
+    const previousThinking = session.thinkingLevel;
+    try {
+      await session.setModel(model);
+      session.setThinkingLevel(input.thinkingLevel);
+      this.refreshSnapshot();
+    } catch (error) {
+      if (previousModel) await session.setModel(previousModel).catch(() => undefined);
+      if (session.getAvailableThinkingLevels().includes(previousThinking)) {
+        session.setThinkingLevel(previousThinking);
+      }
+      this.refreshSnapshot();
+      throw error;
+    }
   }
 
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
@@ -738,10 +887,10 @@ export class SessionRuntime implements PiDriver {
         };
       } else if (kind === "agent_end") {
         const duration = Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
-        const messages = session.state.messages;
+        const messages = this.transcriptMessages(session);
         let assistantIndex = -1;
         for (let index = messages.length - 1; index >= 0; index--) {
-          if (messages[index]?.role === "assistant") {
+          if ((messages[index] as { role?: unknown } | undefined)?.role === "assistant") {
             assistantIndex = index;
             break;
           }
@@ -915,7 +1064,7 @@ export class SessionRuntime implements PiDriver {
       cwdLabel: basename(runtime.cwd) || runtime.cwd,
       diagnostics: [...this.diagnostics],
       conversation: {
-        messages: [], tools: [], streaming: false,
+        messages: [], tools: [], delegatedRuns: [], streaming: false,
         queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false },
       },
       operational: cloneOperational(this.operational),
@@ -986,10 +1135,10 @@ export class SessionRuntime implements PiDriver {
     const session = runtime.session;
     const stats = session.getSessionStats();
     const context = session.getContextUsage();
-    const messages = session.state.messages.length > 0
-      ? session.state.messages
-      : session.sessionManager.buildSessionContext().messages;
-    const projectedMessages = projectMessages(messages).map((message) => {
+    const messages = this.transcriptMessages(session);
+    const historyStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
+    const projectedConversation = projectConversation(messages, { start: historyStart });
+    const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = this.workDurations.get(message.id);
       const controls = this.turnControls.get(message.id);
       const changedFiles = this.turnChanges.get(message.id);
@@ -1040,6 +1189,11 @@ export class SessionRuntime implements PiDriver {
       conversation: {
         messages: projectedMessages,
         tools: [],
+        delegatedRuns: projectedConversation.delegatedRuns,
+        ...(historyStart > 0 ? {
+          historyCursor: encodeHistoryCursor(historyStart),
+          historyRemaining: historyStart,
+        } : {}),
         streaming: session.isStreaming,
         workStartedAt: this.workStartedAt,
         workModelName: this.workModelName,
@@ -1161,6 +1315,45 @@ export class SessionRuntime implements PiDriver {
         payload: { type: "worktree_summary", turnId: turn.turnId, messageId, files },
       });
     }));
+  }
+
+  private transcriptMessages(session: AgentSession): unknown[] {
+    const sessionId = session.sessionId;
+    const leafId = session.sessionManager.getLeafId();
+    const cached = this.transcriptCache;
+    if (cached?.sessionId === sessionId && cached.leafId === leafId) return cached.messages;
+    const messages = session.sessionManager.getBranch()
+      .filter((entry) => entry.type === "message" || entry.type === "custom_message")
+      .flatMap((entry) => sessionEntryToContextMessages(entry)
+        .map((message) => ({ ...message, entryId: entry.id })));
+    this.transcriptCache = { sessionId, leafId, messages };
+    return messages;
+  }
+
+  private prepareTimelineEdit(
+    session: AgentSession,
+    targetEntryId: string,
+    rollbackFiles: boolean,
+  ): Promise<TimelineEditTransaction | undefined> {
+    return new Promise((resolve, reject) => {
+      let handled = false;
+      this.eventBus.emit("pi-timeline:edit-navigation", {
+        version: 1,
+        sessionId: session.sessionId,
+        targetEntryId,
+        rollbackFiles,
+        respond: (result: TimelineEditTransaction | Promise<TimelineEditTransaction>) => {
+          handled = true;
+          void Promise.resolve(result).then(resolve, reject);
+        },
+      });
+      if (handled) return;
+      if (rollbackFiles) {
+        reject(new Error("Pi Timeline is unavailable for filesystem rollback"));
+        return;
+      }
+      resolve(undefined);
+    });
   }
 
   private requestPackageStates(sessionId: string): void {

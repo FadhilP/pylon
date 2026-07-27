@@ -1,7 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
-import type { PromptImage } from "../../shared/protocol/commands.ts";
-import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
+import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -23,6 +23,14 @@ export interface PromptInput {
   expectedGeneration: number;
   message: string;
   images?: PromptImage[];
+  files?: PromptTextFile[];
+  planMode?: boolean;
+}
+
+export interface QueueMutationInput {
+  expectedGeneration: number;
+  queueId: string;
+  commandId?: string;
 }
 
 export interface NewSessionInput {
@@ -70,6 +78,11 @@ export interface ForkInput {
   position?: "before" | "at";
 }
 
+export interface EditPromptInput extends PromptInput {
+  entryId: string;
+  rollbackFiles: boolean;
+}
+
 export interface SetPackageEnabledInput {
   packageId: string;
   enabled: boolean;
@@ -87,6 +100,10 @@ export interface SetModelInput {
 
 export interface SetThinkingLevelInput {
   level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+}
+
+export interface SetSessionControlsInput extends SetModelInput {
+  thinkingLevel: SetThinkingLevelInput["level"];
 }
 
 export interface UpdateContinuityMemoryInput {
@@ -152,6 +169,12 @@ export type DriverEvent =
       type: "projects.changed";
       sessionId: string;
       sessionGeneration: number;
+    }
+  | {
+      type: "queue.changed";
+      sessionId: string;
+      sessionGeneration: number;
+      queue: QueueReadModel;
     };
 
 export type DriverEventListener = (event: DriverEvent) => void;
@@ -159,10 +182,15 @@ export type DriverEventListener = (event: DriverEvent) => void;
 export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
+  conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
   prompt(input: PromptInput): Promise<AcceptedCommand>;
+  queuePrompt(input: PromptInput): Promise<AcceptedCommand>;
+  queuedPrompt(input: QueueMutationInput): Promise<QueuedPromptPayload>;
+  restoreQueuedPrompt(input: QueueMutationInput): Promise<void>;
+  steerQueuedPrompt(input: QueueMutationInput): Promise<AcceptedCommand>;
   steer(input: PromptInput): Promise<AcceptedCommand>;
   followUp(input: PromptInput): Promise<AcceptedCommand>;
   abort(): Promise<void>;
@@ -177,12 +205,14 @@ export interface PiDriver {
   restoreSession(input: SessionArchiveInput): Promise<void>;
   renameSession(input: RenameSessionInput): Promise<void>;
   setSessionActive(input: SetSessionActiveInput): Promise<void>;
+  editPrompt(input: EditPromptInput): Promise<AcceptedCommand>;
   fork(input: ForkInput): Promise<ReplacementResult>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
   rebuildDiscoverIndex(): Promise<void>;
   setModel(input: SetModelInput): Promise<void>;
   setThinkingLevel(input: SetThinkingLevelInput): void;
+  setSessionControls(input: SetSessionControlsInput): Promise<void>;
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;

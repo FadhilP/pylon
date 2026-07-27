@@ -50,7 +50,7 @@ export class ProjectRegistry {
     return new ProjectRegistry(resolve(agentDir, "pylon-web", "projects.json"));
   }
 
-  async load(seedDirectories: string[] = []): Promise<void> {
+  async load(seedDirectories: string[] | (() => Promise<string[]>) = []): Promise<void> {
     if (this.loaded) return;
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
@@ -88,7 +88,8 @@ export class ProjectRegistry {
       if (error?.code !== "ENOENT") throw error;
     }
 
-    this.projects = await this.resolveProjects(seedDirectories.map((directory) => ({ directory })));
+    const seeds = typeof seedDirectories === "function" ? await seedDirectories() : seedDirectories;
+    this.projects = await this.resolveProjects(seeds.map((directory) => ({ directory })));
     this.loaded = true;
     await this.save();
   }

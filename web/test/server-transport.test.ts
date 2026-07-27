@@ -2,14 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { AcceptedCommand } from "../src/shared/protocol/commands.ts";
+import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
-import type { DriverEvent, DriverEventListener, PiDriver, PromptInput, ReplacementResult, RuntimeHandle, RuntimeTarget } from "../src/server/pi/pi-driver.ts";
+import type { DriverEvent, DriverEventListener, EditPromptInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
 import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
+import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 
 const snapshot: RuntimeSnapshot = {
   protocolVersion: PROTOCOL_VERSION,
@@ -21,7 +22,7 @@ const snapshot: RuntimeSnapshot = {
   availableTools: ["read"],
   optionalCapabilities: {},
   diagnostics: [],
-  conversation: { messages: [], tools: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
+  conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
   sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
   metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
   operational: initialOperational([], []),
@@ -34,6 +35,8 @@ class FakeDriver implements PiDriver {
   calls = 0;
   prompts: string[] = [];
   promptImages: PromptInput["images"][] = [];
+  queued?: QueuedPromptPayload;
+  edits: EditPromptInput[] = [];
   answers: UiResponse[] = [];
   deletedSessions: string[] = [];
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
@@ -45,6 +48,15 @@ class FakeDriver implements PiDriver {
   newSessionParent?: string;
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
+  conversationHistory(): Promise<ConversationHistoryPage> {
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.current.sessionId,
+      sessionGeneration: this.current.sessionGeneration,
+      messages: [{ id: "history-0", role: "user", text: "Earlier message", streaming: false }],
+      remaining: 0,
+    });
+  }
   listSessions(): Promise<SessionListSnapshot> {
     const session = { id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, runtimeState: "idle" as const };
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, activeSessions: [session], projects: [{ id: "project-workspace", label: "workspace", totalCount: 1, sessions: [session] }] });
@@ -60,8 +72,30 @@ class FakeDriver implements PiDriver {
     this.emit({ type: "ui.event", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, payload: { kind: "request", requestId, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, method: "confirm", payload: { title: "Guard approval", message: "Allow risky action?" }, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } });
     return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true });
   }
+  queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
+    this.queued = { id: "queue-1", message: input.message, images: input.images, planMode: input.planMode === true };
+    return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true });
+  }
+  queuedPrompt(input: QueueMutationInput): Promise<QueuedPromptPayload> {
+    if (!this.queued || this.queued.id !== input.queueId) return Promise.reject(new Error("queued prompt is unavailable"));
+    return Promise.resolve(structuredClone(this.queued));
+  }
+  restoreQueuedPrompt(input: QueueMutationInput): Promise<void> {
+    if (!this.queued || this.queued.id !== input.queueId) return Promise.reject(new Error("queued prompt is unavailable"));
+    this.queued = undefined;
+    return Promise.resolve();
+  }
+  steerQueuedPrompt(input: QueueMutationInput): Promise<AcceptedCommand> {
+    if (!this.queued || this.queued.id !== input.queueId) return Promise.reject(new Error("queued prompt is unavailable"));
+    this.queued = undefined;
+    return Promise.resolve({ commandId: input.commandId ?? "steer-queued", sessionGeneration: this.current.sessionGeneration, accepted: true });
+  }
   steer(input: PromptInput): Promise<AcceptedCommand> { return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true }); }
   followUp(input: PromptInput): Promise<AcceptedCommand> { return this.steer(input); }
+  editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
+    this.edits.push(input);
+    return this.steer(input);
+  }
   abort(): Promise<void> { return Promise.resolve(); }
   addProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project", "project-workspace")); }
   removeProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-removed", "workspace")); }
@@ -92,6 +126,13 @@ class FakeDriver implements PiDriver {
   setThinkingLevel(input: { level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }): void {
     this.selectedThinking.push(input.level);
     this.current.sessionControls.thinkingLevel = input.level;
+  }
+  setSessionControls(input: SetSessionControlsInput): Promise<void> {
+    this.selectedModels.push({ provider: input.provider, modelId: input.modelId });
+    this.selectedThinking.push(input.thinkingLevel);
+    this.current.sessionControls.model = { provider: input.provider, id: input.modelId, name: input.modelId };
+    this.current.sessionControls.thinkingLevel = input.thinkingLevel;
+    return Promise.resolve();
   }
   updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
@@ -214,6 +255,22 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const duplicateAnswer = await fetch(`${origin}/api/v1/ui-responses/dialog-1`, { method: "POST", headers: otherHeaders, body: responseBody });
     assert.equal(duplicateAnswer.status, 409);
 
+    const editCommand = {
+      type: "editPrompt",
+      entryId: "entry-1",
+      message: "Updated prompt",
+      images,
+      rollbackFiles: true,
+      commandId: "edit-once",
+      expectedGeneration: 1,
+    };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(editCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(editCommand) })).status, 200);
+    assert.equal(driver.edits.length, 1);
+    assert.equal(driver.edits[0]?.entryId, "entry-1");
+    assert.equal(driver.edits[0]?.rollbackFiles, true);
+    assert.deepEqual(driver.edits[0]?.images, images);
+
     const sessions = await fetch(`${origin}/api/v1/sessions`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(sessions.status, 200);
     const sessionList = await body(sessions);
@@ -221,6 +278,13 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((sessionList.activeSessions as unknown[]).length, 1);
     const invalidCursor = await fetch(`${origin}/api/v1/sessions?cursor=not-valid`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(invalidCursor.status, 400);
+    const history = await fetch(`${origin}/api/v1/conversation-history?cursor=${encodeHistoryCursor(100)}&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(history.status, 200);
+    assert.equal(((await body(history)).messages as unknown[]).length, 1);
+    const staleHistory = await fetch(`${origin}/api/v1/conversation-history?cursor=${encodeHistoryCursor(100)}&generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(staleHistory.status, 409);
+    const invalidHistory = await fetch(`${origin}/api/v1/conversation-history?cursor=not-valid&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(invalidHistory.status, 400);
     const archives = await fetch(`${origin}/api/v1/archives`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(archives.status, 200);
     assert.deepEqual((await body(archives)).projects, []);
@@ -256,6 +320,21 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.deepEqual(driver.selectedModels, [{ provider: "mock", modelId: "next" }]);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "setThinkingLevel", level: "high", commandId: "thinking-once", expectedGeneration: 1 }) })).status, 200);
     assert.deepEqual(driver.selectedThinking, ["high"]);
+    const controlsCommand = { type: "setSessionControls", provider: "mock", modelId: "atomic", thinkingLevel: "medium", commandId: "controls-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(controlsCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(controlsCommand) })).status, 200);
+    assert.deepEqual(driver.selectedModels.at(-1), { provider: "mock", modelId: "atomic" });
+    assert.equal(driver.selectedThinking.at(-1), "medium");
+
+    const queueCommand = { type: "queuePrompt", message: "queued message", images, planMode: true, commandId: "queue-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(queueCommand) })).status, 200);
+    const queuedPayload = await fetch(`${origin}/api/v1/queued-prompt?queueId=queue-1&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(queuedPayload.status, 200);
+    assert.deepEqual(await body(queuedPayload), { id: "queue-1", message: "queued message", images, planMode: true });
+    assert.equal((await fetch(`${origin}/api/v1/queued-prompt?queueId=queue-1&generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
+    const restoreCommand = { type: "restoreQueuedPrompt", queueId: "queue-1", commandId: "restore-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(restoreCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/queued-prompt?queueId=queue-1&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
 
     const renameCommand = { type: "renameSession", sessionId: "session-old", name: "Renamed", commandId: "rename-once", expectedGeneration: 1 };
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameCommand) })).status, 200);

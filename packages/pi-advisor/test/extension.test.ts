@@ -143,7 +143,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
       errorMessage: `bad\napi_key=${secret}\u0000\u0085\u2028\u2029${"z".repeat(600)}`,
     }));
     assert.equal(providerError.details.failureCode, "invalid_response");
-    assert.equal(providerError.content[0].text, "Advisor failed nonfatally: invalid_response.");
+    assert.match(providerError.content[0].text, /^\[A-[\w-]+ · Advisor\] Advisor failed nonfatally: invalid_response\.$/);
     assert.ok(providerError.details.failureMessage.length <= 500);
     assert.doesNotMatch(providerError.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.doesNotMatch(providerError.details.failureMessage, new RegExp(secret));

@@ -48,6 +48,8 @@ interface SidebarProps {
 
 export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
+  const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
+  const [projectsOpen, setProjectsOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const menuTrigger = useRef<HTMLElement | null>(null);
 
@@ -105,8 +107,11 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
 
       <nav className="project-list">
         <section className="active-session-group" aria-labelledby="active-sessions-heading">
-          <h2 className="nav-label" id="active-sessions-heading">Active sessions <small>{activeSessions.length}</small></h2>
-          {activeSessions.length > 0
+          <h2 className="nav-label" id="active-sessions-heading"><button type="button" aria-expanded={activeSessionsOpen} onClick={() => setActiveSessionsOpen((open) => !open)}>
+            <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
+            Active sessions <small>{activeSessions.length}</small>
+          </button></h2>
+          {activeSessionsOpen && (activeSessions.length > 0
             ? <div className="active-session-list">{activeSessions.map((session) => <SessionRow
                 key={session.id}
                 session={session}
@@ -124,17 +129,20 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
               />)}</div>
-            : <p className="active-session-empty">No active sessions</p>}
+            : <p className="active-session-empty">No active sessions</p>)}
         </section>
         <div className="project-heading">
-          <h2 className="nav-label">Projects</h2>
+          <h2 className="nav-label"><button type="button" aria-expanded={projectsOpen || Boolean(query.trim())} onClick={() => setProjectsOpen((open) => !open)}>
+            <IconChevronRight className={projectsOpen || query.trim() ? "is-expanded" : ""} size={13} />
+            Projects
+          </button></h2>
           <div>
             <button className="project-add" type="button" onClick={onOpenArchives} disabled={Boolean(projectBusy || busy || deleting)}><IconArchive size={13} />Archived</button>
             <button className="project-add" type="button" onClick={onAddProject} disabled={Boolean(projectBusy || busy || deleting)} aria-label="Add project"><IconPlus size={14} />Add project</button>
           </div>
         </div>
-        {loading && projects.length === 0 && <div className="sidebar-state">Loading sessions...</div>}
-        {projects.map((project) => {
+        {(projectsOpen || Boolean(query.trim())) && loading && projects.length === 0 && <div className="sidebar-state">Loading sessions...</div>}
+        {(projectsOpen || Boolean(query.trim())) && projects.map((project) => {
           const expanded = Boolean(query.trim()) || expandedProjects.has(project.id);
           const page = pages.find((candidate) => candidate.id === project.id);
           return <section className="project-group" key={project.id}>
@@ -193,7 +201,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
             </div>}
           </section>;
         })}
-        {!loading && projects.length === 0 && <div className="sidebar-state">{query ? "No matching sessions." : "No projects yet. Add a folder to start."}</div>}
+        {(projectsOpen || Boolean(query.trim())) && !loading && projects.length === 0 && <div className="sidebar-state">{query ? "No matching sessions." : "No projects yet. Add a folder to start."}</div>}
       </nav>
 
       <div className="sidebar-foot">

@@ -1,12 +1,33 @@
-import type { ConversationReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
+import type { ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
+import { PROMPT_FILES_CUSTOM_TYPE } from "./prompt-attachments.ts";
 
 const MAX_TEXT = 60 * 1024;
 const MAX_MESSAGES = 100;
 const MAX_TOOLS = 100;
+const MAX_DELEGATED_RUNS = 100;
 const MAX_PAYLOAD_TEXT = 8 * 1024;
+const MAX_AGENT_ACTIVITY_TEXT = 2_000;
+const delegatedAgentKinds = new Set<DelegatedAgentKind>(["advisor", "grunt", "repo_scout", "web_scout"]);
+
+export const HISTORY_PAGE_SIZE = MAX_MESSAGES;
+
+export function encodeHistoryCursor(index: number): string {
+  return Buffer.from(`h:${Math.max(0, Math.floor(index))}`).toString("base64url");
+}
+
+export function decodeHistoryCursor(cursor: string): number | undefined {
+  try {
+    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+    if (!/^h:\d+$/.test(decoded) || encodeHistoryCursor(Number(decoded.slice(2))) !== cursor) return undefined;
+    const index = Number(decoded.slice(2));
+    return Number.isSafeInteger(index) ? index : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 type Publish = (type: string, payload: unknown) => void;
 
@@ -31,6 +52,12 @@ function attachmentCount(value: unknown): number | undefined {
   if (!Array.isArray(content)) return undefined;
   const count = content.filter((part) => object(part).type === "image").length;
   return count > 0 ? Math.min(4, count) : undefined;
+}
+function promptFileCount(value: unknown): number | undefined {
+  const raw = object(value);
+  if (raw.customType !== PROMPT_FILES_CUSTOM_TYPE) return undefined;
+  const files = object(raw.details).files;
+  return Array.isArray(files) && files.length > 0 ? Math.min(100, files.length) : undefined;
 }
 function messageText(value: unknown): string {
   const raw = object(value);
@@ -64,49 +91,206 @@ export function browserValue(value: unknown, depth = 0): unknown {
   return undefined;
 }
 
+function delegatedAgentKind(value: unknown): DelegatedAgentKind | undefined {
+  return delegatedAgentKinds.has(value as DelegatedAgentKind) ? value as DelegatedAgentKind : undefined;
+}
+
+function boundedNumber(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.min(maximum, value)
+    : undefined;
+}
+
+function delegatedUsage(value: unknown): DelegatedAgentUsageReadModel | undefined {
+  const raw = object(value);
+  const input = boundedNumber(raw.input);
+  const output = boundedNumber(raw.output);
+  const cacheRead = boundedNumber(raw.cacheRead);
+  const cacheWrite = boundedNumber(raw.cacheWrite);
+  const cost = boundedNumber(raw.cost, 1_000_000_000);
+  if ([input, output, cacheRead, cacheWrite, cost].some((item) => item === undefined)) return undefined;
+  return { input: input!, output: output!, cacheRead: cacheRead!, cacheWrite: cacheWrite!, cost: cost! };
+}
+
+function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: DelegatedAgentActivityReadModel[] = [];
+  for (const rawValue of value.slice(0, 100)) {
+    const raw = object(rawValue);
+    if (raw.kind !== "call" && raw.kind !== "result") continue;
+    const tool = text(raw.tool, 200);
+    if (!tool) continue;
+    let activityText = text(raw.text, MAX_AGENT_ACTIVITY_TEXT);
+    if (activityText) {
+      try { activityText = browserJson(JSON.parse(activityText))?.slice(0, MAX_AGENT_ACTIVITY_TEXT) ?? activityText; }
+      catch { /* Non-JSON tool input remains bounded plain text. */ }
+      activityText = activityText
+        .replace(/\bBearer\s+\S+/gi, "Bearer <redacted>")
+        .replace(/\b((?:api[_-]?key|token|secret|password|cookie)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1<redacted>")
+        .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted>");
+    }
+    result.push({
+      kind: raw.kind,
+      tool,
+      ...(activityText ? { text: activityText } : {}),
+      ...(raw.isError === true ? { isError: true } : {}),
+    });
+  }
+  return result;
+}
+
+function delegatedRequest(input: unknown): string | undefined {
+  const raw = object(input);
+  return text(raw.request ?? raw.task, MAX_PAYLOAD_TEXT) || undefined;
+}
+
+function updateDelegatedRun(
+  previous: DelegatedAgentRunReadModel | undefined,
+  kind: DelegatedAgentKind,
+  id: string,
+  turn: number,
+  input: unknown,
+  result: unknown,
+  status: DelegatedAgentRunReadModel["status"],
+): DelegatedAgentRunReadModel {
+  const raw = object(result);
+  const details = object(raw.details);
+  const request = delegatedRequest(input);
+  const response = messageText(raw);
+  const agentName = text(details.agentName, 24) || undefined;
+  const startedAt = typeof details.startedAt === "string" && !Number.isNaN(Date.parse(details.startedAt))
+    ? details.startedAt
+    : undefined;
+  const modelName = text(details.advisorModel ?? details.model, 200) || undefined;
+  const level = thinkingLevel(details.thinking);
+  const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
+  const usage = delegatedUsage(details.usage);
+  const activity = delegatedActivity(details.activity);
+  return {
+    ...previous,
+    id,
+    kind,
+    turn: previous?.turn ?? Math.max(0, Math.floor(turn)),
+    status,
+    ...(agentName ? { agentName } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(request ? { request } : {}),
+    ...(response ? { response } : {}),
+    ...(modelName ? { modelName } : {}),
+    ...(level ? { thinkingLevel: level } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(usage ? { usage } : {}),
+    activity: activity ?? previous?.activity ?? [],
+  };
+}
+
 export function browserJson(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   try { return JSON.stringify(browserValue(value), null, 2).slice(0, MAX_TEXT); }
   catch { return "[unserializable input]"; }
 }
 
-export function projectMessages(messages: unknown[]): MessageReadModel[] {
-  const toolCalls = new Map<string, { name: string; input?: string }>();
-  return messages.map((message, index) => {
+export function projectConversation(
+  messages: unknown[],
+  options: { start?: number; end?: number; includeDelegated?: boolean } = {},
+): Pick<ConversationReadModel, "messages" | "delegatedRuns"> {
+  const start = Math.min(messages.length, Math.max(0, Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES))));
+  const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
+  const includeDelegated = options.includeDelegated !== false;
+  const toolCalls = new Map<string, { name: string; rawInput?: unknown; turn: number }>();
+  const delegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
+  const projectedMessages: MessageReadModel[] = [];
+  let latestProjectedUser: MessageReadModel | undefined;
+  let userTurn = 0;
+  for (let index = 0; index < end; index++) {
+    const message = messages[index];
     const raw = object(message);
     const messageRole = role(raw.role);
+    if (messageRole === "user") userTurn++;
+    const fileCount = promptFileCount(raw);
+    if (fileCount) {
+      if (latestProjectedUser) latestProjectedUser.fileAttachmentCount = fileCount;
+      continue;
+    }
     if (messageRole === "assistant" && Array.isArray(raw.content)) {
       for (const part of raw.content) {
         const item = object(part);
         if (item.type !== "toolCall" || typeof item.id !== "string") continue;
-        toolCalls.set(item.id, { name: text(item.name, 200) || "Tool", input: browserJson(item.arguments) });
+        const name = text(item.name, 200) || "Tool";
+        toolCalls.set(item.id, { name, rawInput: item.arguments, turn: userTurn });
+        const kind = delegatedAgentKind(name);
+        if (includeDelegated && kind) {
+          delegatedRuns.set(item.id, updateDelegatedRun(undefined, kind, item.id, userTurn, item.arguments, undefined, "running"));
+          trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
+        }
       }
     }
+    if (messageRole === "tool") {
+      const fallbackId = `history-${index}`;
+      const toolId = id(raw.toolCallId, fallbackId);
+      const call = toolCalls.get(toolId);
+      const name = text(raw.toolName, 200) || call?.name || "Tool";
+      const kind = delegatedAgentKind(name);
+      if (includeDelegated && kind) {
+        const details = object(raw.details);
+        const failed = raw.isError === true || Boolean(details.failureCode)
+          || typeof details.status === "string" && !["completed", "running"].includes(details.status);
+        delegatedRuns.set(toolId, updateDelegatedRun(
+          delegatedRuns.get(toolId),
+          kind,
+          toolId,
+          call?.turn ?? userTurn,
+          call?.rawInput,
+          raw,
+          failed ? "failed" : "completed",
+        ));
+        trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
+      }
+      if (index < start) continue;
+      projectedMessages.push({
+        id: fallbackId,
+        ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, fallbackId) } : {}),
+        role: "tool",
+        text: messageText(raw),
+        streaming: false,
+        tool: {
+          id: toolId,
+          name,
+          input: browserJson(call?.rawInput),
+          status: raw.isError === true ? "failed" : "completed",
+        },
+      });
+      continue;
+    }
+    if (index < start) continue;
+    const images = attachmentCount(raw);
     const result: MessageReadModel = {
       id: `history-${index}`,
+      ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, `history-${index}`) } : {}),
       role: messageRole,
       text: messageText(raw),
       streaming: false,
-      ...(attachmentCount(raw) ? { attachmentCount: attachmentCount(raw) } : {}),
+      ...(images ? { attachmentCount: images } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string" ? { systemSource: text(raw.customType, 200) } : {}),
     };
-    if (messageRole !== "tool") return result;
-    const toolId = id(raw.toolCallId, result.id);
-    const call = toolCalls.get(toolId);
-    result.tool = {
-      id: toolId,
-      name: text(raw.toolName, 200) || call?.name || "Tool",
-      input: call?.input,
-      status: raw.isError === true ? "failed" : "completed",
-    };
-    return result;
-  }).slice(-MAX_MESSAGES);
+    projectedMessages.push(result);
+    if (messageRole === "user") latestProjectedUser = result;
+  }
+  return {
+    messages: projectedMessages,
+    delegatedRuns: [...delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS),
+  };
+}
+
+export function projectMessages(messages: unknown[]): MessageReadModel[] {
+  return projectConversation(messages).messages;
 }
 
 /** Maintains the browser-safe read model synchronously with journal publication. */
 export class RuntimeProjection {
   private readonly messages = new Map<string, MessageReadModel>();
   private readonly tools = new Map<string, ToolActivityReadModel>();
+  private readonly delegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
   private pendingUpdate?: { id: string; text: string };
   private updateTimer?: NodeJS.Timeout;
   private updateBytes = 0;
@@ -118,6 +302,7 @@ export class RuntimeProjection {
   constructor(private runtime: RuntimeSnapshot, private readonly publish: Publish) {
     for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
     for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
+    for (const run of runtime.conversation.delegatedRuns) this.delegatedRuns.set(run.id, structuredClone(run));
   }
 
   snapshot(): RuntimeSnapshot {
@@ -127,6 +312,7 @@ export class RuntimeProjection {
         ...this.runtime.conversation,
         messages: [...this.messages.values()].slice(-MAX_MESSAGES).map((message) => ({ ...message })),
         tools: [...this.tools.values()].slice(-MAX_TOOLS).map((tool) => ({ ...tool })),
+        delegatedRuns: [...this.delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS).map((run) => structuredClone(run)),
       },
       operational: cloneOperational(this.runtime.operational),
       extensionUi: {
@@ -170,9 +356,11 @@ export class RuntimeProjection {
     this.runtime = runtime;
     this.messages.clear();
     this.tools.clear();
+    this.delegatedRuns.clear();
     this.turnMessages.clear();
     for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
     for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
+    for (const run of runtime.conversation.delegatedRuns) this.delegatedRuns.set(run.id, structuredClone(run));
     this.pendingUi = undefined;
   }
 
@@ -193,6 +381,11 @@ export class RuntimeProjection {
     }
     if (event.type === "session.status") {
       this.publish("session.status", { sessionId: event.sessionId.slice(0, 128), state: event.state });
+      return;
+    }
+    if (event.type === "queue.changed") {
+      this.runtime.conversation.queue = structuredClone(event.queue);
+      this.publish("queue.update", this.runtime.conversation.queue);
       return;
     }
     if (event.type === "ui.closed") {
@@ -267,7 +460,7 @@ export class RuntimeProjection {
     if (kind === "message_end" || kind === "message_complete") return this.messageEnd(raw);
     if (kind === "tool_execution_start" || kind === "tool_start" || kind === "tool_call_start") return this.toolStart(raw);
     if (kind === "tool_execution_end" || kind === "tool_end" || kind === "tool_call_end" || kind === "tool_result") return this.toolEnd(raw);
-    if (kind === "tool_execution_update") return;
+    if (kind === "tool_execution_update") return this.toolUpdate(raw);
     if (kind === "queue" || kind === "queue_update") return this.queue(raw);
     if (kind === "auto_retry_start" || kind === "auto_retry_end" || kind === "retry" || kind === "retry_start" || kind === "retry_end") return this.retry(raw, kind);
     if (kind === "compaction" || kind === "compaction_start" || kind === "compaction_end") return this.compaction(raw, kind);
@@ -341,6 +534,16 @@ export class RuntimeProjection {
   private messageStart(raw: Record<string, unknown>): void {
     this.flush();
     const message = object(raw.message);
+    const fileCount = promptFileCount(message);
+    if (fileCount) {
+      const user = [...this.messages.values()].reverse().find((item) => item.role === "user");
+      if (user) {
+        user.fileAttachmentCount = fileCount;
+        this.messages.set(user.id, user);
+        this.publish("message.update", { id: user.id, text: user.text, fileAttachmentCount: fileCount });
+      }
+      return;
+    }
     const messageId = id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
     this.activeMessageId = messageId;
     const item: MessageReadModel = {
@@ -381,6 +584,7 @@ export class RuntimeProjection {
     else if (!this.updateTimer) { this.updateTimer = setTimeout(() => this.flush(), 16); this.updateTimer.unref?.(); }
   }
   private messageEnd(raw: Record<string, unknown>): void {
+    if (promptFileCount(object(raw.message))) return;
     this.flush();
     const messageId = this.activeMessageId ?? id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
     const current = this.messages.get(messageId);
@@ -396,13 +600,37 @@ export class RuntimeProjection {
   }
   private toolStart(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, `tool-${this.tools.size + 1}`);
-    const item: ToolActivityReadModel = { id: toolId, name: text(raw.name ?? raw.toolName, 200), input: browserJson(raw.args ?? raw.input), status: "running" };
+    const name = text(raw.name ?? raw.toolName, 200);
+    const input = raw.args ?? raw.input;
+    const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running" };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.start", item);
+    const kind = delegatedAgentKind(name);
+    if (kind) this.setDelegatedRun(updateDelegatedRun(undefined, kind, toolId, this.runtime.metrics.userMessages, input, undefined, "running"));
+  }
+  private toolUpdate(raw: Record<string, unknown>): void {
+    const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool");
+    const old = this.delegatedRuns.get(toolId);
+    const kind = delegatedAgentKind(raw.name ?? raw.toolName) ?? old?.kind;
+    if (!kind) return;
+    this.setDelegatedRun(updateDelegatedRun(old, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, raw.partialResult, "running"));
   }
   private toolEnd(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool"); const old = this.tools.get(toolId);
     const item: ToolActivityReadModel = { id: toolId, name: old?.name ?? text(raw.name ?? raw.toolName, 200), input: old?.input ?? browserJson(raw.args ?? raw.input), status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed", summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.end", item);
+    const previous = this.delegatedRuns.get(toolId);
+    const kind = delegatedAgentKind(item.name) ?? previous?.kind;
+    if (!kind) return;
+    const result = raw.result ?? raw;
+    const details = object(object(result).details);
+    const failed = item.status === "failed" || Boolean(details.failureCode)
+      || typeof details.status === "string" && !["completed", "running"].includes(details.status);
+    this.setDelegatedRun(updateDelegatedRun(previous, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, result, failed ? "failed" : "completed"));
+  }
+  private setDelegatedRun(run: DelegatedAgentRunReadModel): void {
+    this.delegatedRuns.set(run.id, run);
+    trimMap(this.delegatedRuns, MAX_DELEGATED_RUNS);
+    this.publish("delegate.update", structuredClone(run));
   }
   private queue(raw: Record<string, unknown>): void { this.runtime.conversation.queue = { steering: Array.isArray(raw.steering) ? raw.steering.length : Number.isSafeInteger(raw.steering) ? Math.max(0, raw.steering as number) : 0, followUp: Array.isArray(raw.followUp) ? raw.followUp.length : Number.isSafeInteger(raw.followUp) ? Math.max(0, raw.followUp as number) : 0 }; this.publish("queue.update", this.runtime.conversation.queue); }
   private retry(raw: Record<string, unknown>, kind: string): void { this.runtime.conversation.retry = { active: kind !== "retry_end" && kind !== "auto_retry_end" && raw.active !== false, attempt: typeof raw.attempt === "number" ? raw.attempt : undefined, maxAttempts: typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined, message: text(raw.message ?? raw.errorMessage ?? raw.finalError, 1_000) || undefined }; this.publish("retry.update", this.runtime.conversation.retry); }

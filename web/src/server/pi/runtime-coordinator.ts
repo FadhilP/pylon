@@ -1,20 +1,24 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
+import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
-import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
   DriverEvent,
   DriverEventListener,
+  EditPromptInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
   ProjectInput,
   ProjectArchiveInput,
   PromptInput,
+  QueueMutationInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -24,6 +28,7 @@ import type {
   SetPackageEnabledInput,
   SetSessionActiveInput,
   SetThinkingLevelInput,
+  SetSessionControlsInput,
   SessionArchiveInput,
   SwitchSessionInput,
   UpdateContinuityMemoryInput,
@@ -54,6 +59,17 @@ interface RuntimeSlot {
   pinned: boolean;
   lastState: SessionRuntimeState;
   pendingUi?: UiRequest;
+  nativeQueue: { steering: number; followUp: number };
+  queuedPrompt?: {
+    id: string;
+    commandId: string;
+    message: string;
+    images?: PromptImage[];
+    files?: PromptTextFile[];
+    planMode: boolean;
+    state: "queued" | "delivering";
+  };
+  suppressEvents?: boolean;
   unsubscribe: () => void;
 }
 
@@ -78,8 +94,10 @@ export class RuntimeCoordinator implements PiDriver {
     if (this.target || this.disposed) throw new Error("driver cannot be started twice");
     this.target = target;
     this.projectRegistry = ProjectRegistry.forAgentDir(target.agentDir);
-    const knownSessions = await SessionManager.listAll();
-    await this.projectRegistry.load([target.cwd, ...knownSessions.map((session) => session.cwd)]);
+    await this.projectRegistry.load(async () => {
+      const knownSessions = await SessionManager.listAll();
+      return [target.cwd, ...knownSessions.map((session) => session.cwd)];
+    });
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     const projects = this.projectRegistry.list();
     const project = projects.find((candidate) => candidate.id === projectIdForCwd(target.cwd)) ?? projects[0];
@@ -95,6 +113,14 @@ export class RuntimeCoordinator implements PiDriver {
 
   async snapshot(): Promise<RuntimeSnapshot> {
     return this.selectedSnapshot();
+  }
+
+  async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
+    const slot = this.selected();
+    const generation = this.generation;
+    const page = await slot.driver.conversationHistory(input);
+    if (slot.id !== this.selectedId || generation !== this.generation) throw new Error("session changed while loading history");
+    return { ...page, sessionGeneration: generation };
   }
 
   async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
@@ -143,12 +169,114 @@ export class RuntimeCoordinator implements PiDriver {
     return this.messageCommand("prompt", input);
   }
 
+  async queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    if (slot.queuedPrompt) throw new Error("a prompt is already queued");
+    if (slot.driver.runtimeState() !== "running") return this.messageCommand("prompt", input);
+    slot.queuedPrompt = {
+      id: randomUUID(),
+      commandId: input.commandId,
+      message: input.message,
+      ...(input.images?.length ? { images: input.images.map((image) => ({ ...image })) } : {}),
+      ...(input.files?.length ? { files: structuredClone(input.files) } : {}),
+      planMode: input.planMode === true,
+      state: "queued",
+    };
+    slot.receivedInput = true;
+    slot.lastActivityAt = Date.now();
+    this.publishQueue(slot);
+    return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
+  }
+
+  async queuedPrompt(input: QueueMutationInput): Promise<QueuedPromptPayload> {
+    this.assertGeneration(input.expectedGeneration);
+    const queued = this.selectedQueuedPrompt(input.queueId);
+    if (queued.state !== "queued") throw new Error("queued prompt is already being delivered");
+    return {
+      id: queued.id,
+      message: queued.message,
+      ...(queued.images?.length ? { images: queued.images.map((image) => ({ ...image })) } : {}),
+      ...(queued.files?.length ? { files: structuredClone(queued.files) } : {}),
+      planMode: queued.planMode,
+    };
+  }
+
+  async restoreQueuedPrompt(input: QueueMutationInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    const queued = this.selectedQueuedPrompt(input.queueId);
+    if (queued.state !== "queued") throw new Error("queued prompt is already being delivered");
+    slot.queuedPrompt = undefined;
+    slot.lastActivityAt = Date.now();
+    this.publishQueue(slot);
+  }
+
+  async steerQueuedPrompt(input: QueueMutationInput): Promise<AcceptedCommand> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    const queued = this.selectedQueuedPrompt(input.queueId);
+    if (queued.state !== "queued") throw new Error("queued prompt is already being delivered");
+    queued.state = "delivering";
+    this.publishQueue(slot);
+    try {
+      const accepted = await slot.driver.steer({
+        commandId: queued.commandId,
+        expectedGeneration: slot.innerGeneration,
+        message: queued.message,
+        images: queued.images,
+        files: queued.files,
+      });
+      slot.queuedPrompt = undefined;
+      this.publishQueue(slot);
+      return {
+        ...accepted,
+        commandId: input.commandId ?? accepted.commandId,
+        sessionGeneration: this.generation,
+      };
+    } catch (error) {
+      queued.state = "queued";
+      this.publishQueue(slot);
+      throw error;
+    }
+  }
+
   async steer(input: PromptInput): Promise<AcceptedCommand> {
     return this.messageCommand("steer", input);
   }
 
   async followUp(input: PromptInput): Promise<AcceptedCommand> {
     return this.messageCommand("followUp", input);
+  }
+
+  async editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      slot.lastActivityAt = Date.now();
+      slot.suppressEvents = true;
+      try {
+        await slot.driver.editPrompt({ ...input, expectedGeneration: slot.innerGeneration });
+        slot.receivedInput = true;
+        this.sessionIndex.invalidate();
+        this.generation++;
+        const runtime = await this.selectedSnapshot();
+        slot.suppressEvents = false;
+        this.emit({
+          type: "session.replaced",
+          sessionId: slot.id,
+          sessionGeneration: this.generation,
+          runtime,
+        });
+        return {
+          commandId: input.commandId,
+          sessionGeneration: this.generation,
+          accepted: true,
+        };
+      } finally {
+        slot.suppressEvents = false;
+      }
+    });
   }
 
   async abort(): Promise<void> {
@@ -208,8 +336,8 @@ export class RuntimeCoordinator implements PiDriver {
       if (!project || project.archivedAt) throw new Error("project is unavailable");
       const projectSlots = [...this.slots.values()]
         .filter((slot) => projectIdForCwd(slot.driver.runtimeDetails().cwd) === project.id);
-      if (projectSlots.some((slot) => !slot.driver.canSleep())) {
-        throw new Error("cannot remove a project with a running or attention session");
+      if (projectSlots.some((slot) => !this.slotCanSleep(slot))) {
+        throw new Error("cannot remove a project with a running, queued, or attention session");
       }
 
       const sessions = (await SessionManager.listAll())
@@ -247,8 +375,8 @@ export class RuntimeCoordinator implements PiDriver {
       if (!project || project.archivedAt) throw new Error("project is unavailable");
       const projectSlots = [...this.slots.values()]
         .filter((slot) => projectIdForCwd(slot.driver.runtimeDetails().cwd) === project.id);
-      if (projectSlots.some((slot) => !slot.driver.canSleep())) {
-        throw new Error("cannot archive a project with a running or attention session");
+      if (projectSlots.some((slot) => !this.slotCanSleep(slot))) {
+        throw new Error("cannot archive a project with a running, queued, or attention session");
       }
       if (projectSlots.some((slot) => slot.id === this.selectedId)) {
         const alternative = registry.list().find((candidate) => candidate.id !== project.id);
@@ -288,7 +416,7 @@ export class RuntimeCoordinator implements PiDriver {
       const project = registry.get(projectIdForCwd(session.cwd));
       if (!project || project.archivedAt) throw new Error("session project is unavailable");
       const awake = this.slots.get(input.sessionId);
-      if (awake && !awake.driver.canSleep()) throw new Error("cannot archive a running or attention session");
+      if (awake && !this.slotCanSleep(awake)) throw new Error("cannot archive a running, queued, or attention session");
       if (input.sessionId === this.selectedId) {
         const replacement = await this.createSlot({ ...this.baseTarget(), cwd: project.cwd });
         await this.select(replacement);
@@ -334,7 +462,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (input.sessionId === this.selectedId) throw new Error("cannot delete the currently active session");
     const awake = this.slots.get(input.sessionId);
     if (awake) {
-      if (!awake.driver.canSleep()) throw new Error("cannot delete a running session");
+      if (!this.slotCanSleep(awake)) throw new Error("cannot delete a running or queued session");
       await this.disposeSlot(awake);
     }
     const selected = this.selected();
@@ -373,7 +501,7 @@ export class RuntimeCoordinator implements PiDriver {
       }
       if (input.sessionId === this.selectedId) throw new Error("cannot deactivate the selected session");
       if (!awake) return;
-      if (!awake.driver.canSleep()) throw new Error("cannot deactivate a running session");
+      if (!this.slotCanSleep(awake)) throw new Error("cannot deactivate a running or queued session");
       await this.disposeSlot(awake);
       this.emitStatus(input.sessionId, "sleeping");
     });
@@ -390,7 +518,7 @@ export class RuntimeCoordinator implements PiDriver {
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
       for (const slot of this.slots.values()) {
-        if (!slot.driver.canSleep()) throw new Error("packages can only change while every session is idle");
+        if (!this.slotCanSleep(slot)) throw new Error("packages can only change while every session is idle");
       }
       const selected = this.selected();
       await selected.driver.setPackageEnabled(input);
@@ -405,7 +533,7 @@ export class RuntimeCoordinator implements PiDriver {
   async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
       for (const slot of this.slots.values()) {
-        if (!slot.driver.canSleep()) throw new Error("packages can only change while every session is idle");
+        if (!this.slotCanSleep(slot)) throw new Error("packages can only change while every session is idle");
       }
       const selected = this.selected();
       await selected.driver.updatePackageSettings(input);
@@ -432,6 +560,11 @@ export class RuntimeCoordinator implements PiDriver {
   setThinkingLevel(input: SetThinkingLevelInput): void {
     this.assertGeneration();
     this.selected().driver.setThinkingLevel(input);
+  }
+
+  async setSessionControls(input: SetSessionControlsInput): Promise<void> {
+    this.assertGeneration();
+    await this.selected().driver.setSessionControls(input);
   }
 
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
@@ -480,6 +613,7 @@ export class RuntimeCoordinator implements PiDriver {
       receivedInput: false,
       pinned: false,
       lastState: driver.runtimeState(),
+      nativeQueue: { steering: 0, followUp: 0 },
       unsubscribe: () => undefined,
     };
     slot.unsubscribe = driver.subscribe((event) => this.onSlotEvent(slot, event));
@@ -528,11 +662,30 @@ export class RuntimeCoordinator implements PiDriver {
       if (this.selectedId === oldId) {
         this.selectedId = slot.id;
         this.generation++;
-        this.emit({ ...event, sessionId: slot.id, sessionGeneration: this.generation, runtime: this.translateSnapshot(event.runtime) });
+        this.emit({ ...event, sessionId: slot.id, sessionGeneration: this.generation, runtime: this.translateSnapshot(event.runtime, slot) });
       }
       this.sessionIndex.invalidate();
       this.publishStatus(slot.id);
       return;
+    }
+    if (slot.suppressEvents) {
+      this.publishStatus(slot.id);
+      return;
+    }
+    if (event.type === "session.event") {
+      const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown>
+        : {};
+      const kind = String(payload.type ?? "").replace(/-/g, "_");
+      if (kind === "queue_update") {
+        slot.nativeQueue = {
+          steering: Array.isArray(payload.steering) ? payload.steering.length : Number.isSafeInteger(payload.steering) ? Math.max(0, payload.steering as number) : 0,
+          followUp: Array.isArray(payload.followUp) ? payload.followUp.length : Number.isSafeInteger(payload.followUp) ? Math.max(0, payload.followUp as number) : 0,
+        };
+        this.publishQueue(slot);
+        this.publishStatus(slot.id);
+        return;
+      }
     }
     if (event.type === "ui.event") {
       const request = event.payload as UiRequest;
@@ -541,6 +694,14 @@ export class RuntimeCoordinator implements PiDriver {
     if (event.type === "ui.closed" && slot.pendingUi?.requestId === event.requestId) slot.pendingUi = undefined;
     if (slot.id === this.selectedId) {
       this.emit({ ...event, sessionId: slot.id, sessionGeneration: this.generation } as DriverEvent);
+    }
+    if (event.type === "session.event") {
+      const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown>
+        : {};
+      if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
+        queueMicrotask(() => void this.flushQueuedPrompt(slot));
+      }
     }
     this.publishStatus(slot.id);
   }
@@ -560,17 +721,93 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async selectedSnapshot(): Promise<RuntimeSnapshot> {
-    return this.translateSnapshot(await this.selected().driver.snapshot());
+    const slot = this.selected();
+    return this.translateSnapshot(await slot.driver.snapshot(), slot);
   }
 
-  private translateSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshot {
-    return { ...snapshot, sessionGeneration: this.generation, ready: true };
+  private translateSnapshot(snapshot: RuntimeSnapshot, slot: RuntimeSlot): RuntimeSnapshot {
+    slot.nativeQueue = {
+      steering: snapshot.conversation.queue.steering,
+      followUp: snapshot.conversation.queue.followUp,
+    };
+    return {
+      ...snapshot,
+      sessionGeneration: this.generation,
+      ready: true,
+      conversation: {
+        ...snapshot.conversation,
+        queue: this.queueReadModel(slot),
+      },
+    };
   }
 
   private selected(): RuntimeSlot {
     const slot = this.slots.get(this.selectedId);
     if (!slot) throw new Error("runtime has not started");
     return slot;
+  }
+
+  private selectedQueuedPrompt(queueId: string): NonNullable<RuntimeSlot["queuedPrompt"]> {
+    const queued = this.selected().queuedPrompt;
+    if (!queued || queued.id !== queueId) throw new Error("queued prompt is unavailable");
+    return queued;
+  }
+
+  private queueReadModel(slot: RuntimeSlot): QueueReadModel {
+    const queued = slot.queuedPrompt;
+    return {
+      steering: slot.nativeQueue.steering,
+      followUp: slot.nativeQueue.followUp + (queued ? 1 : 0),
+      ...(queued ? {
+        pending: {
+          id: queued.id,
+          preview: queued.message.replace(/\s+/g, " ").trim().slice(0, 2_000),
+          attachmentCount: queued.images?.length ?? 0,
+          fileAttachmentCount: queued.files?.length ?? 0,
+          planMode: queued.planMode,
+          state: queued.state,
+        },
+      } : {}),
+    };
+  }
+
+  private publishQueue(slot: RuntimeSlot): void {
+    if (slot.id !== this.selectedId) return;
+    this.emit({
+      type: "queue.changed",
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      queue: this.queueReadModel(slot),
+    });
+  }
+
+  private async flushQueuedPrompt(slot: RuntimeSlot): Promise<void> {
+    const queued = slot.queuedPrompt;
+    if (!queued || queued.state !== "queued") return;
+    queued.state = "delivering";
+    this.publishQueue(slot);
+    try {
+      await slot.driver.prompt({
+        commandId: queued.commandId,
+        expectedGeneration: slot.innerGeneration,
+        message: queued.message,
+        images: queued.images,
+        files: queued.files,
+        planMode: queued.planMode,
+      });
+      slot.queuedPrompt = undefined;
+      slot.lastActivityAt = Date.now();
+      this.publishQueue(slot);
+    } catch {
+      if (slot.queuedPrompt === queued) {
+        queued.state = "queued";
+        this.publishQueue(slot);
+      }
+    }
+  }
+
+  private slotCanSleep(slot: RuntimeSlot): boolean {
+    return !slot.queuedPrompt && slot.driver.canSleep();
   }
 
   private baseTarget(): RuntimeTarget {
@@ -634,7 +871,7 @@ export class RuntimeCoordinator implements PiDriver {
       const sleepAfterMs = slot.receivedInput
         ? this.options.sleepAfterMs ?? SLEEP_AFTER_MS
         : this.options.viewOnlySleepAfterMs ?? VIEW_ONLY_SLEEP_AFTER_MS;
-      if (slot.id === this.selectedId || slot.pinned || now - slot.lastActivityAt < sleepAfterMs || !slot.driver.canSleep()) continue;
+      if (slot.id === this.selectedId || slot.pinned || now - slot.lastActivityAt < sleepAfterMs || !this.slotCanSleep(slot)) continue;
       await this.disposeSlot(slot);
       this.emitStatus(slot.id, "sleeping");
     }

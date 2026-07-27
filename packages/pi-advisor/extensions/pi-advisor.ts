@@ -34,6 +34,8 @@ type FailureCode =
   | "pricing_unavailable"
   | "context_overflow";
 type Details = {
+  agentName: string;
+  startedAt: string;
   advisorModel?: string;
   durationMs: number;
   usage: {
@@ -43,6 +45,7 @@ type Details = {
     cacheWrite: number;
     cost: number;
   };
+  thinking?: string;
   callNumber: 1 | 2 | 3;
   snapshotEstimatedTokens: number;
   redactionCount: number;
@@ -87,6 +90,18 @@ function errorCode(
   return /429|rate.?limit/i.test(String((error as any)?.message ?? error))
     ? "rate_limited"
     : "invalid_response";
+}
+function delegatedName(pi: ExtensionAPI, callId: string): string {
+  let assigned: string | undefined;
+  pi.events.emit("pylon:delegate-name", {
+    version: 1,
+    kind: "advisor",
+    callId,
+    respond: (name: unknown) => {
+      if (typeof name === "string" && /^A\d+$/.test(name)) assigned = name;
+    },
+  });
+  return assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
 }
 
 export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = complete) {
@@ -187,7 +202,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       return serializeAdvisor(async () => {
       const callNumber = Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"];
       const cacheRetention: "short" | "long" =
@@ -212,11 +227,17 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           },
         };
       const started = Date.now();
+      const startedAt = new Date(started).toISOString();
+      const agentName = delegatedName(pi, id);
+      const named = (value: string) => `[${agentName} · Advisor] ${value}`;
       const model = await configuredModel(ctx);
       const config = await loadConfig();
       const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
       const base = {
+        agentName,
+        startedAt,
         advisorModel: model ? modelName(model) : undefined,
+        thinking,
         durationMs: 0,
         usage: emptyUsage(),
         callNumber,
@@ -278,7 +299,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       );
       if (snapshot.requiredContextOmitted)
         return {
-          content: [{ type: "text" as const, text: "Advisor failed nonfatally: required context exceeds the input budget." }],
+          content: [{ type: "text" as const, text: named("Advisor failed nonfatally: required context exceeds the input budget.") }],
           details: { ...base, snapshotEstimatedTokens: 0, truncated: true, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: "context_overflow" as const },
         };
       const budget = advisorBudget(
@@ -293,7 +314,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             ? "estimated input cost exceeds the limit"
             : "estimated output budget is exhausted";
         return {
-          content: [{ type: "text" as const, text: `Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).` }],
+          content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`) }],
           details: { ...base, snapshotEstimatedTokens: snapshot.estimatedTokens, redactionCount: snapshot.redactionCount, truncated: snapshot.truncated, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: budget.error === "pricing_unavailable" ? "pricing_unavailable" as const : "budget_exceeded" as const },
         };
       }
@@ -385,7 +406,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             content: [
               {
                 type: "text" as const,
-                text: `Advisor failed nonfatally: ${code}.`,
+                text: named(`Advisor failed nonfatally: ${code}.`),
               },
             ],
             details: {
@@ -431,7 +452,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           content: [
             {
               type: "text" as const,
-              text: `\n\n${advice.text}`,
+              text: `${named("Advice:")}\n\n${advice.text}`,
             },
           ],
           details,
@@ -446,7 +467,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           content: [
             {
               type: "text" as const,
-              text: `Advisor failed nonfatally: ${code}.`,
+              text: named(`Advisor failed nonfatally: ${code}.`),
             },
           ],
           details: {

@@ -1,17 +1,20 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_TOTAL_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGES = 4;
+const MAX_TEXT_FILES = 100;
+const MAX_TEXT_FILE_TOTAL_BYTES = 10 * 1024 * 1024;
 const commandNames = new Set<string>(COMMAND_NAMES);
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
 const memoryKinds = new Set(["workflow", "structure", "architecture", "warning", "preference"]);
+const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout"]);
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -48,6 +51,23 @@ function validImages(value: unknown): boolean {
   return totalBytes <= MAX_IMAGE_TOTAL_BYTES;
 }
 
+function validTextFiles(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TEXT_FILES) return false;
+  let totalBytes = 0;
+  for (const file of value) {
+    if (!record(file)
+      || typeof file.name !== "string" || !file.name || file.name.length > 255 || /[\/\\\0]/.test(file.name)
+      || typeof file.text !== "string" || !file.text || file.text.includes("\0")
+      || !Number.isSafeInteger(file.size) || (file.size as number) <= 0
+      || (file.mimeType !== undefined && (typeof file.mimeType !== "string" || file.mimeType.length > 120))) return false;
+    const bytes = new TextEncoder().encode(file.text).byteLength;
+    if (bytes !== file.size) return false;
+    totalBytes += bytes;
+  }
+  return totalBytes <= MAX_TEXT_FILE_TOTAL_BYTES;
+}
+
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
@@ -75,7 +95,8 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && (value.threshold as number) >= 1_000
       && (value.threshold as number) <= 50_000;
   }
-  return value.kind === "helios" && typeof value.headed === "boolean";
+  if (value.kind === "helios") return typeof value.headed === "boolean";
+  return value.kind === "timeline" && typeof value.editRollbackDefault === "boolean";
 }
 
 export function validateCommand(value: unknown): ValidationResult<WebCommand> {
@@ -86,11 +107,24 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (!identifier(value.commandId)) return { ok: false, error: "invalid commandId" };
   if (!generation(value.expectedGeneration)) return { ok: false, error: "invalid expectedGeneration" };
 
-  if (["prompt", "steer", "followUp"].includes(value.type)) {
-    if (typeof value.message !== "string" || value.message.length > MAX_MESSAGE_LENGTH || (!value.message.length && !Array.isArray(value.images))) {
+  if (["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(value.type)) {
+    if (typeof value.message !== "string" || value.message.length > MAX_MESSAGE_LENGTH
+      || (!value.message.length && !Array.isArray(value.images) && !Array.isArray(value.files))) {
       return { ok: false, error: "invalid message" };
     }
     if (!validImages(value.images)) return { ok: false, error: "invalid images" };
+    if (!validTextFiles(value.files)) return { ok: false, error: "invalid text files" };
+  }
+  if (["prompt", "queuePrompt"].includes(value.type)
+    && value.planMode !== undefined && typeof value.planMode !== "boolean") {
+    return { ok: false, error: "invalid prompt mode" };
+  }
+  if (["restoreQueuedPrompt", "steerQueuedPrompt"].includes(value.type) && !identifier(value.queueId)) {
+    return { ok: false, error: "invalid queueId" };
+  }
+  if (value.type === "editPrompt"
+    && (!identifier(value.entryId) || typeof value.rollbackFiles !== "boolean")) {
+    return { ok: false, error: "invalid prompt edit" };
   }
   if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
@@ -142,6 +176,11 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (value.type === "setThinkingLevel" && !thinkingLevels.has(String(value.level))) {
     return { ok: false, error: "invalid thinking level" };
+  }
+  if (value.type === "setSessionControls"
+    && (!boundedString(value.provider) || !boundedString(value.modelId)
+      || !thinkingLevels.has(String(value.thinkingLevel)))) {
+    return { ok: false, error: "invalid session controls" };
   }
   if (value.type === "updateContinuityMemory" || value.type === "deleteContinuityMemory") {
     if (!boundedString(value.key, 200) || typeof value.expectedUpdatedAt !== "string"
@@ -225,6 +264,63 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     && runtimeStates.has(String(value.runtimeState));
 }
 
+function validDelegatedRun(value: unknown): boolean {
+  if (!record(value)
+    || !identifier(value.id)
+    || !delegatedAgentKinds.has(String(value.kind))
+    || !Number.isSafeInteger(value.turn) || (value.turn as number) < 0
+    || !["running", "completed", "failed"].includes(String(value.status))
+    || !Array.isArray(value.activity) || value.activity.length > 100) return false;
+  if (value.request !== undefined && (typeof value.request !== "string" || value.request.length > 8 * 1024)) return false;
+  if (value.response !== undefined && (typeof value.response !== "string" || value.response.length > MAX_MESSAGE_LENGTH)) return false;
+  if (value.agentName !== undefined && !boundedString(value.agentName, 24)) return false;
+  if (value.startedAt !== undefined && (typeof value.startedAt !== "string" || Number.isNaN(Date.parse(value.startedAt)))) return false;
+  if (value.modelName !== undefined && (typeof value.modelName !== "string" || value.modelName.length > 200)) return false;
+  if (value.thinkingLevel !== undefined && !thinkingLevels.has(String(value.thinkingLevel))) return false;
+  if (value.durationMs !== undefined && (!Number.isSafeInteger(value.durationMs)
+    || (value.durationMs as number) < 0 || (value.durationMs as number) > 7 * 24 * 60 * 60 * 1_000)) return false;
+  if (value.usage !== undefined) {
+    const usage = value.usage;
+    if (!record(usage) || !["input", "output", "cacheRead", "cacheWrite", "cost"]
+      .every((key) => typeof usage[key] === "number" && Number.isFinite(usage[key] as number)
+        && (usage[key] as number) >= 0)) return false;
+  }
+  return value.activity.every((item) => record(item)
+    && ["call", "result"].includes(String(item.kind))
+    && boundedString(item.tool, 200)
+    && (item.text === undefined || typeof item.text === "string" && item.text.length <= 2_000)
+    && (item.isError === undefined || typeof item.isError === "boolean"));
+}
+
+function validHistoryMessage(message: unknown): boolean {
+  return record(message)
+    && identifier(message.id)
+    && (message.entryId === undefined || identifier(message.entryId))
+    && ["user", "assistant", "system", "tool"].includes(String(message.role))
+    && typeof message.text === "string" && message.text.length <= MAX_MESSAGE_LENGTH
+    && message.streaming === false
+    && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount)
+      && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
+    && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount)
+      && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
+    && (message.systemSource === undefined || typeof message.systemSource === "string" && message.systemSource.length <= 200)
+    && (message.tool === undefined || record(message.tool)
+      && identifier(message.tool.id)
+      && boundedString(message.tool.name)
+      && (message.tool.input === undefined || typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)
+      && ["running", "completed", "failed"].includes(String(message.tool.status)));
+}
+
+export function isConversationHistoryPage(value: unknown): value is ConversationHistoryPage {
+  return record(value)
+    && value.protocolVersion === PROTOCOL_VERSION
+    && identifier(value.sessionId)
+    && generation(value.sessionGeneration)
+    && Array.isArray(value.messages) && value.messages.length <= 100 && value.messages.every(validHistoryMessage)
+    && Number.isSafeInteger(value.remaining) && (value.remaining as number) >= 0
+    && (value.nextCursor === undefined || identifier(value.nextCursor));
+}
+
 export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean") return false;
@@ -239,16 +335,23 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && typeof item.message === "string")) return false;
   const conversation = value.conversation;
   if (!record(conversation) || !Array.isArray(conversation.messages) || !Array.isArray(conversation.tools)
+    || !Array.isArray(conversation.delegatedRuns)
     || typeof conversation.streaming !== "boolean" || !record(conversation.queue) || !record(conversation.retry) || !record(conversation.compaction)) return false;
   if (conversation.workStartedAt !== undefined
     && (typeof conversation.workStartedAt !== "string" || Number.isNaN(Date.parse(conversation.workStartedAt)))) return false;
   if (conversation.workModelName !== undefined && (typeof conversation.workModelName !== "string" || conversation.workModelName.length > 200)) return false;
   if (conversation.workThinkingLevel !== undefined && !thinkingLevels.has(String(conversation.workThinkingLevel))) return false;
-  if (conversation.messages.length > 100 || conversation.tools.length > 100) return false;
+  if (conversation.historyCursor !== undefined && !identifier(conversation.historyCursor)) return false;
+  if (conversation.historyRemaining !== undefined
+    && (!Number.isSafeInteger(conversation.historyRemaining) || (conversation.historyRemaining as number) < 0)) return false;
+  if ((conversation.historyCursor === undefined) !== (conversation.historyRemaining === undefined)) return false;
+  if (conversation.messages.length > 100 || conversation.tools.length > 100 || conversation.delegatedRuns.length > 100) return false;
   if (!conversation.messages.every((message) => record(message) && identifier(message.id)
+    && (message.entryId === undefined || identifier(message.entryId))
     && ["user", "assistant", "system", "tool"].includes(message.role as string)
     && typeof message.text === "string" && message.text.length <= MAX_MESSAGE_LENGTH && typeof message.streaming === "boolean"
     && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount) && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
+    && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount) && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
     && (message.workDurationMs === undefined || Number.isSafeInteger(message.workDurationMs)
       && (message.workDurationMs as number) >= 0 && (message.workDurationMs as number) <= 7 * 24 * 60 * 60 * 1_000)
     && (message.modelName === undefined || typeof message.modelName === "string" && message.modelName.length <= 200)
@@ -268,8 +371,20 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && (tool.input === undefined || typeof tool.input === "string" && tool.input.length <= MAX_MESSAGE_LENGTH)
     && (tool.summary === undefined || typeof tool.summary === "string" && tool.summary.length <= MAX_MESSAGE_LENGTH)
     && ["running", "completed", "failed"].includes(tool.status as string))) return false;
+  if (!conversation.delegatedRuns.every((run) => validDelegatedRun(run))) return false;
   if (!Number.isSafeInteger(conversation.queue.steering) || !Number.isSafeInteger(conversation.queue.followUp)
     || typeof conversation.retry.active !== "boolean" || typeof conversation.compaction.active !== "boolean") return false;
+  if (conversation.queue.pending !== undefined) {
+    const pending = conversation.queue.pending;
+    if (!record(pending) || !identifier(pending.id)
+      || typeof pending.preview !== "string" || pending.preview.length > 2_000
+      || !Number.isSafeInteger(pending.attachmentCount) || (pending.attachmentCount as number) < 0
+      || (pending.attachmentCount as number) > MAX_IMAGES
+      || !Number.isSafeInteger(pending.fileAttachmentCount) || (pending.fileAttachmentCount as number) < 0
+      || (pending.fileAttachmentCount as number) > MAX_TEXT_FILES
+      || typeof pending.planMode !== "boolean"
+      || !["queued", "delivering"].includes(String(pending.state))) return false;
+  }
   const controls = value.sessionControls;
   if (!record(controls) || !Array.isArray(controls.models) || controls.models.length > 500
     || !Array.isArray(controls.thinkingLevels) || !controls.thinkingLevels.every((level) => thinkingLevels.has(String(level)))

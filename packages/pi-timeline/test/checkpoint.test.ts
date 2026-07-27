@@ -177,6 +177,92 @@ test("timeline rejects incompatible targets before rollback capture", async () =
   }
 });
 
+test("web prompt editing restores the nearest earlier checkpoint and can roll back", async () => {
+  const { root } = await repository();
+  const artifactRoot = join(root, "timeline-artifacts");
+  let checkpoint: Awaited<ReturnType<typeof capture>> | undefined;
+  try {
+    await writeFile(join(root, "tracked.txt"), "after first turn\n");
+    checkpoint = await capture(root, "edit-session");
+    await writeFile(join(root, "tracked.txt"), "current work\n");
+    const entries = [
+      { type: "message", id: "user-1", parentId: null, message: { role: "user", content: "First prompt" } },
+      { type: "message", id: "assistant-1", parentId: "user-1", message: { role: "assistant", content: "First answer" } },
+      {
+        type: "custom",
+        customType: "pi-prompt-checkpoint",
+        id: "checkpoint-1",
+        parentId: "assistant-1",
+        data: {
+          version: 3,
+          kind: "pi-prompt-checkpoint",
+          promptEntryId: "user-1",
+          ownerSessionId: "edit-session",
+          continuationEntryId: "assistant-1",
+          createdAt: new Date(0).toISOString(),
+          ...checkpoint,
+        },
+      },
+      { type: "message", id: "user-2", parentId: "checkpoint-1", message: { role: "user", content: "Second prompt" } },
+      { type: "message", id: "assistant-2", parentId: "user-2", message: { role: "assistant", content: "Second answer" } },
+    ];
+    const sessionHandlers = new Map<string, Function[]>();
+    const eventHandlers = new Map<string, Function>();
+    const notices: string[] = [];
+    const pi: any = {
+      events: {
+        on: (name: string, handler: Function) => {
+          eventHandlers.set(name, handler);
+          return () => eventHandlers.delete(name);
+        },
+        emit() {},
+      },
+      on: (name: string, handler: Function) =>
+        sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
+      registerCommand() {},
+      appendEntry() {},
+      setSessionName() {},
+    };
+    extension(pi, undefined, { artifactRoot });
+    const ctx: any = {
+      cwd: root,
+      hasUI: true,
+      mode: "rpc",
+      sessionManager: {
+        getBranch: () => entries,
+        getEntries: () => entries,
+        getLeafId: () => "assistant-2",
+        getSessionFile: () => undefined,
+        getSessionId: () => "edit-session",
+      },
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setStatus() {},
+      },
+    };
+    await sessionHandlers.get("session_start")![0]({}, ctx);
+
+    let operation: Promise<any> | undefined;
+    eventHandlers.get("pi-timeline:edit-navigation")!({
+      version: 1,
+      sessionId: "edit-session",
+      targetEntryId: "user-2",
+      rollbackFiles: true,
+      respond: (value: Promise<any>) => { operation = value; },
+    });
+    const transaction = await operation;
+    await sessionHandlers.get("session_tree")![0]({}, ctx);
+    assert.deepEqual(notices, []);
+    await transaction.apply();
+    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "after first turn\n");
+    await transaction.rollback();
+    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "current work\n");
+  } finally {
+    if (checkpoint) await deleteRefs(root, [checkpoint.worktreeRef, checkpoint.indexRef]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("capture completes and restore preserves ignored files", { timeout: 20_000 }, async () => {
   const { root, git } = await repository();
   try {

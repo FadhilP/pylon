@@ -322,3 +322,59 @@ test("driver starts without a root manifest or local packages", { timeout: 20_00
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("driver pages the complete visible branch after compaction", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-history-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const session = SessionManager.create(cwd);
+  const messageIds: string[] = [];
+  for (let index = 0; index < 155; index++) {
+    messageIds.push(session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: `message-${index}` }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    }));
+    if (index === 134) session.appendCompaction("summary", messageIds[120]!, 1_000);
+  }
+
+  const driver = new SessionRuntime();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
+    const snapshot = await driver.snapshot();
+    assert.equal(snapshot.conversation.messages.length, 100);
+    assert.equal(snapshot.conversation.messages[0]?.text, "message-55");
+    assert.equal(snapshot.conversation.messages[0]?.entryId, messageIds[55]);
+    assert.equal(snapshot.conversation.historyRemaining, 55);
+
+    const earlier: string[] = [];
+    let cursor = snapshot.conversation.historyCursor;
+    while (cursor) {
+      const page = await driver.conversationHistory({ cursor });
+      earlier.unshift(...page.messages.map((message) => message.text));
+      cursor = page.nextCursor;
+    }
+    assert.equal(earlier.length, 55);
+    assert.equal(earlier[0], "message-0");
+    assert.equal(earlier.at(-1), "message-54");
+    const firstPage = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
+    assert.equal(firstPage.messages[0]?.entryId, messageIds[0]);
+  } finally {
+    await driver.dispose();
+    await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});

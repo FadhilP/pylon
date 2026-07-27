@@ -2,6 +2,9 @@ import type { PackageSettingsReadModel } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
+  "queuePrompt",
+  "restoreQueuedPrompt",
+  "steerQueuedPrompt",
   "steer",
   "followUp",
   "abort",
@@ -16,6 +19,7 @@ export const COMMAND_NAMES = [
   "restoreSession",
   "renameSession",
   "setSessionActive",
+  "editPrompt",
   "fork",
   "timeline",
   "setPackageEnabled",
@@ -23,6 +27,7 @@ export const COMMAND_NAMES = [
   "rebuildDiscoverIndex",
   "setModel",
   "setThinkingLevel",
+  "setSessionControls",
   "updateContinuityMemory",
   "deleteContinuityMemory",
 ] as const;
@@ -39,13 +44,28 @@ export interface PromptImage {
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 }
 
+export interface PromptTextFile {
+  name: string;
+  text: string;
+  size: number;
+  mimeType?: string;
+}
+
 interface MessageCommand extends CommandBase {
   message: string;
   images?: PromptImage[];
+  files?: PromptTextFile[];
+}
+
+interface PromptCommand extends MessageCommand {
+  planMode?: boolean;
 }
 
 export type WebCommand =
-  | ({ type: "prompt" } & MessageCommand)
+  | ({ type: "prompt" } & PromptCommand)
+  | ({ type: "queuePrompt" } & PromptCommand)
+  | ({ type: "restoreQueuedPrompt"; queueId: string } & CommandBase)
+  | ({ type: "steerQueuedPrompt"; queueId: string } & CommandBase)
   | ({ type: "steer" } & MessageCommand)
   | ({ type: "followUp" } & MessageCommand)
   | ({ type: "abort" } & CommandBase)
@@ -60,6 +80,7 @@ export type WebCommand =
   | ({ type: "restoreSession"; sessionId: string } & CommandBase)
   | ({ type: "renameSession"; sessionId: string; name: string } & CommandBase)
   | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
+  | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "fork"; entryId: string; position?: "before" | "at" } & CommandBase)
   | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
@@ -67,6 +88,7 @@ export type WebCommand =
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
+  | ({ type: "setSessionControls"; provider: string; modelId: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase);
 
@@ -74,4 +96,12 @@ export interface AcceptedCommand {
   commandId: string;
   sessionGeneration: number;
   accepted: true;
+}
+
+export interface QueuedPromptPayload {
+  id: string;
+  message: string;
+  images?: PromptImage[];
+  files?: PromptTextFile[];
+  planMode: boolean;
 }

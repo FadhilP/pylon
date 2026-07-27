@@ -1,9 +1,11 @@
 export interface MessageReadModel {
   id: string;
+  entryId?: string;
   role: "user" | "assistant" | "system" | "tool";
   text: string;
   streaming: boolean;
   attachmentCount?: number;
+  fileAttachmentCount?: number;
   workDurationMs?: number;
   modelName?: string;
   thinkingLevel?: ThinkingLevelReadModel;
@@ -34,9 +36,52 @@ export interface ToolActivityReadModel {
   summary?: string;
 }
 
+export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout";
+
+export interface DelegatedAgentActivityReadModel {
+  kind: "call" | "result";
+  tool: string;
+  text?: string;
+  isError?: boolean;
+}
+
+export interface DelegatedAgentUsageReadModel {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
+
+export interface DelegatedAgentRunReadModel {
+  id: string;
+  kind: DelegatedAgentKind;
+  agentName?: string;
+  startedAt?: string;
+  turn: number;
+  request?: string;
+  response?: string;
+  status: "running" | "completed" | "failed";
+  modelName?: string;
+  thinkingLevel?: ThinkingLevelReadModel;
+  durationMs?: number;
+  usage?: DelegatedAgentUsageReadModel;
+  activity: DelegatedAgentActivityReadModel[];
+}
+
 export interface QueueReadModel {
   steering: number;
   followUp: number;
+  pending?: QueuedPromptReadModel;
+}
+
+export interface QueuedPromptReadModel {
+  id: string;
+  preview: string;
+  attachmentCount: number;
+  fileAttachmentCount: number;
+  planMode: boolean;
+  state: "queued" | "delivering";
 }
 
 export interface RetryReadModel {
@@ -54,6 +99,9 @@ export interface CompactionReadModel {
 export interface ConversationReadModel {
   messages: MessageReadModel[];
   tools: ToolActivityReadModel[];
+  delegatedRuns: DelegatedAgentRunReadModel[];
+  historyCursor?: string;
+  historyRemaining?: number;
   streaming: boolean;
   workStartedAt?: string;
   workModelName?: string;

@@ -729,25 +729,34 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("context", (event) => {
     const active = activeWork();
+    let boundary = -1;
+    for (let index = event.messages.length - 1; index >= 0; index--) {
+      const message = event.messages[index] as any;
+      if (message.role === "custom" && message.customType === HANDOFF_ENTRY_TYPE) {
+        boundary = index;
+        break;
+      }
+    }
+    const messages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
     const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
-    if (text)
-      return {
-        messages: [
-          ...event.messages,
-          {
-            role: "custom",
-            customType: "pi-continuity",
-            content:
-              text +
-              (work?.mode === "planning"
-                ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
-                : ""),
-            display: false,
-            timestamp: Date.now(),
-          },
-        ],
-      };
+    if (!text) return boundary >= 0 ? { messages } : undefined;
+    return {
+      messages: [
+        ...messages,
+        {
+          role: "custom",
+          customType: "pi-continuity",
+          content:
+            text +
+            (work?.mode === "planning"
+              ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
+              : ""),
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
   });
   pi.registerTool({
     name: "memory",
@@ -1233,63 +1242,54 @@ export default function continuityExtension(pi: ExtensionAPI) {
         );
         if (!executor)
           return void ctx.ui.notify("Executor model unavailable.", "error");
-        const sourceSessionId = ctx.sessionManager.getSessionId();
-        const sourceSessionFile = ctx.sessionManager.getSessionFile();
-        const sourceWorkFile = workFile;
+        if (!(await pi.setModel(executor)))
+          return void ctx.ui.notify("Executor model unavailable.", "error");
         const now = new Date().toISOString();
         pendingApproval = undefined;
-        const childWork: Work = {
+        const executorWork: Work = {
           ...work,
           mode: "executing",
           approved: true,
           updatedAt: now,
         };
-        const runId = childWork.runId ?? randomUUID();
+        const runId = executorWork.runId ?? randomUUID();
         const run: RunEntry = {
           version: 1,
           runId,
-          timelineId: childWork.timelineId ?? childWork.runId ?? runId,
+          timelineId: executorWork.timelineId ?? executorWork.runId ?? runId,
           role: "executor",
-          parentSessionId: sourceSessionId,
+          parentSessionId: ctx.sessionManager.getSessionId(),
           createdAt: now,
         };
-        childWork.runId = run.runId;
-        childWork.timelineId = run.timelineId;
+        executorWork.runId = run.runId;
+        executorWork.timelineId = run.timelineId;
         const thinking = config.executor?.thinking ?? work.baseThinking;
-        const result = await ctx.newSession({
-          parentSession: sourceSessionFile,
-          setup: async (sessionManager: any) => {
-            sessionManager.appendModelChange(executor.provider, executor.id);
-            if (thinking) sessionManager.appendThinkingLevelChange(thinking);
-            sessionManager.appendCustomEntry(RUN_ENTRY_TYPE, run);
-            sessionManager.appendCustomEntry(HANDOFF_ENTRY_TYPE, {
-              version: 1,
-              work: childWork,
-              model: { provider: executor.provider, id: executor.id },
-              ...(thinking ? { thinking } : {}),
-            });
+        if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
+        work = executorWork;
+        await saveWork();
+        pi.appendEntry(RUN_ENTRY_TYPE, run);
+        pi.sendMessage({
+          customType: HANDOFF_ENTRY_TYPE,
+          content: [
+            "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
+            buildContext({ ...executorWork, mode: "planning" }, [], "", 600),
+          ].filter(Boolean).join("\n"),
+          display: false,
+          details: {
+            version: 1,
+            runId,
+            model: { provider: executor.provider, id: executor.id },
+            ...(thinking ? { thinking } : {}),
           },
-          withSession: async (fresh: any) => {
-            if (
-              fresh.model?.provider !== executor.provider ||
-              fresh.model?.id !== executor.id
-            )
-              throw new Error("Executor model was not selected in child session.");
-            await fresh.sendUserMessage(
-              "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
-            );
-          },
+        }, {
+          triggerTurn: false,
         });
-        if (!result.cancelled) {
-          const plannerWork: Work = {
-            ...work,
-            mode: "handed_off",
-            approved: true,
-            runId: run.runId,
-            updatedAt: new Date().toISOString(),
-          };
-          await writeJson(sourceWorkFile, plannerWork);
-        }
+        gate(false);
+        tasksVisible = true;
+        refresh(ctx);
+        pi.sendUserMessage(
+          "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
+        );
         return;
       }
       if (value === "cancel") {
@@ -1384,12 +1384,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.offeredPlanRevision = token.revision;
         await saveWork();
         const choice = await settledCtx.ui.select("Plan ready — review structured plan above", [
-          "Approve — fresh executor session",
+          "Approve — reset context",
           "Approve — continue current session",
           "Request changes",
         ]);
         if (sessionGeneration !== generation) return;
-        if (choice === "Approve — fresh executor session")
+        if (choice === "Approve — reset context")
           await planCommand.handler("approve", actionCtx);
         else if (choice === "Approve — continue current session")
           await planCommand.handler("approve-current", actionCtx);

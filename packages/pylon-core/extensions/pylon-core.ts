@@ -33,6 +33,36 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   let shellToolCallIds: string[] = [];
   let runBaseline: Promise<WorktreeSnapshot | undefined> | undefined;
   let runCwd = "";
+  const delegateNames = new Map<string, string>();
+  const delegateCounts = { A: 0, G: 0, S: 0 };
+
+  const rebuildDelegateNames = (ctx: any) => {
+    delegateNames.clear();
+    delegateCounts.A = delegateCounts.G = delegateCounts.S = 0;
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      const message = entry?.message;
+      const name = message?.details?.agentName;
+      const match = typeof name === "string" ? /^(A|G|S)(\d+)$/.exec(name) : undefined;
+      if (!match) continue;
+      delegateCounts[match[1] as keyof typeof delegateCounts] = Math.max(
+        delegateCounts[match[1] as keyof typeof delegateCounts],
+        Number(match[2]),
+      );
+      if (typeof message?.toolCallId === "string") delegateNames.set(message.toolCallId, name);
+    }
+  };
+  const disposeDelegateNames = pi.events.on("pylon:delegate-name", (request: any) => {
+    if (request?.version !== 1 || typeof request.callId !== "string" || typeof request.respond !== "function") return;
+    const prefix = request.kind === "advisor" ? "A" : request.kind === "grunt" ? "G"
+      : request.kind === "repo_scout" || request.kind === "web_scout" ? "S" : undefined;
+    if (!prefix) return;
+    let name = delegateNames.get(request.callId);
+    if (!name) {
+      name = `${prefix}${++delegateCounts[prefix]}`;
+      delegateNames.set(request.callId, name);
+    }
+    request.respond(name);
+  });
 
   const hasGate = () => [...policies.values()].some((policy) => policy.allowOnly);
   const managedTools = () =>
@@ -234,8 +264,12 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     captureBaseline();
     reconcile();
     rebuildTokenMeter(ctx);
+    rebuildDelegateNames(ctx);
   });
-  pi.on("session_tree", (_event, ctx) => rebuildTokenMeter(ctx));
+  pi.on("session_tree", (_event, ctx) => {
+    rebuildTokenMeter(ctx);
+    rebuildDelegateNames(ctx);
+  });
   pi.on("agent_start", async (_event, ctx) => {
     runCwd = ctx.cwd;
     runBaseline = worktreeSnapshot(ctx.cwd);
@@ -291,6 +325,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     disposeWorktreeObserverRequest();
     disposeTelemetryListener();
     disposeVerifyTelemetry();
+    disposeDelegateNames();
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];
@@ -299,6 +334,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     selectedTools.clear();
     policies.clear();
     managedByOwner.clear();
+    delegateNames.clear();
   });
 
   const doctor = async (ctx: any) => {

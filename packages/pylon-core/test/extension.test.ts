@@ -103,6 +103,36 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
 
+test("delegated runs receive stable role-local names", () => {
+  const runtime = harness();
+  const allocate = (kind: string, callId: string) => {
+    let name = "";
+    runtime.events.emit("pylon:delegate-name", {
+      version: 1,
+      kind,
+      callId,
+      respond: (value: string) => { name = value; },
+    });
+    return name;
+  };
+
+  assert.equal(allocate("advisor", "advisor-1"), "A1");
+  assert.equal(allocate("advisor", "advisor-1"), "A1");
+  assert.equal(allocate("grunt", "grunt-1"), "G1");
+  assert.equal(allocate("repo_scout", "repo-1"), "S1");
+  assert.equal(allocate("web_scout", "web-1"), "S2");
+
+  for (const handler of runtime.handlers.get("session_tree") ?? []) handler({}, {
+    sessionManager: {
+      getBranch: () => [{
+        message: { role: "toolResult", toolCallId: "repo-7", details: { agentName: "S7" } },
+      }],
+    },
+  });
+  assert.equal(allocate("repo_scout", "repo-7"), "S7");
+  assert.equal(allocate("web_scout", "web-8"), "S8");
+});
+
 test("shared worktree observer fingerprints one shell tool batch per turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-worktree-observer-"));
   await exec("git", ["init", "-q"], { cwd: root });

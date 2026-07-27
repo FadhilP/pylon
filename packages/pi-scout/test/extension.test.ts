@@ -388,13 +388,13 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
     }, undefined, undefined, context({ hasUI: false, ui: {
       async confirm() { confirmations++; return false; }, setStatus() {},
     } }));
-    assert.equal(result.content[0].text, "cited report");
+    assert.match(result.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
 
     const uiResult = await runtime.tools.get("web_scout").execute("ui", { task: "read current docs", maxPages: 2 }, undefined, undefined, context({ ui: {
       async confirm() { confirmations++; return false; },
       setStatus(_key: string, value: string | undefined) { statuses.push(value); },
     } }));
-    assert.equal(uiResult.content[0].text, "cited report");
+    assert.match(uiResult.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
     assert.equal(confirmations, 0);
     assert.equal(revoked, 2);
     assert.equal(statuses.at(-1), undefined);

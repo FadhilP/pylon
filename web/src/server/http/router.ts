@@ -6,10 +6,10 @@ import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
-import { RuntimeProjection } from "../pi/projections.ts";
+import { decodeHistoryCursor, RuntimeProjection } from "../pi/projections.ts";
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
-import { applySecurityHeaders, httpError, readJson, requestAllowed, SessionStore, type BrowserSession, type SecurityOptions, validCsrf, validTabId } from "./security.ts";
+import { applySecurityHeaders, httpError, MAX_JSON_BODY_BYTES, readJson, readJsonWithSize, requestAllowed, SessionStore, type BrowserSession, type SecurityOptions, validCsrf, validTabId } from "./security.ts";
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -17,7 +17,7 @@ function header(value: string | string[] | undefined): string | undefined {
 
 interface SseClient { response: ServerResponse; tabId: string; heartbeat: NodeJS.Timeout; }
 interface DialogOwner { requestId: string; sessionGeneration: number; tabId?: string; lossTimer?: NodeJS.Timeout; }
-const MAX_COMMAND_BODY_BYTES = 21 * 1024 * 1024;
+const MAX_COMMAND_BODY_BYTES = 42 * 1024 * 1024;
 
 export interface ServerTransportOptions extends SecurityOptions {
   secureCookies?: boolean;
@@ -64,6 +64,8 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/bootstrap") return this.bootstrap(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
@@ -139,9 +141,14 @@ export class ServerTransport {
   private async command(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
-    const parsed = validateCommand(await readJson(request, MAX_COMMAND_BODY_BYTES));
+    const body = await readJsonWithSize(request, MAX_COMMAND_BODY_BYTES);
+    const parsed = validateCommand(body.value);
     if (!parsed.ok) throw httpError(400, parsed.error);
     const command = parsed.value;
+    if (!["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(command.type)
+      && body.bytes > MAX_JSON_BODY_BYTES) {
+      throw httpError(413, "request body too large");
+    }
     if (command.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
     const runtime = this.projection.snapshot();
     if (!runtime.ready) throw httpError(409, "runtime is not ready");
@@ -187,6 +194,38 @@ export class ServerTransport {
     const result = await this.driver.listPackages();
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing packages");
     this.send(response, 200, result);
+  }
+
+  private async conversationHistory(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const cursor = url.searchParams.get("cursor") ?? "";
+    const generation = Number(url.searchParams.get("generation"));
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 100 : Number(rawLimit);
+    if (!cursor || cursor.length > 128 || decodeHistoryCursor(cursor) === undefined) throw httpError(400, "invalid history cursor");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid history limit");
+    const result = await this.driver.conversationHistory({ cursor, limit });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading history");
+    this.send(response, 200, result);
+  }
+
+  private async queuedPrompt(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const queueId = url.searchParams.get("queueId") ?? "";
+    const generation = Number(url.searchParams.get("generation"));
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(queueId)) throw httpError(400, "invalid queueId");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    const queued = await this.driver.queuedPrompt({ queueId, expectedGeneration: generation })
+      .catch((error) => {
+        throw httpError(409, error instanceof Error ? error.message : "queued prompt is unavailable");
+      });
+    this.renew(tabId);
+    this.send(response, 200, queued);
   }
 
   private async archiveList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
@@ -255,6 +294,10 @@ export class ServerTransport {
     const accepted = (sessionGeneration: number): AcceptedCommand => ({ commandId: command.commandId, sessionGeneration, accepted: true });
     switch (command.type) {
       case "prompt": return this.driver.prompt(command);
+      case "queuePrompt": return this.driver.queuePrompt(command);
+      case "restoreQueuedPrompt":
+        return this.driver.restoreQueuedPrompt(command).then(() => accepted(command.expectedGeneration));
+      case "steerQueuedPrompt": return this.driver.steerQueuedPrompt(command);
       case "steer": return this.driver.steer(command);
       case "followUp": return this.driver.followUp(command);
       case "abort": return this.driver.abort().then(() => accepted(command.expectedGeneration));
@@ -273,6 +316,7 @@ export class ServerTransport {
       case "restoreSession": return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
       case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
       case "setSessionActive": return this.driver.setSessionActive({ sessionId: command.sessionId, active: command.active }).then(() => accepted(command.expectedGeneration));
+      case "editPrompt": return this.driver.editPrompt(command);
       case "fork": return this.driver.fork({ entryId: command.entryId, position: command.position }).then((result) => accepted(result.sessionGeneration));
       case "timeline": {
         const action = command.action === "restore" ? "jump" : command.action;
@@ -296,6 +340,15 @@ export class ServerTransport {
         return Promise.resolve()
           .then(() => this.driver.setThinkingLevel({ level: command.level }))
           .then(async () => { this.projection.refresh(await this.driver.snapshot()); return accepted(command.expectedGeneration); });
+      case "setSessionControls":
+        return this.driver.setSessionControls({
+          provider: command.provider,
+          modelId: command.modelId,
+          thinkingLevel: command.thinkingLevel,
+        }).then(async () => {
+          this.projection.refresh(await this.driver.snapshot());
+          return accepted(command.expectedGeneration);
+        });
       case "updateContinuityMemory":
         return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "deleteContinuityMemory":

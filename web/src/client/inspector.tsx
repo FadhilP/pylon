@@ -15,7 +15,7 @@ import {
 } from "@tabler/icons-react";
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { formatCompactNumber } from "../shared/format";
-import { displayTime, formatDuration } from "./format";
+import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 export type ViewId = "overview" | "timeline" | "memory" | "tools";
@@ -102,7 +102,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
           {work ? <>
             <div className="run-title-row">
               <div className="run-icon"><IconListCheck size={20} /></div>
-              <div><h2>{work.goal}</h2><p className="mono">{work.runId || "Current session"}</p></div>
+              <div><h2 className="run-goal" title={work.goal}>{oneLine(work.goal)}</h2><p className="mono">{work.runId || "Current session"}</p></div>
             </div>
             <div className="run-meta-row">
               <Status tone={work.mode === "executing" ? "active" : work.mode === "completed" ? "success" : "neutral"}>{work.mode}</Status>
@@ -262,7 +262,7 @@ function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
           <button className={`checkpoint-row ${active?.id === checkpoint.id ? "is-selected" : ""}`} key={checkpoint.id} onClick={() => setSelected(checkpoint.id)}>
             <span className="timeline-node"><span />{index < checkpoints.length - 1 && <i />}</span>
             <span className="checkpoint-copy">
-              <span><strong>{checkpoint.title}</strong><time>{displayTime(checkpoint.createdAt)}</time></span>
+              <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong><time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
               <span className="checkpoint-meta"><span className="mono">{checkpoint.id}</span>{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}</span>
             </span>
           </button>
@@ -271,7 +271,7 @@ function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
       </section>
       {active && <aside className="panel checkpoint-detail">
         <span className="section-kicker">Selected checkpoint</span>
-        <h2>{active.title}</h2>
+        <h2 title={active.title}>{active.title}</h2>
         <dl>
           <div><dt>Checkpoint</dt><dd className="mono">{active.id}</dd></div>
           <div><dt>Branch</dt><dd>{active.branch || "Detached or unavailable"}</dd></div>
@@ -284,6 +284,11 @@ function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
       </aside>}
     </div>
   );
+}
+
+function oneLine(value: string, max = 120): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
 }
 
 function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolicies: boolean }) {

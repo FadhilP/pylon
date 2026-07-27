@@ -133,6 +133,19 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       }} /></label>
     </div>;
   }
+  if (settings.kind === "timeline") {
+    return <div className="package-fields">
+      <label className="checkbox-field">
+        <input
+          type="checkbox"
+          checked={settings.editRollbackDefault}
+          disabled={disabled}
+          onChange={(event) => onUpdate({ ...settings, editRollbackDefault: event.target.checked })}
+        />
+        Restore files by default when editing a prompt
+      </label>
+    </div>;
+  }
   if (settings.kind !== "helios") return null;
   return <div className="package-fields">
     <label>Future owned browsers<select value={settings.headed ? "shown" : "headless"} disabled={disabled} onChange={(event) => onUpdate({ ...settings, headed: event.target.value === "shown" })}>

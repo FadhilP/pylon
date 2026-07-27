@@ -126,6 +126,7 @@ export default function timelineExtension(
     stateRevision = 0,
     namingInFlight: number | undefined,
     pendingContext = "",
+    suppressNextTreeWarning = false,
     activeRun: RunEntry | undefined,
     latestVerification: any,
     pendingBash = new Map<string, string | undefined>(),
@@ -167,6 +168,75 @@ export default function timelineExtension(
   const disposeStateRequest = pi.events.on("pi-timeline:state-request", (request: any) => {
     if (request?.version !== TIMELINE_STATE_VERSION || request.sessionId !== currentSessionId || typeof request.respond !== "function") return;
     try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Timeline. */ }
+  });
+  const disposeEditNavigation = pi.events.on("pi-timeline:edit-navigation", (request: any) => {
+    if (request?.version !== 1
+      || request.sessionId !== currentSessionId
+      || typeof request.targetEntryId !== "string"
+      || typeof request.rollbackFiles !== "boolean"
+      || typeof request.respond !== "function"
+      || !lastCtx) return;
+    request.respond((async () => {
+      const previousPaired = paired;
+      if (!request.rollbackFiles) {
+        suppressNextTreeWarning = true;
+        return {
+          apply: async () => { paired = false; refresh(lastCtx); },
+          rollback: async () => { suppressNextTreeWarning = true; paired = previousPaired; refresh(lastCtx); },
+          commit: async () => { suppressNextTreeWarning = false; },
+          cancel: async () => { suppressNextTreeWarning = false; },
+        };
+      }
+
+      const branch = lastCtx.sessionManager.getBranch();
+      const positions = new Map<string, number>(
+        branch.map((entry: any, index: number) => [entry.id, index] as const),
+      );
+      const targetPosition = positions.get(request.targetEntryId);
+      const target = targetPosition === undefined ? undefined : [...records.values()]
+        .filter((bound) => bound.sessionId === currentSessionId
+          && (positions.get(bound.record.promptEntryId) ?? Number.POSITIVE_INFINITY) < targetPosition)
+        .sort((left, right) =>
+          (positions.get(right.record.promptEntryId) ?? -1) - (positions.get(left.record.promptEntryId) ?? -1))[0];
+      if (!target) throw new Error("No Timeline checkpoint exists before this prompt");
+
+      const current = await inspectGitState(lastCtx.cwd);
+      const compatibility = classifyCompatibility(target.record, current);
+      if (!compatibility.allowed) {
+        throw new Error(compatibilityDetail(target.record, current, compatibility));
+      }
+
+      const source = await capture(lastCtx.cwd, currentSessionId, (root) =>
+        recordTimelineOwner(artifactRoot, currentSessionId, root));
+      let closed = false;
+      suppressNextTreeWarning = true;
+      const close = async () => {
+        if (closed) return;
+        closed = true;
+        await deleteRefs(source);
+      };
+      return {
+        apply: async () => {
+          await restore(target.record, lastCtx.cwd);
+          paired = true;
+          pendingContext = `Filesystem restored to before edited prompt ${request.targetEntryId}.`;
+          refresh(lastCtx);
+        },
+        rollback: async () => {
+          if (!closed) await restore(source, lastCtx.cwd);
+          suppressNextTreeWarning = true;
+          paired = previousPaired;
+          pendingContext = "";
+          refresh(lastCtx);
+          await close();
+        },
+        commit: close,
+        cancel: async () => {
+          suppressNextTreeWarning = false;
+          await close();
+        },
+      };
+    })());
   });
   const nameSession = async (ctx: any) => {
     if (namingDecided || namingInFlight !== undefined) return;
@@ -454,6 +524,7 @@ export default function timelineExtension(
     namingInFlight = undefined;
     publishState(false);
     disposeStateRequest();
+    disposeEditNavigation();
     disposeVerify();
     disposeCheckpoint();
     disposeWorktreeChange();
@@ -486,6 +557,10 @@ export default function timelineExtension(
     await nameSession(ctx);
   });
   pi.on("session_tree", (_e, ctx) => {
+    if (suppressNextTreeWarning) {
+      suppressNextTreeWarning = false;
+      return;
+    }
     paired = false;
     refresh(ctx);
     ctx.ui.notify(

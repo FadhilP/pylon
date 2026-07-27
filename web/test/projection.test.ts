@@ -2,14 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
-import { projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
+import { decodeHistoryCursor, encodeHistoryCursor, projectConversation, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 
 function runtime(): RuntimeSnapshot {
   return {
     protocolVersion: PROTOCOL_VERSION, sessionId: "session", sessionGeneration: 1, ready: true, cwdLabel: "repo",
     activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [],
-    conversation: { messages: [], tools: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
+    conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
     sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
     metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
     operational: initialOperational([], []),
@@ -69,11 +69,20 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
   const messages = projectMessages([
     { role: "custom", customType: "pi-continuity-memory", display: false, content: "injected context" },
     { role: "user", content: [{ type: "text", text: "" }, { type: "image", mimeType: "image/png", data: "not-returned" }] },
+    {
+      role: "custom",
+      customType: "pylon-prompt-files",
+      display: false,
+      content: "hidden file contents",
+      details: { version: 1, files: [{ name: "notes.txt", size: 12 }] },
+    },
     { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "write", arguments: { path: "src/app.ts", password: "hidden" } }] },
     { role: "toolResult", toolCallId: "call-1", toolName: "write", content: [{ type: "text", text: "done" }], isError: false },
   ]);
   assert.deepEqual(messages[0], { id: "history-0", role: "system", text: "injected context", streaming: false, systemSource: "pi-continuity-memory" });
   assert.equal(messages[1]?.attachmentCount, 1);
+  assert.equal(messages[1]?.fileAttachmentCount, 1);
+  assert.doesNotMatch(JSON.stringify(messages), /hidden file contents|notes\.txt/);
   assert.equal(messages[2]?.text, "");
   assert.deepEqual(messages[3]?.tool, {
     id: "call-1",
@@ -82,6 +91,138 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
     status: "completed",
   });
   assert.equal(messages[3]?.text, "done");
+});
+
+test("history projection keeps stable global IDs and skips old non-delegate payload serialization", () => {
+  let oldPayloadReads = 0;
+  const oldArguments = new Proxy({ path: "old.ts" }, {
+    ownKeys(target) { oldPayloadReads++; return Reflect.ownKeys(target); },
+  });
+  const history = [
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: oldArguments }] },
+    { role: "toolResult", toolCallId: "old", toolName: "read", content: [{ type: "text", text: "old" }] },
+    ...Array.from({ length: 150 }, (_, index) => ({ role: "user", content: `message ${index}` })),
+  ];
+  const projected = projectConversation(history);
+  assert.equal(projected.messages.length, 100);
+  assert.equal(projected.messages[0]?.id, "history-52");
+  assert.equal(projected.messages.at(-1)?.id, "history-151");
+  assert.equal(oldPayloadReads, 0);
+  const page = projectConversation(history, { start: 2, end: 12, includeDelegated: false });
+  assert.equal(page.messages[0]?.id, "history-2");
+  assert.equal(page.messages.at(-1)?.id, "history-11");
+  assert.equal(decodeHistoryCursor(encodeHistoryCursor(52)), 52);
+  assert.equal(decodeHistoryCursor("not-a-cursor"), undefined);
+});
+
+test("history projection retains bounded Pi entry IDs for editable prompts", () => {
+  const projected = projectConversation([
+    { role: "user", content: "Original prompt", entryId: "pi-entry-1" },
+    { role: "assistant", content: "Original response", entryId: "pi-entry-2" },
+  ]);
+  assert.equal(projected.messages[0]?.id, "history-0");
+  assert.equal(projected.messages[0]?.entryId, "pi-entry-1");
+  assert.equal(projected.messages[1]?.entryId, "pi-entry-2");
+});
+
+test("history projection reconstructs bounded delegated runs from tool details", () => {
+  const activity = Array.from({ length: 105 }, (_, index) => ({
+    kind: index % 2 ? "result" : "call",
+    tool: "read",
+    text: "x".repeat(2_100),
+  }));
+  const projected = projectConversation([
+    { role: "user", content: "Inspect the repository" },
+    { role: "assistant", content: [{ type: "toolCall", id: "scout-1", name: "repo_scout", arguments: { task: "Map the runtime", apiToken: "hidden" } }] },
+    {
+      role: "toolResult",
+      toolCallId: "scout-1",
+      toolName: "repo_scout",
+      content: [{ type: "text", text: "Repository report" }],
+      isError: false,
+      details: {
+        agentName: "S1",
+        startedAt: "2026-07-27T01:02:03.000Z",
+        model: "provider/scout",
+        thinking: "high",
+        durationMs: 1_250,
+        usage: { input: 10, output: 20, cacheRead: 3, cacheWrite: 0, cost: 0.01 },
+        activity,
+      },
+    },
+    { role: "assistant", content: [{ type: "toolCall", id: "other", name: "read", arguments: { path: "src/app.ts" } }] },
+  ]);
+  assert.equal(projected.delegatedRuns.length, 1);
+  assert.deepEqual(projected.delegatedRuns[0], {
+    id: "scout-1",
+    kind: "repo_scout",
+    turn: 1,
+    request: "Map the runtime",
+    response: "Repository report",
+    status: "completed",
+    agentName: "S1",
+    startedAt: "2026-07-27T01:02:03.000Z",
+    modelName: "provider/scout",
+    thinkingLevel: "high",
+    durationMs: 1_250,
+    usage: { input: 10, output: 20, cacheRead: 3, cacheWrite: 0, cost: 0.01 },
+    activity: activity.slice(0, 100).map((item) => ({ ...item, text: item.text.slice(0, 2_000) })),
+  });
+  assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);
+});
+
+test("projection publishes live delegated-run updates once per tool event", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const initial = runtime();
+  initial.metrics.userMessages = 2;
+  const projection = new RuntimeProjection(initial, (type, payload) => published.push({ type, payload }));
+  projection.apply(session({ type: "tool_execution_start", toolCallId: "grunt-1", toolName: "grunt", args: { task: "Apply edits" } }));
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "grunt-1",
+    toolName: "grunt",
+    args: { task: "Apply edits" },
+    partialResult: { details: { state: "running", model: "provider/grunt", thinking: "medium", activity: [{ kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" }] } },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end",
+    toolCallId: "grunt-1",
+    toolName: "grunt",
+    result: {
+      content: [{ type: "text", text: "Worker status: completed." }],
+      details: {
+        status: "completed",
+        model: "provider/grunt",
+        thinking: "medium",
+        durationMs: 500,
+        usage: { input: 5, output: 7, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+        activity: [
+          { kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" },
+          { kind: "result", tool: "read", text: "token=hidden source" },
+        ],
+      },
+    },
+    isError: false,
+  }));
+  const updates = published.filter((event) => event.type === "delegate.update");
+  assert.equal(updates.length, 3);
+  assert.equal(updates[0]?.payload.status, "running");
+  assert.deepEqual(projection.snapshot().conversation.delegatedRuns[0], {
+    id: "grunt-1",
+    kind: "grunt",
+    turn: 2,
+    request: "Apply edits",
+    response: "Worker status: completed.",
+    status: "completed",
+    modelName: "provider/grunt",
+    thinkingLevel: "medium",
+    durationMs: 500,
+    usage: { input: 5, output: 7, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+    activity: [
+      { kind: "call", tool: "read", text: '{\n  "path": "a.ts"\n}' },
+      { kind: "result", tool: "read", text: "token=<redacted> source" },
+    ],
+  });
 });
 
 test("projection publishes live session names and agent timing metadata", () => {

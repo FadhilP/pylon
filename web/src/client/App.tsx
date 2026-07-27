@@ -5,10 +5,12 @@ import {
   IconMenu2,
   IconMoon,
   IconSun,
+  IconUsers,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
 import { Inspector, type ViewId } from "./inspector";
@@ -18,6 +20,20 @@ import { SettingsDialog } from "./settings-dialog";
 import { UiDialog } from "./ui-dialog";
 
 type Theme = "light" | "dark";
+type RightPanel = "inspector" | "agents" | null;
+const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
+const DEFAULT_RIGHT_PANEL_WIDTH = 380;
+
+function panelWidth(value: number): number {
+  const maximum = Math.min(720, window.innerWidth * .6);
+  return Math.round(Math.max(300, Math.min(maximum, value)));
+}
+function initialPanelWidth(): number {
+  let stored = Number.NaN;
+  try { stored = Number(localStorage.getItem(RIGHT_PANEL_WIDTH_KEY)); }
+  catch { /* Storage can be unavailable in hardened browser contexts. */ }
+  return panelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_RIGHT_PANEL_WIDTH);
+}
 
 function readInitialTheme(): Theme {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
@@ -38,7 +54,9 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
+  const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -57,8 +75,10 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
+  const agentsToggleRef = useRef<HTMLButtonElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
-  const previousInspectorOpen = useRef(inspectorOpen);
+  const previousRightPanel = useRef(rightPanel);
   const sessionListRequest = useRef(0);
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
@@ -74,6 +94,10 @@ export function App() {
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
+  const timelineSettings = packages.find((item) => item.settings?.kind === "timeline")?.settings;
+  const timelineRollbackDefault = timelineSettings?.kind === "timeline"
+    ? timelineSettings.editRollbackDefault
+    : false;
   const availableViews = useMemo(() => new Set<ViewId>([
     "overview",
     ...(activePackages.has("pi-timeline") ? ["timeline" as const] : []),
@@ -103,6 +127,7 @@ export function App() {
   }, [theme]);
 
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
+  useEffect(() => { setSelectedAgentId(undefined); }, [live.runtime?.sessionId]);
 
   useEffect(() => {
     if (mobile && previousSidebarOpen.current && !sidebarOpen) navigationToggleRef.current?.focus();
@@ -110,9 +135,14 @@ export function App() {
   }, [mobile, sidebarOpen]);
 
   useEffect(() => {
-    if (inspectorOverlay && previousInspectorOpen.current && !inspectorOpen) inspectorToggleRef.current?.focus();
-    previousInspectorOpen.current = inspectorOpen;
-  }, [inspectorOpen, inspectorOverlay]);
+    if (!previousRightPanel.current || rightPanel) {
+      previousRightPanel.current = rightPanel;
+      return;
+    }
+    const trigger = previousRightPanel.current === "agents" ? agentsToggleRef.current : inspectorToggleRef.current;
+    trigger?.focus();
+    previousRightPanel.current = rightPanel;
+  }, [rightPanel]);
 
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
@@ -185,7 +215,7 @@ export function App() {
       }
       if (event.key === "Escape") {
         setSidebarOpen(false);
-        if (inspectorOverlay) setInspectorOpen(false);
+        if (inspectorOverlay) setRightPanel(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -194,7 +224,7 @@ export function App() {
 
   const selectView = (next: ViewId) => {
     setView(next);
-    setInspectorOpen(true);
+    setRightPanel("inspector");
   };
 
   const switchSession = async (session: SessionSummary) => {
@@ -363,16 +393,16 @@ export function App() {
 
   const toggleSidebar = () => {
     if (mobile) {
-      setInspectorOpen(false);
+      setRightPanel(null);
       setSidebarOpen((open) => !open);
       return;
     }
     setSidebarCollapsed((collapsed) => !collapsed);
   };
 
-  const toggleInspector = () => {
+  const toggleRightPanel = (panel: Exclude<RightPanel, null>) => {
     if (inspectorOverlay) setSidebarOpen(false);
-    setInspectorOpen((open) => !open);
+    setRightPanel((current) => current === panel ? null : panel);
   };
 
   const setPackageEnabled = async (item: PackageSummary, enabled: boolean) => {
@@ -455,25 +485,56 @@ export function App() {
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
-          inspectorOpen={inspectorOpen}
+          rightPanel={rightPanel}
           menuButtonRef={navigationToggleRef}
           inspectorButtonRef={inspectorToggleRef}
+          agentsButtonRef={agentsToggleRef}
           onToggleMenu={toggleSidebar}
-          onToggleInspector={toggleInspector}
+          onToggleInspector={() => toggleRightPanel("inspector")}
+          onToggleAgents={() => toggleRightPanel("agents")}
         />
         {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
-        <div className={`workspace-layout ${inspectorOpen ? "has-inspector" : ""}`}>
-          <ConversationPanel key={live.runtime?.sessionId || "loading"} live={live} projectAvailable={live.runtime?.projectAvailable !== false} />
-          {inspectorOpen && inspectorOverlay && <button className="inspector-scrim" aria-label="Close inspector" onClick={() => setInspectorOpen(false)} />}
-          <Inspector
-            current={view}
+        <div
+          ref={workspaceRef}
+          className={`workspace-layout ${rightPanel ? "has-inspector" : ""}`}
+          style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}
+        >
+          <ConversationPanel
+            key={live.runtime?.sessionId || "loading"}
             live={live}
-            availableViews={availableViews}
-            isOpen={inspectorOpen}
-            overlay={inspectorOverlay}
-            onClose={() => setInspectorOpen(false)}
-            onNavigate={selectView}
+            projectAvailable={live.runtime?.projectAvailable !== false}
+            timelineRollbackDefault={timelineRollbackDefault}
+            onSelectAgent={(id) => {
+              setSelectedAgentId(id);
+              setRightPanel("agents");
+            }}
           />
+          {rightPanel && inspectorOverlay && <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />}
+          {rightPanel && <PanelResizer
+            container={workspaceRef}
+            width={rightPanelWidth}
+            onCommit={(width) => {
+              setRightPanelWidth(width);
+              try { localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(width)); }
+              catch { /* Resizing still works for the current page. */ }
+            }}
+          />}
+          {rightPanel === "inspector" && <Inspector
+              current={view}
+              live={live}
+              availableViews={availableViews}
+              isOpen
+              overlay={inspectorOverlay}
+              onClose={() => setRightPanel(null)}
+              onNavigate={selectView}
+            />}
+          {rightPanel === "agents" && <AgentPanel
+            key={live.runtime?.sessionId || "agents"}
+            runs={live.runtime?.conversation.delegatedRuns ?? []}
+            selectedId={selectedAgentId}
+            onSelect={setSelectedAgentId}
+            onClose={() => setRightPanel(null)}
+          />}
         </div>
         {(sessionBusy || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
       </main>
@@ -495,6 +556,50 @@ export function App() {
   );
 }
 
+function PanelResizer({ container, width, onCommit }: {
+  container: React.RefObject<HTMLDivElement | null>;
+  width: number;
+  onCommit: (width: number) => void;
+}) {
+  const resize = (clientX: number) => {
+    const next = panelWidth(window.innerWidth - clientX);
+    container.current?.style.setProperty("--inspector-width", `${next}px`);
+    return next;
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (window.innerWidth <= 680) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    let next = width;
+    const move = (moveEvent: PointerEvent) => { next = resize(moveEvent.clientX); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      onCommit(next);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  };
+  return <div
+    className="panel-resizer"
+    role="separator"
+    aria-label="Resize details panel"
+    aria-orientation="vertical"
+    aria-valuemin={300}
+    aria-valuemax={Math.floor(Math.min(720, window.innerWidth * .6))}
+    aria-valuenow={width}
+    tabIndex={0}
+    onPointerDown={onPointerDown}
+    onKeyDown={(event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const next = panelWidth(width + (event.key === "ArrowLeft" ? 16 : -16));
+      container.current?.style.setProperty("--inspector-width", `${next}px`);
+      onCommit(next);
+    }}
+  />;
+}
+
 function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
   useEffect(() => {
     const timer = window.setTimeout(onClose, 8_000);
@@ -506,10 +611,12 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, inspectorOpen, menuButtonRef, inspectorButtonRef, onToggleTheme, onToggleMenu, onToggleInspector }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; inspectorOpen: boolean; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void }) {
+function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void }) {
   const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = live.runtime?.gitBranch || "No Git branch";
   const turn = live.runtime?.metrics.userMessages ?? 0;
+  const delegatedRuns = live.runtime?.conversation.delegatedRuns ?? [];
+  const activeAgents = delegatedRuns.filter((run) => run.status === "running").length;
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -522,7 +629,13 @@ function Topbar({ live, session, theme, menuOpen, inspectorOpen, menuButtonRef, 
         <div className="branch-label"><IconGitBranch size={14} /><span>{branch} · Turn {turn}</span></div>
       </div>
       <div className="topbar-actions">
-        <button ref={inspectorButtonRef} className={`icon-button ${inspectorOpen ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Toggle inspector" aria-controls="session-inspector" aria-expanded={inspectorOpen}><IconLayoutDashboard size={17} /></button>
+        <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
+          <IconUsers size={16} />
+          <span>Agents</span>
+          <small>{delegatedRuns.length}</small>
+          {activeAgents > 0 && <i aria-hidden="true" />}
+        </button>
+        <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
         <button className="icon-button" onClick={onToggleTheme} aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
           {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
         </button>

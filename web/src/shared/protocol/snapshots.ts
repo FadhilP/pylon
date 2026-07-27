@@ -1,5 +1,5 @@
 import type { PROTOCOL_VERSION } from "./envelope.ts";
-import type { ConversationReadModel, ExtensionUiReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, UiRequestReadModel } from "./events.ts";
+import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, UiRequestReadModel } from "./events.ts";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -43,6 +43,20 @@ export interface BootstrapSnapshot {
   csrfToken: string;
   runtime: RuntimeSnapshot;
   pendingUi?: UiRequestReadModel;
+}
+
+export interface ConversationHistoryQuery {
+  cursor: string;
+  limit?: number;
+}
+
+export interface ConversationHistoryPage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionId: string;
+  sessionGeneration: number;
+  messages: MessageReadModel[];
+  remaining: number;
+  nextCursor?: string;
 }
 
 export interface SessionSummary {
@@ -145,6 +159,10 @@ export type PackageSettingsReadModel =
   | {
       kind: "helios";
       headed: boolean;
+    }
+  | {
+      kind: "timeline";
+      editRollbackDefault: boolean;
     };
 
 export interface PackageModelProfileReadModel {

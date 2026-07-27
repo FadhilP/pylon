@@ -74,6 +74,10 @@ export function validTabId(value: string | undefined): value is string {
 }
 
 export async function readJson(request: IncomingMessage, limit = MAX_JSON_BODY_BYTES): Promise<unknown> {
+  return (await readJsonWithSize(request, limit)).value;
+}
+
+export async function readJsonWithSize(request: IncomingMessage, limit = MAX_JSON_BODY_BYTES): Promise<{ value: unknown; bytes: number }> {
   const contentType = request.headers["content-type"];
   if (!contentType || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)) throw httpError(415, "application/json content type required");
   let bytes = 0;
@@ -84,7 +88,7 @@ export async function readJson(request: IncomingMessage, limit = MAX_JSON_BODY_B
     if (bytes > limit) throw httpError(413, "request body too large");
     chunks.push(buffer);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  try { return { value: JSON.parse(Buffer.concat(chunks).toString("utf8")), bytes }; }
   catch { throw httpError(400, "invalid JSON"); }
 }
 

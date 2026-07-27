@@ -100,6 +100,18 @@ function webStartUrl(value: string): string {
 function modelName(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
+function delegatedName(pi: ExtensionAPI, kind: "repo_scout" | "web_scout", callId: string): string {
+  let assigned: string | undefined;
+  pi.events.emit("pylon:delegate-name", {
+    version: 1,
+    kind,
+    callId,
+    respond: (name: unknown) => {
+      if (typeof name === "string" && /^S\d+$/.test(name)) assigned = name;
+    },
+  });
+  return assigned ?? `S-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
+}
 export function startsNewRepoSequence(event: { source: string; streamingBehavior?: string }): boolean {
   return event.source !== "extension" && event.streamingBehavior !== "steer";
 }
@@ -376,7 +388,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       return serializeRepoCall(async () => {
       if (!isScoutEnabled(await loadConfig()))
         return {
@@ -415,14 +427,16 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           ],
           details: { failureCode: "unavailable", model: modelName(model) },
         };
+      const thinking = await resolveThinking();
       repoRuns++;
+      const started = Date.now();
+      const agent = { agentName: delegatedName(pi, "repo_scout", id), startedAt: new Date(started).toISOString() };
       if (ctx.hasUI)
         ctx.ui.setStatus("pi-scout", "scout: searching repository…");
       onUpdate?.({
         content: [{ type: "text", text: "Scout searching repository…" }],
-        details: { model: modelName(model), state: "running" },
+        details: { ...agent, model: modelName(model), thinking, state: "running" },
       });
-      const started = Date.now();
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       let sessionDir: string | undefined;
@@ -432,7 +446,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         lastUpdateAt = now;
         onUpdate?.({
           content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }],
-          details: { model: modelName(model), state: "running", durationMs: now - started, activity },
+          details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started, activity },
         });
       }, HEARTBEAT_MS);
       heartbeat.unref();
@@ -466,7 +480,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           "--model",
           modelName(model),
           "--thinking",
-          await resolveThinking(),
+          thinking,
           "--system-prompt",
           REPO_SCOUT_PROMPT,
         ];
@@ -490,7 +504,9 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
                 },
               ],
               details: {
+                ...agent,
                 model: modelName(model),
+                thinking,
                 state: "running",
                 durationMs: lastUpdateAt - started,
                 activity: all,
@@ -507,14 +523,16 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         const claims = structuredClaims(report.text);
         const searches = searchTelemetry(run.activity, seenRepoSearches);
         return {
-          content: [{ type: "text" as const, text: report.text }],
+          content: [{ type: "text" as const, text: `[${agent.agentName} · Repo Scout] ${report.text}` }],
           details: {
+            ...agent,
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
             callNumber: repoRuns,
             contextTokens: run.contextTokens,
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
+            thinking,
             durationMs: run.durationMs,
             usage: run.usage,
             turns: run.turns,
@@ -592,7 +610,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 12, default: 8 })),
     }, { additionalProperties: false }),
     executionMode: "sequential",
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       if (!isScoutEnabled(await loadConfig())) return { content: [{ type: "text" as const, text: "Web Scout inactive. Configure it with /scout or use /scout reset." }], details: { failureCode: "disabled" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Web scout task must not be empty." }], details: { failureCode: "invalid" } };
@@ -605,19 +623,21 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       if (!model) return { content: [{ type: "text" as const, text: "Web scout unavailable: no selected model." }], details: { failureCode: "unavailable" } };
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) return { content: [{ type: "text" as const, text: "Web scout unavailable: selected model has no credentials." }], details: { failureCode: "unavailable", model: modelName(model) } };
+      const thinking = await resolveThinking();
       const maxPages = params.maxPages ?? 8;
       const maxActions = Math.min(80, maxPages * 6 + 8);
       const grant = await capability.issueGrant({ maxPages, maxActions, headed: false });
-      if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: researching public web…");
-      onUpdate?.({ content: [{ type: "text", text: "Web Scout launching isolated browser…" }], details: { model: modelName(model), state: "running" } });
       const started = Date.now();
+      const agent = { agentName: delegatedName(pi, "web_scout", id), startedAt: new Date(started).toISOString() };
+      if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: researching public web…");
+      onUpdate?.({ content: [{ type: "text", text: "Web Scout launching isolated browser…" }], details: { ...agent, model: modelName(model), thinking, state: "running" } });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
         lastUpdateAt = now;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { model: modelName(model), state: "running", durationMs: now - started } });
+        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
       try {
@@ -626,7 +646,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           "--mode", "rpc", "--no-session", "--no-extensions", "-e", capability.childExtensionPath,
           "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
           "--no-builtin-tools", "--tools", "scout_browser", "--model", modelName(model),
-          "--thinking", await resolveThinking(), "--system-prompt", WEB_SCOUT_PROMPT,
+          "--thinking", thinking, "--system-prompt", WEB_SCOUT_PROMPT,
         ];
         const run = await runChild(args, {
           cwd: ctx.cwd,
@@ -639,7 +659,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           onActivity: (_item, all) => {
             lastUpdateAt = Date.now();
             activity = all;
-            onUpdate?.({ content: [{ type: "text", text: `Web Scout child activity:\n${activityText(all)}` }], details: { model: modelName(model), state: "running", durationMs: lastUpdateAt - started } });
+            onUpdate?.({ content: [{ type: "text", text: `Web Scout child activity:\n${activityText(all)}` }], details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, activity: all } });
           },
         });
         const failureMessage = run.error
@@ -647,12 +667,14 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           : undefined;
         const text = failureMessage ? `Web scout failed nonfatally: ${failureMessage}` : run.text;
         return {
-          content: [{ type: "text" as const, text }],
+          content: [{ type: "text" as const, text: `[${agent.agentName} · Web Scout] ${text}` }],
           details: {
+            ...agent,
             task,
             startUrls,
             maxPages,
             model: modelName(model),
+            thinking,
             durationMs: run.durationMs,
             usage: run.usage,
             turns: run.turns,
@@ -663,7 +685,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
             finalizationSucceeded: run.finalizationSucceeded,
             failureCode: run.failure === "budget_exceeded" ? "budget_exceeded" : run.error ? "child_error" : undefined,
             ...(failureMessage ? { failureMessage } : {}),
-            activity: run.activity.map((item) => ({ kind: item.kind, tool: item.tool, isError: item.isError })),
+            activity: run.activity,
           },
         };
       } finally {

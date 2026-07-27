@@ -1,5 +1,5 @@
-import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -58,6 +58,22 @@ export class ApiClient {
     if (input.query) query.set("q", input.query);
     if (input.limit) query.set("limit", String(input.limit));
     return json<SessionListSnapshot>(await fetch(`/api/v1/sessions${query.size ? `?${query}` : ""}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async conversationHistory(cursor: string, generation: number, limit = 100): Promise<ConversationHistoryPage> {
+    const query = new URLSearchParams({ cursor, generation: String(generation), limit: String(limit) });
+    return json<ConversationHistoryPage>(await fetch(`/api/v1/conversation-history?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async queuedPrompt(queueId: string, generation: number): Promise<QueuedPromptPayload> {
+    const query = new URLSearchParams({ queueId, generation: String(generation) });
+    return json<QueuedPromptPayload>(await fetch(`/api/v1/queued-prompt?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));

@@ -19,6 +19,18 @@ import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
 
 const HEARTBEAT_MS = 1000;
 const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
+function delegatedName(pi: ExtensionAPI, callId: string): string {
+  let assigned: string | undefined;
+  pi.events.emit("pylon:delegate-name", {
+    version: 1,
+    kind: "grunt",
+    callId,
+    respond: (name: unknown) => {
+      if (typeof name === "string" && /^G\d+$/.test(name)) assigned = name;
+    },
+  });
+  return assigned ?? `G-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
+}
 
 async function resolveExecutionMode(configured: ReturnType<typeof gruntMode>, exec: any, cwd: string): Promise<"isolated" | "direct"> {
   if (configured !== "dynamic") return configured;
@@ -157,7 +169,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       checkCommands: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8, uniqueItems: true, description: "Focused existing checks useful for this task" })),
     }, { additionalProperties: false }),
     executionMode: "sequential",
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       const config = await loadConfig();
       if (!isGruntEnabled(config)) return { content: [{ type: "text" as const, text: "Grunt inactive. Configure it with /grunt or use /grunt reset." }], details: { status: "disabled" } };
       const task = params.task.trim();
@@ -167,6 +179,9 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) return { content: [{ type: "text" as const, text: "Grunt unavailable: selected model has no credentials." }], details: { status: "unavailable", model: modelName(model) } };
       calls++;
+      const started = Date.now();
+      const agent = { agentName: delegatedName(pi, id), startedAt: new Date(started).toISOString() };
+      const named = (value: string) => `[${agent.agentName} · Grunt] ${value}`;
 
       const exec = pi.exec.bind(pi);
       const configuredMode = gruntMode(config);
@@ -207,14 +222,13 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       ];
       const runningText = mode === "isolated" ? "implementing in isolation" : "DIRECT — editing current working directory";
       if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
-      onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
-      const started = Date.now();
+      onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
       let activity: readonly WorkerActivity[] = [];
       let lastUpdateAt = started;
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
+        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
       try {
@@ -223,7 +237,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
           maxTurns: gruntMaxTurns(), maxCostUsd: gruntMaxCostUsd(),
           onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
             activity = all; lastUpdateAt = Date.now();
-            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
+            onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all } });
           },
         });
         if (run.cwd !== workerCwd)
@@ -244,8 +258,9 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
             recovery && run.text ? `\nWorker report:\n${run.text}` : "",
           ].filter(Boolean);
           return {
-            content: [{ type: "text" as const, text: lines.join("\n") }],
+            content: [{ type: "text" as const, text: named(lines.join("\n")) }],
             details: {
+              ...agent,
               status, mode, configuredMode, isolationFallback, isolated: false, workerCwd: run.cwd,
               ...(recovery ? { task, suggestedPaths: suggested, targetedContext, checkCommands } : {}),
               model: modelName(model), thinking: params.thinking, durationMs: run.durationMs,
@@ -309,8 +324,9 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
           recovery && run.text ? `\nWorker report:\n${run.text}` : "",
         ].filter(Boolean);
         return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
+          content: [{ type: "text" as const, text: named(lines.join("\n")) }],
           details: {
+            ...agent,
             status, applied, mode, configuredMode, isolated: true, isolationVerified: isolated.isolationVerified,
             workerCwd: run.cwd, workerHead: isolated.workerHead, artifactPath,
             ...(recovery ? { task, suggestedPaths: suggested, targetedContext, checkCommands, missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths } : {}),
@@ -325,8 +341,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
       } catch (error) {
         const failureMessage = sanitizeFailureMessage(error, "Grunt execution failed.");
         return {
-          content: [{ type: "text" as const, text: mode === "isolated" ? `Grunt failed in isolated worktree; parent unchanged. ${failureMessage}` : `Grunt failed in DIRECT mode; partial edits may remain. ${failureMessage}` }],
-          details: { status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking },
+          content: [{ type: "text" as const, text: named(mode === "isolated" ? `Grunt failed in isolated worktree; parent unchanged. ${failureMessage}` : `Grunt failed in DIRECT mode; partial edits may remain. ${failureMessage}`) }],
+          details: { ...agent, status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking },
         };
       } finally {
         clearInterval(heartbeat);
@@ -334,7 +350,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi) {
         if (cleanupWarnings.length) {
           const text = `Grunt cleanup warning: ${cleanupWarnings.join("; ")}`;
           if (ctx.hasUI) ctx.ui.notify(text, "warning");
-          else onUpdate?.({ content: [{ type: "text", text }], details: { state: "cleanup_warning", cleanupWarnings } });
+          else onUpdate?.({ content: [{ type: "text", text }], details: { ...agent, state: "cleanup_warning", cleanupWarnings } });
         }
         if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", undefined);
       }

@@ -23,6 +23,14 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     assert.equal(stored.version, 2);
     assert.equal(stored.projects.length, 2);
 
+    let seeded = false;
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load(async () => {
+      seeded = true;
+      return [first];
+    });
+    assert.equal(seeded, false);
+
     await registry.remove(projectIdForCwd(first));
     assert.deepEqual(registry.list().map((project) => project.id), [projectIdForCwd(second)]);
   } finally {

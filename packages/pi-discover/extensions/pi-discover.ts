@@ -136,6 +136,9 @@ export default function discoverExtension(pi: ExtensionAPI) {
   let indexReady = false;
   let activeCwd = "";
   let indexing = false;
+  let pendingRefreshCwd: string | undefined;
+  let backgroundRefresh: Promise<void> | undefined;
+  let shuttingDown = false;
   const publishIndexState = async (cwd = activeCwd) => {
     if (!cwd) return;
     if (indexing) {
@@ -179,6 +182,26 @@ export default function discoverExtension(pi: ExtensionAPI) {
       indexing = false;
       await publishIndexState();
     }
+  };
+  const scheduleIndexRefresh = (ctx?: { cwd?: string }) => {
+    if (!ctx?.cwd || shuttingDown) return;
+    activeCwd = ctx.cwd;
+    pendingRefreshCwd = ctx.cwd;
+    if (backgroundRefresh) return;
+    backgroundRefresh = (async () => {
+      while (pendingRefreshCwd && !shuttingDown) {
+        const cwd = pendingRefreshCwd;
+        pendingRefreshCwd = undefined;
+        await refreshIndex({ cwd });
+      }
+    })().catch((error) => {
+      latestIndexError = boundedError(error);
+      indexing = false;
+      pi.events.emit("pi-discover:index-state", { version: 1, available: true, state: "error", error: latestIndexError });
+    }).finally(() => {
+      backgroundRefresh = undefined;
+      if (pendingRefreshCwd && !shuttingDown) scheduleIndexRefresh({ cwd: pendingRefreshCwd });
+    });
   };
   const increment = (counts: Map<string, number>, names: readonly string[]) => {
     for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
@@ -249,19 +272,22 @@ export default function discoverExtension(pi: ExtensionAPI) {
       else request.resolve();
     })().catch((error) => request.reject(error));
   });
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     clearSessionState();
     configureDeferredTools();
-    await refreshIndex(ctx);
+    scheduleIndexRefresh(ctx);
   });
-  pi.on("turn_end", async (_event, ctx) => {
+  pi.on("turn_end", (_event, ctx) => {
     clearTurnState();
-    await refreshIndex(ctx);
+    scheduleIndexRefresh(ctx);
   });
   pi.on("tool_call", (event: any) => {
     if (selectedTools.has(event?.toolName)) increment(invoked, [event.toolName]);
   });
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
+    pendingRefreshCwd = undefined;
+    await backgroundRefresh;
     disposeChildCapability();
     disposeHealth();
     disposeIndexActions();
@@ -281,6 +307,10 @@ export default function discoverExtension(pi: ExtensionAPI) {
         return;
       }
       await ctx.waitForIdle?.();
+      if (indexing) {
+        ctx.ui.notify("pi-discover indexing is already in progress.", "warning");
+        return;
+      }
       const activity = action === "status" ? "Reading index status..." : action === "prune" ? "Pruning stale index entries..." : `${action === "rebuild" ? "Rebuilding" : "Refreshing"} index...`;
       ctx.ui.setStatus("pi-discover-index", activity);
       activeCwd = ctx.cwd;
