@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -126,10 +126,13 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     && (!identifier(value.entryId) || typeof value.rollbackFiles !== "boolean")) {
     return { ok: false, error: "invalid prompt edit" };
   }
+  if (value.type === "rewindPrompt" && !identifier(value.entryId)) {
+    return { ok: false, error: "invalid prompt rewind" };
+  }
   if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
   }
-  if (["removeProject", "archiveProject", "restoreProject"].includes(value.type) && !identifier(value.projectId)) {
+  if (["removeProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
     return { ok: false, error: "invalid projectId" };
   }
   if (value.type === "renameSession" && (!boundedString(value.name) || !value.name.trim())) {
@@ -170,6 +173,14 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "updatePackageSettings") {
     if (!identifier(value.packageId)) return { ok: false, error: "invalid packageId" };
     if (!validPackageSettings(value.settings)) return { ok: false, error: "invalid package settings" };
+  }
+  if (value.type === "updateProjectWorktreeSettings"
+    && (typeof value.setupCommand !== "string" || value.setupCommand.length > 2_000)) {
+    return { ok: false, error: "invalid worktree setup command" };
+  }
+  if (value.type === "handoffSession"
+    && value.destination !== "checkout" && value.destination !== "worktree") {
+    return { ok: false, error: "invalid handoff destination" };
   }
   if (value.type === "setModel" && (!boundedString(value.provider) || !boundedString(value.modelId))) {
     return { ok: false, error: "invalid model" };
@@ -232,6 +243,37 @@ export function isSessionListSnapshot(value: unknown): value is SessionListSnaps
     && (project.nextCursor === undefined || identifier(project.nextCursor))
     && Array.isArray(project.sessions) && project.sessions.length <= 100
     && project.sessions.every((session) => validSessionSummary(session, project.id as string)));
+}
+
+function validWorkspacePath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 500
+    && !value.startsWith("/") && !value.includes("\\")
+    && !/^[A-Za-z]:/.test(value)
+    && value.split("/").every((part) => part && part !== "." && part !== "..");
+}
+
+export function isWorkspaceFilePage(value: unknown): value is WorkspaceFilePage {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !boundedString(value.revision, 128) || !Array.isArray(value.files) || value.files.length > 200
+    || !Number.isSafeInteger(value.totalCount) || (value.totalCount as number) < 0 || (value.totalCount as number) > 10_000
+    || typeof value.truncated !== "boolean"
+    || (value.nextCursor !== undefined && !identifier(value.nextCursor))) return false;
+  return value.files.every((file) => record(file) && validWorkspacePath(file.path)
+    && (file.status === undefined || ["added", "modified", "deleted"].includes(String(file.status)))
+    && (file.binary === undefined || typeof file.binary === "boolean")
+    && (file.additions === undefined || Number.isSafeInteger(file.additions) && (file.additions as number) >= 0)
+    && (file.deletions === undefined || Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0));
+}
+
+export function isWorkspaceFileContent(value: unknown): value is WorkspaceFileContent {
+  return record(value)
+    && value.protocolVersion === PROTOCOL_VERSION
+    && generation(value.sessionGeneration)
+    && boundedString(value.revision, 128)
+    && validWorkspacePath(value.path)
+    && ["available", "deleted", "binary", "oversized"].includes(String(value.state))
+    && (value.text === undefined || typeof value.text === "string" && value.text.length <= 2 * 1024 * 1024)
+    && (value.truncated === undefined || typeof value.truncated === "boolean");
 }
 
 export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnapshot {
@@ -341,6 +383,18 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (value.projectAvailable !== undefined && typeof value.projectAvailable !== "boolean") return false;
   if (value.sessionName !== undefined && (typeof value.sessionName !== "string" || value.sessionName.length > 200)) return false;
   if (value.gitBranch !== undefined && (typeof value.gitBranch !== "string" || value.gitBranch.length > 200)) return false;
+  if (value.workspace !== undefined) {
+    if (!record(value.workspace)
+      || typeof value.workspace.gitAvailable !== "boolean"
+      || !["worktree", "checkout", "non-git"].includes(String(value.workspace.mode))
+      || !Number.isSafeInteger(value.workspace.changedCount) || (value.workspace.changedCount as number) < 0
+      || typeof value.workspace.canMoveToCheckout !== "boolean"
+      || typeof value.workspace.canMoveToWorktree !== "boolean"
+      || (value.workspace.revision !== undefined && !boundedString(value.workspace.revision, 128))
+      || (value.workspace.setupState !== undefined && !["idle", "running", "failed"].includes(String(value.workspace.setupState)))
+      || (value.workspace.setupError !== undefined && !boundedString(value.workspace.setupError, 500))
+      || (value.workspace.checkoutOwner !== undefined && !identifier(value.workspace.checkoutOwner))) return false;
+  }
   if (!value.activeTools.every((item) => typeof item === "string") || !value.availableTools.every((item) => typeof item === "string")) return false;
   if (!record(value.optionalCapabilities) || !Object.values(value.optionalCapabilities).every((item) => item === "available" || item === "unavailable")) return false;
   if (!Array.isArray(value.diagnostics) || !value.diagnostics.every((item) => record(item)
@@ -363,6 +417,8 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && (message.entryId === undefined || identifier(message.entryId))
     && ["user", "assistant", "system", "tool"].includes(message.role as string)
     && typeof message.text === "string" && message.text.length <= MAX_MESSAGE_LENGTH && typeof message.streaming === "boolean"
+    && (message.createdAt === undefined || typeof message.createdAt === "string" && !Number.isNaN(Date.parse(message.createdAt)))
+    && (message.canUndo === undefined || typeof message.canUndo === "boolean")
     && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount) && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
     && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount) && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
     && (message.workDurationMs === undefined || Number.isSafeInteger(message.workDurationMs)

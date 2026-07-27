@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
-import type { DriverEvent, DriverEventListener, EditPromptInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
+import type { DriverEvent, DriverEventListener, EditPromptInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
 import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
@@ -37,6 +37,7 @@ class FakeDriver implements PiDriver {
   promptImages: PromptInput["images"][] = [];
   queued?: QueuedPromptPayload;
   edits: EditPromptInput[] = [];
+  rewinds: RewindPromptInput[] = [];
   answers: UiResponse[] = [];
   deletedSessions: string[] = [];
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
@@ -103,6 +104,10 @@ class FakeDriver implements PiDriver {
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
     this.edits.push(input);
     return this.steer(input);
+  }
+  rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand> {
+    this.rewinds.push(input);
+    return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true });
   }
   abort(): Promise<void> { return Promise.resolve(); }
   addProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project", "project-workspace")); }
@@ -278,6 +283,15 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(driver.edits[0]?.entryId, "entry-1");
     assert.equal(driver.edits[0]?.rollbackFiles, true);
     assert.deepEqual(driver.edits[0]?.images, images);
+    const rewindCommand = {
+      type: "rewindPrompt",
+      entryId: "entry-1",
+      commandId: "rewind-once",
+      expectedGeneration: 1,
+    };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(rewindCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(rewindCommand) })).status, 200);
+    assert.equal(driver.rewinds.length, 1);
 
     const sessions = await fetch(`${origin}/api/v1/sessions`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(sessions.status, 200);

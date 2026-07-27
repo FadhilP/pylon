@@ -70,7 +70,7 @@ export class SessionIndex {
       return (options.userCountFor?.(fallback.id) ?? fallback.messageCount) > 0;
     });
     const source = [...missing, ...this.sessions]
-      .filter((session) => !registeredIds || registeredIds.has(projectIdForCwd(session.cwd)))
+      .filter((session) => !registeredIds || registeredIds.has(this.projectId(session)))
       .filter((session) => !this.registry?.isSessionArchived(session.id))
       .sort((left, right) => right.modified.getTime() - left.modified.getTime());
     const query = input.query?.trim().toLowerCase() ?? "";
@@ -79,7 +79,7 @@ export class SessionIndex {
       : source;
     const grouped = new Map<string, SessionInfo[]>();
     for (const session of filtered) {
-      const projectId = projectIdForCwd(session.cwd);
+      const projectId = this.projectId(session);
       if (input.projectId && projectId !== input.projectId) continue;
       const group = grouped.get(projectId) ?? [];
       group.push(session);
@@ -130,13 +130,13 @@ export class SessionIndex {
       .map((project) => ({
         id: project.id,
         label: project.label,
-        sessionCount: this.sessions.filter((session) => projectIdForCwd(session.cwd) === project.id).length,
+        sessionCount: this.sessions.filter((session) => this.projectId(session) === project.id).length,
         archivedAt: project.archivedAt!,
       }));
     const archiveRecords = new Map(registry.listArchivedSessions().map((record) => [record.id, record.archivedAt]));
     const source = this.sessions
       .filter((session) => archiveRecords.has(session.id))
-      .filter((session) => !archivedProjectIds.has(projectIdForCwd(session.cwd)))
+      .filter((session) => !archivedProjectIds.has(this.projectId(session)))
       .filter((session) => !query || `${session.name ?? ""} ${session.firstMessage} ${session.allMessagesText} ${session.cwd}`.toLowerCase().includes(query))
       .sort((left, right) => Date.parse(archiveRecords.get(right.id)!) - Date.parse(archiveRecords.get(left.id)!));
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
@@ -182,11 +182,12 @@ export class SessionIndex {
       }
       this.userCounts.set(session.id, userMessageCount);
     }
+    const project = this.registry?.projectForSession(session.id, session.cwd);
     return {
       id: session.id.slice(0, 128),
-      projectId: projectIdForCwd(session.cwd),
+      projectId: this.projectId(session),
       ...(session.name ? { name: session.name.slice(0, 200) } : {}),
-      cwdLabel: basename(session.cwd) || "Workspace",
+      cwdLabel: project?.label ?? (basename(session.cwd) || "Workspace"),
       createdAt: session.created.toISOString(),
       modifiedAt: session.modified.toISOString(),
       userMessageCount,
@@ -200,7 +201,7 @@ export class SessionIndex {
     const rawLabels = new Map<string, string>();
     const counts = new Map<string, number>();
     for (const session of sessions) {
-      const id = projectIdForCwd(session.cwd);
+      const id = this.projectId(session);
       if (rawLabels.has(id)) continue;
       const label = basename(session.cwd) || "Workspace";
       rawLabels.set(id, label);
@@ -218,5 +219,9 @@ export class SessionIndex {
       labels.set(id, `${label} (${index})`);
     }
     return labels;
+  }
+
+  private projectId(session: Pick<SessionInfo, "id" | "cwd">): string {
+    return this.registry?.projectForSession(session.id, session.cwd)?.id ?? projectIdForCwd(session.cwd);
   }
 }

@@ -2,6 +2,7 @@ import {
   IconBrandGit,
   IconGitBranch,
   IconLayoutDashboard,
+  IconFiles,
   IconMenu2,
   IconMoon,
   IconSun,
@@ -13,6 +14,7 @@ import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, Ses
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
+import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
@@ -20,7 +22,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { UiDialog } from "./ui-dialog";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "agents" | null;
+type RightPanel = "inspector" | "agents" | "files" | null;
 const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
 const DEFAULT_RIGHT_PANEL_WIDTH = 380;
 
@@ -57,6 +59,7 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
+  const [requestedFile, setRequestedFile] = useState<string>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -76,6 +79,7 @@ export function App() {
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const agentsToggleRef = useRef<HTMLButtonElement>(null);
+  const filesToggleRef = useRef<HTMLButtonElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
   const previousRightPanel = useRef(rightPanel);
@@ -94,10 +98,6 @@ export function App() {
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
-  const timelineSettings = packages.find((item) => item.settings?.kind === "timeline")?.settings;
-  const timelineRollbackDefault = timelineSettings?.kind === "timeline"
-    ? timelineSettings.editRollbackDefault
-    : false;
   const timelineEnabled = activePackages.has("pi-timeline")
     || live.runtime?.operational.timeline.availability === "available";
   const memoryEnabled = activePackages.has("pi-continuity")
@@ -143,10 +143,25 @@ export function App() {
       previousRightPanel.current = rightPanel;
       return;
     }
-    const trigger = previousRightPanel.current === "agents" ? agentsToggleRef.current : inspectorToggleRef.current;
+    const trigger = previousRightPanel.current === "agents"
+      ? agentsToggleRef.current
+      : previousRightPanel.current === "files"
+        ? filesToggleRef.current
+        : inspectorToggleRef.current;
     trigger?.focus();
     previousRightPanel.current = rightPanel;
   }, [rightPanel]);
+
+  useEffect(() => {
+    const open = (event: Event) => {
+      const path = (event as CustomEvent<unknown>).detail;
+      if (typeof path !== "string") return;
+      setRequestedFile(path);
+      setRightPanel("files");
+    };
+    window.addEventListener("pylon:open-file", open);
+    return () => window.removeEventListener("pylon:open-file", open);
+  }, []);
 
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
@@ -310,6 +325,22 @@ export function App() {
       await runtimeStore.removeProject(project.id);
     } catch (cause) {
       reportError(cause, "Unable to remove project");
+    } finally {
+      setProjectBusy("");
+    }
+  };
+
+  const updateWorktreeSetup = async (project: SessionProject) => {
+    const setupCommand = window.prompt(
+      `Worktree setup for ${project.label}\n\nRuns once after a new isolated worktree is created. Leave blank to disable.`,
+      "",
+    );
+    if (setupCommand === null) return;
+    setProjectBusy(project.id);
+    try {
+      await runtimeStore.updateProjectWorktreeSettings(project.id, setupCommand);
+    } catch (cause) {
+      reportError(cause, "Unable to save worktree setup");
     } finally {
       setProjectBusy("");
     }
@@ -479,6 +510,7 @@ export function App() {
           const unfiltered = projects.find((candidate) => candidate.id === project.id);
           if (unfiltered) void newSession(unfiltered);
         }}
+        onWorktreeSetup={(project) => void updateWorktreeSetup(project)}
       />
       {mobile && sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
 
@@ -493,9 +525,11 @@ export function App() {
           menuButtonRef={navigationToggleRef}
           inspectorButtonRef={inspectorToggleRef}
           agentsButtonRef={agentsToggleRef}
+          filesButtonRef={filesToggleRef}
           onToggleMenu={toggleSidebar}
           onToggleInspector={() => toggleRightPanel("inspector")}
           onToggleAgents={() => toggleRightPanel("agents")}
+          onToggleFiles={() => toggleRightPanel("files")}
         />
         {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
         <div
@@ -504,10 +538,9 @@ export function App() {
           style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}
         >
           <ConversationPanel
-            key={live.runtime?.sessionId || "loading"}
+            key={`conversation:${live.runtime?.sessionId ?? "loading"}`}
             live={live}
             projectAvailable={live.runtime?.projectAvailable !== false}
-            timelineRollbackDefault={timelineRollbackDefault}
             onSelectAgent={(id) => {
               setSelectedAgentId(id);
               setRightPanel("agents");
@@ -534,11 +567,19 @@ export function App() {
               onNavigate={selectView}
             />}
           {rightPanel === "agents" && <AgentPanel
-            key={live.runtime?.sessionId || "agents"}
+            key={`agents:${live.runtime?.sessionId ?? "loading"}`}
             runs={live.runtime?.conversation.delegatedRuns ?? []}
+            models={live.runtime?.sessionControls.models ?? []}
             selectedId={selectedAgentId}
             onSelect={setSelectedAgentId}
             onClose={() => setRightPanel(null)}
+          />}
+          {rightPanel === "files" && <FilesPanel
+            key={`files:${live.runtime?.sessionId ?? "loading"}`}
+            runtime={live.runtime}
+            requestedPath={requestedFile}
+            onClose={() => setRightPanel(null)}
+            onError={reportError}
           />}
         </div>
         {(sessionBusy || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
@@ -616,7 +657,7 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void }) {
+function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void }) {
   const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = live.runtime?.gitBranch || "No Git branch";
   const turn = live.runtime?.metrics.userMessages ?? 0;
@@ -634,6 +675,11 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
         <div className="branch-label"><IconGitBranch size={14} /><span>{branch} · Turn {turn}</span></div>
       </div>
       <div className="topbar-actions">
+        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
+          <IconFiles size={16} />
+          <span>Files</span>
+          {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
+        </button>
         <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>

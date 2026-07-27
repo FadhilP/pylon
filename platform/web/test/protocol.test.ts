@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, validateCommand } from "../src/shared/protocol/validation.ts";
+import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v11 commands and attachments", () => {
+test("command validation allowlists bounded v13 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -43,6 +43,8 @@ test("command validation allowlists bounded v11 commands and attachments", () =>
   assert.equal(validateCommand({ type: "editPrompt", entryId: "entry-1", message: "Updated", rollbackFiles: false, commandId: "edit", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "editPrompt", entryId: "", message: "Updated", rollbackFiles: false, commandId: "edit", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "editPrompt", entryId: "entry-1", message: "Updated", rollbackFiles: "yes", commandId: "edit", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "rewindPrompt", entryId: "entry-1", commandId: "rewind", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "rewindPrompt", entryId: "", commandId: "rewind", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "addProject", commandId: "project", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "removeProject", projectId: "project-one", commandId: "project", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "archiveProject", projectId: "project-one", commandId: "archive-project", expectedGeneration: 1 }).ok, true);
@@ -52,6 +54,10 @@ test("command validation allowlists bounded v11 commands and attachments", () =>
   assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "Use the coordinator", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "handoffSession", destination: "checkout", commandId: "handoff", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "handoffSession", destination: "merge", commandId: "handoff", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "npm install", commandId: "setup", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "x".repeat(2_001), commandId: "setup", expectedGeneration: 1 }).ok, false);
   const image = { mimeType: "image/png", data: Buffer.from("image").toString("base64") };
   const file = { name: "notes.txt", mimeType: "text/plain", text: "context", size: 7 };
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: [image] }).ok, true);
@@ -246,4 +252,30 @@ test("file suggestion validation confines bounded relative paths", () => {
   assert.equal(isFileSuggestionList({ ...suggestions, paths: ["../secret"] }), false);
   assert.equal(isFileSuggestionList({ ...suggestions, paths: ["C:/secret.txt"] }), false);
   assert.equal(isFileSuggestionList({ ...suggestions, paths: Array(21).fill("src/index.ts") }), false);
+});
+
+test("workspace file validation confines paths and payloads", () => {
+  const page = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    revision: "revision",
+    files: [{ path: "src/index.ts", status: "modified", additions: 2, deletions: 1 }],
+    totalCount: 1,
+    truncated: false,
+  };
+  assert.equal(isWorkspaceFilePage(page), true);
+  assert.equal(isWorkspaceFilePage({ ...page, files: [{ path: "../secret" }] }), false);
+  assert.equal(isWorkspaceFilePage({ ...page, files: Array(201).fill(page.files[0]) }), false);
+
+  const content = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    revision: "revision",
+    path: "src/index.ts",
+    state: "available",
+    text: "export {};",
+  };
+  assert.equal(isWorkspaceFileContent(content), true);
+  assert.equal(isWorkspaceFileContent({ ...content, path: "C:/secret" }), false);
+  assert.equal(isWorkspaceFileContent({ ...content, text: "x".repeat(2 * 1024 * 1024 + 1) }), false);
 });

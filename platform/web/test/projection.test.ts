@@ -50,6 +50,7 @@ test("projection maps SDK event names and bounds retained read models", () => {
   assert.equal(result.conversation.tools[0]?.status, "completed");
   assert.equal(result.conversation.messages.length, 100);
   assert.equal(result.conversation.messages.at(-1)?.text, "message 104");
+  assert.ok(result.conversation.messages.at(-1)?.createdAt);
   assert.ok(published.some((event) => event.type === "tool.start"));
 
   const replacement = runtime();
@@ -117,12 +118,32 @@ test("history projection keeps stable global IDs and skips old non-delegate payl
 
 test("history projection retains bounded Pi entry IDs for editable prompts", () => {
   const projected = projectConversation([
-    { role: "user", content: "Original prompt", entryId: "pi-entry-1" },
+    { role: "user", content: "Original prompt", entryId: "pi-entry-1", timestamp: 1_000, canUndo: true },
     { role: "assistant", content: "Original response", entryId: "pi-entry-2" },
   ]);
   assert.equal(projected.messages[0]?.id, "history-0");
   assert.equal(projected.messages[0]?.entryId, "pi-entry-1");
+  assert.equal(projected.messages[0]?.createdAt, new Date(1_000).toISOString());
+  assert.equal(projected.messages[0]?.canUndo, true);
   assert.equal(projected.messages[1]?.entryId, "pi-entry-2");
+});
+
+test("Timeline undo availability is published without exposing Pi entry IDs", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const initial = runtime();
+  initial.conversation.messages = [{
+    id: "message-1",
+    entryId: "entry-1",
+    role: "user",
+    text: "Prompt",
+    streaming: false,
+  }];
+  const projection = new RuntimeProjection(initial, (type, payload) => published.push({ type, payload }));
+  projection.apply(session({ type: "prompt_undo", entryIds: ["entry-1"] }));
+  assert.equal(projection.snapshot().conversation.messages[0]?.canUndo, true);
+  const event = published.find((item) => item.type === "message.undo");
+  assert.deepEqual(event?.payload, { items: [{ id: "message-1", canUndo: true }] });
+  assert.doesNotMatch(JSON.stringify(event), /entry-1/);
 });
 
 test("history projection reconstructs bounded delegated runs from tool details", () => {

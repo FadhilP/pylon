@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
-const VERSION = 2;
+const VERSION = 3;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 
@@ -13,6 +13,48 @@ export interface RegisteredProject {
   cwd: string;
   label: string;
   archivedAt?: string;
+  setupCommand?: string;
+}
+
+export interface SessionWorkspaceRecord {
+  sessionId: string;
+  projectId: string;
+  mode: "checkout" | "worktree";
+  worktreePath?: string;
+  commonDir?: string;
+  branch?: string;
+  baseline?: string;
+  baselineTree?: string;
+  parkedRoot?: string;
+  parkedCommonDir?: string;
+  parkedHead?: string;
+  parkedHeadRef?: string;
+  parkedIndexTree?: string;
+  parkedWorktreeTree?: string;
+}
+
+export interface HandoffJournal {
+  version: 1;
+  sessionId: string;
+  projectId: string;
+  workspace: SessionWorkspaceRecord;
+  projectState: {
+    root: string;
+    commonDir: string;
+    head?: string;
+    headRef?: string;
+    indexTree: string;
+    worktreeTree: string;
+  };
+  sessionState: HandoffJournal["projectState"];
+}
+
+export interface ProvisionJournal {
+  version: 1;
+  projectId: string;
+  worktreePath: string;
+  commonDir: string;
+  branch: string;
 }
 
 export interface ArchivedSessionRecord {
@@ -42,6 +84,7 @@ async function canonicalDirectory(path: string): Promise<string> {
 export class ProjectRegistry {
   private projects: RegisteredProject[] = [];
   private archivedSessions: ArchivedSessionRecord[] = [];
+  private sessionWorkspaces: SessionWorkspaceRecord[] = [];
   private loaded = false;
 
   constructor(private readonly configPath: string) {}
@@ -55,7 +98,7 @@ export class ProjectRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("invalid project registry");
-      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown };
+      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown };
       if (value.version === 1 && Array.isArray(value.directories)) {
         const directories = value.directories.filter((item): item is string =>
           typeof item === "string" && item.length > 0 && item.length <= 4_096);
@@ -64,15 +107,20 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (value.version !== VERSION || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; archivedAt?: unknown };
+        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown };
         if (typeof record.directory !== "string" || !record.directory || record.directory.length > 4_096) return [];
         if (record.archivedAt !== undefined && (typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt)))) return [];
-        return [{ directory: record.directory, ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}) }];
+        if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
+        return [{
+          directory: record.directory,
+          ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
+          ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
+        }];
       });
       this.projects = await this.resolveProjects(projects);
       this.archivedSessions = value.archivedSessions.flatMap((item) => {
@@ -82,7 +130,11 @@ export class ProjectRegistry {
           || typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt))) return [];
         return [{ id: record.id, archivedAt: record.archivedAt }];
       }).slice(0, MAX_ARCHIVED_SESSIONS);
+      this.sessionWorkspaces = Array.isArray(value.sessionWorkspaces)
+        ? value.sessionWorkspaces.flatMap((item) => this.parseSessionWorkspace(item)).slice(0, MAX_ARCHIVED_SESSIONS)
+        : [];
       this.loaded = true;
+      if (value.version === 2) await this.save();
       return;
     } catch (error: any) {
       if (error?.code !== "ENOENT") throw error;
@@ -128,6 +180,7 @@ export class ProjectRegistry {
     this.assertLoaded();
     if (!this.projects.some((project) => project.id === projectId)) throw new Error("project is unavailable");
     this.projects = this.projects.filter((project) => project.id !== projectId);
+    this.sessionWorkspaces = this.sessionWorkspaces.filter((workspace) => workspace.projectId !== projectId);
     const removedSessions = new Set(sessionIds);
     this.archivedSessions = this.archivedSessions.filter((session) => !removedSessions.has(session.id));
     await this.save();
@@ -172,14 +225,134 @@ export class ProjectRegistry {
     await this.save();
   }
 
-  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string }>): Promise<RegisteredProject[]> {
+  projectForSession(sessionId: string, cwd: string): RegisteredProject | undefined {
+    this.assertLoaded();
+    const mapped = this.sessionWorkspaces.find((item) => item.sessionId === sessionId);
+    return mapped ? this.get(mapped.projectId) : this.get(projectIdForCwd(cwd));
+  }
+
+  effectiveCwd(sessionId: string, fallback: string): string {
+    this.assertLoaded();
+    const workspace = this.sessionWorkspaces.find((item) => item.sessionId === sessionId);
+    if (!workspace) return fallback;
+    if (workspace.mode === "worktree" && workspace.worktreePath) return workspace.worktreePath;
+    return this.get(workspace.projectId)?.cwd ?? fallback;
+  }
+
+  workspaceForSession(sessionId: string): SessionWorkspaceRecord | undefined {
+    this.assertLoaded();
+    const value = this.sessionWorkspaces.find((item) => item.sessionId === sessionId);
+    return value ? { ...value } : undefined;
+  }
+
+  listSessionWorkspaces(): SessionWorkspaceRecord[] {
+    this.assertLoaded();
+    return this.sessionWorkspaces.map((item) => ({ ...item }));
+  }
+
+  worktreeRoot(projectId: string): string {
+    this.assertLoaded();
+    if (!this.get(projectId)) throw new Error("project is unavailable");
+    return resolve(dirname(this.configPath), "worktrees", projectId);
+  }
+
+  async setSessionWorkspace(record: SessionWorkspaceRecord): Promise<void> {
+    this.assertLoaded();
+    if (!this.get(record.projectId)) throw new Error("project is unavailable");
+    if (!record.sessionId || record.sessionId.length > 128) throw new Error("invalid session workspace");
+    this.sessionWorkspaces = this.sessionWorkspaces.filter((item) => item.sessionId !== record.sessionId);
+    this.sessionWorkspaces.push({ ...record });
+    await this.save();
+  }
+
+  async removeSessionWorkspace(sessionId: string): Promise<SessionWorkspaceRecord | undefined> {
+    this.assertLoaded();
+    const record = this.workspaceForSession(sessionId);
+    if (!record) return undefined;
+    this.sessionWorkspaces = this.sessionWorkspaces.filter((item) => item.sessionId !== sessionId);
+    await this.save();
+    return record;
+  }
+
+  async updateWorktreeSettings(projectId: string, setupCommand: string): Promise<void> {
+    const project = this.requireProject(projectId);
+    if (setupCommand.length > 2_000) throw new Error("setup command is too long");
+    if (setupCommand.trim()) project.setupCommand = setupCommand.trim();
+    else delete project.setupCommand;
+    await this.save();
+  }
+
+  async writeHandoffJournal(value: HandoffJournal): Promise<void> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "handoff.json");
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, path);
+  }
+
+  async readHandoffJournal(): Promise<HandoffJournal | undefined> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "handoff.json");
+    try {
+      const value = JSON.parse(await readFile(path, "utf8")) as HandoffJournal;
+      if (value?.version !== 1 || typeof value.sessionId !== "string" || typeof value.projectId !== "string"
+        || !value.workspace || !value.projectState || !value.sessionState) {
+        throw new Error("invalid handoff recovery journal");
+      }
+      return value;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  async clearHandoffJournal(): Promise<void> {
+    this.assertLoaded();
+    await rm(resolve(dirname(this.configPath), "handoff.json"), { force: true });
+  }
+
+  async writeProvisionJournal(value: ProvisionJournal): Promise<void> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "provision.json");
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, path);
+  }
+
+  async readProvisionJournal(): Promise<ProvisionJournal | undefined> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "provision.json");
+    try {
+      const value = JSON.parse(await readFile(path, "utf8")) as ProvisionJournal;
+      if (value?.version !== 1 || typeof value.projectId !== "string"
+        || typeof value.worktreePath !== "string" || typeof value.commonDir !== "string"
+        || typeof value.branch !== "string") throw new Error("invalid worktree recovery journal");
+      return value;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  async clearProvisionJournal(): Promise<void> {
+    this.assertLoaded();
+    await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
+  }
+
+  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
         const cwd = await canonicalDirectory(record.directory);
         const id = projectIdForCwd(cwd);
         if (!projects.some((project) => project.id === id)) {
-          projects.push({ id, cwd, label: basename(cwd) || cwd, ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}) });
+          projects.push({
+            id,
+            cwd,
+            label: basename(cwd) || cwd,
+            ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
+            ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
+          });
         }
       } catch {
         // Missing directories remain absent until explicitly added again.
@@ -196,8 +369,10 @@ export class ProjectRegistry {
       projects: this.projects.map((project) => ({
         directory: project.cwd,
         ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
+        ...(project.setupCommand ? { setupCommand: project.setupCommand } : {}),
       })),
       archivedSessions: this.archivedSessions,
+      sessionWorkspaces: this.sessionWorkspaces,
     }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await rename(temporary, this.configPath);
   }
@@ -211,6 +386,27 @@ export class ProjectRegistry {
     const project = this.projects.find((item) => item.id === projectId);
     if (!project) throw new Error("project is unavailable");
     return project;
+  }
+
+  private parseSessionWorkspace(value: unknown): SessionWorkspaceRecord[] {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 128
+      || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
+      || !["checkout", "worktree"].includes(String(record.mode))) return [];
+    const optional = [
+      "worktreePath", "commonDir", "branch", "baseline", "baselineTree",
+      "parkedRoot", "parkedCommonDir", "parkedHead", "parkedHeadRef",
+      "parkedIndexTree", "parkedWorktreeTree",
+    ] as const;
+    if (optional.some((key) => record[key] !== undefined
+      && (typeof record[key] !== "string" || !record[key] || record[key]!.length > 4_096))) return [];
+    return [{
+      sessionId: record.sessionId,
+      projectId: record.projectId,
+      mode: record.mode as "checkout" | "worktree",
+      ...Object.fromEntries(optional.flatMap((key) => record[key] ? [[key, record[key]]] : [])),
+    } as SessionWorkspaceRecord];
   }
 }
 

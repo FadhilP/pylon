@@ -134,17 +134,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
     </div>;
   }
   if (settings.kind === "timeline") {
-    return <div className="package-fields">
-      <label className="checkbox-field">
-        <input
-          type="checkbox"
-          checked={settings.editRollbackDefault}
-          disabled={disabled}
-          onChange={(event) => onUpdate({ ...settings, editRollbackDefault: event.target.checked })}
-        />
-        Restore files by default when editing a prompt
-      </label>
-    </div>;
+    return null;
   }
   if (settings.kind !== "helios") return null;
   return <div className="package-fields">

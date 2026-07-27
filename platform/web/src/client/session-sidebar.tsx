@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconDots, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconStack2, IconTrash, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconDots, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconStack2, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
@@ -44,9 +44,10 @@ interface SidebarProps {
   onRemoveProject: (project: SessionProject) => void;
   onArchiveSession: (session: SessionSummary) => void;
   onNewSession: (project: SessionProject) => void;
+  onWorktreeSetup: (project: SessionProject) => void;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -167,6 +168,10 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                   }}
                 ><IconDots size={15} /></summary>
                 <div className="session-menu-popover">
+                  <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
+                    closeMenu(true);
+                    onWorktreeSetup(project);
+                  }}><IconTerminal2 size={14} />Worktree setup</button>
                   <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
                     closeMenu(true);
                     onArchiveProject(project);

@@ -38,3 +38,12 @@ export function latestTimedAssistant(messages: MessageReadModel[]): MessageReadM
   }
   return undefined;
 }
+
+export function activeTurnAtMarker(turns: Array<{ id: string; top: number }>, marker: number): string {
+  let active = turns[0]?.id ?? "";
+  for (const turn of turns) {
+    if (turn.top > marker) break;
+    active = turn.id;
+  }
+  return active;
+}

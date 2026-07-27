@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import extension from "../extensions/pi-timeline.ts";
-import { capture } from "../src/snapshot.ts";
+import { capture, makePortable } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 
 const exec = promisify(execFile);
@@ -24,6 +24,31 @@ async function repository() {
   await git("commit", "-qm", "base");
   return { root, git };
 }
+
+test("version 4 checkpoints restore across linked worktrees and v3 migrates only at origin", async () => {
+  const { root, git } = await repository();
+  const linked = `${root}-linked`;
+  try {
+    await writeFile(join(root, "tracked.txt"), "checkpoint\n");
+    const snapshot = await capture(root, "portable-session");
+    await git("worktree", "add", "--detach", linked, "HEAD");
+    await restore(snapshot, linked);
+    assert.equal((await readFile(join(linked, "tracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "checkpoint\n");
+
+    const legacy = {
+      ...snapshot,
+      commonDir: undefined,
+      nested: snapshot.nested?.map((repository) => ({ ...repository, commonDir: undefined })),
+    };
+    const migrated = await makePortable(legacy, root);
+    assert.ok(migrated.commonDir);
+    await assert.rejects(() => makePortable(legacy, linked), /original checkout/);
+  } finally {
+    await exec("git", ["worktree", "remove", "--force", linked], { cwd: root, windowsHide: true }).catch(() => {});
+    await rm(linked, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("automatic checkpoints skip read-only turns and unchanged bash", async () => {
   const { root } = await repository();
@@ -241,6 +266,13 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
       },
     };
     await sessionHandlers.get("session_start")![0]({}, ctx);
+    let state: any;
+    eventHandlers.get("pi-timeline:state-request")!({
+      version: 2,
+      sessionId: "edit-session",
+      respond: (value: unknown) => { state = value; },
+    });
+    assert.deepEqual(state.undoPromptEntryIds, ["user-2"]);
 
     let operation: Promise<any> | undefined;
     eventHandlers.get("pi-timeline:edit-navigation")!({

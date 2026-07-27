@@ -20,7 +20,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 2);
+    assert.equal(stored.version, 3);
     assert.equal(stored.projects.length, 2);
 
     let seeded = false;
@@ -30,6 +30,51 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       return [first];
     });
     assert.equal(seeded, false);
+
+    const project = registry.get(projectIdForCwd(second))!;
+    await registry.updateWorktreeSettings(project.id, "npm install");
+    await registry.setSessionWorkspace({
+      sessionId: "session-one",
+      projectId: project.id,
+      mode: "worktree",
+      worktreePath: join(root, "worktree"),
+      commonDir: join(root, ".git"),
+      branch: "refs/heads/pylon/sessions/session-one",
+      baseline: "a".repeat(40),
+      baselineTree: "b".repeat(40),
+    });
+    assert.equal(registry.projectForSession("session-one", join(root, "elsewhere"))?.id, project.id);
+    assert.equal(registry.workspaceForSession("session-one")?.mode, "worktree");
+    assert.equal(registry.get(project.id)?.setupCommand, "npm install");
+    const checkoutState = {
+      root: second,
+      commonDir: join(second, ".git"),
+      head: "a".repeat(40),
+      headRef: "refs/heads/main",
+      indexTree: "b".repeat(40),
+      worktreeTree: "c".repeat(40),
+    };
+    await registry.writeHandoffJournal({
+      version: 1,
+      sessionId: "session-one",
+      projectId: project.id,
+      workspace: registry.workspaceForSession("session-one")!,
+      projectState: checkoutState,
+      sessionState: checkoutState,
+    });
+    assert.equal((await registry.readHandoffJournal())?.sessionId, "session-one");
+    await registry.clearHandoffJournal();
+    assert.equal(await registry.readHandoffJournal(), undefined);
+    await registry.writeProvisionJournal({
+      version: 1,
+      projectId: project.id,
+      worktreePath: join(root, "provisional"),
+      commonDir: join(second, ".git"),
+      branch: "refs/heads/pylon/sessions/provisional",
+    });
+    assert.equal((await registry.readProvisionJournal())?.branch, "refs/heads/pylon/sessions/provisional");
+    await registry.clearProvisionJournal();
+    assert.equal(await registry.readProvisionJournal(), undefined);
 
     await registry.remove(projectIdForCwd(first));
     assert.deepEqual(registry.list().map((project) => project.id), [projectIdForCwd(second)]);

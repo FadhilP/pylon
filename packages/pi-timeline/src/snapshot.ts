@@ -8,6 +8,7 @@ import { preflight, type RepositoryState } from "./safety.ts";
 export type RepositorySnapshot = {
   prefix: string;
   gitRoot: string;
+  commonDir?: string;
   head: string;
   headRef: string | null;
   worktreeRef: string;
@@ -19,6 +20,9 @@ export type Snapshot = Omit<RepositorySnapshot, "prefix"> & {
   snapshotId: string;
   nested?: RepositorySnapshot[];
 };
+const canonical = (path: string) => process.platform === "win32"
+  ? path.toLowerCase()
+  : path;
 const ident = {
   GIT_AUTHOR_NAME: "pi-timeline",
   GIT_AUTHOR_EMAIL: "pi-timeline@local",
@@ -79,6 +83,7 @@ async function captureRepository(repository: RepositoryState, sessionId: string,
   return {
     prefix: repository.prefix,
     gitRoot: repository.root,
+    commonDir: repository.commonDir,
     head: repository.head,
     headRef,
     worktreeRef,
@@ -115,6 +120,7 @@ export async function capture(
     return {
       snapshotId: id,
       gitRoot: root.gitRoot,
+      commonDir: root.commonDir,
       head: root.head,
       headRef: root.headRef,
       worktreeRef: root.worktreeRef,
@@ -127,4 +133,49 @@ export async function capture(
     await Promise.all(captured.map(deleteRefs));
     throw error;
   }
+}
+
+export async function makePortable(snapshot: Snapshot, cwd: string): Promise<Snapshot> {
+  const current = await preflight(cwd);
+  const expected: RepositorySnapshot[] = [{
+    prefix: "",
+    gitRoot: snapshot.gitRoot,
+    commonDir: snapshot.commonDir,
+    head: snapshot.head,
+    headRef: snapshot.headRef,
+    worktreeRef: snapshot.worktreeRef,
+    indexRef: snapshot.indexRef,
+    worktreeTree: snapshot.worktreeTree,
+    indexTree: snapshot.indexTree,
+  }, ...(snapshot.nested ?? [])];
+  if (current.repositories.length !== expected.length) {
+    throw Error("Nested repository graph changed since checkpoint.");
+  }
+  const portable = expected.map((repository, index) => {
+    const actual = current.repositories[index];
+    if (repository.prefix !== actual.prefix || repository.head !== actual.head) {
+      throw Error("Checkpoint repository graph or HEAD changed.");
+    }
+    if (repository.commonDir) {
+      if (canonical(repository.commonDir) !== canonical(actual.commonDir)) {
+        throw Error("Checkpoint belongs to a different Git repository.");
+      }
+    } else if (canonical(repository.gitRoot) !== canonical(actual.root)) {
+      throw Error("Version 3 checkpoint must be migrated from its original checkout.");
+    }
+    return { ...repository, gitRoot: actual.root, commonDir: actual.commonDir };
+  });
+  const [root, ...nested] = portable;
+  return {
+    snapshotId: snapshot.snapshotId,
+    gitRoot: root.gitRoot,
+    commonDir: root.commonDir,
+    head: root.head,
+    headRef: root.headRef,
+    worktreeRef: root.worktreeRef,
+    indexRef: root.indexRef,
+    worktreeTree: root.worktreeTree,
+    indexTree: root.indexTree,
+    ...(nested.length ? { nested } : {}),
+  };
 }

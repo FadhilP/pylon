@@ -136,16 +136,19 @@ const ownerPrefix = (sessionId: string) =>
   `refs/pi-timeline/${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}/`;
 
 async function canonicalGitRoot(path: string) {
-  const reported = await git(path, ["rev-parse", "--show-toplevel"]);
+  const reported = await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return realpath(reported);
+}
+async function canonicalCommonDir(path: string) {
+  const reported = await git(path, ["--git-dir", path, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return realpath(reported);
 }
 async function deleteOwnedRefs(owner: Owner) {
-  if (await canonicalGitRoot(owner.gitRoot) !== await realpath(owner.gitRoot))
-    throw Error("Timeline artifact repository identity changed.");
+  const commonDir = await canonicalCommonDir(owner.gitRoot).catch(() => canonicalGitRoot(owner.gitRoot));
   const prefix = ownerPrefix(owner.sessionId);
-  const refs = (await git(owner.gitRoot, ["for-each-ref", "--format=%(refname)", prefix]))
+  const refs = (await git(commonDir, ["--git-dir", commonDir, "for-each-ref", "--format=%(refname)", prefix]))
     .split(/\r?\n/).filter((ref) => ref.startsWith(prefix));
-  for (const ref of refs) await git(owner.gitRoot, ["update-ref", "-d", ref]);
+  for (const ref of refs) await git(commonDir, ["--git-dir", commonDir, "update-ref", "-d", ref]);
 }
 async function deleteSessionOwners(catalog: Catalog, sessionId: string) {
   const keep: Owner[] = [];

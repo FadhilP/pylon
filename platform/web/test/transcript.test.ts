@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { groupConversationMessages, latestTimedAssistant } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, groupConversationMessages, latestTimedAssistant } from "../src/shared/transcript.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 
 const message = (id: string, role: MessageReadModel["role"]): MessageReadModel => ({
@@ -39,4 +39,11 @@ test("the latest completed turn timer follows any trailing tool activity", () =>
 
   assert.equal(latestTimedAssistant(messages)?.id, "assistant-1");
   assert.equal(latestTimedAssistant([...messages, message("user-2", "user")]), undefined);
+});
+
+test("history rail keeps a turn active until the next prompt crosses the viewport marker", () => {
+  const turns = [{ id: "one", top: -100 }, { id: "two", top: 240 }, { id: "three", top: 700 }];
+  assert.equal(activeTurnAtMarker(turns, 200), "one");
+  assert.equal(activeTurnAtMarker(turns, 300), "two");
+  assert.equal(activeTurnAtMarker(turns, -200), "one");
 });

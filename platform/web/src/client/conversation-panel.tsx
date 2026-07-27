@@ -1,7 +1,7 @@
-import { IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
+import { activeTurnAtMarker, groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../shared/composer-input";
@@ -21,8 +21,11 @@ interface PromptEdit {
   images: PastedImage[];
   imageError: string;
   attachmentCount: number;
-  confirming: boolean;
-  rollbackFiles: boolean;
+}
+interface PromptUndo {
+  entryId: string;
+  text: string;
+  attachmentCount: number;
 }
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -34,12 +37,10 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 export function ConversationPanel({
   live,
   projectAvailable = true,
-  timelineRollbackDefault = false,
   onSelectAgent,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
-  timelineRollbackDefault?: boolean;
   onSelectAgent?: (id: string) => void;
 }) {
   const [message, setMessage] = useState("");
@@ -47,6 +48,7 @@ export function ConversationPanel({
   const [files, setFiles] = useState<DroppedTextFile[]>([]);
   const [dropActive, setDropActive] = useState(false);
   const [edit, setEdit] = useState<PromptEdit>();
+  const [undo, setUndo] = useState<PromptUndo>();
   const [activeTurnId, setActiveTurnId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [controlBusy, setControlBusy] = useState("");
@@ -88,6 +90,7 @@ export function ConversationPanel({
   useEffect(() => {
     setHistoryLoading(undefined);
     setEdit(undefined);
+    setUndo(undefined);
     turnRefs.current.clear();
   }, [runtime?.sessionId]);
   const connected = live.connection === "connected" && runtime?.ready === true && projectAvailable;
@@ -112,25 +115,32 @@ export function ConversationPanel({
   const userTurnKey = userTurns.map((item) => item.id).join("\0");
   useEffect(() => {
     const root = streamRef.current;
-    if (!root || !userTurns.length || typeof IntersectionObserver === "undefined") return;
-    const visible = new Map<string, IntersectionObserverEntry>();
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const id = (entry.target as HTMLElement).dataset.turnId;
-        if (!id) continue;
-        if (entry.isIntersecting) visible.set(id, entry);
-        else visible.delete(id);
-      }
-      const nearest = [...visible.entries()].sort((left, right) =>
-        Math.abs(left[1].boundingClientRect.top - root.getBoundingClientRect().top)
-        - Math.abs(right[1].boundingClientRect.top - root.getBoundingClientRect().top))[0];
-      if (nearest) setActiveTurnId(nearest[0]);
-    }, { root, rootMargin: "-5% 0px -55% 0px", threshold: 0 });
-    for (const turn of userTurns) {
-      const element = turnRefs.current.get(turn.id);
-      if (element) observer.observe(element);
-    }
-    return () => observer.disconnect();
+    if (!root || !userTurns.length) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const marker = root.getBoundingClientRect().top + root.clientHeight * .28;
+      const active = activeTurnAtMarker(userTurns.flatMap((turn) => {
+        const element = turnRefs.current.get(turn.id);
+        return element ? [{ id: turn.id, top: element.getBoundingClientRect().top }] : [];
+      }), marker);
+      if (!active) return;
+      setActiveTurnId((current) => current === active ? current : active);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
+    if (transcriptRef.current) observer?.observe(transcriptRef.current);
+    root.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    schedule();
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      root.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+    };
   }, [runtime?.sessionId, userTurnKey]);
   const latestTurnTimer = latestTimedAssistant(visibleMessages);
   const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
@@ -277,9 +287,6 @@ export function ConversationPanel({
       images: [],
       imageError: "",
       attachmentCount: item.attachmentCount ?? 0,
-      confirming: false,
-      rollbackFiles: timelineRollbackDefault
-        && runtime?.operational.timeline.availability === "available",
     });
   };
   const submitEdit = async () => {
@@ -290,11 +297,24 @@ export function ConversationPanel({
         edit.entryId,
         edit.text.trim(),
         edit.images.map(({ data, mimeType }) => ({ data, mimeType })),
-        edit.rollbackFiles,
+        false,
       );
       setEdit(undefined);
-    } catch {
-      setEdit((current) => current ? { ...current, confirming: false } : current);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const submitUndo = async () => {
+    if (!undo) return;
+    setSubmitting(true);
+    try {
+      await runtimeStore.rewindPrompt(undo.entryId);
+      setMessage(undo.text);
+      setImages([]);
+      setFiles([]);
+      setPlanMode(false);
+      setUndo(undefined);
+      requestAnimationFrame(() => promptRef.current?.focus());
     } finally {
       setSubmitting(false);
     }
@@ -367,20 +387,22 @@ export function ConversationPanel({
             >
               <small>{block.role}{block.streaming ? " · streaming" : ""}</small>
               {editing && edit
-                ? <PromptEditor edit={edit} disabled={submitting} onChange={setEdit} onCancel={() => setEdit(undefined)} />
+                ? <PromptEditor edit={edit} disabled={submitting} onChange={setEdit} onCancel={() => setEdit(undefined)} onSubmit={() => void submitEdit()} />
                 : <>
                   {block.text && <MarkdownContent text={block.text} />}
                   {Boolean(block.attachmentCount) && <span className="message-attachments"><IconPhoto size={14} />{block.attachmentCount} {block.attachmentCount === 1 ? "image" : "images"}</span>}
                   {Boolean(block.fileAttachmentCount) && <span className="message-attachments"><IconFileText size={14} />{block.fileAttachmentCount} {block.fileAttachmentCount === 1 ? "file" : "files"}</span>}
-                  {block.text && (block.role === "user" || copyableAssistants.has(block.id)) && <CopyMessageButton text={block.text} label={`Copy ${block.role === "user" ? "prompt" : "response"}`} />}
-                  {block.role === "user" && block.entryId && <button
-                    className="message-edit"
-                    type="button"
+                  {(block.role === "user" || copyableAssistants.has(block.id)) && <MessageFooter
+                    message={block}
+                    canCopy={Boolean(block.text)}
                     disabled={!connected || streaming || submitting || Boolean(edit)}
-                    onClick={() => startEdit(block)}
-                    aria-label="Edit prompt"
-                    title="Edit prompt"
-                  ><IconPencil size={14} /></button>}
+                    onEdit={block.role === "user" && block.entryId ? () => startEdit(block) : undefined}
+                    onUndo={block.role === "user" && block.entryId ? () => setUndo({
+                      entryId: block.entryId!,
+                      text: block.text,
+                      attachmentCount: block.attachmentCount ?? 0,
+                    }) : undefined}
+                  />}
                 </>}
             </article>
             {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
@@ -412,13 +434,11 @@ export function ConversationPanel({
         onLoadEarlier={() => void loadHistory(false)}
         onSelect={(id) => turnRefs.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
       />}
-      {edit?.confirming && <EditConfirmDialog
-        edit={edit}
-        timelineAvailable={runtime?.operational.timeline.availability === "available"}
+      {undo && <UndoConfirmDialog
+        undo={undo}
         submitting={submitting}
-        onChangeRollback={(rollbackFiles) => setEdit((current) => current ? { ...current, rollbackFiles } : current)}
-        onCancel={() => setEdit((current) => current ? { ...current, confirming: false } : current)}
-        onConfirm={() => void submitEdit()}
+        onCancel={() => setUndo(undefined)}
+        onConfirm={() => void submitUndo()}
       />}
       {runtime?.conversation.retry.active && <p className="conversation-note">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
       {runtime?.conversation.compaction.active && <p className="conversation-note">Compacting context…</p>}
@@ -782,13 +802,14 @@ function HistoryRail({
     {turns.map((turn) => {
       const preview = turn.text.replace(/\s+/g, " ").trim().slice(0, 120)
         || `${turn.attachmentCount ?? 0} attached image${turn.attachmentCount === 1 ? "" : "s"}`;
+      const timestamp = formatMessageTime(turn.createdAt);
       return <button
         className={`history-tick${turn.id === activeId ? " is-active" : ""}`}
         type="button"
         key={turn.id}
         onClick={() => onSelect(turn.id)}
-        aria-label={`Jump to prompt: ${preview}`}
-      ><i /><span>{preview}</span></button>;
+        aria-label={`Jump to prompt: ${preview}${timestamp ? `, ${timestamp}` : ""}`}
+      ><i /><span><strong>{preview}</strong>{timestamp && <time dateTime={turn.createdAt}>{timestamp}</time>}</span></button>;
     })}
   </nav>;
 }
@@ -798,11 +819,13 @@ function PromptEditor({
   disabled,
   onChange,
   onCancel,
+  onSubmit,
 }: {
   edit: PromptEdit;
   disabled: boolean;
   onChange: (value: PromptEdit) => void;
   onCancel: () => void;
+  onSubmit: () => void;
 }) {
   const onPaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     try {
@@ -833,7 +856,7 @@ function PromptEditor({
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();
-          if (edit.text.trim() || edit.images.length) onChange({ ...edit, confirming: true });
+          if (edit.text.trim() || edit.images.length) onSubmit();
         }
       }}
     />
@@ -844,24 +867,20 @@ function PromptEditor({
         className="primary-button"
         type="button"
         disabled={disabled || (!edit.text.trim() && edit.images.length === 0)}
-        onClick={() => onChange({ ...edit, confirming: true })}
-      >Continue</button>
+        onClick={onSubmit}
+      >Send</button>
     </div>
   </div>;
 }
 
-function EditConfirmDialog({
-  edit,
-  timelineAvailable,
+function UndoConfirmDialog({
+  undo,
   submitting,
-  onChangeRollback,
   onCancel,
   onConfirm,
 }: {
-  edit: PromptEdit;
-  timelineAvailable: boolean;
+  undo: PromptUndo;
   submitting: boolean;
-  onChangeRollback: (value: boolean) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -895,27 +914,17 @@ function EditConfirmDialog({
   }}>
     <div ref={dialogRef} className="edit-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-confirm-title" onKeyDown={onKeyDown}>
       <header>
-        <strong id="edit-confirm-title">Edit this prompt?</strong>
+        <strong id="edit-confirm-title">Undo to this prompt?</strong>
         <button className="icon-button" type="button" onClick={onCancel} disabled={submitting} aria-label="Close"><IconX size={16} /></button>
       </header>
       <div>
-        <p>The conversation will continue from this prompt. Later turns leave the active branch but remain recoverable in Pi’s tree.</p>
-        {edit.attachmentCount > 0 && <p className="edit-confirm-warning">The original {edit.attachmentCount === 1 ? "image is" : "images are"} not retained. Only replacement images pasted into the editor will be sent.</p>}
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
-            checked={edit.rollbackFiles}
-            disabled={!timelineAvailable || submitting}
-            onChange={(event) => onChangeRollback(event.target.checked)}
-          />
-          Restore files to before this prompt
-        </label>
-        {!timelineAvailable && <small>Pi Timeline is unavailable, so only conversation history will change.</small>}
+        <p>Files and conversation history will return to immediately before this prompt. The prompt text will be restored to the composer without sending.</p>
+        {undo.attachmentCount > 0 && <p className="edit-confirm-warning">Historical {undo.attachmentCount === 1 ? "image cannot" : "images cannot"} be restored. Paste replacement images before sending again.</p>}
       </div>
       <footer>
         <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
         <button data-autofocus className="primary-button" type="button" onClick={onConfirm} disabled={submitting}>
-          {submitting ? "Editing…" : "Edit and continue"}
+          {submitting ? "Undoing…" : "Undo"}
         </button>
       </footer>
     </div>
@@ -967,6 +976,41 @@ function CopyMessageButton({ text, label }: { text: string; label: string }) {
   </button>;
 }
 
+function MessageFooter({
+  message,
+  canCopy,
+  disabled,
+  onEdit,
+  onUndo,
+}: {
+  message: MessageReadModel;
+  canCopy: boolean;
+  disabled: boolean;
+  onEdit?: () => void;
+  onUndo?: () => void;
+}) {
+  const timestamp = formatMessageTime(message.createdAt);
+  return <footer className="message-footer">
+    {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
+    {canCopy && <CopyMessageButton text={message.text} label={`Copy ${message.role === "user" ? "prompt" : "response"}`} />}
+    {onEdit && <button type="button" disabled={disabled} onClick={onEdit} aria-label="Edit prompt" title="Edit prompt"><IconPencil size={14} /></button>}
+    {onUndo && <button
+      type="button"
+      disabled={disabled || !message.canUndo}
+      onClick={onUndo}
+      aria-label="Undo to this prompt"
+      title={message.canUndo ? "Undo to this prompt and restore files" : "No compatible Timeline checkpoint exists before this prompt"}
+    ><IconArrowBackUp size={14} /></button>}
+  </footer>;
+}
+
+function formatMessageTime(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+}
+
 function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
   const result = new Set<string>();
   let final: MessageReadModel | undefined;
@@ -987,12 +1031,13 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
   const visible = expanded ? files : files.slice(0, 3);
   const remaining = files.length - 3;
   return <section className="changed-files" aria-label="Files changed in this turn">
-    {visible.map((file) => <div className="changed-file" key={file.path}>
+    {visible.map((file) => <button className="changed-file" type="button" key={file.path} onClick={() =>
+      window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: file.path }))}>
       <code>{file.path}</code>
       <span>{file.binary
         ? <small>binary</small>
         : <><ins>+{file.additions ?? 0}</ins><del>-{file.deletions ?? 0}</del></>}</span>
-    </div>)}
+    </button>)}
     {files.length > 3 && <button type="button" onClick={() => setExpanded((current) => !current)}>
       {expanded ? "Show less" : `Show ${remaining} more`}
       <IconChevronDown className={expanded ? "is-expanded" : ""} size={14} />

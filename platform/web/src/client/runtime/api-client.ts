@@ -1,5 +1,5 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -74,6 +74,33 @@ export class ApiClient {
   async fileSuggestions(queryValue: string, generation: number, limit = 8): Promise<FileSuggestionList> {
     const query = new URLSearchParams({ q: queryValue, generation: String(generation), limit: String(limit) });
     return json<FileSuggestionList>(await fetch(`/api/v1/file-suggestions?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async workspaceFiles(generation: number, queryValue = "", cursor?: string, signal?: AbortSignal): Promise<WorkspaceFilePage> {
+    const query = new URLSearchParams({ generation: String(generation), limit: "200" });
+    if (queryValue) query.set("q", queryValue);
+    if (cursor) query.set("cursor", cursor);
+    return json<WorkspaceFilePage>(await fetch(`/api/v1/workspace/files?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+      signal,
+    }));
+  }
+
+  async workspaceFile(generation: number, path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
+    const query = new URLSearchParams({ generation: String(generation), path, view });
+    return json<WorkspaceFileContent>(await fetch(`/api/v1/workspace/file?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async workspaceDiff(generation: number, path: string): Promise<WorkspaceFileDiff> {
+    const query = new URLSearchParams({ generation: String(generation), path });
+    return json<WorkspaceFileDiff>(await fetch(`/api/v1/workspace/diff?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));

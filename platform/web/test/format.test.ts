@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCompactNumber, formatRelativeTime, formatWorkDuration } from "../src/shared/format.ts";
-import { renderMarkdown } from "../src/shared/markdown.ts";
+import { formatCompactNumber, formatRelativeTime, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
+import { highlightSource, renderMarkdown } from "../src/shared/markdown.ts";
 
 test("work duration uses compact Codex-style units", () => {
   assert.equal(formatWorkDuration(999), "0s");
@@ -37,4 +37,17 @@ test("Markdown code fences preserve and highlight supported languages", () => {
   const unknown = renderMarkdown("```custom\n<script>alert('safe')</script>\n```");
   assert.match(unknown, /data-language="custom"/);
   assert.match(unknown, /&lt;script&gt;/);
+});
+
+test("file source highlighting uses extensions and explicit diff grammar", () => {
+  assert.match(highlightSource("const value: number = 1;", "src/app.ts"), /hljs-keyword/);
+  assert.match(highlightSource('{"ok": true}', "config.json"), /hljs-literal/);
+  assert.match(highlightSource("+added\n-removed", "src/app.ts", true), /hljs-addition/);
+  assert.match(highlightSource("<script>", "unknown.custom"), /&lt;script&gt;/);
+});
+
+test("delegated model references use authenticated labels or readable fallbacks", () => {
+  const models = [{ provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }];
+  assert.equal(modelLabel("openai-codex/gpt-5.6-luna", models), "GPT-5.6 Luna");
+  assert.equal(modelLabel("other/gpt-5.6-sol", []), "GPT-5.6 Sol");
 });

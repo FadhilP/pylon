@@ -1,10 +1,28 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
+import { resolve } from "node:path";
+import {
+  createSessionWorktree,
+  captureCheckoutState,
+  inspectGitWorkspace,
+  inspectWorkspaceChanges,
+  listWorkspaceFiles,
+  listPlainWorkspaceFiles,
+  readWorkspaceFile,
+  readPlainWorkspaceFile,
+  recreateSessionWorktree,
+  restoreCheckoutState,
+  diffWorkspaceFile,
+  removeSessionWorktree,
+  removeSessionBranch,
+} from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
   DeleteSessionInput,
@@ -18,8 +36,11 @@ import type {
   PiDriver,
   ProjectInput,
   ProjectArchiveInput,
+  ProjectWorktreeSettingsInput,
   PromptInput,
+  HandoffSessionInput,
   QueueMutationInput,
+  RewindPromptInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -34,6 +55,8 @@ import type {
   SwitchSessionInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
+  WorkspaceFileInput,
+  WorkspaceFilesInput,
 } from "./pi-driver.ts";
 import type { UiRequest, UiResponse } from "./remote-ui-context.ts";
 import { SessionIndex } from "./session-index.ts";
@@ -42,6 +65,33 @@ import { pickProjectDirectory, ProjectRegistry, projectIdForCwd } from "./projec
 const SLEEP_AFTER_MS = 30 * 60 * 1000;
 const VIEW_ONLY_SLEEP_AFTER_MS = 60 * 1000;
 const SLEEP_CHECK_MS = 60 * 1000;
+const SETUP_LOG_BYTES = 64 * 1024;
+
+function runSetupCommand(cwd: string, command: string, signal?: AbortSignal): Promise<void> {
+  if (!command.trim()) return Promise.resolve();
+  const executable = process.platform === "win32"
+    ? process.env.ComSpec ?? "cmd.exe"
+    : process.env.SHELL ?? "/bin/sh";
+  const args = process.platform === "win32"
+    ? ["/d", "/s", "/c", command]
+    : ["-lc", command];
+  return new Promise((resolvePromise, reject) => {
+    execFile(executable, args, {
+      cwd,
+      timeout: 10 * 60_000,
+      maxBuffer: SETUP_LOG_BYTES,
+      windowsHide: true,
+      signal,
+    }, (error, stdout, stderr) => {
+      if (!error) {
+        resolvePromise();
+        return;
+      }
+      const log = String(stderr || stdout || error.message).trim().slice(0, SETUP_LOG_BYTES);
+      reject(new Error(log || "worktree setup failed"));
+    });
+  });
+}
 
 export interface RuntimeCoordinatorOptions extends SessionRuntimeOptions {
   sleepAfterMs?: number;
@@ -76,6 +126,19 @@ interface RuntimeSlot {
   };
   suppressEvents?: boolean;
   unsubscribe: () => void;
+  setupState?: "idle" | "running" | "failed";
+  setupError?: string;
+  workspace?: WorkspaceReadModel;
+  provisional?: {
+    previous: RuntimeSlot;
+    projectId: string;
+    worktree: {
+      root: string;
+      commonDir: string;
+      branch: string;
+    };
+    oldSessionPath?: string;
+  };
 }
 
 /** Keeps visited SDK sessions alive while preserving one server-wide selection. */
@@ -91,6 +154,7 @@ export class RuntimeCoordinator implements PiDriver {
   private lifecycleBusy = false;
   private pickerBusy = false;
   private pickerAbort?: AbortController;
+  private setupAbort?: AbortController;
   private disposed = false;
 
   constructor(private readonly options: RuntimeCoordinatorOptions = {}) {}
@@ -103,11 +167,13 @@ export class RuntimeCoordinator implements PiDriver {
       const knownSessions = await SessionManager.listAll();
       return [target.cwd, ...knownSessions.map((session) => session.cwd)];
     });
+    await this.recoverProvision();
+    await this.recoverHandoff();
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     const projects = this.projectRegistry.list();
     const project = projects.find((candidate) => candidate.id === projectIdForCwd(target.cwd)) ?? projects[0];
     const slot = await this.createSlot(project
-      ? { ...target, cwd: project.cwd }
+      ? { ...target, cwd: project.cwd, projectId: project.id }
       : { ...target, inMemory: true });
     this.selectedId = slot.id;
     this.generation = 1;
@@ -175,15 +241,56 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: this.generation };
   }
 
+  async workspaceFiles(input: WorkspaceFilesInput): Promise<WorkspaceFilePage> {
+    const slot = this.selected();
+    await this.refreshWorkspace(slot, true);
+    const record = this.registry().workspaceForSession(slot.id);
+    const cwd = slot.driver.runtimeDetails().cwd;
+    const page = await (await inspectGitWorkspace(cwd)
+      ? listWorkspaceFiles({
+          cwd,
+          baselineTree: record?.baselineTree,
+          query: input.query,
+          cursor: input.cursor,
+          limit: input.limit,
+        })
+      : listPlainWorkspaceFiles({ cwd, query: input.query, cursor: input.cursor, limit: input.limit }));
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...page };
+  }
+
+  async workspaceFile(input: WorkspaceFileInput): Promise<WorkspaceFileContent> {
+    const slot = this.selected();
+    const record = this.registry().workspaceForSession(slot.id);
+    const cwd = slot.driver.runtimeDetails().cwd;
+    const file = await (await inspectGitWorkspace(cwd)
+      ? readWorkspaceFile({ cwd, path: input.path, baselineTree: record?.baselineTree, view: input.view })
+      : readPlainWorkspaceFile(cwd, input.path));
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...file };
+  }
+
+  async workspaceDiff(input: WorkspaceFileInput): Promise<WorkspaceFileDiff> {
+    const slot = this.selected();
+    const record = this.registry().workspaceForSession(slot.id);
+    if (!record?.baselineTree) throw new Error("This session has no isolated Git baseline.");
+    const diff = await diffWorkspaceFile({
+      cwd: slot.driver.runtimeDetails().cwd,
+      path: input.path,
+      baselineTree: record.baselineTree,
+    });
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...diff };
+  }
+
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
-    return this.messageCommand("prompt", input);
+    return this.withLifecycle(() => this.messageCommand("prompt", input));
   }
 
   async queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
     if (slot.queuedPrompt) throw new Error("a prompt is already queued");
-    if (slot.driver.runtimeState() !== "running") return this.messageCommand("prompt", input);
+    if (slot.driver.runtimeState() !== "running") {
+      return this.withLifecycle(() => this.messageCommand("prompt", input));
+    }
     slot.queuedPrompt = {
       id: randomUUID(),
       commandId: input.commandId,
@@ -289,6 +396,35 @@ export class RuntimeCoordinator implements PiDriver {
     });
   }
 
+  async rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand> {
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      slot.lastActivityAt = Date.now();
+      slot.suppressEvents = true;
+      try {
+        await slot.driver.rewindPrompt({ ...input, expectedGeneration: slot.innerGeneration });
+        this.sessionIndex.invalidate();
+        this.generation++;
+        const runtime = await this.selectedSnapshot();
+        slot.suppressEvents = false;
+        this.emit({
+          type: "session.replaced",
+          sessionId: slot.id,
+          sessionGeneration: this.generation,
+          runtime,
+        });
+        return {
+          commandId: input.commandId,
+          sessionGeneration: this.generation,
+          accepted: true,
+        };
+      } finally {
+        slot.suppressEvents = false;
+      }
+    });
+  }
+
   async abort(): Promise<void> {
     const slot = this.selected();
     slot.lastActivityAt = Date.now();
@@ -307,7 +443,11 @@ export class RuntimeCoordinator implements PiDriver {
       const slot = await this.createSlot({
         ...this.baseTarget(),
         cwd: project?.cwd ?? parent?.cwd ?? current.cwd,
+        projectId: project?.id
+          ?? (parent ? this.registry().projectForSession(parent.id, parent.cwd)?.id : undefined)
+          ?? this.registry().projectForSession(current.sessionId, current.cwd)?.id,
         parentSessionPath: parent?.path ?? current.sessionPath,
+        parentSessionId: parent?.id ?? current.sessionId,
       });
       this.sessionIndex.invalidate();
       return this.select(slot);
@@ -326,7 +466,7 @@ export class RuntimeCoordinator implements PiDriver {
       return this.withLifecycle(async () => {
         this.assertGeneration(input.expectedGeneration);
         const project = await this.registry().add(directory);
-        const slot = await this.createSlot({ ...this.baseTarget(), cwd: project.cwd });
+        const slot = await this.createSlot({ ...this.baseTarget(), cwd: project.cwd, projectId: project.id });
         this.sessionIndex.invalidate();
         const result = await this.select(slot);
         this.emitProjectsChanged();
@@ -345,13 +485,13 @@ export class RuntimeCoordinator implements PiDriver {
       const project = registry.get(input.projectId);
       if (!project || project.archivedAt) throw new Error("project is unavailable");
       const projectSlots = [...this.slots.values()]
-        .filter((slot) => projectIdForCwd(slot.driver.runtimeDetails().cwd) === project.id);
+        .filter((slot) => this.projectIdForSlot(slot) === project.id);
       if (projectSlots.some((slot) => !this.slotCanSleep(slot))) {
         throw new Error("cannot remove a project with a running, queued, or attention session");
       }
 
       const sessions = (await SessionManager.listAll())
-        .filter((session) => projectIdForCwd(session.cwd) === project.id);
+        .filter((session) => registry.projectForSession(session.id, session.cwd)?.id === project.id);
       if (projectSlots.some((slot) => slot.id === this.selectedId)) {
         const alternative = registry.list().find((candidate) => candidate.id !== project.id);
         const slot = alternative
@@ -367,6 +507,25 @@ export class RuntimeCoordinator implements PiDriver {
         await unlink(session.path).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "ENOENT") throw error;
         });
+        const workspace = registry.workspaceForSession(session.id);
+        if (workspace?.mode === "checkout" && workspace.commonDir && workspace.branch
+          && workspace.parkedRoot && workspace.parkedCommonDir && workspace.parkedIndexTree && workspace.parkedWorktreeTree) {
+          await restoreCheckoutState(project.cwd, {
+            root: workspace.parkedRoot,
+            commonDir: workspace.parkedCommonDir,
+            head: workspace.parkedHead,
+            headRef: workspace.parkedHeadRef,
+            indexTree: workspace.parkedIndexTree,
+            worktreeTree: workspace.parkedWorktreeTree,
+          });
+          await removeSessionBranch(project.cwd, workspace.branch, workspace.commonDir);
+        } else if (workspace?.mode === "worktree" && workspace.worktreePath && workspace.commonDir && workspace.branch) {
+          await removeSessionWorktree(project.cwd, {
+            root: workspace.worktreePath,
+            commonDir: workspace.commonDir,
+            branch: workspace.branch,
+          }, registry.worktreeRoot(project.id));
+        }
         this.sessionIndex.remove(session.id);
         this.emitStatus(session.id, "sleeping");
       }
@@ -384,9 +543,13 @@ export class RuntimeCoordinator implements PiDriver {
       const project = registry.get(input.projectId);
       if (!project || project.archivedAt) throw new Error("project is unavailable");
       const projectSlots = [...this.slots.values()]
-        .filter((slot) => projectIdForCwd(slot.driver.runtimeDetails().cwd) === project.id);
+        .filter((slot) => this.projectIdForSlot(slot) === project.id);
       if (projectSlots.some((slot) => !this.slotCanSleep(slot))) {
         throw new Error("cannot archive a project with a running, queued, or attention session");
+      }
+      if (registry.listSessionWorkspaces().some((workspace) =>
+        workspace.projectId === project.id && workspace.mode === "checkout")) {
+        throw new Error("move the checkout-owning session back to its worktree before archiving this project");
       }
       if (projectSlots.some((slot) => slot.id === this.selectedId)) {
         const alternative = registry.list().find((candidate) => candidate.id !== project.id);
@@ -416,6 +579,154 @@ export class RuntimeCoordinator implements PiDriver {
     });
   }
 
+  async updateProjectWorktreeSettings(input: ProjectWorktreeSettingsInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    await this.registry().updateWorktreeSettings(input.projectId, input.setupCommand);
+    this.emitProjectsChanged();
+  }
+
+  async handoffSession(input: HandoffSessionInput): Promise<ReplacementResult> {
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      if (!slot.driver.canSleep()) throw new Error("session must be idle before moving its checkout");
+      const registry = this.registry();
+      const record = registry.workspaceForSession(slot.id);
+      if (!record?.branch || !record.commonDir || !record.worktreePath
+        || !record.baseline || !record.baselineTree) {
+        throw new Error("only isolated sessions can move between checkouts");
+      }
+      if (record.mode === input.destination) return this.replacement(false);
+      const project = registry.get(record.projectId);
+      if (!project || project.archivedAt) throw new Error("project is unavailable");
+      await slot.driver.timelineRelocationReady();
+
+      if (input.destination === "checkout") {
+        const owner = registry.listSessionWorkspaces().find((item) =>
+          item.projectId === project.id && item.mode === "checkout" && item.sessionId !== slot.id);
+        if (owner) throw new Error("another session currently owns the project checkout");
+        const parked = await captureCheckoutState(project.cwd, true);
+        const session = await captureCheckoutState(record.worktreePath, true);
+        await registry.writeHandoffJournal({
+          version: 1,
+          sessionId: slot.id,
+          projectId: project.id,
+          workspace: record,
+          projectState: parked,
+          sessionState: session,
+        });
+        try {
+          await removeSessionWorktree(project.cwd, {
+            root: record.worktreePath,
+            commonDir: record.commonDir,
+            branch: record.branch,
+          }, registry.worktreeRoot(project.id), false);
+          await restoreCheckoutState(project.cwd, session);
+          await registry.setSessionWorkspace({
+            ...record,
+            mode: "checkout",
+            parkedRoot: parked.root,
+            parkedCommonDir: parked.commonDir,
+            parkedHead: parked.head,
+            parkedHeadRef: parked.headRef,
+            parkedIndexTree: parked.indexTree,
+            parkedWorktreeTree: parked.worktreeTree,
+          });
+          slot.suppressEvents = true;
+          await slot.driver.rebindWorkspace(project.cwd);
+          slot.suppressEvents = false;
+          slot.target.cwd = project.cwd;
+          await registry.clearHandoffJournal();
+        } catch (error) {
+          slot.suppressEvents = false;
+          await restoreCheckoutState(project.cwd, parked).catch(() => {});
+          const recreated = await recreateSessionWorktree(
+            project.cwd,
+            record.worktreePath,
+            registry.worktreeRoot(project.id),
+            record.branch,
+            record.commonDir,
+          ).catch(() => undefined);
+          if (recreated) await restoreCheckoutState(recreated, session).catch(() => {});
+          if (recreated) {
+            await registry.setSessionWorkspace(record).catch(() => {});
+            await registry.clearHandoffJournal().catch(() => {});
+          }
+          throw error;
+        }
+      } else {
+        if (!record.parkedRoot || !record.parkedCommonDir || !record.parkedIndexTree || !record.parkedWorktreeTree) {
+          throw new Error("parked project checkout state is unavailable");
+        }
+        const session = await captureCheckoutState(project.cwd, true);
+        const parked = {
+          root: record.parkedRoot,
+          commonDir: record.parkedCommonDir,
+          head: record.parkedHead,
+          headRef: record.parkedHeadRef,
+          indexTree: record.parkedIndexTree,
+          worktreeTree: record.parkedWorktreeTree,
+        };
+        await registry.writeHandoffJournal({
+          version: 1,
+          sessionId: slot.id,
+          projectId: project.id,
+          workspace: record,
+          projectState: parked,
+          sessionState: session,
+        });
+        let recreated: string | undefined;
+        try {
+          await restoreCheckoutState(project.cwd, parked);
+          recreated = await recreateSessionWorktree(
+            project.cwd,
+            record.worktreePath,
+            registry.worktreeRoot(project.id),
+            record.branch,
+            record.commonDir,
+          );
+          await restoreCheckoutState(recreated, session);
+          await registry.setSessionWorkspace({
+            sessionId: record.sessionId,
+            projectId: record.projectId,
+            mode: "worktree",
+            worktreePath: recreated,
+            commonDir: record.commonDir,
+            branch: record.branch,
+            baseline: record.baseline,
+            baselineTree: record.baselineTree,
+          });
+          slot.suppressEvents = true;
+          await slot.driver.rebindWorkspace(recreated);
+          slot.suppressEvents = false;
+          slot.target.cwd = recreated;
+          await registry.clearHandoffJournal();
+        } catch (error) {
+          slot.suppressEvents = false;
+          if (recreated) {
+            await removeSessionWorktree(project.cwd, {
+              root: recreated,
+              commonDir: record.commonDir,
+              branch: record.branch,
+            }, registry.worktreeRoot(project.id), false).catch(() => {});
+          }
+          await restoreCheckoutState(project.cwd, session).catch(() => {});
+          await registry.setSessionWorkspace(record).catch(() => {});
+          await registry.clearHandoffJournal().catch(() => {});
+          throw error;
+        }
+      }
+      slot.suppressEvents = false;
+      slot.innerGeneration = slot.driver.runtimeDetails().generation;
+      this.generation++;
+      await this.refreshWorkspace(slot, false);
+      const runtime = await this.selectedSnapshot();
+      this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });
+      this.sessionIndex.invalidate();
+      return this.replacement(false);
+    });
+  }
+
   async archiveSession(input: SessionArchiveInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
       this.assertGeneration(input.expectedGeneration);
@@ -423,12 +734,15 @@ export class RuntimeCoordinator implements PiDriver {
       if (registry.isSessionArchived(input.sessionId)) throw new Error("session is already archived");
       const session = await this.sessionIndex.resolve(input.sessionId);
       if (!session) throw new Error("session is unavailable");
-      const project = registry.get(projectIdForCwd(session.cwd));
+      const project = registry.projectForSession(session.id, session.cwd);
       if (!project || project.archivedAt) throw new Error("session project is unavailable");
       const awake = this.slots.get(input.sessionId);
+      if (registry.workspaceForSession(input.sessionId)?.mode === "checkout") {
+        throw new Error("move this session back to its worktree before archiving it");
+      }
       if (awake && !this.slotCanSleep(awake)) throw new Error("cannot archive a running, queued, or attention session");
       if (input.sessionId === this.selectedId) {
-        const replacement = await this.createSlot({ ...this.baseTarget(), cwd: project.cwd });
+        const replacement = await this.createSlot({ ...this.baseTarget(), cwd: project.cwd, projectId: project.id });
         await this.select(replacement);
       }
       await registry.archiveSession(input.sessionId);
@@ -447,7 +761,7 @@ export class RuntimeCoordinator implements PiDriver {
       if (!registry.isSessionArchived(input.sessionId)) throw new Error("archived session is unavailable");
       const session = await this.sessionIndex.resolve(input.sessionId);
       if (!session) throw new Error("archived session is unavailable");
-      if (registry.get(projectIdForCwd(session.cwd))?.archivedAt) throw new Error("restore the project before restoring this session");
+      if (registry.projectForSession(session.id, session.cwd)?.archivedAt) throw new Error("restore the project before restoring this session");
       await registry.restoreSession(input.sessionId);
       this.sessionIndex.invalidate();
       this.emitProjectsChanged();
@@ -462,7 +776,12 @@ export class RuntimeCoordinator implements PiDriver {
       if (awake) return this.select(awake);
       const session = await this.sessionIndex.resolve(input.sessionId);
       if (!session) throw new Error("session is unavailable");
-      const slot = await this.createSlot({ ...this.baseTarget(), cwd: session.cwd, sessionPath: session.path });
+      const slot = await this.createSlot({
+        ...this.baseTarget(),
+        cwd: this.registry().effectiveCwd(session.id, session.cwd),
+        sessionPath: session.path,
+        projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
+      });
       return this.select(slot);
     });
   }
@@ -477,6 +796,27 @@ export class RuntimeCoordinator implements PiDriver {
     }
     const selected = this.selected();
     await selected.driver.deleteSession({ sessionId: input.sessionId });
+    const record = this.registry().workspaceForSession(input.sessionId);
+    const project = record ? this.registry().get(record.projectId) : undefined;
+    if (record?.mode === "checkout" && project && record.commonDir && record.branch
+      && record.parkedRoot && record.parkedCommonDir && record.parkedIndexTree && record.parkedWorktreeTree) {
+      await restoreCheckoutState(project.cwd, {
+        root: record.parkedRoot,
+        commonDir: record.parkedCommonDir,
+        head: record.parkedHead,
+        headRef: record.parkedHeadRef,
+        indexTree: record.parkedIndexTree,
+        worktreeTree: record.parkedWorktreeTree,
+      });
+      await removeSessionBranch(project.cwd, record.branch, record.commonDir);
+    } else if (record?.mode === "worktree" && project && record.worktreePath && record.commonDir && record.branch) {
+      await removeSessionWorktree(project.cwd, {
+        root: record.worktreePath,
+        commonDir: record.commonDir,
+        branch: record.branch,
+      }, this.registry().worktreeRoot(project.id));
+    }
+    await this.registry().removeSessionWorkspace(input.sessionId);
     this.sessionIndex.remove(input.sessionId);
     this.emitStatus(input.sessionId, "sleeping");
   }
@@ -503,7 +843,12 @@ export class RuntimeCoordinator implements PiDriver {
         }
         const session = await this.sessionIndex.resolve(input.sessionId);
         if (!session) throw new Error("session is unavailable");
-        const slot = await this.createSlot({ ...this.baseTarget(), cwd: session.cwd, sessionPath: session.path });
+        const slot = await this.createSlot({
+          ...this.baseTarget(),
+          cwd: this.registry().effectiveCwd(session.id, session.cwd),
+          sessionPath: session.path,
+          projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
+        });
         slot.pinned = true;
         this.sessionIndex.invalidate();
         this.emitStatus(slot.id, slot.driver.runtimeState());
@@ -617,6 +962,8 @@ export class RuntimeCoordinator implements PiDriver {
     this.disposed = true;
     this.pickerAbort?.abort();
     this.pickerAbort = undefined;
+    this.setupAbort?.abort();
+    this.setupAbort = undefined;
     if (this.sleepTimer) clearInterval(this.sleepTimer);
     for (const slot of [...this.slots.values()]) await this.disposeSlot(slot);
     this.listeners.clear();
@@ -642,14 +989,159 @@ export class RuntimeCoordinator implements PiDriver {
     return slot;
   }
 
+  private async ensureIsolatedDraft(slot: RuntimeSlot): Promise<RuntimeSlot> {
+    const details = slot.driver.runtimeDetails();
+    const registry = this.registry();
+    const existing = registry.workspaceForSession(slot.id);
+    if (existing || details.userMessageCount > 0 || slot.target.inMemory) return slot;
+    const project = slot.target.projectId
+      ? registry.get(slot.target.projectId)
+      : registry.projectForSession(slot.id, details.cwd);
+    if (!project || project.archivedAt) return slot;
+    const checkoutOwner = registry.listSessionWorkspaces().find((item) =>
+      item.projectId === project.id && item.mode === "checkout" && item.sessionId !== slot.id);
+    if (checkoutOwner && slot.target.parentSessionId !== checkoutOwner.sessionId) {
+      throw new Error("the project checkout is currently owned by another session");
+    }
+    const gitWorkspace = await inspectGitWorkspace(details.cwd);
+    if (!gitWorkspace) {
+      await registry.setSessionWorkspace({
+        sessionId: slot.id,
+        projectId: project.id,
+        mode: "checkout",
+      });
+      return slot;
+    }
+
+    const controls = (await slot.driver.snapshot()).sessionControls;
+    const opaqueId = randomUUID().replaceAll("-", "");
+    const ownedRoot = registry.worktreeRoot(project.id);
+    const targetPath = resolve(ownedRoot, opaqueId);
+    await registry.writeProvisionJournal({
+      version: 1,
+      projectId: project.id,
+      worktreePath: targetPath,
+      commonDir: gitWorkspace.commonDir,
+      branch: `refs/heads/pylon/sessions/${opaqueId}`,
+    });
+    const worktree = await createSessionWorktree(details.cwd, targetPath, ownedRoot, opaqueId)
+      .catch(async (error) => {
+        await registry.clearProvisionJournal().catch(() => {});
+        throw error;
+      });
+    let next: RuntimeSlot | undefined;
+    try {
+      slot.setupState = project.setupCommand ? "running" : "idle";
+      const setupAbort = new AbortController();
+      this.setupAbort = setupAbort;
+      try {
+        await runSetupCommand(worktree.root, project.setupCommand ?? "", setupAbort.signal);
+      } finally {
+        if (this.setupAbort === setupAbort) this.setupAbort = undefined;
+      }
+      next = await this.createSlot({
+        ...this.baseTarget(),
+        cwd: worktree.root,
+        projectId: project.id,
+      });
+      next.setupState = "idle";
+      if (controls.model && controls.thinkingLevel) {
+        await next.driver.setSessionControls({
+          provider: controls.model.provider,
+          modelId: controls.model.id,
+          thinkingLevel: controls.thinkingLevel,
+        });
+      }
+      await registry.setSessionWorkspace({
+        sessionId: next.id,
+        projectId: project.id,
+        mode: "worktree",
+        worktreePath: worktree.root,
+        commonDir: worktree.commonDir,
+        branch: worktree.branch,
+        baseline: worktree.baseline,
+        baselineTree: worktree.baselineTree,
+      });
+      await registry.clearProvisionJournal();
+      next.provisional = {
+        previous: slot,
+        projectId: project.id,
+        worktree: {
+          root: worktree.root,
+          commonDir: worktree.commonDir,
+          branch: worktree.branch,
+        },
+        oldSessionPath: details.sessionPath,
+      };
+      return next;
+    } catch (error) {
+      if (next) await this.disposeSlot(next).catch(() => {});
+      if (next) await registry.removeSessionWorkspace(next.id).catch(() => {});
+      await removeSessionWorktree(details.cwd, worktree, ownedRoot).catch(() => {});
+      await registry.clearProvisionJournal().catch(() => {});
+      slot.setupState = "failed";
+      slot.setupError = error instanceof Error ? error.message.slice(0, 500) : "worktree setup failed";
+      throw error;
+    }
+  }
+
   private async messageCommand(kind: "prompt" | "steer" | "followUp", input: PromptInput): Promise<AcceptedCommand> {
     this.assertGeneration(input.expectedGeneration);
-    const slot = this.selected();
+    const slot = kind === "prompt"
+      ? await this.ensureIsolatedDraft(this.selected())
+      : this.selected();
+    this.assertCheckoutAvailable(slot);
     slot.lastActivityAt = Date.now();
-    await slot.driver[kind]({ ...input, expectedGeneration: slot.innerGeneration });
+    try {
+      await slot.driver[kind]({ ...input, expectedGeneration: slot.innerGeneration });
+    } catch (error) {
+      await this.rollbackProvisional(slot);
+      throw error;
+    }
+    await this.commitProvisional(slot);
     slot.receivedInput = true;
     this.sessionIndex.invalidate();
     return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
+  }
+
+  private async commitProvisional(slot: RuntimeSlot): Promise<void> {
+    const provisional = slot.provisional;
+    if (!provisional) return;
+    slot.provisional = undefined;
+    await this.select(slot);
+    await this.disposeSlot(provisional.previous);
+    if (provisional.oldSessionPath) await unlink(provisional.oldSessionPath).catch(() => {});
+    this.sessionIndex.invalidate();
+    this.emitProjectsChanged();
+  }
+
+  private async rollbackProvisional(slot: RuntimeSlot): Promise<void> {
+    const provisional = slot.provisional;
+    if (!provisional) return;
+    slot.provisional = undefined;
+    await this.disposeSlot(slot).catch(() => {});
+    await this.registry().removeSessionWorkspace(slot.id).catch(() => {});
+    const project = this.registry().get(provisional.projectId);
+    if (project) {
+      await removeSessionWorktree(project.cwd, provisional.worktree, this.registry().worktreeRoot(project.id)).catch(() => {});
+    }
+  }
+
+  private assertCheckoutAvailable(slot: RuntimeSlot): void {
+    if (this.registry().workspaceForSession(slot.id)?.mode === "worktree") return;
+    const details = slot.driver.runtimeDetails();
+    const projectId = slot.target.projectId
+      ?? this.registry().projectForSession(slot.id, details.cwd)?.id;
+    if (!projectId) return;
+    const conflict = [...this.slots.values()].find((candidate) => {
+      if (candidate === slot || candidate.driver.runtimeState() === "idle") return false;
+      const value = candidate.driver.runtimeDetails();
+      const candidateProject = candidate.target.projectId
+        ?? this.registry().projectForSession(candidate.id, value.cwd)?.id;
+      return candidateProject === projectId
+        && this.registry().workspaceForSession(candidate.id)?.mode !== "worktree";
+    });
+    if (conflict) throw new Error("another checkout-bound session is already running in this project");
   }
 
   private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
@@ -680,6 +1172,7 @@ export class RuntimeCoordinator implements PiDriver {
       slot.id = event.sessionId;
       this.slots.delete(oldId);
       this.slots.set(slot.id, slot);
+      if (slot.suppressEvents) return;
       if (this.selectedId === oldId) {
         this.selectedId = slot.id;
         this.generation++;
@@ -721,7 +1214,10 @@ export class RuntimeCoordinator implements PiDriver {
         ? event.payload as Record<string, unknown>
         : {};
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
+        queueMicrotask(() => void this.refreshWorkspace(slot, true));
         queueMicrotask(() => void this.settleAgentRun(slot));
+      } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
+        queueMicrotask(() => void this.refreshWorkspace(slot, true));
       }
     }
     this.publishStatus(slot.id);
@@ -743,6 +1239,7 @@ export class RuntimeCoordinator implements PiDriver {
 
   private async selectedSnapshot(): Promise<RuntimeSnapshot> {
     const slot = this.selected();
+    await this.refreshWorkspace(slot, false);
     return this.translateSnapshot(await slot.driver.snapshot(), slot);
   }
 
@@ -768,7 +1265,57 @@ export class RuntimeCoordinator implements PiDriver {
           },
         } : { pending: undefined }),
       },
+      workspace: slot.workspace,
     };
+  }
+
+  private async refreshWorkspace(slot: RuntimeSlot, publish: boolean): Promise<void> {
+    const details = slot.driver.runtimeDetails();
+    const record = this.registry().workspaceForSession(slot.id);
+    try {
+      if (record?.mode === "worktree" && record.baselineTree) {
+        const changes = await inspectWorkspaceChanges(details.cwd, record.baselineTree);
+        slot.workspace = {
+          gitAvailable: true,
+          mode: "worktree",
+          revision: changes.revision,
+          changedCount: changes.files.length,
+          setupState: slot.setupState ?? "idle",
+          ...(slot.setupError ? { setupError: slot.setupError } : {}),
+          canMoveToCheckout: slot.driver.runtimeState() === "idle",
+          canMoveToWorktree: false,
+        };
+      } else {
+        const gitWorkspace = await inspectGitWorkspace(details.cwd);
+        slot.workspace = {
+          gitAvailable: Boolean(gitWorkspace),
+          mode: gitWorkspace ? "checkout" : "non-git",
+          changedCount: 0,
+          setupState: slot.setupState ?? "idle",
+          ...(slot.setupError ? { setupError: slot.setupError } : {}),
+          ...(record?.mode === "checkout" ? { checkoutOwner: slot.id.slice(0, 128) } : {}),
+          canMoveToCheckout: false,
+          canMoveToWorktree: Boolean(record?.mode === "checkout" && record.branch),
+        };
+      }
+    } catch (error) {
+      slot.workspace = {
+        gitAvailable: false,
+        mode: "non-git",
+        changedCount: 0,
+        setupState: "failed",
+        setupError: error instanceof Error ? error.message.slice(0, 500) : "workspace unavailable",
+        canMoveToCheckout: false,
+        canMoveToWorktree: false,
+      };
+    }
+    if (!publish || slot.id !== this.selectedId) return;
+    this.emit({
+      type: "workspace.revision",
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      workspace: slot.workspace,
+    });
   }
 
   private selected(): RuntimeSlot {
@@ -890,15 +1437,78 @@ export class RuntimeCoordinator implements PiDriver {
     return this.projectRegistry;
   }
 
+  private async recoverHandoff(): Promise<void> {
+    const registry = this.registry();
+    const journal = await registry.readHandoffJournal();
+    if (!journal) return;
+    const project = registry.get(journal.projectId);
+    const workspace = journal.workspace;
+    if (!project || !workspace.worktreePath || !workspace.commonDir || !workspace.branch) {
+      throw new Error("handoff recovery metadata is incomplete");
+    }
+    await restoreCheckoutState(project.cwd, journal.projectState);
+    const existing = await inspectGitWorkspace(workspace.worktreePath);
+    const worktreePath = existing
+      ? workspace.worktreePath
+      : await recreateSessionWorktree(
+          project.cwd,
+          workspace.worktreePath,
+          registry.worktreeRoot(project.id),
+          workspace.branch,
+          workspace.commonDir,
+        );
+    await restoreCheckoutState(worktreePath, journal.sessionState);
+    await registry.setSessionWorkspace({
+      sessionId: workspace.sessionId,
+      projectId: workspace.projectId,
+      mode: "worktree",
+      worktreePath,
+      commonDir: workspace.commonDir,
+      branch: workspace.branch,
+      baseline: workspace.baseline,
+      baselineTree: workspace.baselineTree,
+    });
+    await registry.clearHandoffJournal();
+  }
+
+  private async recoverProvision(): Promise<void> {
+    const registry = this.registry();
+    const journal = await registry.readProvisionJournal();
+    if (!journal) return;
+    const mapped = registry.listSessionWorkspaces().some((workspace) =>
+      workspace.worktreePath === journal.worktreePath && workspace.branch === journal.branch);
+    if (mapped) {
+      await registry.clearProvisionJournal();
+      return;
+    }
+    const project = registry.get(journal.projectId);
+    if (!project) throw new Error("worktree recovery project is unavailable");
+    await removeSessionWorktree(project.cwd, {
+      root: journal.worktreePath,
+      commonDir: journal.commonDir,
+      branch: journal.branch,
+    }, registry.worktreeRoot(project.id)).catch(async () => {
+      await removeSessionBranch(project.cwd, journal.branch, journal.commonDir);
+    });
+    await registry.clearProvisionJournal();
+  }
+
   private async slotForProject(projectId: string, cwd: string): Promise<RuntimeSlot> {
-    const awake = [...this.slots.values()].find((slot) => projectIdForCwd(slot.driver.runtimeDetails().cwd) === projectId);
+    const awake = [...this.slots.values()].find((slot) => this.projectIdForSlot(slot) === projectId);
     if (awake) return awake;
     const session = (await SessionManager.listAll())
-      .filter((candidate) => projectIdForCwd(candidate.cwd) === projectId && !this.registry().isSessionArchived(candidate.id))
+      .filter((candidate) => this.registry().projectForSession(candidate.id, candidate.cwd)?.id === projectId
+        && !this.registry().isSessionArchived(candidate.id))
       .sort((left, right) => right.modified.getTime() - left.modified.getTime())[0];
     return this.createSlot(session
-      ? { ...this.baseTarget(), cwd, sessionPath: session.path }
-      : { ...this.baseTarget(), cwd });
+      ? { ...this.baseTarget(), cwd: this.registry().effectiveCwd(session.id, session.cwd), sessionPath: session.path, projectId }
+      : { ...this.baseTarget(), cwd, projectId });
+  }
+
+  private projectIdForSlot(slot: RuntimeSlot): string | undefined {
+    const details = slot.driver.runtimeDetails();
+    return slot.target.projectId
+      ?? this.registry().projectForSession(slot.id, details.cwd)?.id;
   }
 
   private emitProjectsChanged(): void {
@@ -934,6 +1544,7 @@ export class RuntimeCoordinator implements PiDriver {
   private async sleepIdleSlots(): Promise<void> {
     const now = Date.now();
     for (const slot of [...this.slots.values()]) {
+      if (!slot.receivedInput && slot.driver.runtimeDetails().userMessageCount === 0) continue;
       const sleepAfterMs = slot.receivedInput
         ? this.options.sleepAfterMs ?? SLEEP_AFTER_MS
         : this.options.viewOnlySleepAfterMs ?? VIEW_ONLY_SLEEP_AFTER_MS;

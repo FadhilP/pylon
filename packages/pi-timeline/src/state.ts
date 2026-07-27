@@ -1,4 +1,4 @@
-export const TIMELINE_STATE_VERSION = 1 as const;
+export const TIMELINE_STATE_VERSION = 2 as const;
 
 export interface TimelineCheckpointState {
   id: string;
@@ -15,6 +15,7 @@ export interface TimelineStateSnapshot {
   sessionId: string;
   available: boolean;
   checkpoints: TimelineCheckpointState[];
+  undoPromptEntryIds: string[];
 }
 
 export interface TimelineStateRequest {
@@ -23,12 +24,19 @@ export interface TimelineStateRequest {
   respond(value: TimelineStateSnapshot): void;
 }
 
-export function timelineStateSnapshot(sessionId: string, revision: number, checkpoints: TimelineCheckpointState[], available = true): TimelineStateSnapshot {
+export function timelineStateSnapshot(
+  sessionId: string,
+  revision: number,
+  checkpoints: TimelineCheckpointState[],
+  available = true,
+  undoPromptEntryIds: string[] = [],
+): TimelineStateSnapshot {
   return {
     version: TIMELINE_STATE_VERSION,
     revision,
     sessionId,
     available,
+    undoPromptEntryIds: undoPromptEntryIds.slice(-10_000).map((id) => id.slice(0, 128)),
     checkpoints: checkpoints.slice(-100).map((item) => ({
       id: item.id.slice(0, 128),
       title: item.title.slice(0, 500),

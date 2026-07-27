@@ -38,6 +38,7 @@ import type {
   ProjectArchiveInput,
   PromptInput,
   QueueMutationInput,
+  RewindPromptInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -168,6 +169,7 @@ export class SessionRuntime implements PiDriver {
   private discoverIndex?: DiscoverIndexReadModel;
   private gitBranch?: string;
   private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
+  private undoPromptEntryIds = new Set<string>();
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -481,6 +483,31 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
+  rebindWorkspace(cwd: string): Promise<ReplacementResult> {
+    return this.withSessionMutation("lifecycle", async () => {
+      const runtime = this.requireRuntime();
+      const sessionPath = runtime.session.sessionFile;
+      if (!sessionPath) throw new Error("session is not persisted");
+      const result = await this.replace(() => runtime.switchSession(sessionPath, { cwdOverride: cwd }));
+      if (!result.cancelled && this.target) this.target.cwd = cwd;
+      return result;
+    });
+  }
+
+  async timelineRelocationReady(): Promise<void> {
+    const runtime = this.requireRuntime();
+    let response: Promise<unknown> | undefined;
+    this.eventBus.emit("pi-timeline:relocation-readiness", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      respond: (value: unknown) => { response = Promise.resolve(value); },
+    });
+    const value = await response;
+    if (!value) return;
+    const result = value as { ready?: unknown };
+    if (result.ready !== true) throw new Error("Timeline checkpoints are not portable.");
+  }
+
   deleteSession(input: DeleteSessionInput): Promise<void> {
     return this.withSessionMutation("delete", async () => {
       if (!this.gate.ready) throw new Error("runtime is not ready");
@@ -520,17 +547,22 @@ export class SessionRuntime implements PiDriver {
       if (this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
         throw new Error("prompts can only be edited while the session is idle");
       }
-      const target = session.sessionManager.getBranch().find((entry) => entry.id === input.entryId);
+      const branch = session.sessionManager.getBranch();
+      const targetIndex = branch.findIndex((entry) => entry.id === input.entryId);
+      const target = branch[targetIndex];
       if (target?.type !== "message" || target.message.role !== "user") {
         throw new Error("the selected prompt is not on the active branch");
       }
+      const parentId = typeof (target as { parentId?: unknown }).parentId === "string"
+        ? (target as { parentId: string }).parentId
+        : branch[targetIndex - 1]?.id;
       const oldLeaf = session.sessionManager.getLeafId();
-      if (!oldLeaf || oldLeaf === target.id) throw new Error("the selected turn has not completed");
+      if (!parentId || !oldLeaf || oldLeaf === target.id) throw new Error("the selected turn has not completed");
 
       const timeline = await this.prepareTimelineEdit(session, target.id, input.rollbackFiles);
       let navigated = false;
       try {
-        const result = await session.navigateTree(target.id, { summarize: false });
+        const result = await session.navigateTree(parentId, { summarize: false });
         if (result.cancelled) {
           throw new Error("prompt editing was cancelled");
         }
@@ -541,6 +573,54 @@ export class SessionRuntime implements PiDriver {
         this.transcriptCache = undefined;
         this.refreshSnapshot();
         return accepted;
+      } catch (error) {
+        if (navigated) {
+          await timeline?.rollback().catch((rollbackError) => this.recordError(rollbackError));
+          await session.navigateTree(oldLeaf, { summarize: false }).catch((rollbackError) => this.recordError(rollbackError));
+        } else {
+          await timeline?.cancel().catch((rollbackError) => this.recordError(rollbackError));
+        }
+        this.transcriptCache = undefined;
+        this.refreshSnapshot();
+        throw error;
+      }
+    });
+  }
+
+  rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand> {
+    return this.withSessionMutation("lifecycle", async () => {
+      const session = this.sessionFor(input.expectedGeneration);
+      if (this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+        throw new Error("prompts can only be rewound while the session is idle");
+      }
+      const branch = session.sessionManager.getBranch();
+      const targetIndex = branch.findIndex((entry) => entry.id === input.entryId);
+      const target = branch[targetIndex];
+      if (target?.type !== "message" || target.message.role !== "user") {
+        throw new Error("the selected prompt is not on the active branch");
+      }
+      if (!this.undoPromptEntryIds.has(target.id)) {
+        throw new Error("Pi Timeline cannot restore files before this prompt");
+      }
+      const parentId = typeof (target as { parentId?: unknown }).parentId === "string"
+        ? (target as { parentId: string }).parentId
+        : branch[targetIndex - 1]?.id;
+      const oldLeaf = session.sessionManager.getLeafId();
+      if (!parentId || !oldLeaf || oldLeaf === target.id) {
+        throw new Error("the selected prompt cannot be rewound");
+      }
+
+      const timeline = await this.prepareTimelineEdit(session, target.id, true);
+      let navigated = false;
+      try {
+        const result = await session.navigateTree(parentId, { summarize: false });
+        if (result.cancelled) throw new Error("prompt rewind was cancelled");
+        navigated = true;
+        await timeline!.apply();
+        await timeline!.commit().catch((cleanupError) => this.recordError(cleanupError));
+        this.transcriptCache = undefined;
+        this.refreshSnapshot();
+        return this.accepted(input.commandId);
       } catch (error) {
         if (navigated) {
           await timeline?.rollback().catch((rollbackError) => this.recordError(rollbackError));
@@ -1176,6 +1256,7 @@ export class SessionRuntime implements PiDriver {
     }));
     const session = runtime.session;
     this.hydrateTurnChanges(session);
+    this.requestPackageStates(session.sessionId);
     const stats = session.getSessionStats();
     const context = session.getContextUsage();
     const messages = this.transcriptMessages(session);
@@ -1211,9 +1292,8 @@ export class SessionRuntime implements PiDriver {
         source: command.source,
       }));
     const loadedExtensions = runtime.services.resourceLoader.getExtensions().extensions.map((extension) => basename(extension.resolvedPath));
-    const selectedProject = this.projectRegistry?.get(projectIdForCwd(runtime.cwd));
+    const selectedProject = this.projectRegistry?.projectForSession(session.sessionId, runtime.cwd);
     this.operational = withOperationalCapabilities(this.operational, availableTools, loadedExtensions, this.diagnostics);
-    this.requestPackageStates(session.sessionId);
     this.lastSnapshot = {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: session.sessionId,
@@ -1307,6 +1387,7 @@ export class SessionRuntime implements PiDriver {
         const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
         if (replacing && raw?.available === false) return;
         const sessionId = active ? this.runtime?.session.sessionId : undefined;
+        if (channel === "pi-timeline:state-change") this.captureTimelineUndo(raw);
         this.operational = applyOperationalEvent(
           this.operational,
           channel,
@@ -1320,7 +1401,9 @@ export class SessionRuntime implements PiDriver {
           sessionId,
           sessionGeneration: generation,
           channel,
-          payload,
+          payload: channel === "pi-timeline:state-change" && raw
+            ? Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "undoPromptEntryIds"))
+            : payload,
           operational: cloneOperational(this.operational),
         });
       }));
@@ -1369,7 +1452,13 @@ export class SessionRuntime implements PiDriver {
     const messages = session.sessionManager.getBranch()
       .filter((entry) => entry.type === "message" || entry.type === "custom_message")
       .flatMap((entry) => sessionEntryToContextMessages(entry)
-        .map((message) => ({ ...message, entryId: entry.id })));
+        .map((message) => ({
+          ...message,
+          entryId: entry.id,
+          timestamp: (message as { timestamp?: unknown }).timestamp
+            ?? (entry as { timestamp?: unknown }).timestamp,
+          ...(this.undoPromptEntryIds.has(entry.id) ? { canUndo: true } : {}),
+        })));
     this.transcriptCache = { sessionId, leafId, messages };
     return messages;
   }
@@ -1405,13 +1494,14 @@ export class SessionRuntime implements PiDriver {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel.startsWith("pi-continuity") ? 2 : 1,
+          version: 2,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
             if (answered || raw?.sessionId !== sessionId) return;
             answered = true;
             const stateChannel = channel.replace("state-request", "state-change");
+            if (stateChannel === "pi-timeline:state-change") this.captureTimelineUndo(raw, false);
             this.operational = applyOperationalEvent(
               this.operational,
               stateChannel,
@@ -1426,6 +1516,23 @@ export class SessionRuntime implements PiDriver {
         this.recordError(error);
       }
     }
+  }
+
+  private captureTimelineUndo(raw?: Record<string, unknown>, publish = true): void {
+    if (raw?.version !== 2 || !Array.isArray(raw.undoPromptEntryIds)) return;
+    this.undoPromptEntryIds = new Set(
+      raw.undoPromptEntryIds
+        .filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 128)
+        .slice(0, 10_000),
+    );
+    const sessionId = this.runtime?.session.sessionId;
+    if (!publish || !sessionId) return;
+    this.emit({
+      type: "session.event",
+      sessionId,
+      sessionGeneration: this.gate.generation,
+      payload: { type: "prompt_undo", entryIds: [...this.undoPromptEntryIds] },
+    });
   }
 
   private detachBus(): void {

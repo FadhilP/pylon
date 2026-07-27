@@ -48,7 +48,41 @@ export function renderMarkdown(text: string): string {
   });
 }
 
-function escapeHtml(value: string): string {
+const sourceLanguages: Record<string, string> = {
+  bash: "bash",
+  css: "css",
+  diff: "diff",
+  htm: "xml",
+  html: "xml",
+  js: "javascript",
+  jsx: "javascript",
+  json: "json",
+  jsonc: "json",
+  md: "markdown",
+  mjs: "javascript",
+  cjs: "javascript",
+  ps1: "powershell",
+  py: "python",
+  sh: "bash",
+  sql: "sql",
+  svg: "xml",
+  ts: "typescript",
+  tsx: "typescript",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yaml",
+  zsh: "bash",
+};
+
+export function highlightSource(text: string, path: string, diffView = false): string {
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  const language = diffView ? "diff" : sourceLanguages[extension];
+  return language
+    ? hljs.highlight(text, { language, ignoreIllegals: true }).value
+    : escapeHtml(text);
+}
+
+export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

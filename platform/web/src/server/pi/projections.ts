@@ -34,6 +34,10 @@ type Publish = (type: string, payload: unknown) => void;
 function text(value: unknown, maximum = MAX_TEXT): string {
   return typeof value === "string" ? value.slice(0, maximum) : "";
 }
+function createdAt(value: unknown): string | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function id(value: unknown, fallback: string): string { return typeof value === "string" && value.length > 0 ? value.slice(0, 128) : fallback; }
 function role(value: unknown): MessageReadModel["role"] {
@@ -253,6 +257,7 @@ export function projectConversation(
         role: "tool",
         text: messageText(raw),
         streaming: false,
+        ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
         tool: {
           id: toolId,
           name,
@@ -270,6 +275,8 @@ export function projectConversation(
       role: messageRole,
       text: messageText(raw),
       streaming: false,
+      ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
+      ...(messageRole === "user" && raw.canUndo === true ? { canUndo: true } : {}),
       ...(images ? { attachmentCount: images } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string" ? { systemSource: text(raw.customType, 200) } : {}),
     };
@@ -388,6 +395,11 @@ export class RuntimeProjection {
       this.publish("queue.update", this.runtime.conversation.queue);
       return;
     }
+    if (event.type === "workspace.revision") {
+      this.runtime.workspace = structuredClone(event.workspace);
+      this.publish("workspace.revision", this.runtime.workspace);
+      return;
+    }
     if (event.type === "ui.closed") {
       if (this.pendingUi?.requestId === event.requestId) this.pendingUi = undefined;
       this.publish("ui.closed", { requestId: event.requestId.slice(0, 128) });
@@ -483,6 +495,21 @@ export class RuntimeProjection {
       this.publish("runtime.error", { message: text(raw.message, 1_000) || "Could not apply the queued model change" });
       return;
     }
+    if (kind === "prompt_undo") {
+      const entryIds = new Set(
+        Array.isArray(raw.entryIds)
+          ? raw.entryIds.filter((entryId): entryId is string => typeof entryId === "string").slice(0, 10_000)
+          : [],
+      );
+      const items: Array<{ id: string; canUndo: boolean }> = [];
+      for (const message of this.messages.values()) {
+        if (message.role !== "user" || !message.entryId) continue;
+        message.canUndo = entryIds.has(message.entryId);
+        items.push({ id: message.id, canUndo: message.canUndo });
+      }
+      this.publish("message.undo", { items });
+      return;
+    }
     if (kind === "agent_start") {
       if (raw.metrics) this.metrics(object(raw.metrics));
       const startedAt = typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
@@ -552,9 +579,13 @@ export class RuntimeProjection {
     this.activeMessageId = messageId;
     const item: MessageReadModel = {
       id: messageId,
+      ...(typeof raw.entryId === "string" || typeof message.entryId === "string"
+        ? { entryId: id(raw.entryId ?? message.entryId, messageId) }
+        : {}),
       role: role(raw.role ?? message.role),
       text: messageText(message) || text(raw.text),
       streaming: true,
+      createdAt: createdAt(message.timestamp ?? raw.timestamp) ?? new Date().toISOString(),
       ...(attachmentCount(message) ? { attachmentCount: attachmentCount(message) } : {}),
       ...(typeof message.customType === "string" ? { systemSource: text(message.customType, 200) } : {}),
     };
@@ -595,12 +626,14 @@ export class RuntimeProjection {
     if (current) {
       const finalText = messageText(raw.message);
       if (finalText) current.text = finalText;
+      const entryId = raw.entryId ?? object(raw.message).entryId;
+      if (typeof entryId === "string") current.entryId = id(entryId, current.id);
       current.streaming = false;
       this.messages.set(messageId, current);
     }
     this.activeMessageId = undefined;
     this.runtime.conversation.streaming = false;
-    this.publish("message.end", { id: messageId, text: current?.text ?? "" });
+    this.publish("message.end", { id: messageId, text: current?.text ?? "", entryId: current?.entryId });
   }
   private toolStart(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, `tool-${this.tools.size + 1}`);

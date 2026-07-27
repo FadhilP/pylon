@@ -66,6 +66,9 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions") return await this.fileSuggestions(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/files") return await this.workspaceFiles(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/file") return await this.workspaceFile(request, response, url, false);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/diff") return await this.workspaceFile(request, response, url, true);
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
@@ -229,6 +232,47 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
+  private async workspaceFiles(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const generation = Number(url.searchParams.get("generation"));
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.driver.workspaceFiles) throw httpError(404, "workspace files are unavailable");
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const limit = Number(url.searchParams.get("limit") ?? 200);
+    if (query.length > 200 || (cursor && cursor.length > 128)
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, "invalid file query");
+    const result = await this.driver.workspaceFiles({ query, cursor, limit });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing files");
+    this.send(response, 200, result);
+  }
+
+  private async workspaceFile(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    diff: boolean,
+  ): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const generation = Number(url.searchParams.get("generation"));
+    const path = url.searchParams.get("path") ?? "";
+    const view = url.searchParams.get("view") === "base" ? "base" : "current";
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!path || path.length > 500 || path.includes("\\") || path.startsWith("/")
+      || /^[A-Za-z]:/.test(path) || path.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw httpError(400, "invalid workspace path");
+    }
+    const method = diff ? this.driver.workspaceDiff : this.driver.workspaceFile;
+    if (!method) throw httpError(404, "workspace file view is unavailable");
+    const result = await method.call(this.driver, { path, view });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while reading file");
+    this.send(response, 200, result);
+  }
+
   private async queuedPrompt(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     const session = this.sessions.get(request);
     const tabId = header(request.headers["x-pylon-tab-id"]);
@@ -334,6 +378,7 @@ export class ServerTransport {
       case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
       case "setSessionActive": return this.driver.setSessionActive({ sessionId: command.sessionId, active: command.active }).then(() => accepted(command.expectedGeneration));
       case "editPrompt": return this.driver.editPrompt(command);
+      case "rewindPrompt": return this.driver.rewindPrompt(command);
       case "fork": return this.driver.fork({ entryId: command.entryId, position: command.position }).then((result) => accepted(result.sessionGeneration));
       case "timeline": {
         const action = command.action === "restore" ? "jump" : command.action;
@@ -370,6 +415,12 @@ export class ServerTransport {
         return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "deleteContinuityMemory":
         return this.driver.deleteContinuityMemory(command).then(() => accepted(command.expectedGeneration));
+      case "handoffSession":
+        if (!this.driver.handoffSession) return Promise.reject(httpError(409, "workspace handoff is unavailable"));
+        return this.driver.handoffSession(command).then((result) => accepted(result.sessionGeneration));
+      case "updateProjectWorktreeSettings":
+        if (!this.driver.updateProjectWorktreeSettings) return Promise.reject(httpError(409, "worktree settings are unavailable"));
+        return this.driver.updateProjectWorktreeSettings(command).then(() => accepted(command.expectedGeneration));
     }
   }
 

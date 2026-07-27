@@ -20,6 +20,7 @@ export const COMMAND_NAMES = [
   "renameSession",
   "setSessionActive",
   "editPrompt",
+  "rewindPrompt",
   "fork",
   "timeline",
   "setPackageEnabled",
@@ -30,6 +31,8 @@ export const COMMAND_NAMES = [
   "setSessionControls",
   "updateContinuityMemory",
   "deleteContinuityMemory",
+  "handoffSession",
+  "updateProjectWorktreeSettings",
 ] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
@@ -81,6 +84,7 @@ export type WebCommand =
   | ({ type: "renameSession"; sessionId: string; name: string } & CommandBase)
   | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
   | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
+  | ({ type: "rewindPrompt"; entryId: string } & CommandBase)
   | ({ type: "fork"; entryId: string; position?: "before" | "at" } & CommandBase)
   | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
@@ -90,7 +94,9 @@ export type WebCommand =
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({ type: "setSessionControls"; provider: string; modelId: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
-  | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase);
+  | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase)
+  | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
+  | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase);
 
 export interface AcceptedCommand {
   commandId: string;

@@ -13,13 +13,14 @@ function repositories(target: Snapshot): RepositorySnapshot[] {
   return [{
     prefix: "",
     gitRoot: target.gitRoot,
+    commonDir: target.commonDir,
     head: target.head,
     headRef: target.headRef,
     worktreeRef: target.worktreeRef,
     indexRef: target.indexRef,
     worktreeTree: target.worktreeTree,
     indexTree: target.indexTree,
-  }, ...(target.nested ?? [])];
+  }, ...(target.nested ?? []).map((repository) => ({ ...repository }))];
 }
 
 async function apply(repository: RepositorySnapshot, worktreeIndex: string) {
@@ -59,10 +60,14 @@ export async function restore(target: Snapshot, cwd = target.gitRoot) {
     throw Error("Nested repository graph changed since checkpoint.");
   for (let index = 0; index < targets.length; index++) {
     const actual = current.repositories[index], expected = targets[index];
-    if (actual.prefix !== expected.prefix || canonical(actual.root) !== canonical(expected.gitRoot))
+    const repositoryMatches = expected.commonDir
+      ? canonical(actual.commonDir) === canonical(expected.commonDir)
+      : canonical(actual.root) === canonical(expected.gitRoot);
+    if (actual.prefix !== expected.prefix || !repositoryMatches)
       throw Error("Checkpoint belongs to a different repository graph.");
     if (actual.head !== expected.head)
       throw Error(`HEAD changed since checkpoint: ${expected.prefix || "."}`);
+    expected.gitRoot = actual.root;
   }
 
   const dir = await mkdtemp(join(tmpdir(), "pi-timeline-")), indexes: string[] = [];

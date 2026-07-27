@@ -27,6 +27,51 @@ export interface RuntimeSnapshot {
   discoverIndex?: DiscoverIndexReadModel;
   operational: OperationalReadModel;
   extensionUi: ExtensionUiReadModel;
+  workspace?: WorkspaceReadModel;
+}
+
+export interface WorkspaceReadModel {
+  gitAvailable: boolean;
+  mode: "worktree" | "checkout" | "non-git";
+  revision?: string;
+  changedCount: number;
+  setupState?: "idle" | "running" | "failed";
+  setupError?: string;
+  checkoutOwner?: string;
+  canMoveToCheckout: boolean;
+  canMoveToWorktree: boolean;
+}
+
+export interface WorkspaceFileReadModel {
+  path: string;
+  status?: "added" | "modified" | "deleted";
+  additions?: number;
+  deletions?: number;
+  binary?: boolean;
+}
+
+export interface WorkspaceFilePage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  revision: string;
+  files: WorkspaceFileReadModel[];
+  totalCount: number;
+  truncated: boolean;
+  nextCursor?: string;
+}
+
+export interface WorkspaceFileContent {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  revision: string;
+  path: string;
+  state: "available" | "deleted" | "binary" | "oversized";
+  text?: string;
+  truncated?: boolean;
+}
+
+export interface WorkspaceFileDiff extends WorkspaceFileContent {
+  state: "available" | "binary" | "oversized";
 }
 
 export interface DiscoverIndexReadModel {

@@ -31,6 +31,22 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.continuity.work?.goal, "Ship");
   assert.equal(state.continuity.memory[0]?.key, "project.arch");
 
+  state = applyOperationalEvent(state, "pi-timeline:state-change", {
+    version: 2,
+    revision: 1,
+    sessionId: "session",
+    available: true,
+    undoPromptEntryIds: ["user-2"],
+    checkpoints: [{
+      id: "checkpoint-1",
+      title: "First prompt",
+      ownerSessionId: "session",
+      createdAt: new Date(0).toISOString(),
+      verified: true,
+    }],
+  }, [], "session");
+  assert.equal(state.timeline.checkpoints[0]?.id, "checkpoint-1");
+
   state = applyOperationalEvent(state, "pylon:tool-policy", { version: 1, kind: "register", owner: "pi-test", managedTools: ["test"], enabledTools: ["test"] });
   assert.equal(state.tools.policies.length, 1);
   state = applyOperationalEvent(state, "pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-test" });

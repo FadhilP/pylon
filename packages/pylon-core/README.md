@@ -34,6 +34,7 @@ Guard remains the independent final safety authority; Pylon never approves or we
 - Lets Continuity planning retain read-only Scout and Advisor tools when enabled.
 - Coordinates pi-advisor, pi-grunt, pi-helios, pi-scout, and pi-continuity.
 - Fingerprints shell-driven worktree changes once per model turn for shared Continuity and Timeline consumption.
+- Provides opt-in Git workspace primitives for platform hosts: dirty-state baselines, Pylon-owned linked worktrees, confined file reads, bounded diffs, and reversible checkout-state moves. Importing the extension never creates a worktree.
 - Persists bounded, path-only changed-file summaries in Pi session entries for platform clients.
 - Falls back to each package's standalone behavior when Pylon is absent.
 - Tests real package adapters together.

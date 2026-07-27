@@ -1,7 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -10,7 +10,9 @@ export interface RuntimeTarget {
   repositoryRoot: string;
   sessionPath?: string;
   parentSessionPath?: string;
+  parentSessionId?: string;
   inMemory?: boolean;
+  projectId?: string;
 }
 
 export interface RuntimeHandle {
@@ -38,6 +40,17 @@ export interface FileSuggestionInput {
   limit?: number;
 }
 
+export interface WorkspaceFilesInput {
+  query?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface WorkspaceFileInput {
+  path: string;
+  view?: "current" | "base";
+}
+
 export interface NewSessionInput {
   parentSessionId?: string;
   projectId?: string;
@@ -54,6 +67,16 @@ export interface RemoveProjectInput extends ProjectInput {
 
 export interface ProjectArchiveInput extends ProjectInput {
   projectId: string;
+}
+
+export interface ProjectWorktreeSettingsInput extends ProjectInput {
+  projectId: string;
+  setupCommand: string;
+}
+
+export interface HandoffSessionInput {
+  expectedGeneration: number;
+  destination: "checkout" | "worktree";
 }
 
 export interface SwitchSessionInput {
@@ -86,6 +109,12 @@ export interface ForkInput {
 export interface EditPromptInput extends PromptInput {
   entryId: string;
   rollbackFiles: boolean;
+}
+
+export interface RewindPromptInput {
+  entryId: string;
+  commandId: string;
+  expectedGeneration: number;
 }
 
 export interface SetPackageEnabledInput {
@@ -180,6 +209,12 @@ export type DriverEvent =
       sessionId: string;
       sessionGeneration: number;
       queue: QueueReadModel;
+    }
+  | {
+      type: "workspace.revision";
+      sessionId: string;
+      sessionGeneration: number;
+      workspace: NonNullable<RuntimeSnapshot["workspace"]>;
     };
 
 export type DriverEventListener = (event: DriverEvent) => void;
@@ -189,6 +224,9 @@ export interface PiDriver {
   snapshot(): Promise<RuntimeSnapshot>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
+  workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;
+  workspaceFile?(input: WorkspaceFileInput): Promise<WorkspaceFileContent>;
+  workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
@@ -205,6 +243,8 @@ export interface PiDriver {
   removeProject(input: RemoveProjectInput): Promise<ReplacementResult>;
   archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult>;
   restoreProject(input: ProjectArchiveInput): Promise<void>;
+  updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
+  handoffSession?(input: HandoffSessionInput): Promise<ReplacementResult>;
   switchSession(input: SwitchSessionInput): Promise<ReplacementResult>;
   deleteSession(input: DeleteSessionInput): Promise<void>;
   archiveSession(input: SessionArchiveInput): Promise<ReplacementResult>;
@@ -212,6 +252,7 @@ export interface PiDriver {
   renameSession(input: RenameSessionInput): Promise<void>;
   setSessionActive(input: SetSessionActiveInput): Promise<void>;
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand>;
+  rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand>;
   fork(input: ForkInput): Promise<ReplacementResult>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;

@@ -4,6 +4,8 @@ export interface MessageReadModel {
   role: "user" | "assistant" | "system" | "tool";
   text: string;
   streaming: boolean;
+  createdAt?: string;
+  canUndo?: boolean;
   attachmentCount?: number;
   fileAttachmentCount?: number;
   workDurationMs?: number;

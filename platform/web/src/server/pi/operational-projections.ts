@@ -207,7 +207,7 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
 
 function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: string): TimelineReadModel {
   const input = record(value);
-  if (!input || input.version !== 1 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 1 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
+  if (!input || input.version !== 2 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 2 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
   if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   if (!Array.isArray(input.checkpoints)) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   const checkpoints = input.checkpoints.slice(-100).flatMap((value) => {

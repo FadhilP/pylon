@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   capture,
+  makePortable,
   worktreeFingerprint,
   type Snapshot,
 } from "../src/snapshot.ts";
@@ -38,7 +39,7 @@ import {
 } from "../src/run.ts";
 import { TIMELINE_STATE_VERSION, timelineStateSnapshot } from "../src/state.ts";
 type RecordV3 = Snapshot & {
-  version: 3;
+  version: 3 | 4;
   kind: "pi-prompt-checkpoint";
   promptEntryId: string;
   ownerSessionId: string;
@@ -65,12 +66,13 @@ type ClearV1 = {
   checkpointEntryIds: string[];
 };
 const inspectGitState = async (cwd: string): Promise<GitState> => {
-  const [gitRoot, head, headRef] = await Promise.all([
+  const [gitRoot, commonDir, head, headRef] = await Promise.all([
     git(cwd, ["rev-parse", "--show-toplevel"]),
+    git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
     git(cwd, ["rev-parse", "HEAD"]),
     symbolicHead(cwd),
   ]);
-  return { gitRoot, head, headRef };
+  return { gitRoot, commonDir, head, headRef };
 };
 const shortRef = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const compatibilityLabel = (
@@ -135,6 +137,7 @@ export default function timelineExtension(
     releaseSessionLease: ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
     ephemeralSession = false,
     currentSessionId = "",
+    currentGit: any,
     lastCtx: any;
   pi.events.emit?.("pylon:worktree-observer-request", {
     version: 1,
@@ -148,19 +151,39 @@ export default function timelineExtension(
   });
   const artifactRoot = options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
-  const stateSnapshot = (available = true) => timelineStateSnapshot(
-    currentSessionId,
-    stateRevision,
-    [...records].map(([id, bound]) => ({
-      id,
-      title: bound.preview.split(/\r?\n/, 1)[0] || "Checkpoint",
-      createdAt: bound.record.createdAt,
-      ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
-      verified: bound.record.verification?.state === "passed",
-      ownerSessionId: bound.record.ownerSessionId,
-    })),
-    available,
-  );
+  const stateSnapshot = (available = true) => {
+    const branch = lastCtx?.sessionManager.getBranch?.() ?? [];
+    const positions = new Map<string, number>(
+      branch.map((entry: any, index: number) => [entry.id, index] as const),
+    );
+    const compatibleCheckpoints = currentGit
+      ? [...records.values()].filter((bound) =>
+          bound.sessionId === currentSessionId
+          && positions.has(bound.record.promptEntryId)
+          && classifyCompatibility(bound.record, currentGit).allowed)
+      : [];
+    const undoPromptEntryIds = branch
+      .filter((entry: any, index: number) =>
+        entry.type === "message"
+        && entry.message.role === "user"
+        && compatibleCheckpoints.some((bound) =>
+          (positions.get(bound.record.promptEntryId) ?? Number.POSITIVE_INFINITY) < index))
+      .map((entry: any) => entry.id);
+    return timelineStateSnapshot(
+      currentSessionId,
+      stateRevision,
+      [...records].map(([id, bound]) => ({
+        id,
+        title: bound.preview.split(/\r?\n/, 1)[0] || "Checkpoint",
+        createdAt: bound.record.createdAt,
+        ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
+        verified: bound.record.verification?.state === "passed",
+        ownerSessionId: bound.record.ownerSessionId,
+      })),
+      available,
+      undoPromptEntryIds,
+    );
+  };
   const publishState = (available = true) => {
     stateRevision++;
     pi.events.emit?.("pi-timeline:state-change", stateSnapshot(available));
@@ -345,6 +368,14 @@ export default function timelineExtension(
     timelineId?: string,
   ) => {
     const byId = new Map(entries.map((entry: any) => [entry.id, entry]));
+    const portable = new Set(entries.flatMap((entry: any) =>
+      entry.type === "custom"
+        && entry.customType === "pi-prompt-checkpoint"
+        && entry.data?.version === 4
+        && typeof entry.data.promptEntryId === "string"
+        && typeof entry.data.snapshotId === "string"
+        ? [`${entry.data.promptEntryId}:${entry.data.snapshotId}`]
+        : []));
     let checkpointTimelineId: string | undefined;
     for (const entry of entries) {
       if (
@@ -356,8 +387,10 @@ export default function timelineExtension(
       } else if (
         entry.type === "custom" &&
         entry.customType === "pi-prompt-checkpoint" &&
-        entry.data?.version === 3
+        (entry.data?.version === 3 || entry.data?.version === 4)
       ) {
+        if (entry.data.version === 3
+          && portable.has(`${entry.data.promptEntryId}:${entry.data.snapshotId}`)) continue;
         if (entry.data.headRef !== null && typeof entry.data.headRef !== "string") continue;
         if (timelineId && checkpointTimelineId !== timelineId) continue;
         const user = byId.get(entry.data.promptEntryId) as any;
@@ -380,6 +413,7 @@ export default function timelineExtension(
   };
   const load = async (ctx: any) => {
     records = new Map();
+    currentGit = await inspectGitState(ctx.cwd).catch(() => undefined);
     const currentEntries = ctx.sessionManager.getEntries();
     activeRun = findRunEntry(currentEntries);
     if (!activeRun) {
@@ -450,6 +484,7 @@ export default function timelineExtension(
     try {
       snap = await capture(ctx.cwd, sessionId, (root) =>
         recordTimelineOwner(artifactRoot, sessionId, root));
+      currentGit = snap;
       const identity = await worktreeId(ctx.cwd),
         verification = latestVerification?.worktreeId === identity && latestVerification.state === "passed"
           ? {
@@ -461,7 +496,7 @@ export default function timelineExtension(
             }
           : undefined,
         record: RecordV3 = {
-          version: 3,
+          version: 4,
           kind: "pi-prompt-checkpoint",
           promptEntryId: user.id,
           ownerSessionId: sessionId,
@@ -496,6 +531,33 @@ export default function timelineExtension(
     if (event?.version === 1 && lastCtx && typeof event.respond === "function")
       event.respond(checkpoint(lastCtx));
   });
+  const disposeRelocation = pi.events.on("pi-timeline:relocation-readiness", (request: any) => {
+    if (request?.version !== 1
+      || request.sessionId !== currentSessionId
+      || typeof request.respond !== "function"
+      || !lastCtx) return;
+    request.respond((async () => {
+      const migrating = [...records.entries()].filter(([, bound]) =>
+        bound.sessionId === currentSessionId && bound.record.version === 3);
+      for (const [recordKey, bound] of migrating) {
+        const portable = await makePortable(bound.record, lastCtx.cwd);
+        const record: RecordV3 = { ...bound.record, ...portable, version: 4 };
+        pi.appendEntry("pi-prompt-checkpoint", record);
+        const checkpointEntryId = lastCtx.sessionManager.getLeafId()!;
+        records.delete(recordKey);
+        records.set(key(currentSessionId, checkpointEntryId), {
+          ...bound,
+          record,
+          checkpointEntryId,
+        });
+      }
+      if (migrating.length) {
+        refresh(lastCtx);
+        publishState();
+      }
+      return { version: 1, ready: true };
+    })());
+  });
   pi.on("session_start", async (_e, ctx) => {
     lastCtx = ctx;
     latestVerification = undefined;
@@ -527,6 +589,7 @@ export default function timelineExtension(
     disposeEditNavigation();
     disposeVerify();
     disposeCheckpoint();
+    disposeRelocation();
     disposeWorktreeChange();
     await releaseSessionLease?.(ephemeralSession);
     releaseSessionLease = undefined;
