@@ -10,8 +10,8 @@ import {
   captureCheckoutState,
   inspectGitWorkspace,
   inspectWorkspaceChanges,
-  listWorkspaceFiles,
-  listPlainWorkspaceFiles,
+  collectWorkspaceFiles,
+  collectPlainWorkspaceFiles,
   readWorkspaceFile,
   readPlainWorkspaceFile,
   recreateSessionWorktree,
@@ -19,9 +19,10 @@ import {
   diffWorkspaceFile,
   removeSessionWorktree,
   removeSessionBranch,
+  sessionWorktreeBranch,
 } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
@@ -41,6 +42,8 @@ import type {
   HandoffSessionInput,
   QueueMutationInput,
   RewindPromptInput,
+  ReorderActiveSessionInput,
+  ReorderProjectInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -53,6 +56,8 @@ import type {
   SetSessionControlsInput,
   SessionArchiveInput,
   SwitchSessionInput,
+  TimelineCheckpointDiffInput,
+  TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
   WorkspaceFileInput,
@@ -66,6 +71,17 @@ const SLEEP_AFTER_MS = 30 * 60 * 1000;
 const VIEW_ONLY_SLEEP_AFTER_MS = 60 * 1000;
 const SLEEP_CHECK_MS = 60 * 1000;
 const SETUP_LOG_BYTES = 64 * 1024;
+const WORKSPACE_INVENTORY_TTL_MS = 60_000;
+const MAX_WORKSPACE_INVENTORIES = 25;
+
+interface CachedWorkspaceInventory {
+  cwd: string;
+  baselineTree?: string;
+  expiresAt: number;
+  revision: string;
+  files: WorkspaceFileReadModel[];
+  truncated: boolean;
+}
 
 function runSetupCommand(cwd: string, command: string, signal?: AbortSignal): Promise<void> {
   if (!command.trim()) return Promise.resolve();
@@ -156,6 +172,7 @@ export class RuntimeCoordinator implements PiDriver {
   private pickerAbort?: AbortController;
   private setupAbort?: AbortController;
   private disposed = false;
+  private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
 
   constructor(private readonly options: RuntimeCoordinatorOptions = {}) {}
 
@@ -191,6 +208,17 @@ export class RuntimeCoordinator implements PiDriver {
     const generation = this.generation;
     const page = await slot.driver.conversationHistory(input);
     if (slot.id !== this.selectedId || generation !== this.generation) throw new Error("session changed while loading history");
+    return { ...page, sessionGeneration: generation };
+  }
+
+  async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.conversationTurnIndex) throw new Error("conversation turn index is unavailable");
+    const page = await slot.driver.conversationTurnIndex(input);
+    if (slot.id !== this.selectedId || generation !== this.generation) {
+      throw new Error("session changed while loading turn index");
+    }
     return { ...page, sessionGeneration: generation };
   }
 
@@ -243,19 +271,48 @@ export class RuntimeCoordinator implements PiDriver {
 
   async workspaceFiles(input: WorkspaceFilesInput): Promise<WorkspaceFilePage> {
     const slot = this.selected();
-    await this.refreshWorkspace(slot, true);
     const record = this.registry().workspaceForSession(slot.id);
     const cwd = slot.driver.runtimeDetails().cwd;
-    const page = await (await inspectGitWorkspace(cwd)
-      ? listWorkspaceFiles({
-          cwd,
-          baselineTree: record?.baselineTree,
-          query: input.query,
-          cursor: input.cursor,
-          limit: input.limit,
-        })
-      : listPlainWorkspaceFiles({ cwd, query: input.query, cursor: input.cursor, limit: input.limit }));
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...page };
+    const inventoryKey = workspaceInventoryKey(cwd, record?.baselineTree);
+    if (input.refresh) this.workspaceInventories.delete(inventoryKey);
+    let inventory = this.workspaceInventories.get(inventoryKey);
+    if (!inventory || inventory.expiresAt <= Date.now()
+      || inventory.cwd !== cwd || inventory.baselineTree !== record?.baselineTree) {
+      await this.refreshWorkspace(slot, true);
+      const collected = await (await inspectGitWorkspace(cwd)
+        ? collectWorkspaceFiles({ cwd, baselineTree: record?.baselineTree })
+        : collectPlainWorkspaceFiles({ cwd }));
+      inventory = {
+        cwd,
+        baselineTree: record?.baselineTree,
+        expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
+        revision: collected.revision,
+        files: collected.files,
+        truncated: collected.truncated,
+      };
+      this.workspaceInventories.delete(inventoryKey);
+      this.workspaceInventories.set(inventoryKey, inventory);
+      while (this.workspaceInventories.size > MAX_WORKSPACE_INVENTORIES) {
+        this.workspaceInventories.delete(this.workspaceInventories.keys().next().value!);
+      }
+    }
+    const query = (input.query ?? "").trim().toLocaleLowerCase();
+    const filtered = query
+      ? inventory.files.filter((file) => file.path.toLocaleLowerCase().includes(query))
+      : inventory.files;
+    const offset = decodeWorkspaceFileCursor(input.cursor, filtered.length);
+    const limit = Math.min(200, Math.max(1, input.limit ?? 200));
+    const files = filtered.slice(offset, offset + limit);
+    const next = offset + files.length;
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.generation,
+      revision: inventory.revision,
+      files,
+      totalCount: filtered.length,
+      truncated: inventory.truncated,
+      ...(next < filtered.length ? { nextCursor: Buffer.from(String(next)).toString("base64url") } : {}),
+    };
   }
 
   async workspaceFile(input: WorkspaceFileInput): Promise<WorkspaceFileContent> {
@@ -278,6 +335,16 @@ export class RuntimeCoordinator implements PiDriver {
       baselineTree: record.baselineTree,
     });
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...diff };
+  }
+
+  async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
+    const result = await this.selected().driver.timelineCheckpointFiles(input);
+    return { ...result, sessionGeneration: this.generation };
+  }
+
+  async timelineCheckpointDiff(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff> {
+    const result = await this.selected().driver.timelineCheckpointDiff(input);
+    return { ...result, sessionGeneration: this.generation };
   }
 
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -536,6 +603,13 @@ export class RuntimeCoordinator implements PiDriver {
     });
   }
 
+  async reorderProject(input: ReorderProjectInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    await this.registry().reorderProject(input.projectId, input.beforeProjectId);
+    this.sessionIndex.invalidate();
+    this.emitProjectsChanged();
+  }
+
   async archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
       this.assertGeneration(input.expectedGeneration);
@@ -558,7 +632,11 @@ export class RuntimeCoordinator implements PiDriver {
           : await this.createSlot({ ...this.baseTarget(), inMemory: true });
         await this.select(slot);
       }
+      const projectSessionIds = (await SessionManager.listAll())
+        .filter((session) => registry.projectForSession(session.id, session.cwd)?.id === project.id)
+        .map((session) => session.id);
       await registry.archiveProject(project.id);
+      await registry.deactivateSessions(projectSessionIds);
       for (const slot of projectSlots) {
         if (this.slots.has(slot.id)) await this.disposeSlot(slot);
       }
@@ -600,6 +678,7 @@ export class RuntimeCoordinator implements PiDriver {
       const project = registry.get(record.projectId);
       if (!project || project.archivedAt) throw new Error("project is unavailable");
       await slot.driver.timelineRelocationReady();
+      this.invalidateWorkspaceInventory(slot);
 
       if (input.destination === "checkout") {
         const owner = registry.listSessionWorkspaces().find((item) =>
@@ -719,6 +798,7 @@ export class RuntimeCoordinator implements PiDriver {
       slot.suppressEvents = false;
       slot.innerGeneration = slot.driver.runtimeDetails().generation;
       this.generation++;
+      this.invalidateWorkspaceInventory(slot);
       await this.refreshWorkspace(slot, false);
       const runtime = await this.selectedSnapshot();
       this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });
@@ -746,6 +826,7 @@ export class RuntimeCoordinator implements PiDriver {
         await this.select(replacement);
       }
       await registry.archiveSession(input.sessionId);
+      await registry.deactivateSession(input.sessionId);
       if (awake && this.slots.has(awake.id)) await this.disposeSlot(awake);
       this.sessionIndex.invalidate();
       this.emitStatus(input.sessionId, "sleeping");
@@ -817,6 +898,7 @@ export class RuntimeCoordinator implements PiDriver {
       }, this.registry().worktreeRoot(project.id));
     }
     await this.registry().removeSessionWorkspace(input.sessionId);
+    await this.registry().deactivateSession(input.sessionId);
     this.sessionIndex.remove(input.sessionId);
     this.emitStatus(input.sessionId, "sleeping");
   }
@@ -837,8 +919,11 @@ export class RuntimeCoordinator implements PiDriver {
       const awake = this.slots.get(input.sessionId);
       if (input.active) {
         if (awake) {
+          await this.registry().activateSession(input.sessionId);
           awake.pinned = true;
           awake.lastActivityAt = Date.now();
+          this.sessionIndex.invalidate();
+          this.emitProjectsChanged();
           return;
         }
         const session = await this.sessionIndex.resolve(input.sessionId);
@@ -850,16 +935,40 @@ export class RuntimeCoordinator implements PiDriver {
           projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
         });
         slot.pinned = true;
+        await this.registry().activateSession(input.sessionId);
         this.sessionIndex.invalidate();
         this.emitStatus(slot.id, slot.driver.runtimeState());
+        this.emitProjectsChanged();
         return;
       }
       if (input.sessionId === this.selectedId) throw new Error("cannot deactivate the selected session");
-      if (!awake) return;
+      if (!awake) {
+        await this.registry().deactivateSession(input.sessionId);
+        this.sessionIndex.invalidate();
+        this.emitProjectsChanged();
+        return;
+      }
       if (!this.slotCanSleep(awake)) throw new Error("cannot deactivate a running or queued session");
+      await this.registry().deactivateSession(input.sessionId);
       await this.disposeSlot(awake);
       this.emitStatus(input.sessionId, "sleeping");
+      this.sessionIndex.invalidate();
+      this.emitProjectsChanged();
     });
+  }
+
+  async reorderActiveSession(input: ReorderActiveSessionInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const active = await this.listSessions();
+    if (!active.activeSessions.some((session) => session.id === input.sessionId)) {
+      throw new Error("active session is unavailable");
+    }
+    if (input.beforeSessionId && !active.activeSessions.some((session) => session.id === input.beforeSessionId)) {
+      throw new Error("active session reorder target is unavailable");
+    }
+    await this.registry().reorderActiveSession(input.sessionId, input.beforeSessionId);
+    this.sessionIndex.invalidate();
+    this.emitProjectsChanged();
   }
 
   async fork(input: ForkInput): Promise<ReplacementResult> {
@@ -878,9 +987,13 @@ export class RuntimeCoordinator implements PiDriver {
       const selected = this.selected();
       await selected.driver.setPackageEnabled(input);
       for (const slot of [...this.slots.values()]) {
-        if (slot.id !== this.selectedId) await this.disposeSlot(slot);
+        if (slot.id !== this.selectedId) {
+          await this.registry().deactivateSession(slot.id);
+          await this.disposeSlot(slot);
+        }
       }
       this.sessionIndex.invalidate();
+      this.emitProjectsChanged();
       return this.replacement(false);
     });
   }
@@ -893,9 +1006,13 @@ export class RuntimeCoordinator implements PiDriver {
       const selected = this.selected();
       await selected.driver.updatePackageSettings(input);
       for (const slot of [...this.slots.values()]) {
-        if (slot.id !== this.selectedId) await this.disposeSlot(slot);
+        if (slot.id !== this.selectedId) {
+          await this.registry().deactivateSession(slot.id);
+          await this.disposeSlot(slot);
+        }
       }
       this.sessionIndex.invalidate();
+      this.emitProjectsChanged();
       return this.replacement(false);
     });
   }
@@ -967,6 +1084,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (this.sleepTimer) clearInterval(this.sleepTimer);
     for (const slot of [...this.slots.values()]) await this.disposeSlot(slot);
     this.listeners.clear();
+    this.workspaceInventories.clear();
   }
 
   private async createSlot(target: RuntimeTarget): Promise<RuntimeSlot> {
@@ -1022,7 +1140,7 @@ export class RuntimeCoordinator implements PiDriver {
       projectId: project.id,
       worktreePath: targetPath,
       commonDir: gitWorkspace.commonDir,
-      branch: `refs/heads/pylon/sessions/${opaqueId}`,
+      branch: sessionWorktreeBranch(opaqueId),
     });
     const worktree = await createSessionWorktree(details.cwd, targetPath, ownedRoot, opaqueId)
       .catch(async (error) => {
@@ -1091,6 +1209,7 @@ export class RuntimeCoordinator implements PiDriver {
       ? await this.ensureIsolatedDraft(this.selected())
       : this.selected();
     this.assertCheckoutAvailable(slot);
+    const wasActive = slot.receivedInput || slot.pinned;
     slot.lastActivityAt = Date.now();
     try {
       await slot.driver[kind]({ ...input, expectedGeneration: slot.innerGeneration });
@@ -1100,6 +1219,10 @@ export class RuntimeCoordinator implements PiDriver {
     }
     await this.commitProvisional(slot);
     slot.receivedInput = true;
+    if (!wasActive) {
+      await this.registry().activateSession(slot.id).catch(() => undefined);
+      this.emitProjectsChanged();
+    }
     this.sessionIndex.invalidate();
     return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
   }
@@ -1214,9 +1337,11 @@ export class RuntimeCoordinator implements PiDriver {
         ? event.payload as Record<string, unknown>
         : {};
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
+        this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true));
         queueMicrotask(() => void this.settleAgentRun(slot));
       } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
+        this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true));
       }
     }
@@ -1549,8 +1674,10 @@ export class RuntimeCoordinator implements PiDriver {
         ? this.options.sleepAfterMs ?? SLEEP_AFTER_MS
         : this.options.viewOnlySleepAfterMs ?? VIEW_ONLY_SLEEP_AFTER_MS;
       if (slot.id === this.selectedId || slot.pinned || now - slot.lastActivityAt < sleepAfterMs || !this.slotCanSleep(slot)) continue;
+      await this.registry().deactivateSession(slot.id);
       await this.disposeSlot(slot);
       this.emitStatus(slot.id, "sleeping");
+      this.emitProjectsChanged();
     }
   }
 
@@ -1560,7 +1687,23 @@ export class RuntimeCoordinator implements PiDriver {
     await slot.driver.dispose();
   }
 
+  private invalidateWorkspaceInventory(slot: RuntimeSlot): void {
+    const record = this.registry().workspaceForSession(slot.id);
+    this.workspaceInventories.delete(workspaceInventoryKey(slot.driver.runtimeDetails().cwd, record?.baselineTree));
+  }
+
   private emit(event: DriverEvent): void {
     for (const listener of this.listeners) listener(event);
   }
+}
+
+function decodeWorkspaceFileCursor(cursor: string | undefined, length: number): number {
+  if (!cursor) return 0;
+  const offset = Number(Buffer.from(cursor, "base64url").toString("utf8"));
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > length) throw new Error("Invalid file cursor.");
+  return offset;
+}
+
+function workspaceInventoryKey(cwd: string, baselineTree?: string): string {
+  return `${resolve(cwd).toLocaleLowerCase()}\0${baselineTree ?? ""}`;
 }

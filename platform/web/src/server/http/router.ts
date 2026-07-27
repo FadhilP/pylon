@@ -6,7 +6,7 @@ import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
-import { decodeHistoryCursor, RuntimeProjection } from "../pi/projections.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from "../pi/projections.ts";
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
 import { applySecurityHeaders, httpError, MAX_JSON_BODY_BYTES, readJson, readJsonWithSize, requestAllowed, SessionStore, type BrowserSession, type SecurityOptions, validCsrf, validTabId } from "./security.ts";
@@ -65,10 +65,13 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-turns") return await this.conversationTurnIndex(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions") return await this.fileSuggestions(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/files") return await this.workspaceFiles(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/file") return await this.workspaceFile(request, response, url, false);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/diff") return await this.workspaceFile(request, response, url, true);
+      if (request.method === "GET" && url.pathname === "/api/v1/timeline/files") return await this.timelineCheckpoint(request, response, url, false);
+      if (request.method === "GET" && url.pathname === "/api/v1/timeline/diff") return await this.timelineCheckpoint(request, response, url, true);
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
@@ -208,11 +211,35 @@ export class ServerTransport {
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 100 : Number(rawLimit);
+    const direction = url.searchParams.get("direction") ?? "before";
     if (!cursor || cursor.length > 128 || decodeHistoryCursor(cursor) === undefined) throw httpError(400, "invalid history cursor");
+    if (!["before", "after", "around"].includes(direction)) throw httpError(400, "invalid history direction");
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid history limit");
-    const result = await this.driver.conversationHistory({ cursor, limit });
+    const result = await this.driver.conversationHistory({ cursor, limit, direction: direction as "before" | "after" | "around" });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading history");
+    this.send(response, 200, result);
+  }
+
+  private async conversationTurnIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const direction = url.searchParams.get("direction") ?? "earlier";
+    const generation = Number(url.searchParams.get("generation"));
+    const limit = Number(url.searchParams.get("limit") ?? 250);
+    if (cursor && (cursor.length > 128 || decodeTurnIndexCursor(cursor) === undefined)) throw httpError(400, "invalid turn cursor");
+    if (!["earlier", "later"].includes(direction)) throw httpError(400, "invalid turn direction");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 250) throw httpError(400, "invalid turn limit");
+    if (!this.driver.conversationTurnIndex) throw httpError(404, "conversation turn index is unavailable");
+    const result = await this.driver.conversationTurnIndex({
+      cursor,
+      direction: direction as "earlier" | "later",
+      limit,
+    });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading turns");
     this.send(response, 200, result);
   }
 
@@ -242,9 +269,10 @@ export class ServerTransport {
     const query = url.searchParams.get("q")?.trim() ?? "";
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const limit = Number(url.searchParams.get("limit") ?? 200);
+    const refresh = url.searchParams.get("refresh") === "1";
     if (query.length > 200 || (cursor && cursor.length > 128)
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, "invalid file query");
-    const result = await this.driver.workspaceFiles({ query, cursor, limit });
+    const result = await this.driver.workspaceFiles({ query, cursor, limit, refresh });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing files");
     this.send(response, 200, result);
   }
@@ -270,6 +298,39 @@ export class ServerTransport {
     if (!method) throw httpError(404, "workspace file view is unavailable");
     const result = await method.call(this.driver, { path, view });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while reading file");
+    this.send(response, 200, result);
+  }
+
+  private async timelineCheckpoint(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    diff: boolean,
+  ): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const generation = Number(url.searchParams.get("generation"));
+    const checkpointId = url.searchParams.get("checkpointId") ?? "";
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(checkpointId))
+      throw httpError(400, "invalid checkpoint ID");
+    if (!diff) {
+      if (!this.driver.timelineCheckpointFiles) throw httpError(404, "Timeline files are unavailable");
+      const result = await this.driver.timelineCheckpointFiles({ checkpointId });
+      if (result.sessionGeneration !== this.journal.sessionGeneration)
+        throw httpError(409, "session changed while reading Timeline");
+      return this.send(response, 200, result);
+    }
+    const path = url.searchParams.get("path") ?? "";
+    if (!path || path.length > 500 || path.includes("\\") || path.startsWith("/")
+      || /^[A-Za-z]:/.test(path) || path.split("/").some((part) => !part || part === "." || part === ".."))
+      throw httpError(400, "invalid Timeline path");
+    if (!this.driver.timelineCheckpointDiff) throw httpError(404, "Timeline diff is unavailable");
+    const result = await this.driver.timelineCheckpointDiff({ checkpointId, path });
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while reading Timeline");
     this.send(response, 200, result);
   }
 
@@ -364,6 +425,7 @@ export class ServerTransport {
       case "abort": return this.driver.abort().then(() => accepted(command.expectedGeneration));
       case "addProject": return this.driver.addProject({ expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
       case "removeProject": return this.driver.removeProject({ projectId: command.projectId, expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
+      case "reorderProject": return this.driver.reorderProject(command).then(() => accepted(command.expectedGeneration));
       case "archiveProject": return this.driver.archiveProject(command).then((result) => accepted(result.sessionGeneration));
       case "restoreProject": return this.driver.restoreProject(command).then(() => accepted(command.expectedGeneration));
       case "newSession": return this.driver.newSession({
@@ -377,6 +439,7 @@ export class ServerTransport {
       case "restoreSession": return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
       case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
       case "setSessionActive": return this.driver.setSessionActive({ sessionId: command.sessionId, active: command.active }).then(() => accepted(command.expectedGeneration));
+      case "reorderActiveSession": return this.driver.reorderActiveSession(command).then(() => accepted(command.expectedGeneration));
       case "editPrompt": return this.driver.editPrompt(command);
       case "rewindPrompt": return this.driver.rewindPrompt(command);
       case "fork": return this.driver.fork({ entryId: command.entryId, position: command.position }).then((result) => accepted(result.sessionGeneration));

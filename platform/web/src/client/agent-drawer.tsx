@@ -4,6 +4,7 @@ import { formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
 import { MarkdownContent } from "./conversation-panel";
 import { thinkingLabel } from "./format";
+import { agentColor } from "./agent-color";
 
 export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
   runs: DelegatedAgentRunReadModel[];
@@ -16,7 +17,7 @@ export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
   const selected = ordered.find((run) => run.id === selectedId);
 
   return (
-    <aside id="agents-panel" className="inspector agents-panel is-open" aria-labelledby="agents-title">
+    <aside id="agents-panel" className="inspector agents-panel is-open" aria-labelledby="agents-title" style={selected ? agentColor(selected.id) : undefined}>
       <header>
         <div>
           {selected && <button className="icon-button" type="button" onClick={() => onSelect(undefined)} aria-label="Back to agents"><IconArrowLeft size={17} /></button>}
@@ -37,7 +38,7 @@ function AgentList({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; onS
   return <div className="agents-list">
     {[...turns].map(([turn, items]) => <section key={turn}>
       <h2>{turn > 0 ? `Turn ${turn}` : "Earlier turn"}</h2>
-      {items.map((run) => <button type="button" key={run.id} onClick={() => onSelect(run.id)}>
+      {items.map((run) => <button type="button" key={run.id} style={agentColor(run.id)} onClick={() => onSelect(run.id)}>
         <span className={`agent-state is-${run.status}`} aria-hidden="true" />
         <span><strong>{run.agentName ? `${run.agentName} · ` : ""}{agentLabel(run.kind)}</strong><small>{run.request || "Delegated run"}</small></span>
         <span className={`agent-status is-${run.status}`}>{run.status}</span>
@@ -50,6 +51,10 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
   const tools = useMemo(() => pairActivity(run.activity), [run.activity]);
   const toolNames = [...new Set(tools.map((tool) => tool.tool))];
   const toolStatus = tools.some((tool) => tool.failed) ? "failed" : run.status === "running" ? "running" : "completed";
+  const usage = run.usage ?? (run.status === "failed"
+    ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
+    : undefined);
+  const scout = run.kind === "repo_scout" || run.kind === "web_scout";
   return <div className="agent-details">
     <div className="agent-metadata">
       <span className={`agent-status is-${run.status}`}>{run.status}</span>
@@ -57,18 +62,17 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
       {run.thinkingLevel && <span>{thinkingLabel(run.thinkingLevel)}</span>}
       {run.durationMs !== undefined && <span>{formatWorkDuration(run.durationMs)}</span>}
     </div>
-    {run.usage && <dl className="agent-usage">
-      <div><dt>Input</dt><dd>{run.usage.input.toLocaleString()}</dd></div>
-      <div><dt>Output</dt><dd>{run.usage.output.toLocaleString()}</dd></div>
-      <div><dt>Cache</dt><dd>{run.usage.cacheRead.toLocaleString()}</dd></div>
-      <div><dt>Cost</dt><dd>${run.usage.cost.toFixed(4)}</dd></div>
-    </dl>}
+    <dl className={`agent-usage${usage ? "" : " is-pending"}`}>
+      <div><dt>Input</dt><dd>{usage ? usage.input.toLocaleString() : "—"}</dd></div>
+      <div><dt>Output</dt><dd>{usage ? usage.output.toLocaleString() : "—"}</dd></div>
+      <div><dt>Cache</dt><dd>{usage ? usage.cacheRead.toLocaleString() : "—"}</dd></div>
+      <div><dt>Cost</dt><dd>{usage ? `$${usage.cost.toFixed(4)}` : "—"}</dd></div>
+    </dl>
     {run.request && <section className="agent-section"><h2>Request</h2><pre>{run.request}</pre></section>}
     {tools.length > 0 && <details className={`agent-tool-group is-${toolStatus}`}><summary>
       <IconTool size={15} />
       <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>
       <span>{toolNames.slice(0, 3).join(", ")}{toolNames.length > 3 ? "…" : ""}</span>
-      <em>{toolStatus}</em>
     </summary><div className="agent-tools">
       {tools.map((tool, index) => <details className={`tool-disclosure ${tool.failed ? "is-failed" : run.status === "running" && !tool.output ? "is-running" : ""}`} key={`${tool.tool}-${index}`}>
         <summary>
@@ -82,6 +86,10 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
         </div>
       </details>)}
     </div></details>}
+    {scout && tools.length === 0 && <div className="agent-activity-empty">
+      <IconTool size={16} />
+      <span>{run.status === "running" ? "Waiting for child tool activity…" : "No child tool activity recorded."}</span>
+    </div>}
     {run.response && <section className="agent-section agent-response"><h2>Response</h2><MarkdownContent text={run.response} /></section>}
   </div>;
 }

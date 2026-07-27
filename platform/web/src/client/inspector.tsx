@@ -3,6 +3,7 @@ import {
   IconCircle,
   IconClock,
   IconDatabase,
+  IconFile,
   IconGitBranch,
   IconLayoutDashboard,
   IconListCheck,
@@ -13,8 +14,11 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
-import { useMemo, useState, type ComponentType, type ReactNode } from "react";
+import DOMPurify from "dompurify";
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { formatCompactNumber } from "../shared/format";
+import { highlightSource } from "../shared/markdown";
+import type { TimelineCheckpointDiff, TimelineCheckpointFiles } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -246,6 +250,9 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
   const [selected, setSelected] = useState<string>();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [files, setFiles] = useState<TimelineCheckpointFiles>();
+  const [selectedPath, setSelectedPath] = useState<string>();
+  const [diff, setDiff] = useState<TimelineCheckpointDiff>();
   const active = checkpoints.find((checkpoint) => checkpoint.id === selected) ?? checkpoints[0];
   const enabled = live.connection === "connected" && live.runtime?.ready === true && !busy;
   const act = async (action: "restore" | "fork" | "clear", checkpointId?: string) => {
@@ -254,6 +261,24 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
     try { await runtimeStore.timeline(action, checkpointId); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline action failed"); }
     finally { setBusy(""); }
+  };
+  useEffect(() => {
+    let cancelled = false;
+    setFiles(undefined);
+    setSelectedPath(undefined);
+    setDiff(undefined);
+    if (!active) return;
+    void runtimeStore.timelineCheckpointFiles(active.id)
+      .then((value) => { if (!cancelled) setFiles(value); })
+      .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Timeline files failed to load"); });
+    return () => { cancelled = true; };
+  }, [active?.id, live.runtime?.sessionGeneration]);
+  const openDiff = async (path: string) => {
+    if (!active) return;
+    setSelectedPath(path);
+    setDiff(undefined);
+    try { setDiff(await runtimeStore.timelineCheckpointDiff(active.id, path)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline diff failed to load"); }
   };
   if (timeline?.availability !== "available") {
     return packageEnabled
@@ -264,12 +289,16 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
     <div className="timeline-layout">
       <section className="timeline-list" aria-label="Checkpoints">
         <div className="timeline-toolbar"><span>{checkpoints.length} checkpoints</span><button className="text-button danger" type="button" disabled={!enabled || checkpoints.length === 0} onClick={() => void act("clear")}><IconTrash size={13} />{busy === "clear" ? "Clearing…" : "Clear timeline"}</button></div>
-        {checkpoints.map((checkpoint, index) => (
-          <button className={`checkpoint-row ${active?.id === checkpoint.id ? "is-selected" : ""}`} key={checkpoint.id} onClick={() => setSelected(checkpoint.id)}>
-            <span className="timeline-node"><span />{index < checkpoints.length - 1 && <i />}</span>
+        {checkpoints.map((checkpoint) => (
+          <button
+            className={`checkpoint-row ${active?.id === checkpoint.id ? "is-selected" : ""}`}
+            key={checkpoint.id}
+            aria-pressed={active?.id === checkpoint.id}
+            onClick={() => setSelected(checkpoint.id)}
+          >
             <span className="checkpoint-copy">
               <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong><time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
-              <span className="checkpoint-meta"><span className="mono">{checkpoint.id}</span>{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}</span>
+              <span className="checkpoint-meta">{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}{checkpoint.changes && <span>{checkpoint.changes.fileCount} files</span>}{checkpoint.changes && <span className="checkpoint-diff-count"><ins>+{checkpoint.changes.additions}</ins><del>−{checkpoint.changes.deletions}</del></span>}</span>
             </span>
           </button>
         ))}
@@ -278,18 +307,38 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
       {active && <aside className="panel checkpoint-detail">
         <span className="section-kicker">Selected checkpoint</span>
         <h2 title={active.title}>{active.title}</h2>
-        <dl>
-          <div><dt>Checkpoint</dt><dd className="mono">{active.id}</dd></div>
+        <dl className="checkpoint-summary">
           <div><dt>Branch</dt><dd>{active.branch || "Detached or unavailable"}</dd></div>
           <div><dt>Verification</dt><dd>{active.verified ? "Passed" : "Not attached"}</dd></div>
+          <div><dt>Changes</dt><dd>{active.changes ? `${active.changes.fileCount} files · +${active.changes.additions} −${active.changes.deletions}` : "Calculating…"}</dd></div>
         </dl>
-        <button className="primary-button" type="button" disabled={!enabled} onClick={() => void act("fork", active.id)}>{busy === "fork" ? "Forking…" : "Fork & continue"}</button>
-        <button className="secondary-button full" type="button" disabled={!enabled} onClick={() => void act("restore", active.id)}>{busy === "restore" ? "Restoring…" : "Restore checkpoint"}</button>
+        <div className="checkpoint-actions">
+          <button className="primary-button" type="button" disabled={!enabled} onClick={() => void act("fork", active.id)}>{busy === "fork" ? "Forking…" : "Fork & continue"}</button>
+          <button className="secondary-button" type="button" disabled={!enabled} onClick={() => void act("restore", active.id)}>{busy === "restore" ? "Restoring…" : "Restore checkpoint"}</button>
+        </div>
+        <div className="checkpoint-files" aria-label="Checkpoint changed files">
+          {files?.files.map((file) => <button type="button" className={selectedPath === file.path ? "is-active" : ""} key={file.path} onClick={() => void openDiff(file.path)}>
+            <IconFile size={13} />
+            <span title={file.path}>{file.path}</span>
+            {file.binary ? <small>binary</small> : <small><ins>+{file.additions}</ins><del>−{file.deletions}</del></small>}
+          </button>)}
+          {!files && <span className="settings-note">Loading changes…</span>}
+          {files && files.files.length === 0 && <span className="settings-note">No file changes</span>}
+        </div>
+        {selectedPath && <TimelineDiff value={diff} />}
         <div className="runtime-note"><IconShieldCheck size={15} /><span>Timeline confirms every restore, fork, and clear through its remote safety dialog.</span></div>
         {error && <p className="ui-request-error" role="alert">{error}</p>}
       </aside>}
     </div>
   );
+}
+
+function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
+  if (!value) return <div className="timeline-diff-empty">Loading diff…</div>;
+  if (value.state !== "text" || !value.text)
+    return <div className="timeline-diff-empty">{value.state === "binary" ? "Binary file" : value.state === "oversized" ? "Diff is too large to display" : "Diff unavailable"}</div>;
+  const highlighted = DOMPurify.sanitize(highlightSource(value.text, value.path, true));
+  return <pre className="file-code timeline-diff"><code dangerouslySetInnerHTML={{ __html: highlighted }} />{value.truncated && <small>Output truncated</small>}</pre>;
 }
 
 function oneLine(value: string, max = 120): string {

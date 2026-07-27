@@ -1,5 +1,5 @@
 import { IconArchive, IconChevronRight, IconDots, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconStack2, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
 import { displayDate, displayTime } from "./format";
@@ -45,14 +45,20 @@ interface SidebarProps {
   onArchiveSession: (session: SessionSummary) => void;
   onNewSession: (project: SessionProject) => void;
   onWorktreeSetup: (project: SessionProject) => void;
+  onReorderProject: (projectId: string, beforeProjectId?: string) => Promise<void>;
+  onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const menuTrigger = useRef<HTMLElement | null>(null);
+  const [preview, setPreview] = useState<{ kind: "project" | "active"; id: string; ids: string[] }>();
+  const [announcement, setAnnouncement] = useState("");
+  const visibleProjects = useMemo(() => orderByIds(projects, preview?.kind === "project" ? preview.ids : undefined), [preview, projects]);
+  const visibleActiveSessions = useMemo(() => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined), [activeSessions, preview]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -90,12 +96,104 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
     setOpenMenu("");
     if (restoreFocus) requestAnimationFrame(() => menuTrigger.current?.focus());
   };
+  const reorder = async (kind: "project" | "active", id: string, ids: string[]) => {
+    const before = ids[ids.indexOf(id) + 1];
+    setPreview({ kind, id, ids });
+    try {
+      if (kind === "project") await onReorderProject(id, before);
+      else await onReorderActiveSession(id, before);
+      setAnnouncement(`${kind === "project" ? "Project" : "Active session"} moved to position ${ids.indexOf(id) + 1}`);
+    } catch {
+      setAnnouncement("Reordering failed");
+    } finally {
+      setPreview(undefined);
+    }
+  };
+  const startPointerReorder = (event: ReactPointerEvent<HTMLElement>, kind: "project" | "active", id: string, ids: string[]) => {
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let nextIds = ids;
+    const stopClick = (click: MouseEvent) => {
+      click.preventDefault();
+      click.stopPropagation();
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", keydown);
+      document.body.classList.remove("is-reordering");
+    };
+    const cancel = () => {
+      cleanup();
+      if (!dragging) return;
+      setPreview(undefined);
+      setAnnouncement("Reordering cancelled");
+    };
+    const move = (pointer: PointerEvent) => {
+      if (!dragging && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5) return;
+      if (!dragging) {
+        dragging = true;
+        setOpenMenu("");
+        document.body.classList.add("is-reordering");
+        setPreview({ kind, id, ids: nextIds });
+      }
+      pointer.preventDefault();
+      const target = document.elementFromPoint(pointer.clientX, pointer.clientY)
+        ?.closest<HTMLElement>(`[data-reorder-kind="${kind}"]`);
+      const targetId = target?.dataset.reorderId;
+      if (!target || !targetId || targetId === id) return;
+      const after = pointer.clientY > target.getBoundingClientRect().top + target.offsetHeight / 2;
+      const targetIndex = nextIds.indexOf(targetId);
+      const before = after ? nextIds[targetIndex + 1] : targetId;
+      const reordered = moveBefore(nextIds, id, before);
+      if (sameIds(nextIds, reordered)) return;
+      nextIds = reordered;
+      setPreview({ kind, id, ids: nextIds });
+    };
+    const up = () => {
+      cleanup();
+      if (!dragging) return;
+      document.addEventListener("click", stopClick, { capture: true, once: true });
+      window.setTimeout(() => document.removeEventListener("click", stopClick, true), 0);
+      if (sameIds(ids, nextIds)) {
+        setPreview(undefined);
+        return;
+      }
+      void reorder(kind, id, nextIds);
+    };
+    const keydown = (key: KeyboardEvent) => {
+      if (key.key === "Escape") cancel();
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
+    window.addEventListener("keydown", keydown);
+  };
+  const keyboardReorder = (
+    event: ReactKeyboardEvent,
+    kind: "project" | "active",
+    id: string,
+    ids: string[],
+  ) => {
+    if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const current = ids.indexOf(id);
+    const target = Math.max(0, Math.min(ids.length - 1, current + (event.key === "ArrowUp" ? -1 : 1)));
+    if (target === current) return;
+    const reordered = [...ids];
+    reordered.splice(current, 1);
+    reordered.splice(target, 0, id);
+    void reorder(kind, id, reordered);
+  };
 
   return (
     <aside id="primary-navigation" className={`sidebar ${isOpen ? "is-open" : ""}`} aria-label="Projects and sessions" aria-hidden={mobile && !isOpen} inert={mobile && !isOpen}>
       <div className="brand-row">
-        <div className="brand-mark" aria-hidden="true"><IconStack2 size={18} stroke={1.8} /></div>
-        <div className="brand-copy"><strong>Pylon</strong><span>Control center</span></div>
+        <div className="brand-mark" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></div>
+        <div className="brand-copy"><strong>Pylon</strong></div>
         <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation"><IconX size={18} /></button>
       </div>
 
@@ -112,8 +210,8 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
             <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
             Active sessions <small>{activeSessions.length}</small>
           </button></h2>
-          {activeSessionsOpen && (activeSessions.length > 0
-            ? <div className="active-session-list">{activeSessions.map((session) => <SessionRow
+          {activeSessionsOpen && (visibleActiveSessions.length > 0
+            ? <div className="active-session-list">{visibleActiveSessions.map((session) => <SessionRow
                 key={session.id}
                 session={session}
                 menuId={`active-${session.id}`}
@@ -129,6 +227,10 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onSetActive={onSetSessionActive}
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
+                reorderKind="active"
+                dragging={preview?.kind === "active" && preview.id === session.id}
+                onPointerDown={(event) => startPointerReorder(event, "active", session.id, visibleActiveSessions.map((item) => item.id))}
+                onKeyDown={(event) => keyboardReorder(event, "active", session.id, visibleActiveSessions.map((item) => item.id))}
               />)}</div>
             : <p className="active-session-empty">No active sessions</p>)}
         </section>
@@ -143,12 +245,20 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
           </div>
         </div>
         {(projectsOpen || Boolean(query.trim())) && loading && projects.length === 0 && <div className="sidebar-state">Loading sessions...</div>}
-        {(projectsOpen || Boolean(query.trim())) && projects.map((project) => {
+        {(projectsOpen || Boolean(query.trim())) && visibleProjects.map((project) => {
           const expanded = Boolean(query.trim()) || expandedProjects.has(project.id);
           const page = pages.find((candidate) => candidate.id === project.id);
-          return <section className="project-group" key={project.id}>
-            <div className="project-row">
-              <button type="button" className={`project-toggle ${project.active ? "is-active" : ""}`} onClick={() => onToggleProject(project.id)} aria-expanded={expanded}>
+          return <section className={`project-group${preview?.kind === "project" && preview.id === project.id ? " is-dragging" : ""}`} key={project.id}>
+            <div className="project-row" data-reorder-kind="project" data-reorder-id={project.id}>
+              <button
+                type="button"
+                className={`project-toggle ${project.active ? "is-active" : ""}`}
+                onClick={() => onToggleProject(project.id)}
+                onPointerDown={(event) => startPointerReorder(event, "project", project.id, visibleProjects.map((item) => item.id))}
+                onKeyDown={(event) => keyboardReorder(event, "project", project.id, visibleProjects.map((item) => item.id))}
+                aria-expanded={expanded}
+                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+              >
                 <IconChevronRight className={expanded ? "is-expanded" : ""} size={13} />
                 <IconStack2 size={14} />
                 <span>{project.label}</span>
@@ -212,11 +322,12 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
       <div className="sidebar-foot">
         <button className="sidebar-settings" type="button" onClick={onOpenSettings}><IconSettings size={16} />Settings</button>
       </div>
+      <div className="sr-only" aria-live="polite">{announcement}</div>
     </aside>
   );
 }
 
-function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProject = false, onSelect, onDelete, onArchive, onRename, onSetActive, onToggleMenu, onCloseMenu }: {
+function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onToggleMenu, onCloseMenu }: {
   session: SessionSummary;
   menuId: string;
   menuOpen: boolean;
@@ -224,6 +335,10 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
   deleting: string;
   now: number;
   showProject?: boolean;
+  reorderKind?: "active";
+  dragging?: boolean;
+  onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
   onSelect: (session: SessionSummary) => void;
   onDelete: (session: SessionSummary) => void;
   onArchive: (session: SessionSummary) => void;
@@ -235,13 +350,16 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
 
-  return <div className={`session-row ${session.active ? "is-active" : ""}`}>
+  return <div className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`} data-reorder-kind={reorderKind} data-reorder-id={reorderKind ? session.id : undefined}>
     <button
       className={`session-link ${session.active ? "is-active" : ""}`}
       type="button"
       onClick={() => onSelect(session)}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
       disabled={unavailable}
       aria-current={session.active ? "page" : undefined}
+      aria-keyshortcuts={reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
     >
       <span className="session-copy">
         <strong>{sessionTitle(session)}</strong>
@@ -284,4 +402,21 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
       </div>
     </details>
   </div>;
+}
+
+function orderByIds<T extends { id: string }>(items: T[], ids?: string[]): T[] {
+  if (!ids) return items;
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return [...ids.flatMap((id) => byId.get(id) ?? []), ...items.filter((item) => !ids.includes(item.id))];
+}
+
+function moveBefore(ids: string[], id: string, before?: string): string[] {
+  const next = ids.filter((value) => value !== id);
+  const index = before ? next.indexOf(before) : -1;
+  next.splice(index < 0 ? next.length : index, 0, id);
+  return next;
+}
+
+function sameIds(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }

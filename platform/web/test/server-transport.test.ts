@@ -112,10 +112,12 @@ class FakeDriver implements PiDriver {
   abort(): Promise<void> { return Promise.resolve(); }
   addProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project", "project-workspace")); }
   removeProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-removed", "workspace")); }
+  reorderProject(): Promise<void> { return Promise.resolve(); }
   archiveProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-archived", "workspace")); }
   restoreProject(): Promise<void> { return Promise.resolve(); }
   archiveSession(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-archived", "workspace")); }
   restoreSession(): Promise<void> { return Promise.resolve(); }
+  reorderActiveSession(): Promise<void> { return Promise.resolve(); }
   newSession(input?: { parentSessionId?: string }): Promise<ReplacementResult> {
     this.newSessionParent = input?.parentSessionId;
     return Promise.resolve(this.replace("session-2", "other-workspace"));

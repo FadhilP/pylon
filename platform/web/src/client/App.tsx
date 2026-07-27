@@ -23,9 +23,21 @@ import { UiDialog } from "./ui-dialog";
 
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | null;
+const LEFT_PANEL_WIDTH_KEY = "pylon-left-panel-width";
+const DEFAULT_LEFT_PANEL_WIDTH = 280;
 const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
 const DEFAULT_RIGHT_PANEL_WIDTH = 380;
 
+function leftPanelWidth(value: number): number {
+  const maximum = Math.min(520, window.innerWidth * .45);
+  return Math.round(Math.max(220, Math.min(maximum, value)));
+}
+function initialLeftPanelWidth(): number {
+  let stored = Number.NaN;
+  try { stored = Number(localStorage.getItem(LEFT_PANEL_WIDTH_KEY)); }
+  catch { /* Storage can be unavailable in hardened browser contexts. */ }
+  return leftPanelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_LEFT_PANEL_WIDTH);
+}
 function panelWidth(value: number): number {
   const maximum = Math.min(720, window.innerWidth * .6);
   return Math.round(Math.max(300, Math.min(maximum, value)));
@@ -56,6 +68,7 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
@@ -80,6 +93,7 @@ export function App() {
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const agentsToggleRef = useRef<HTMLButtonElement>(null);
   const filesToggleRef = useRef<HTMLButtonElement>(null);
+  const appShellRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
   const previousRightPanel = useRef(rightPanel);
@@ -172,6 +186,8 @@ export function App() {
       if (!active || request !== sessionListRequest.current) return;
       applySessionList(result);
     }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Unable to list sessions";
+      if (/session changed while listing sessions|session list is stale/i.test(message)) return;
       if (active && request === sessionListRequest.current) reportError(cause, "Unable to list sessions");
     }).finally(() => {
       if (active && request === sessionListRequest.current) setSessionsLoading(false);
@@ -465,7 +481,11 @@ export function App() {
   };
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <div
+      ref={appShellRef}
+      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      style={{ "--sidebar-width": `${leftPanelWidth}px` } as CSSProperties}
+    >
       <a className="skip-link" href="#main-content">Skip to content</a>
       <SessionSidebar
         activeSessions={activeSessions}
@@ -511,7 +531,26 @@ export function App() {
           if (unfiltered) void newSession(unfiltered);
         }}
         onWorktreeSetup={(project) => void updateWorktreeSetup(project)}
+        onReorderProject={(projectId, beforeProjectId) =>
+          runtimeStore.reorderProject(projectId, beforeProjectId).catch((cause) => {
+            reportError(cause, "Unable to reorder project");
+            throw cause;
+          })}
+        onReorderActiveSession={(sessionId, beforeSessionId) =>
+          runtimeStore.reorderActiveSession(sessionId, beforeSessionId).catch((cause) => {
+            reportError(cause, "Unable to reorder active session");
+            throw cause;
+          })}
       />
+      {!mobile && !sidebarCollapsed && <SidebarResizer
+        container={appShellRef}
+        width={leftPanelWidth}
+        onCommit={(width) => {
+          setLeftPanelWidth(width);
+          try { localStorage.setItem(LEFT_PANEL_WIDTH_KEY, String(width)); }
+          catch { /* Resizing still works for the current page. */ }
+        }}
+      />}
       {mobile && sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
 
       <main className="content-card" id="main-content">
@@ -531,7 +570,10 @@ export function App() {
           onToggleAgents={() => toggleRightPanel("agents")}
           onToggleFiles={() => toggleRightPanel("files")}
         />
-        {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
+        {(toast || live.connection === "disconnected") && <div className="app-toast-stack">
+          {live.connection === "disconnected" && <div className="app-connection-toast" role="status">Disconnected. Waiting to reconnect…</div>}
+          {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
+        </div>}
         <div
           ref={workspaceRef}
           className={`workspace-layout ${rightPanel ? "has-inspector" : ""}`}
@@ -618,13 +660,19 @@ function PanelResizer({ container, width, onCommit }: {
     event.currentTarget.setPointerCapture(event.pointerId);
     let next = width;
     const move = (moveEvent: PointerEvent) => { next = resize(moveEvent.clientX); };
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    const up = () => {
+      cleanup();
       onCommit(next);
     };
+    const cancel = () => cleanup();
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
   };
   return <div
     className="panel-resizer"
@@ -641,6 +689,58 @@ function PanelResizer({ container, width, onCommit }: {
       event.preventDefault();
       const next = panelWidth(width + (event.key === "ArrowLeft" ? 16 : -16));
       container.current?.style.setProperty("--inspector-width", `${next}px`);
+      onCommit(next);
+    }}
+  />;
+}
+
+function SidebarResizer({ container, width, onCommit }: {
+  container: React.RefObject<HTMLDivElement | null>;
+  width: number;
+  onCommit: (width: number) => void;
+}) {
+  const resize = (clientX: number) => {
+    const next = leftPanelWidth(clientX);
+    container.current?.style.setProperty("--sidebar-width", `${next}px`);
+    return next;
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    let next = width;
+    const move = (moveEvent: PointerEvent) => { next = resize(moveEvent.clientX); };
+    const up = () => {
+      cleanup();
+      onCommit(next);
+    };
+    const cancel = () => {
+      cleanup();
+      container.current?.style.setProperty("--sidebar-width", `${width}px`);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
+  };
+  return <div
+    className="sidebar-resizer"
+    role="separator"
+    aria-label="Resize navigation"
+    aria-orientation="vertical"
+    aria-valuemin={220}
+    aria-valuemax={Math.floor(Math.min(520, window.innerWidth * .45))}
+    aria-valuenow={width}
+    tabIndex={0}
+    onPointerDown={onPointerDown}
+    onKeyDown={(event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const next = leftPanelWidth(width + (event.key === "ArrowRight" ? 16 : -16));
+      container.current?.style.setProperty("--sidebar-width", `${next}px`);
       onCommit(next);
     }}
   />;

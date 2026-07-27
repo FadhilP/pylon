@@ -74,6 +74,33 @@ export interface WorkspaceFileDiff extends WorkspaceFileContent {
   state: "available" | "binary" | "oversized";
 }
 
+export interface TimelineCheckpointFileReadModel {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface TimelineCheckpointFiles {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  checkpointId: string;
+  files: TimelineCheckpointFileReadModel[];
+  totalCount: number;
+  truncated: boolean;
+}
+
+export interface TimelineCheckpointDiff {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  checkpointId: string;
+  path: string;
+  state: "text" | "binary" | "unavailable" | "oversized";
+  text?: string;
+  truncated?: boolean;
+}
+
 export interface DiscoverIndexReadModel {
   state: "idle" | "indexing" | "error";
   files?: number;
@@ -92,6 +119,7 @@ export interface BootstrapSnapshot {
 
 export interface ConversationHistoryQuery {
   cursor: string;
+  direction?: "before" | "after" | "around";
   limit?: number;
 }
 
@@ -102,6 +130,33 @@ export interface ConversationHistoryPage {
   messages: MessageReadModel[];
   remaining: number;
   nextCursor?: string;
+  earlierCursor?: string;
+  laterCursor?: string;
+  atStart?: boolean;
+  atEnd?: boolean;
+}
+
+export interface ConversationTurnIndexItem {
+  promptId: string;
+  preview: string;
+  createdAt?: string;
+  cursor: string;
+}
+
+export interface ConversationTurnIndexQuery {
+  cursor?: string;
+  direction?: "earlier" | "later";
+  limit?: number;
+}
+
+export interface ConversationTurnIndexPage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionId: string;
+  sessionGeneration: number;
+  turns: ConversationTurnIndexItem[];
+  totalCount: number;
+  earlierCursor?: string;
+  laterCursor?: string;
 }
 
 export interface FileSuggestionList {
@@ -176,6 +231,7 @@ export interface PackageSummary {
   id: string;
   name: string;
   description: string;
+  required?: boolean;
   enabled: boolean;
   active: boolean;
   extensionCount: number;

@@ -20,7 +20,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 3);
+    assert.equal(stored.version, 4);
     assert.equal(stored.projects.length, 2);
 
     let seeded = false;
@@ -78,6 +78,39 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
 
     await registry.remove(projectIdForCwd(first));
     assert.deepEqual(registry.list().map((project) => project.id), [projectIdForCwd(second)]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("project and active-session ordering persists and rejects stale members", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-order-"));
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  const directories = [join(root, "one"), join(root, "two"), join(root, "three")];
+  await Promise.all(directories.map((directory) => mkdir(directory)));
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load(directories);
+    const [one, two, three] = registry.list().map((project) => project.id);
+    await registry.reorderProject(three!, one);
+    assert.deepEqual(registry.list().map((project) => project.id), [three, one, two]);
+    await registry.archiveProject(one!);
+    await registry.reorderProject(two!, three);
+    await registry.restoreProject(one!);
+    assert.deepEqual(registry.list().map((project) => project.id), [two, one, three]);
+
+    await registry.activateSession("session-one");
+    await registry.activateSession("session-two");
+    assert.deepEqual(registry.listActiveSessionOrder(), ["session-two", "session-one"]);
+    await registry.reorderActiveSession("session-two");
+    await registry.deactivateSession("session-one");
+    assert.deepEqual(registry.listActiveSessionOrder(), ["session-two"]);
+    await assert.rejects(registry.reorderActiveSession("missing"), /unavailable/);
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load([]);
+    assert.deepEqual(reloaded.list().map((project) => project.id), [two, one, three]);
+    assert.deepEqual(reloaded.listActiveSessionOrder(), ["session-two"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

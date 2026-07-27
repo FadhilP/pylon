@@ -1,5 +1,6 @@
 import type { ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.ts";
 import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
 import { PROMPT_FILES_CUSTOM_TYPE } from "./prompt-attachments.ts";
@@ -22,6 +23,21 @@ export function decodeHistoryCursor(cursor: string): number | undefined {
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
     if (!/^h:\d+$/.test(decoded) || encodeHistoryCursor(Number(decoded.slice(2))) !== cursor) return undefined;
+    const index = Number(decoded.slice(2));
+    return Number.isSafeInteger(index) ? index : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function encodeTurnIndexCursor(index: number): string {
+  return Buffer.from(`t:${Math.max(0, Math.floor(index))}`).toString("base64url");
+}
+
+export function decodeTurnIndexCursor(cursor: string): number | undefined {
+  try {
+    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+    if (!/^t:\d+$/.test(decoded) || encodeTurnIndexCursor(Number(decoded.slice(2))) !== cursor) return undefined;
     const index = Number(decoded.slice(2));
     return Number.isSafeInteger(index) ? index : undefined;
   } catch {
@@ -159,8 +175,16 @@ function updateDelegatedRun(
 ): DelegatedAgentRunReadModel {
   const raw = object(result);
   const details = object(raw.details);
+  const activity = delegatedActivity(details.activity);
+  const previousActivity = previous?.activity ?? [];
+  if (previous && previous.status !== "running" && status === "running") {
+    return {
+      ...previous,
+      activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
+    };
+  }
   const request = delegatedRequest(input);
-  const response = messageText(raw);
+  const response = status === "running" ? undefined : messageText(raw);
   const agentName = text(details.agentName, 24) || undefined;
   const startedAt = typeof details.startedAt === "string" && !Number.isNaN(Date.parse(details.startedAt))
     ? details.startedAt
@@ -169,7 +193,6 @@ function updateDelegatedRun(
   const level = thinkingLevel(details.thinking);
   const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
   const usage = delegatedUsage(details.usage);
-  const activity = delegatedActivity(details.activity);
   return {
     ...previous,
     id,
@@ -184,7 +207,7 @@ function updateDelegatedRun(
     ...(level ? { thinkingLevel: level } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage } : {}),
-    activity: activity ?? previous?.activity ?? [],
+    activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
   };
 }
 
@@ -287,6 +310,23 @@ export function projectConversation(
     messages: projectedMessages,
     delegatedRuns: [...delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS),
   };
+}
+
+export function projectConversationTurnIndex(messages: unknown[]): ConversationTurnIndexItem[] {
+  const turns: ConversationTurnIndexItem[] = [];
+  for (let index = 0; index < messages.length; index++) {
+    const raw = object(messages[index]);
+    if (role(raw.role) !== "user" || promptFileCount(raw)) continue;
+    const text = messageText(raw).replace(/\s+/g, " ").trim();
+    const images = attachmentCount(raw);
+    turns.push({
+      promptId: id(raw.entryId, `history-${index}`),
+      preview: (text || (images ? `${images} attached image${images === 1 ? "" : "s"}` : "Empty prompt")).slice(0, 120),
+      ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
+      cursor: encodeHistoryCursor(index),
+    });
+  }
+  return turns;
 }
 
 export function projectMessages(messages: unknown[]): MessageReadModel[] {

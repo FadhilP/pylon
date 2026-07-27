@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
-import { decodeHistoryCursor, encodeHistoryCursor, projectConversation, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
+import { decodeHistoryCursor, encodeHistoryCursor, projectConversation, projectConversationTurnIndex, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 
 function runtime(): RuntimeSnapshot {
@@ -16,6 +16,22 @@ function runtime(): RuntimeSnapshot {
     extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
   };
 }
+
+test("turn index keeps bounded prompt metadata without assistant bodies", () => {
+  const turns = projectConversationTurnIndex([
+    { role: "user", content: "  First\n prompt  ", entryId: "user-one", timestamp: "2026-07-27T01:02:00Z" },
+    { role: "assistant", content: "large response that does not belong in the index" },
+    { role: "user", content: "x".repeat(200), entryId: "user-two" },
+  ]);
+  assert.equal(turns.length, 2);
+  assert.deepEqual(turns[0], {
+    promptId: "user-one",
+    preview: "First prompt",
+    createdAt: "2026-07-27T01:02:00.000Z",
+    cursor: encodeHistoryCursor(0),
+  });
+  assert.equal(turns[1]!.preview.length, 120);
+});
 
 function session(payload: Record<string, unknown>) {
   return { type: "session.event" as const, sessionId: "session", sessionGeneration: 1, payload };
@@ -203,8 +219,12 @@ test("projection publishes live delegated-run updates once per tool event", () =
     toolCallId: "grunt-1",
     toolName: "grunt",
     args: { task: "Apply edits" },
-    partialResult: { details: { state: "running", model: "provider/grunt", thinking: "medium", activity: [{ kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" }] } },
+    partialResult: {
+      content: [{ type: "text", text: "Worker activity:\nread a.ts" }],
+      details: { state: "running", model: "provider/grunt", thinking: "medium", activity: [{ kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" }] },
+    },
   }));
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.response, undefined);
   projection.apply(session({
     type: "tool_execution_end",
     toolCallId: "grunt-1",
@@ -225,8 +245,24 @@ test("projection publishes live delegated-run updates once per tool event", () =
     },
     isError: false,
   }));
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "grunt-1",
+    toolName: "grunt",
+    partialResult: {
+      content: [{ type: "text", text: "Worker activity:\nlate update" }],
+      details: {
+        state: "running",
+        activity: [
+          { kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" },
+          { kind: "result", tool: "read", text: "token=hidden source" },
+          { kind: "call", tool: "edit", text: "{\"path\":\"a.ts\"}" },
+        ],
+      },
+    },
+  }));
   const updates = published.filter((event) => event.type === "delegate.update");
-  assert.equal(updates.length, 3);
+  assert.equal(updates.length, 4);
   assert.equal(updates[0]?.payload.status, "running");
   assert.deepEqual(projection.snapshot().conversation.delegatedRuns[0], {
     id: "grunt-1",
@@ -242,8 +278,102 @@ test("projection publishes live delegated-run updates once per tool event", () =
     activity: [
       { kind: "call", tool: "read", text: '{\n  "path": "a.ts"\n}' },
       { kind: "result", tool: "read", text: "token=<redacted> source" },
+      { kind: "call", tool: "edit", text: '{\n  "path": "a.ts"\n}' },
     ],
   });
+});
+
+test("Repo Scout live records settle with usage and bounded tool history", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({
+    type: "tool_execution_start",
+    toolCallId: "scout-live",
+    toolName: "repo_scout",
+    args: { task: "Trace the runtime" },
+  }));
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "scout-live",
+    toolName: "repo_scout",
+    partialResult: {
+      content: [{ type: "text", text: "Scout child activity:\nread src/app.ts" }],
+      details: {
+        state: "running",
+        activity: [{ kind: "call", tool: "read", text: "{\"path\":\"src/app.ts\"}" }],
+      },
+    },
+  }));
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.response, undefined);
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "scout-live",
+    toolName: "repo_scout",
+    partialResult: {
+      details: {
+        state: "running",
+        usage: { input: 50, output: 12, cacheRead: 20, cacheWrite: 0, cost: 0.03 },
+        activity: [],
+      },
+    },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end",
+    toolCallId: "scout-live",
+    toolName: "repo_scout",
+    result: {
+      content: [{ type: "text", text: "Scout report" }],
+      details: {
+        model: "provider/scout",
+        durationMs: 900,
+      },
+    },
+  }));
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "scout-live",
+    toolName: "repo_scout",
+    partialResult: {
+      content: [{ type: "text", text: "Scout child activity:\nlate update" }],
+      details: {
+        state: "running",
+        activity: [
+          { kind: "call", tool: "read", text: "{\"path\":\"src/app.ts\"}" },
+          { kind: "result", tool: "read", text: "export const app = true;" },
+        ],
+      },
+    },
+  }));
+  projection.apply(session({
+    type: "tool_execution_start",
+    toolCallId: "scout-failed",
+    toolName: "repo_scout",
+    args: { task: "Inspect missing credentials" },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end",
+    toolCallId: "scout-failed",
+    toolName: "repo_scout",
+    result: {
+      content: [{ type: "text", text: "Repo Scout child failed." }],
+      details: {
+        failureCode: "child_error",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        activity: [],
+      },
+    },
+  }));
+
+  const [completed, failed] = projection.snapshot().conversation.delegatedRuns;
+  assert.deepEqual(completed?.usage, { input: 50, output: 12, cacheRead: 20, cacheWrite: 0, cost: 0.03 });
+  assert.deepEqual(completed?.activity, [
+    { kind: "call", tool: "read", text: '{\n  "path": "src/app.ts"\n}' },
+    { kind: "result", tool: "read", text: "export const app = true;" },
+  ]);
+  assert.equal(completed?.status, "completed");
+  assert.equal(completed?.response, "Scout report");
+  assert.deepEqual(failed?.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+  assert.deepEqual(failed?.activity, []);
+  assert.equal(failed?.status, "failed");
 });
 
 test("projection publishes live session names and agent timing metadata", () => {

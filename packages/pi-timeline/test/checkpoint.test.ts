@@ -268,7 +268,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     await sessionHandlers.get("session_start")![0]({}, ctx);
     let state: any;
     eventHandlers.get("pi-timeline:state-request")!({
-      version: 2,
+      version: 3,
       sessionId: "edit-session",
       respond: (value: unknown) => { state = value; },
     });

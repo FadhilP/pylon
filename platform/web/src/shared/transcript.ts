@@ -2,20 +2,20 @@ import type { MessageReadModel } from "./protocol/events.ts";
 
 export type ConversationBlock = MessageReadModel | { id: string; tools: MessageReadModel[] };
 
-export function groupConversationMessages(messages: MessageReadModel[], activeTurn: boolean): ConversationBlock[] {
+export function groupConversationMessages(messages: MessageReadModel[]): ConversationBlock[] {
   const blocks: ConversationBlock[] = [];
   let turn: MessageReadModel[] = [];
 
-  const flush = (current: boolean) => {
+  const flush = () => {
     if (!turn.length) return;
     const tools = turn.filter((message) => message.role === "tool");
     let grouped = false;
 
     for (const message of turn) {
-      if (message.role !== "tool" || current) {
+      if (message.role !== "tool") {
         blocks.push(message);
       } else if (!grouped) {
-        blocks.push({ id: `tools-${tools[0]!.id}`, tools });
+        blocks.push({ id: `tools-${tools[0]!.tool?.id ?? tools[0]!.id}`, tools });
         grouped = true;
       }
     }
@@ -23,10 +23,10 @@ export function groupConversationMessages(messages: MessageReadModel[], activeTu
   };
 
   for (const message of messages) {
-    if (message.role === "user" && turn.length) flush(false);
+    if (message.role === "user" && turn.length) flush();
     turn.push(message);
   }
-  flush(activeTurn);
+  flush();
   return blocks;
 }
 

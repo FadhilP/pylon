@@ -68,10 +68,12 @@ export function SettingsDialog({ packages, loading, busy, disabled, models, sess
                 {item.error && <span className="package-error">{item.error}</span>}
               </div>
               <span className={`package-state is-${state}`}>{state}</span>
-              <label className="package-switch">
-                <span className="sr-only">{item.enabled ? "Disable" : "Enable"} {item.name}</span>
-                <input type="checkbox" role="switch" checked={item.enabled} disabled={itemDisabled} onChange={(event) => onSetEnabled(item, event.target.checked)} />
-              </label>
+              {item.required
+                ? <span className="package-required">Required</span>
+                : <label className="package-switch">
+                    <span className="sr-only">{item.enabled ? "Disable" : "Enable"} {item.name}</span>
+                    <input type="checkbox" role="switch" checked={item.enabled} disabled={itemDisabled} onChange={(event) => onSetEnabled(item, event.target.checked)} />
+                  </label>}
             </header>
             {item.settings && <PackageFields
               settings={item.settings}

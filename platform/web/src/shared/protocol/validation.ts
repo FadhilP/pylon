@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -129,10 +129,10 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "rewindPrompt" && !identifier(value.entryId)) {
     return { ok: false, error: "invalid prompt rewind" };
   }
-  if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive"].includes(value.type) && !identifier(value.sessionId)) {
+  if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive", "reorderActiveSession"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
   }
-  if (["removeProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
+  if (["removeProject", "reorderProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
     return { ok: false, error: "invalid projectId" };
   }
   if (value.type === "renameSession" && (!boundedString(value.name) || !value.name.trim())) {
@@ -140,6 +140,12 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (value.type === "setSessionActive" && typeof value.active !== "boolean") {
     return { ok: false, error: "invalid session active state" };
+  }
+  if (value.type === "reorderProject" && value.beforeProjectId !== undefined && !identifier(value.beforeProjectId)) {
+    return { ok: false, error: "invalid project reorder target" };
+  }
+  if (value.type === "reorderActiveSession" && value.beforeSessionId !== undefined && !identifier(value.beforeSessionId)) {
+    return { ok: false, error: "invalid active session reorder target" };
   }
   if (value.type === "fork") {
     if (!identifier(value.entryId)) return { ok: false, error: "invalid entryId" };
@@ -212,6 +218,7 @@ export function isPackageListSnapshot(value: unknown): value is PackageListSnaps
     && identifier(item.id)
     && typeof item.name === "string" && item.name.length > 0 && item.name.length <= 200
     && typeof item.description === "string" && item.description.length <= 500
+    && (item.required === undefined || typeof item.required === "boolean")
     && typeof item.enabled === "boolean"
     && typeof item.active === "boolean"
     && Number.isSafeInteger(item.extensionCount) && (item.extensionCount as number) > 0 && (item.extensionCount as number) <= 50
@@ -360,7 +367,27 @@ export function isConversationHistoryPage(value: unknown): value is Conversation
     && generation(value.sessionGeneration)
     && Array.isArray(value.messages) && value.messages.length <= 100 && value.messages.every(validHistoryMessage)
     && Number.isSafeInteger(value.remaining) && (value.remaining as number) >= 0
-    && (value.nextCursor === undefined || identifier(value.nextCursor));
+    && (value.nextCursor === undefined || identifier(value.nextCursor))
+    && (value.earlierCursor === undefined || identifier(value.earlierCursor))
+    && (value.laterCursor === undefined || identifier(value.laterCursor))
+    && (value.atStart === undefined || typeof value.atStart === "boolean")
+    && (value.atEnd === undefined || typeof value.atEnd === "boolean");
+}
+
+export function isConversationTurnIndexPage(value: unknown): value is ConversationTurnIndexPage {
+  return record(value)
+    && value.protocolVersion === PROTOCOL_VERSION
+    && identifier(value.sessionId)
+    && generation(value.sessionGeneration)
+    && Number.isSafeInteger(value.totalCount) && (value.totalCount as number) >= 0
+    && (value.earlierCursor === undefined || identifier(value.earlierCursor))
+    && (value.laterCursor === undefined || identifier(value.laterCursor))
+    && Array.isArray(value.turns) && value.turns.length <= 250
+    && value.turns.every((turn) => record(turn)
+      && identifier(turn.promptId)
+      && boundedString(turn.preview, 120)
+      && identifier(turn.cursor)
+      && (turn.createdAt === undefined || typeof turn.createdAt === "string" && !Number.isNaN(Date.parse(turn.createdAt))));
 }
 
 export function isFileSuggestionList(value: unknown): value is FileSuggestionList {

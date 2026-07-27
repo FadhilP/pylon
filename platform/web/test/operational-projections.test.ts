@@ -32,7 +32,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.continuity.memory[0]?.key, "project.arch");
 
   state = applyOperationalEvent(state, "pi-timeline:state-change", {
-    version: 2,
+    version: 3,
     revision: 1,
     sessionId: "session",
     available: true,

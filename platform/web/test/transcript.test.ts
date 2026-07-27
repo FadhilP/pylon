@@ -10,23 +10,24 @@ const message = (id: string, role: MessageReadModel["role"]): MessageReadModel =
   streaming: false,
 });
 
-test("completed turns group tools while the streaming turn keeps them visible", () => {
+test("all turns group tools, including the active turn", () => {
   const messages = [
     message("user-1", "user"),
-    message("tool-1", "tool"),
+    { ...message("tool-1", "tool"), tool: { id: "call-1", name: "read", status: "completed" as const } },
     message("assistant-1", "assistant"),
     message("tool-2", "tool"),
     message("user-2", "user"),
     message("tool-3", "tool"),
   ];
 
-  const blocks = groupConversationMessages(messages, true);
+  const blocks = groupConversationMessages(messages);
+  assert.equal(blocks[1]!.id, "tools-call-1");
   assert.deepEqual(blocks.map((block) => "tools" in block ? block.tools.map((tool) => tool.id) : block.id), [
     "user-1",
     ["tool-1", "tool-2"],
     "assistant-1",
     "user-2",
-    "tool-3",
+    ["tool-3"],
   ]);
 });
 

@@ -1,14 +1,16 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { activeTurnAtMarker, groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
+import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
+import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
+import { agentColor } from "./agent-color";
 
 const markdownTags = ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"];
 const markdownAttributes = ["alt", "checked", "class", "data-language", "disabled", "href", "src", "title", "type"];
@@ -49,10 +51,12 @@ export function ConversationPanel({
   const [dropActive, setDropActive] = useState(false);
   const [edit, setEdit] = useState<PromptEdit>();
   const [undo, setUndo] = useState<PromptUndo>();
-  const [activeTurnId, setActiveTurnId] = useState("");
+  const [visibleTurnIds, setVisibleTurnIds] = useState<Set<string>>(() => new Set());
+  const [railPage, setRailPage] = useState<ConversationTurnIndexPage>();
+  const [railLoading, setRailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [controlBusy, setControlBusy] = useState("");
-  const [historyLoading, setHistoryLoading] = useState<"page" | "all">();
+  const [historyLoading, setHistoryLoading] = useState<"page" | "all" | "newer">();
   const [openMenu, setOpenMenu] = useState<"plus" | "model">();
   const [planMode, setPlanMode] = useState(false);
   const [queueBusy, setQueueBusy] = useState<"edit" | "steer">();
@@ -76,7 +80,7 @@ export function ConversationPanel({
       if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
-  }, [runtime?.sessionId]);
+  }, [runtime?.sessionId, runtime?.sessionGeneration]);
   useEffect(() => {
     const stream = streamRef.current;
     const transcript = transcriptRef.current;
@@ -91,6 +95,8 @@ export function ConversationPanel({
     setHistoryLoading(undefined);
     setEdit(undefined);
     setUndo(undefined);
+    setRailPage(undefined);
+    setVisibleTurnIds(new Set());
     turnRefs.current.clear();
   }, [runtime?.sessionId]);
   const connected = live.connection === "connected" && runtime?.ready === true && projectAvailable;
@@ -99,33 +105,51 @@ export function ConversationPanel({
   const queued = runtime?.conversation.queue.pending;
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
-  const visibleMessages = runtime?.conversation.messages.filter((item) => {
+  const activeHistoryWindow = live.historyWindow;
+  const transcriptMessages = activeHistoryWindow && activeHistoryWindow.sessionId === runtime?.sessionId
+    ? activeHistoryWindow.messages
+    : runtime?.conversation.messages ?? [];
+  const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
+  const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
+  const liveToolMessages: MessageReadModel[] = runningTools
+    .filter((tool) => !transcriptToolIds.has(tool.id))
+    .map((tool) => ({
+      id: `live-tool-${tool.id}`,
+      role: "tool",
+      text: tool.summary ?? "",
+      streaming: true,
+      tool: { id: tool.id, name: tool.name || "Tool", input: tool.input, status: tool.status },
+    }));
+  const visibleMessages = [...transcriptMessages, ...liveToolMessages].filter((item) => {
     const text = item.text.trim();
     return item.role !== "assistant" || !["", "...", "…"].includes(text);
   }) ?? [];
   const conversationBlocks = useMemo(
-    () => groupConversationMessages(visibleMessages, Boolean(runtime?.conversation.workStartedAt)),
-    [runtime?.conversation.messages, runtime?.conversation.workStartedAt],
+    () => groupConversationMessages(visibleMessages),
+    [transcriptMessages, runtime?.conversation.tools],
   );
-  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [runtime?.conversation.messages]);
+  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
   const userTurns = useMemo(
     () => visibleMessages.filter((item) => item.role === "user" && item.entryId),
-    [runtime?.conversation.messages],
+    [transcriptMessages],
   );
-  const userTurnKey = userTurns.map((item) => item.id).join("\0");
+  const userTurnKey = userTurns.map((item) => item.entryId ?? item.id).join("\0");
   useEffect(() => {
     const root = streamRef.current;
     if (!root || !userTurns.length) return;
     let frame = 0;
     const update = () => {
       frame = 0;
-      const marker = root.getBoundingClientRect().top + root.clientHeight * .28;
-      const active = activeTurnAtMarker(userTurns.flatMap((turn) => {
-        const element = turnRefs.current.get(turn.id);
-        return element ? [{ id: turn.id, top: element.getBoundingClientRect().top }] : [];
-      }), marker);
-      if (!active) return;
-      setActiveTurnId((current) => current === active ? current : active);
+      const viewport = root.getBoundingClientRect();
+      const visible = new Set<string>();
+      for (const turn of userTurns) {
+        const id = turn.entryId ?? turn.id;
+        const element = turnRefs.current.get(id);
+        if (!element) continue;
+        const bounds = element.getBoundingClientRect();
+        if (bounds.bottom > viewport.top && bounds.top < viewport.bottom) visible.add(id);
+      }
+      setVisibleTurnIds((current) => sameStringSet(current, visible) ? current : visible);
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(update);
@@ -142,8 +166,26 @@ export function ConversationPanel({
       window.removeEventListener("resize", schedule);
     };
   }, [runtime?.sessionId, userTurnKey]);
+  useEffect(() => {
+    if (!runtime || runtime.metrics.userMessages < 3) {
+      setRailPage(undefined);
+      return;
+    }
+    if (live.connection !== "connected" || !runtime.ready) return;
+    let active = true;
+    setRailLoading(true);
+    void runtimeStore.conversationTurnIndex().then((page) => {
+      if (active) setRailPage(page);
+    }).catch((error) => {
+      if (!active) return;
+      setRailPage(undefined);
+      runtimeStore.reportError(error instanceof Error ? error.message : "Unable to load conversation turns");
+    }).finally(() => {
+      if (active) setRailLoading(false);
+    });
+    return () => { active = false; };
+  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.metrics.userMessages]);
   const latestTurnTimer = latestTimedAssistant(visibleMessages);
-  const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
   const activeAgents = runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [];
   const slashMatch = /^\/([^\s]*)$/.exec(message);
   const suggestions = slashMatch && !suggestionsDismissed
@@ -235,6 +277,16 @@ export function ConversationPanel({
       runtimeStore.reportError(error instanceof Error ? error.message : "The dropped files could not be read.");
     }
   };
+  const addFiles = async (selected: File[]) => {
+    if (!selected.length) return;
+    try {
+      const next = await readDroppedFiles(selected, images, files);
+      setImages(next.images);
+      setFiles(next.files);
+    } catch (error) {
+      runtimeStore.reportError(error instanceof Error ? error.message : "The selected files could not be read.");
+    }
+  };
   const setSessionControls = async (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => {
     setControlBusy("controls");
     try { await runtimeStore.setSessionControls(model.provider, model.id, level); }
@@ -263,15 +315,66 @@ export function ConversationPanel({
     catch { /* Store routes the failure through the application toast. */ }
     finally { setQueueBusy(undefined); }
   };
-  const loadHistory = async (all: boolean) => {
+  const loadHistory = async (all: boolean, preserveAnchor = false) => {
     const stream = streamRef.current;
     followBottomRef.current = false;
+    const viewportTop = stream?.getBoundingClientRect().top ?? 0;
+    const anchor = preserveAnchor
+      ? [...(transcriptRef.current?.children ?? [])].find((element) =>
+          element.getBoundingClientRect().bottom > viewportTop) as HTMLElement | undefined
+      : undefined;
+    const anchorTop = anchor?.getBoundingClientRect().top;
     setHistoryLoading(all ? "all" : "page");
     try {
       await runtimeStore.loadEarlierMessages(all);
       requestAnimationFrame(() => {
-        if (stream) stream.scrollTop = 0;
+        if (!stream) return;
+        if (preserveAnchor && anchor?.isConnected && anchorTop !== undefined) {
+          stream.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+          return;
+        }
+        stream.scrollTop = 0;
       });
+    } catch {
+      // Store routes the failure through the application toast.
+    } finally {
+      setHistoryLoading(undefined);
+    }
+  };
+  const loadNewerHistory = async () => {
+    if (historyLoading) return;
+    setHistoryLoading("newer");
+    try {
+      await runtimeStore.loadLaterMessages();
+    } catch {
+      // Store routes the failure through the application toast.
+    } finally {
+      setHistoryLoading(undefined);
+    }
+  };
+  const loadRailPage = async (direction: "earlier" | "later", cursor?: string) => {
+    if (!cursor || railLoading) return;
+    setRailLoading(true);
+    try {
+      setRailPage(await runtimeStore.conversationTurnIndex({ cursor, direction }));
+    } catch {
+      // Keep the current rail segment when paging fails.
+    } finally {
+      setRailLoading(false);
+    }
+  };
+  const selectRailTurn = async (turn: ConversationTurnIndexItem) => {
+    const loaded = turnRefs.current.get(turn.promptId);
+    if (loaded) {
+      loaded.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setHistoryLoading("page");
+    try {
+      await runtimeStore.jumpToHistory(turn.cursor);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        turnRefs.current.get(turn.promptId)?.scrollIntoView({ behavior: "auto", block: "start" });
+      }));
     } catch {
       // Store routes the failure through the application toast.
     } finally {
@@ -347,7 +450,6 @@ export function ConversationPanel({
     <section className="conversation-panel" aria-label="Live conversation">
       {live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
       {live.connection === "error" && <div className="conversation-state error">{live.error || "Unable to load runtime."}</div>}
-      {live.connection === "disconnected" && <div className="conversation-state">Disconnected. Waiting to reconnect…</div>}
       {activeAgents.length > 0 && <ActiveAgents runs={activeAgents} onSelect={onSelectAgent} />}
       {runtime && <div
         ref={streamRef}
@@ -355,11 +457,17 @@ export function ConversationPanel({
         aria-live="polite"
         onScroll={(event) => {
           followBottomRef.current = isNearTranscriptBottom(event.currentTarget);
+          if (!historyLoading && event.currentTarget.scrollTop < 64 && live.historyWindow?.earlierCursor) {
+            void loadHistory(false, true);
+          } else if (!historyLoading && isNearTranscriptBottom(event.currentTarget, 64)
+            && live.historyWindow?.laterCursor) {
+            void loadNewerHistory();
+          }
         }}
       >
         <div className="transcript-layout">
           <div ref={transcriptRef} className="transcript-column">
-        {runtime.conversation.historyCursor && <div className="history-loader">
+        {live.historyWindow?.earlierCursor && <div className="history-loader">
           <span>{runtime.conversation.historyRemaining?.toLocaleString()} earlier entries</span>
           <div>
             <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadHistory(false)}>
@@ -376,13 +484,14 @@ export function ConversationPanel({
           if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
           const editing = edit?.messageId === block.id;
-          return <Fragment key={block.id}>
+          return <div className={`message-block role-${block.role}`} key={block.id}>
             <article
               className={`conversation-message role-${block.role}${editing ? " is-editing" : ""}`}
               data-turn-id={block.role === "user" ? block.id : undefined}
               ref={block.role === "user" ? (element) => {
-                if (element) turnRefs.current.set(block.id, element);
-                else turnRefs.current.delete(block.id);
+                const turnId = block.entryId ?? block.id;
+                if (element) turnRefs.current.set(turnId, element);
+                else turnRefs.current.delete(turnId);
               } : undefined}
             >
               <small>{block.role}{block.streaming ? " · streaming" : ""}</small>
@@ -392,28 +501,27 @@ export function ConversationPanel({
                   {block.text && <MarkdownContent text={block.text} />}
                   {Boolean(block.attachmentCount) && <span className="message-attachments"><IconPhoto size={14} />{block.attachmentCount} {block.attachmentCount === 1 ? "image" : "images"}</span>}
                   {Boolean(block.fileAttachmentCount) && <span className="message-attachments"><IconFileText size={14} />{block.fileAttachmentCount} {block.fileAttachmentCount === 1 ? "file" : "files"}</span>}
-                  {(block.role === "user" || copyableAssistants.has(block.id)) && <MessageFooter
-                    message={block}
-                    canCopy={Boolean(block.text)}
-                    disabled={!connected || streaming || submitting || Boolean(edit)}
-                    onEdit={block.role === "user" && block.entryId ? () => startEdit(block) : undefined}
-                    onUndo={block.role === "user" && block.entryId ? () => setUndo({
-                      entryId: block.entryId!,
-                      text: block.text,
-                      attachmentCount: block.attachmentCount ?? 0,
-                    }) : undefined}
-                  />}
                 </>}
             </article>
             {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
+            {!editing && (block.role === "user" || copyableAssistants.has(block.id)) && <MessageFooter
+              message={block}
+              canCopy={Boolean(block.text)}
+              disabled={!connected || streaming || submitting || Boolean(edit)}
+              onEdit={block.role === "user" && block.entryId ? () => startEdit(block) : undefined}
+              onUndo={block.role === "user" && block.entryId ? () => setUndo({
+                entryId: block.entryId!,
+                text: block.text,
+                attachmentCount: block.attachmentCount ?? 0,
+              }) : undefined}
+            />}
             {block.role === "assistant" && block.id !== latestTurnTimer?.id && block.workDurationMs !== undefined && <WorkTimer
               durationMs={block.workDurationMs}
               modelName={block.modelName}
               thinkingLevel={block.thinkingLevel}
             />}
-          </Fragment>;
+          </div>;
         })}
-        {runningTools.map((tool) => <ToolDisclosure key={tool.id} name={tool.name || "Tool"} status={tool.status} input={tool.input} output={tool.summary} />)}
         {runtime.conversation.workStartedAt ? <WorkTimer
           startedAt={runtime.conversation.workStartedAt}
           modelName={runtime.conversation.workModelName}
@@ -423,16 +531,20 @@ export function ConversationPanel({
           modelName={latestTurnTimer.modelName}
           thinkingLevel={latestTurnTimer.thinkingLevel}
         />}
+        {live.historyWindow?.laterCursor && <div className="history-loader is-later">
+          <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadNewerHistory()}>
+            {historyLoading === "newer" ? "Loading…" : "Load 100 newer"}
+          </button>
+        </div>}
           </div>
         </div>
       </div>}
       {runtime && <HistoryRail
-        turns={userTurns}
-        activeId={activeTurnId}
-        hasEarlier={Boolean(runtime.conversation.historyCursor)}
-        loading={Boolean(historyLoading)}
-        onLoadEarlier={() => void loadHistory(false)}
-        onSelect={(id) => turnRefs.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        page={railPage}
+        visibleIds={visibleTurnIds}
+        loading={railLoading}
+        onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
+        onSelect={(turn) => void selectRailTurn(turn)}
       />}
       {undo && <UndoConfirmDialog
         undo={undo}
@@ -542,6 +654,7 @@ export function ConversationPanel({
               onToggle={() => setOpenMenu((current) => current === "plus" ? undefined : "plus")}
               onClose={() => setOpenMenu(undefined)}
               onChange={setPlanMode}
+              onFiles={addFiles}
             />
             {planMode && <button className="plan-mode-indicator" type="button" onClick={() => setPlanMode(false)} aria-label="Turn off Plan mode" title="Turn off Plan mode"><IconBulb size={14} />Plan mode</button>}
           </div>
@@ -557,7 +670,6 @@ export function ConversationPanel({
             open={openMenu === "model"}
             disabled={controlsDisabled}
             busy={controlBusy === "controls"}
-            running={running}
             onToggle={() => setOpenMenu((current) => current === "model" ? undefined : "model")}
             onClose={() => setOpenMenu(undefined)}
             onApply={setSessionControls}
@@ -580,6 +692,7 @@ function PlusMenu({
   onToggle,
   onClose,
   onChange,
+  onFiles,
 }: {
   open: boolean;
   active: boolean;
@@ -588,9 +701,11 @@ function PlusMenu({
   onToggle: () => void;
   onClose: () => void;
   onChange: (active: boolean) => void;
+  onFiles: (files: File[]) => Promise<void>;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!open) return;
     const pointerDown = (event: PointerEvent) => {
@@ -623,6 +738,10 @@ function PlusMenu({
     ><IconPlus size={17} /></button>
     {open && <div className="plus-menu composer-popover" role="menu">
       <span>Add</span>
+      <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
+        <strong>Files and images</strong>
+        <small>Select one or more attachments</small>
+      </button>
       <button
         type="button"
         role="menuitem"
@@ -634,6 +753,20 @@ function PlusMenu({
         {active && <IconCheck size={15} />}
       </button>
     </div>}
+    <input
+      ref={fileRef}
+      className="sr-only"
+      type="file"
+      multiple
+      tabIndex={-1}
+      aria-label="Select files and images"
+      onChange={(event) => {
+        const selected = [...(event.currentTarget.files ?? [])];
+        event.currentTarget.value = "";
+        onClose();
+        void onFiles(selected).finally(() => triggerRef.current?.focus());
+      }}
+    />
   </div>;
 }
 
@@ -642,7 +775,6 @@ function ModelControl({
   open,
   disabled,
   busy,
-  running,
   onToggle,
   onClose,
   onApply,
@@ -651,7 +783,6 @@ function ModelControl({
   open: boolean;
   disabled: boolean;
   busy: boolean;
-  running: boolean;
   onToggle: () => void;
   onClose: () => void;
   onApply: (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => Promise<void>;
@@ -692,20 +823,17 @@ function ModelControl({
     };
   }, [open]);
 
+  const applySelection = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel) => {
+    void onApply(model, nextLevel).catch(() => {
+      // The shared toast reports the rejected mutation.
+    });
+  };
   const chooseModel = (model: ModelOptionReadModel) => {
     const nextLevels = model.thinkingLevels ?? [];
+    const nextLevel = nextLevels.includes(level) ? level : nextLevels[0] ?? "off";
     setModelKey(`${model.provider}/${model.id}`);
-    setLevel(nextLevels.includes(level) ? level : nextLevels[0] ?? "off");
-  };
-  const apply = async () => {
-    if (!selectedModel || !levels.length) return;
-    try {
-      await onApply(selectedModel, levels[levelIndex]!);
-      onClose();
-      triggerRef.current?.focus();
-    } catch {
-      // The shared toast reports the rejected mutation; keep the staged values.
-    }
+    setLevel(nextLevel);
+    applySelection(model, nextLevel);
   };
   const navigateModels = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowDown", "ArrowUp"].includes(event.key) || event.target instanceof HTMLInputElement) return;
@@ -731,7 +859,7 @@ function ModelControl({
       {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && <small>{thinkingLabel(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel ?? "off")}</small>}
       <IconChevronDown size={14} />
     </button>
-    {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" onKeyDown={navigateModels}>
+    {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy} onKeyDown={navigateModels}>
       <div className="model-options" role="listbox" aria-label="Models">
         {controls?.models.map((model) => {
           const key = `${model.provider}/${model.id}`;
@@ -761,56 +889,58 @@ function ModelControl({
           disabled={levels.length < 2}
           aria-label="Thinking level"
           aria-valuetext={thinkingLabel(levels[levelIndex] ?? "off")}
-          onChange={(event) => setLevel(levels[Number(event.target.value)] ?? "off")}
+          onChange={(event) => {
+            const nextLevel = levels[Number(event.target.value)] ?? "off";
+            setLevel(nextLevel);
+            if (selectedModel) applySelection(selectedModel, nextLevel);
+          }}
         />
         <div>{levels.map((item) => <i key={item} aria-hidden="true" />)}</div>
       </div>
-      <footer>
-        <button type="button" onClick={() => { onClose(); triggerRef.current?.focus(); }}>Cancel</button>
-        <button className="primary-button" type="button" disabled={busy || !selectedModel || !levels.length} onClick={() => void apply()}>
-          {busy ? "Applying…" : running ? "Use next turn" : "Apply"}
-        </button>
-      </footer>
     </div>}
   </div>;
 }
 
 function HistoryRail({
-  turns,
-  activeId,
-  hasEarlier,
+  page,
+  visibleIds,
   loading,
-  onLoadEarlier,
+  onPage,
   onSelect,
 }: {
-  turns: MessageReadModel[];
-  activeId: string;
-  hasEarlier: boolean;
+  page?: ConversationTurnIndexPage;
+  visibleIds: Set<string>;
   loading: boolean;
-  onLoadEarlier: () => void;
-  onSelect: (id: string) => void;
+  onPage: (direction: "earlier" | "later", cursor?: string) => void;
+  onSelect: (turn: ConversationTurnIndexItem) => void;
 }) {
-  if (!turns.length && !hasEarlier) return null;
-  return <nav className="history-rail" aria-label="Loaded conversation turns">
-    {hasEarlier && <button
+  if (!page || page.totalCount < 3) return null;
+  const turns = [...page.turns].reverse();
+  return <nav className="history-rail" aria-label="Conversation turns">
+    {page.earlierCursor && <button
       className="history-tick is-loader"
       type="button"
       disabled={loading}
-      onClick={onLoadEarlier}
-      aria-label="Load 100 earlier messages"
-    ><i /><span>{loading ? "Loading earlier messages…" : "Load earlier messages"}</span></button>}
+      onClick={() => onPage("earlier", page.earlierCursor)}
+      aria-label="Show earlier conversation turns"
+    ><i /><span>{loading ? "Loading earlier turns…" : "Show earlier turns"}</span></button>}
     {turns.map((turn) => {
-      const preview = turn.text.replace(/\s+/g, " ").trim().slice(0, 120)
-        || `${turn.attachmentCount ?? 0} attached image${turn.attachmentCount === 1 ? "" : "s"}`;
       const timestamp = formatMessageTime(turn.createdAt);
       return <button
-        className={`history-tick${turn.id === activeId ? " is-active" : ""}`}
+        className={`history-tick${visibleIds.has(turn.promptId) ? " is-active" : ""}`}
         type="button"
-        key={turn.id}
-        onClick={() => onSelect(turn.id)}
-        aria-label={`Jump to prompt: ${preview}${timestamp ? `, ${timestamp}` : ""}`}
-      ><i /><span><strong>{preview}</strong>{timestamp && <time dateTime={turn.createdAt}>{timestamp}</time>}</span></button>;
+        key={turn.promptId}
+        onClick={() => onSelect(turn)}
+        aria-label={`Jump to prompt: ${turn.preview}${timestamp ? `, ${timestamp}` : ""}`}
+      ><i /><span><strong>{turn.preview}</strong>{timestamp && <time dateTime={turn.createdAt}>{timestamp}</time>}</span></button>;
     })}
+    {page.laterCursor && <button
+      className="history-tick is-loader"
+      type="button"
+      disabled={loading}
+      onClick={() => onPage("later", page.laterCursor)}
+      aria-label="Show later conversation turns"
+    ><i /><span>{loading ? "Loading later turns…" : "Show later turns"}</span></button>}
   </nav>;
 }
 
@@ -1011,6 +1141,10 @@ function formatMessageTime(value?: string): string {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
 }
 
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+  return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
 function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
   const result = new Set<string>();
   let final: MessageReadModel | undefined;
@@ -1072,7 +1206,7 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
     {runs.slice(0, 3).map((run) => {
       const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
       const elapsed = Number.isNaN(started) ? run.durationMs ?? 0 : Math.max(0, now - started);
-      return <button type="button" key={run.id} onClick={() => onSelect?.(run.id)}>
+      return <button type="button" key={run.id} style={agentColor(run.id)} onClick={() => onSelect?.(run.id)}>
         <span className="agent-state is-running" aria-hidden="true" />
         <IconRobot size={14} />
         <span><strong>{run.agentName || agentKindLabel(run.kind)}</strong><small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small></span>

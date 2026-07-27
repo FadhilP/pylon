@@ -22,7 +22,7 @@ import {
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -39,6 +39,8 @@ import type {
   PromptInput,
   QueueMutationInput,
   RewindPromptInput,
+  ReorderActiveSessionInput,
+  ReorderProjectInput,
   RemoveProjectInput,
   ReplacementResult,
   RuntimeHandle,
@@ -51,6 +53,8 @@ import type {
   SetSessionControlsInput,
   SessionArchiveInput,
   SwitchSessionInput,
+  TimelineCheckpointDiffInput,
+  TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
 } from "./pi-driver.ts";
@@ -59,7 +63,7 @@ import { createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
-import { decodeHistoryCursor, encodeHistoryCursor, HISTORY_PAGE_SIZE, projectConversation } from "./projections.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, projectConversation, projectConversationTurnIndex } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
@@ -191,7 +195,7 @@ export class SessionRuntime implements PiDriver {
       });
     }
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
-    this.gitBranch = readGitBranch(target.cwd);
+    this.gitBranch = this.readDisplayGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
     this.packageState = await this.packageCatalog.scan();
     const generation = this.gate.start();
@@ -244,12 +248,24 @@ export class SessionRuntime implements PiDriver {
   async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
     const runtime = this.requireRuntime();
     if (!this.gate.ready) throw new Error("runtime is not ready");
-    const before = decodeHistoryCursor(input.cursor);
-    if (before === undefined) throw new Error("history cursor is invalid");
+    const cursor = decodeHistoryCursor(input.cursor);
+    if (cursor === undefined) throw new Error("history cursor is invalid");
     const messages = this.transcriptMessages(runtime.session);
-    const end = Math.min(before, messages.length);
     const limit = Math.min(HISTORY_PAGE_SIZE, Math.max(1, input.limit ?? HISTORY_PAGE_SIZE));
-    const start = Math.max(0, end - limit);
+    const direction = input.direction ?? "before";
+    let start: number;
+    let end: number;
+    if (direction === "after") {
+      start = Math.min(cursor, messages.length);
+      end = Math.min(messages.length, start + limit);
+    } else if (direction === "around") {
+      start = Math.max(0, Math.min(cursor, messages.length) - Math.floor(limit / 2));
+      end = Math.min(messages.length, start + limit);
+      start = Math.max(0, end - limit);
+    } else {
+      end = Math.min(cursor, messages.length);
+      start = Math.max(0, end - limit);
+    }
     const projected = projectConversation(messages, { start, end, includeDelegated: false }).messages;
     return {
       protocolVersion: PROTOCOL_VERSION,
@@ -258,6 +274,37 @@ export class SessionRuntime implements PiDriver {
       messages: projected,
       remaining: start,
       ...(start > 0 ? { nextCursor: encodeHistoryCursor(start) } : {}),
+      ...(start > 0 ? { earlierCursor: encodeHistoryCursor(start) } : {}),
+      ...(end < messages.length ? { laterCursor: encodeHistoryCursor(end) } : {}),
+      atStart: start === 0,
+      atEnd: end === messages.length,
+    };
+  }
+
+  async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    const turns = projectConversationTurnIndex(this.transcriptMessages(runtime.session));
+    const limit = Math.min(250, Math.max(1, input.limit ?? 250));
+    const cursor = input.cursor ? decodeTurnIndexCursor(input.cursor) : undefined;
+    if (input.cursor && cursor === undefined) throw new Error("turn index cursor is invalid");
+    let start: number;
+    let end: number;
+    if (input.direction === "later") {
+      start = Math.min(cursor ?? 0, turns.length);
+      end = Math.min(turns.length, start + limit);
+    } else {
+      end = Math.min(cursor ?? turns.length, turns.length);
+      start = Math.max(0, end - limit);
+    }
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: runtime.session.sessionId,
+      sessionGeneration: this.gate.generation,
+      turns: turns.slice(start, end).reverse(),
+      totalCount: turns.length,
+      ...(start > 0 ? { earlierCursor: encodeTurnIndexCursor(start) } : {}),
+      ...(end < turns.length ? { laterCursor: encodeTurnIndexCursor(end) } : {}),
     };
   }
 
@@ -328,6 +375,7 @@ export class SessionRuntime implements PiDriver {
         id: item.id,
         name: item.name,
         description: item.description,
+        ...(item.required ? { required: true } : {}),
         enabled,
         active,
         extensionCount: item.extensionPaths.length,
@@ -436,6 +484,10 @@ export class SessionRuntime implements PiDriver {
     return Promise.reject(new Error("project management requires the runtime coordinator"));
   }
 
+  reorderProject(_input: ReorderProjectInput): Promise<void> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
   archiveProject(_input: ProjectArchiveInput): Promise<ReplacementResult> {
     return Promise.reject(new Error("project management requires the runtime coordinator"));
   }
@@ -508,6 +560,66 @@ export class SessionRuntime implements PiDriver {
     if (result.ready !== true) throw new Error("Timeline checkpoints are not portable.");
   }
 
+  async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
+    const runtime = this.requireRuntime();
+    let response: Promise<any> | undefined;
+    this.eventBus.emit("pi-timeline:files-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      checkpointId: input.checkpointId,
+      respond: (value: unknown) => { response = Promise.resolve(value); },
+    });
+    if (!response) throw new Error("Timeline checkpoint files are unavailable");
+    const value = await response;
+    const files = Array.isArray(value?.files) ? value.files.slice(0, 200).flatMap((item: any) => {
+      if (!item || typeof item.path !== "string" || item.path.length > 500
+        || !["added", "modified", "deleted"].includes(item.status)
+        || !Number.isSafeInteger(item.additions) || item.additions < 0
+        || !Number.isSafeInteger(item.deletions) || item.deletions < 0) return [];
+      return [{
+        path: item.path,
+        status: item.status,
+        additions: item.additions,
+        deletions: item.deletions,
+        binary: item.binary === true,
+      }];
+    }) : [];
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.gate.generation,
+      checkpointId: input.checkpointId,
+      files,
+      totalCount: Number.isSafeInteger(value?.totalCount) ? Math.min(10_000, value.totalCount) : files.length,
+      truncated: value?.truncated === true,
+    };
+  }
+
+  async timelineCheckpointDiff(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff> {
+    const runtime = this.requireRuntime();
+    let response: Promise<any> | undefined;
+    this.eventBus.emit("pi-timeline:diff-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      checkpointId: input.checkpointId,
+      path: input.path,
+      respond: (value: unknown) => { response = Promise.resolve(value); },
+    });
+    if (!response) throw new Error("Timeline checkpoint diff is unavailable");
+    const value = await response;
+    if (!value || value.path !== input.path
+      || !["text", "binary", "unavailable", "oversized"].includes(value.state))
+      throw new Error("Timeline returned an invalid diff");
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.gate.generation,
+      checkpointId: input.checkpointId,
+      path: input.path,
+      state: value.state,
+      ...(typeof value.text === "string" ? { text: value.text.slice(0, 2 * 1024 * 1024) } : {}),
+      ...(value.truncated === true ? { truncated: true } : {}),
+    };
+  }
+
   deleteSession(input: DeleteSessionInput): Promise<void> {
     return this.withSessionMutation("delete", async () => {
       if (!this.gate.ready) throw new Error("runtime is not ready");
@@ -539,6 +651,10 @@ export class SessionRuntime implements PiDriver {
     if (input.sessionId === current && input.active) return Promise.resolve();
     if (input.sessionId === current) return Promise.reject(new Error("cannot deactivate the selected session"));
     return Promise.reject(new Error("manual session activation requires the runtime coordinator"));
+  }
+
+  reorderActiveSession(_input: ReorderActiveSessionInput): Promise<void> {
+    return Promise.reject(new Error("session ordering requires the runtime coordinator"));
   }
 
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
@@ -960,7 +1076,7 @@ export class SessionRuntime implements PiDriver {
       this.discoverIndex = undefined;
       this.workModelName = undefined;
       this.workThinkingLevel = undefined;
-      this.gitBranch = readGitBranch(session.sessionManager.getCwd());
+      this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
     }
     await session.bindExtensions({
       mode: "rpc",
@@ -1036,7 +1152,7 @@ export class SessionRuntime implements PiDriver {
         this.workTurnId = undefined;
         this.sessionIndex.invalidate();
         invalidateFileSuggestions(session.sessionManager.getCwd());
-        this.gitBranch = readGitBranch(session.sessionManager.getCwd());
+        this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
         this.refreshSnapshot();
         forwarded = {
           ...raw,
@@ -1183,7 +1299,7 @@ export class SessionRuntime implements PiDriver {
       sessionId: runtime.session.sessionId,
       sessionGeneration: this.gate.generation,
       ready: false,
-      cwdLabel: basename(runtime.cwd) || runtime.cwd,
+      cwdLabel: this.displayCwdLabel(runtime.cwd, runtime.session.sessionId),
       diagnostics: [...this.diagnostics],
       conversation: {
         messages: [], tools: [], delegatedRuns: [], streaming: false,
@@ -1299,7 +1415,7 @@ export class SessionRuntime implements PiDriver {
       sessionId: session.sessionId,
       sessionGeneration: this.gate.generation,
       ready: this.gate.ready,
-      cwdLabel: basename(runtime.cwd) || runtime.cwd,
+      cwdLabel: selectedProject?.label ?? this.displayCwdLabel(runtime.cwd, session.sessionId),
       projectAvailable: !this.target?.inMemory && Boolean(selectedProject && !selectedProject.archivedAt),
       sessionName: session.sessionManager.getSessionName(),
       gitBranch: this.gitBranch,
@@ -1350,6 +1466,21 @@ export class SessionRuntime implements PiDriver {
       ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
     };
+  }
+
+  private displayProject(cwd: string, sessionId?: string) {
+    const selected = this.target?.projectId
+      ? this.projectRegistry?.get(this.target.projectId)
+      : undefined;
+    return selected ?? (sessionId ? this.projectRegistry?.projectForSession(sessionId, cwd) : undefined);
+  }
+
+  private displayCwdLabel(cwd: string, sessionId?: string): string {
+    return this.displayProject(cwd, sessionId)?.label ?? (basename(cwd) || cwd);
+  }
+
+  private readDisplayGitBranch(cwd: string, sessionId?: string): string | undefined {
+    return readGitBranch(this.displayProject(cwd, sessionId)?.cwd ?? cwd);
   }
 
   private installBusHooks(generation: number): void {
@@ -1494,7 +1625,7 @@ export class SessionRuntime implements PiDriver {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: 2,
+          version: channel === "pi-timeline:state-request" ? 3 : 2,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
@@ -1519,7 +1650,7 @@ export class SessionRuntime implements PiDriver {
   }
 
   private captureTimelineUndo(raw?: Record<string, unknown>, publish = true): void {
-    if (raw?.version !== 2 || !Array.isArray(raw.undoPromptEntryIds)) return;
+    if (raw?.version !== 3 || !Array.isArray(raw.undoPromptEntryIds)) return;
     this.undoPromptEntryIds = new Set(
       raw.undoPromptEntryIds
         .filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 128)

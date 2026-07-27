@@ -10,9 +10,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { highlightSource } from "../shared/markdown";
-import { drainWorkspaceFiles } from "../shared/workspace-file-pages";
 import type {
   RuntimeSnapshot,
   WorkspaceFileContent,
@@ -38,25 +37,34 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
   const [refreshRevision, setRefreshRevision] = useState(0);
   const requestRevision = useRef(0);
+  const refreshRequested = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     const revision = ++requestRevision.current;
     setFiles([]);
     setTruncated(false);
+    setInventoryProgress(undefined);
     setInventoryLoading(true);
+    const refresh = refreshRequested.current;
+    refreshRequested.current = false;
     void (async () => {
-      const loaded = await drainWorkspaceFiles(
-        (cursor) => runtimeStore.workspaceFiles(query, cursor, controller.signal),
+      const inventory = await runtimeStore.workspaceInventory(
+        refresh,
         controller.signal,
         (next, wasTruncated) => {
           if (revision !== requestRevision.current) return;
           setFiles(next);
           setTruncated(wasTruncated);
         },
+        (loaded, total) => {
+          if (revision === requestRevision.current) setInventoryProgress({ loaded, total });
+        },
       );
+      const loaded = inventory.files;
       if (requestedPath && loaded.some((file) => file.path === requestedPath)) {
         setSelectedPath(requestedPath);
       }
@@ -69,7 +77,7 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
       controller.abort();
       requestRevision.current++;
     };
-  }, [runtime?.sessionId, runtime?.workspace?.revision, query, refreshRevision]);
+  }, [runtime?.sessionId, runtime?.workspace?.revision, refreshRevision]);
   useEffect(() => {
     if (!requestedPath) return;
     setSelectedPath(requestedPath);
@@ -99,7 +107,13 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
     return () => { active = false; };
   }, [selectedPath, view, runtime?.workspace?.revision]);
 
-  const visible = tab === "changes" ? files.filter((file) => file.status) : files;
+  const matchingFiles = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return normalized
+      ? files.filter((file) => file.path.toLocaleLowerCase().includes(normalized))
+      : files;
+  }, [files, query]);
+  const visible = tab === "changes" ? matchingFiles.filter((file) => file.status) : matchingFiles;
   const workspace = runtime?.workspace;
   return <aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
     <header>
@@ -116,31 +130,41 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
         void runtimeStore.handoffSession("worktree").catch((error) => onError(error, "Unable to move session"))}>
         Move to worktree
       </button>}
-      <button className="icon-button" type="button" onClick={() => setRefreshRevision((current) => current + 1)} aria-label="Refresh files"><IconRefresh size={15} /></button>
+      <button className="icon-button" type="button" onClick={() => {
+        refreshRequested.current = true;
+        setRefreshRevision((current) => current + 1);
+      }} aria-label="Refresh files"><IconRefresh size={15} /></button>
     </div>
     <nav className="files-tabs" aria-label="File views">
       <button className={tab === "changes" ? "is-active" : ""} onClick={() => setTab("changes")}>Changes <span>{workspace?.changedCount ?? 0}</span></button>
       <button className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}>Files</button>
     </nav>
     <label className="files-search"><IconSearch size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" /></label>
-    <div className="files-panel-body">
+    <div className={`files-panel-body${selectedPath ? "" : " is-list-only"}`}>
       <div className="files-list" aria-label={tab === "changes" ? "Changed files" : "Project files"}>
-        {inventoryLoading && !files.length && <span className="files-empty">Loading…</span>}
+        {inventoryLoading && !inventoryProgress && <span className="files-empty">Indexing workspace…</span>}
+        {inventoryLoading && inventoryProgress && <span className="files-progress">
+          Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
+        </span>}
         {!inventoryLoading && !visible.length && <span className="files-empty">{tab === "changes" ? "No session changes" : "No files found"}</span>}
         {tab === "changes"
           ? visible.map((file) => <FileRow key={file.path} file={file} selectedPath={selectedPath} onSelect={(path) => {
               setSelectedPath(path);
               setView("diff");
             }} />)
-          : <FileTree files={visible} selectedPath={selectedPath} onSelect={(path) => {
-              setSelectedPath(path);
-              setView("current");
-            }} />}
+          : query.trim()
+            ? visible.map((file) => <FileRow key={file.path} file={file} fullPath selectedPath={selectedPath} onSelect={(path) => {
+                setSelectedPath(path);
+                setView("current");
+              }} />)
+            : <FileTree files={visible} selectedPath={selectedPath} onSelect={(path) => {
+                setSelectedPath(path);
+                setView("current");
+              }} />}
         {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
       </div>
-      <div className="file-viewer">
-        {!selectedPath && <div className="files-empty large"><IconFiles size={24} />Select a file to inspect</div>}
-        {selectedPath && <>
+      {selectedPath && <div className="file-viewer">
+        <>
           <div className="file-viewer-toolbar">
             <code title={selectedPath}>{selectedPath}</code>
             <span>
@@ -150,11 +174,12 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
               </>}
               <button className={view === "current" ? "is-active" : ""} onClick={() => setView("current")}>Current</button>
               <button className="icon-button" onClick={() => void navigator.clipboard.writeText(selectedPath)} aria-label="Copy file path"><IconCopy size={14} /></button>
+              <button className="icon-button" onClick={() => setSelectedPath(undefined)} aria-label="Close file"><IconX size={14} /></button>
             </span>
           </div>
           <FileContent value={viewerLoading ? undefined : content} view={view} />
-        </>}
-      </div>
+        </>
+      </div>}
     </div>
   </aside>;
 }
@@ -202,15 +227,16 @@ function TreeNode({ node, selectedPath, onSelect }: {
   </>;
 }
 
-function FileRow({ file, selectedPath, onSelect }: {
+function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
   file: WorkspaceFileReadModel;
   selectedPath?: string;
   onSelect: (path: string) => void;
+  fullPath?: boolean;
 }) {
   const name = file.path.split("/").at(-1) ?? file.path;
   return <button type="button" className={selectedPath === file.path ? "is-active" : ""} onClick={() => onSelect(file.path)}>
     <IconFile size={14} />
-    <span title={file.path}>{name}</span>
+    <span title={file.path}>{fullPath ? file.path : name}</span>
     {file.status && <small className={`is-${file.status}`}>{file.status[0].toUpperCase()}</small>}
     {file.binary ? <em>binary</em> : file.status && <em><ins>+{file.additions ?? 0}</ins><del>-{file.deletions ?? 0}</del></em>}
   </button>;

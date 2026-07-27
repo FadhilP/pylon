@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
-const VERSION = 3;
+const VERSION = 4;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 
@@ -85,6 +85,7 @@ export class ProjectRegistry {
   private projects: RegisteredProject[] = [];
   private archivedSessions: ArchivedSessionRecord[] = [];
   private sessionWorkspaces: SessionWorkspaceRecord[] = [];
+  private activeSessionOrder: string[] = [];
   private loaded = false;
 
   constructor(private readonly configPath: string) {}
@@ -98,7 +99,7 @@ export class ProjectRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("invalid project registry");
-      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown };
+      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown };
       if (value.version === 1 && Array.isArray(value.directories)) {
         const directories = value.directories.filter((item): item is string =>
           typeof item === "string" && item.length > 0 && item.length <= 4_096);
@@ -107,7 +108,7 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const projects = value.projects.flatMap((item) => {
@@ -133,8 +134,13 @@ export class ProjectRegistry {
       this.sessionWorkspaces = Array.isArray(value.sessionWorkspaces)
         ? value.sessionWorkspaces.flatMap((item) => this.parseSessionWorkspace(item)).slice(0, MAX_ARCHIVED_SESSIONS)
         : [];
+      this.activeSessionOrder = Array.isArray(value.activeSessionOrder)
+        ? value.activeSessionOrder.filter((item): item is string =>
+            typeof item === "string" && item.length > 0 && item.length <= 128)
+            .slice(0, MAX_ARCHIVED_SESSIONS)
+        : [];
       this.loaded = true;
-      if (value.version === 2) await this.save();
+      if (value.version !== VERSION) await this.save();
       return;
     } catch (error: any) {
       if (error?.code !== "ENOENT") throw error;
@@ -183,6 +189,67 @@ export class ProjectRegistry {
     this.sessionWorkspaces = this.sessionWorkspaces.filter((workspace) => workspace.projectId !== projectId);
     const removedSessions = new Set(sessionIds);
     this.archivedSessions = this.archivedSessions.filter((session) => !removedSessions.has(session.id));
+    this.activeSessionOrder = this.activeSessionOrder.filter((sessionId) => !removedSessions.has(sessionId));
+    await this.save();
+  }
+
+  async reorderProject(projectId: string, beforeProjectId?: string): Promise<void> {
+    this.assertLoaded();
+    const visible = this.projects.filter((project) => !project.archivedAt);
+    const index = visible.findIndex((project) => project.id === projectId);
+    if (index < 0) throw new Error("project is unavailable");
+    if (beforeProjectId === projectId) return;
+    const [project] = visible.splice(index, 1);
+    const before = beforeProjectId
+      ? visible.findIndex((candidate) => candidate.id === beforeProjectId)
+      : -1;
+    if (beforeProjectId && before < 0) {
+      throw new Error("project reorder target is unavailable");
+    }
+    if (before >= 0) visible.splice(before, 0, project);
+    else visible.push(project);
+    let visibleIndex = 0;
+    this.projects = this.projects.map((candidate) =>
+      candidate.archivedAt ? candidate : visible[visibleIndex++]!);
+    await this.save();
+  }
+
+  listActiveSessionOrder(): string[] {
+    this.assertLoaded();
+    return [...this.activeSessionOrder];
+  }
+
+  async activateSession(sessionId: string): Promise<void> {
+    this.assertLoaded();
+    this.activeSessionOrder = [sessionId, ...this.activeSessionOrder.filter((id) => id !== sessionId)]
+      .slice(0, MAX_ARCHIVED_SESSIONS);
+    await this.save();
+  }
+
+  async deactivateSession(sessionId: string): Promise<void> {
+    await this.deactivateSessions([sessionId]);
+  }
+
+  async deactivateSessions(sessionIds: string[]): Promise<void> {
+    this.assertLoaded();
+    const removed = new Set(sessionIds);
+    const next = this.activeSessionOrder.filter((id) => !removed.has(id));
+    if (next.length === this.activeSessionOrder.length) return;
+    this.activeSessionOrder = next;
+    await this.save();
+  }
+
+  async reorderActiveSession(sessionId: string, beforeSessionId?: string): Promise<void> {
+    this.assertLoaded();
+    const index = this.activeSessionOrder.indexOf(sessionId);
+    if (index < 0) throw new Error("active session is unavailable");
+    if (beforeSessionId === sessionId) return;
+    const next = this.activeSessionOrder.filter((id) => id !== sessionId);
+    const before = beforeSessionId ? next.indexOf(beforeSessionId) : -1;
+    if (beforeSessionId && before < 0) throw new Error("active session reorder target is unavailable");
+    if (before >= 0) next.splice(before, 0, sessionId);
+    else next.push(sessionId);
+    this.activeSessionOrder = next;
     await this.save();
   }
 
@@ -373,6 +440,7 @@ export class ProjectRegistry {
       })),
       archivedSessions: this.archivedSessions,
       sessionWorkspaces: this.sessionWorkspaces,
+      activeSessionOrder: this.activeSessionOrder,
     }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await rename(temporary, this.configPath);
   }

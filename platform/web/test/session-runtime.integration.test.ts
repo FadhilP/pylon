@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
+import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -304,7 +305,7 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
   }
 });
 
-test("driver starts without a root manifest or local packages", { timeout: 20_000 }, async () => {
+test("driver starts without a root manifest and still loads required core", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-standalone-"));
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
@@ -314,7 +315,10 @@ test("driver starts without a root manifest or local packages", { timeout: 20_00
     await driver.start({ cwd, agentDir, repositoryRoot: root });
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.ready, true);
-    assert.equal((await driver.listPackages()).packages.length, 0);
+    const packages = (await driver.listPackages()).packages;
+    assert.deepEqual(packages.map((item) => item.id), ["pylon-core"]);
+    assert.equal(packages[0]?.required, true);
+    assert.equal(packages[0]?.active, true);
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
@@ -372,6 +376,20 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     assert.equal(earlier.at(-1), "message-54");
     const firstPage = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
     assert.equal(firstPage.messages[0]?.entryId, messageIds[0]);
+    const laterPage = await driver.conversationHistory({
+      cursor: encodeHistoryCursor(55),
+      direction: "after",
+      limit: 10,
+    });
+    assert.equal(laterPage.messages[0]?.text, "message-55");
+    assert.equal(laterPage.messages.at(-1)?.text, "message-64");
+    const aroundPage = await driver.conversationHistory({
+      cursor: encodeHistoryCursor(77),
+      direction: "around",
+      limit: 10,
+    });
+    assert.equal(aroundPage.messages[0]?.text, "message-72");
+    assert.equal(aroundPage.messages.at(-1)?.text, "message-81");
   } finally {
     await driver.dispose();
     await rm(session.getSessionFile()!, { force: true });

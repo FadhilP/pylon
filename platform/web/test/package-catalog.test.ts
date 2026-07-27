@@ -33,13 +33,13 @@ test("package catalog discovers safe packages and persists an allowlist", async 
 
     const catalog = new PackageCatalog(root, agentDir);
     const first = await catalog.scan();
-    assert.deepEqual(first.packages.map((item) => item.id), ["pi-a", "pi-b"]);
-    assert.deepEqual([...first.enabledIds], ["pi-a"]);
-    assert.equal(first.extensionPaths.length, 2);
+    assert.deepEqual(first.packages.map((item) => item.id), ["pi-a", "pi-b", "pylon-core"]);
+    assert.deepEqual([...first.enabledIds].sort(), ["pi-a", "pylon-core"]);
+    assert.equal(first.extensionPaths.length, 3);
     assert.ok(first.extensionPaths.some((path) => path.endsWith("unmanaged.ts")));
 
     const enabled = await catalog.setEnabled("pi-b", true);
-    assert.deepEqual([...enabled.enabledIds].sort(), ["pi-a", "pi-b"]);
+    assert.deepEqual([...enabled.enabledIds].sort(), ["pi-a", "pi-b", "pylon-core"]);
 
     await rm(join(root, "packages", "pi-b"), { recursive: true });
     assert.equal((await catalog.scan()).packages.some((item) => item.id === "pi-b"), false);
@@ -50,12 +50,27 @@ test("package catalog discovers safe packages and persists an allowlist", async 
   }
 });
 
-test("package catalog supports a standalone repository with no manifest or packages", async () => {
+test("package catalog keeps required core in a standalone repository", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-package-free-"));
   try {
     const state = await new PackageCatalog(root, join(root, "agent")).scan();
-    assert.deepEqual(state.packages, []);
-    assert.deepEqual(state.extensionPaths, []);
+    assert.deepEqual(state.packages.map((item) => item.id), ["pylon-core"]);
+    assert.equal(state.enabledIds.has("pylon-core"), true);
+    assert.equal(state.extensionPaths.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pylon-core is always enabled and cannot be disabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-required-core-"));
+  try {
+    await addPackage(root, "pylon-core");
+    const catalog = new PackageCatalog(root, join(root, "agent"));
+    const state = await catalog.scan();
+    assert.equal(state.packages[0]?.required, true);
+    assert.equal(state.enabledIds.has("pylon-core"), true);
+    await assert.rejects(catalog.setEnabled("pylon-core", false), /required/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

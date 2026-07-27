@@ -10,6 +10,7 @@ export const COMMAND_NAMES = [
   "abort",
   "addProject",
   "removeProject",
+  "reorderProject",
   "archiveProject",
   "restoreProject",
   "newSession",
@@ -19,6 +20,7 @@ export const COMMAND_NAMES = [
   "restoreSession",
   "renameSession",
   "setSessionActive",
+  "reorderActiveSession",
   "editPrompt",
   "rewindPrompt",
   "fork",
@@ -74,6 +76,7 @@ export type WebCommand =
   | ({ type: "abort" } & CommandBase)
   | ({ type: "addProject" } & CommandBase)
   | ({ type: "removeProject"; projectId: string } & CommandBase)
+  | ({ type: "reorderProject"; projectId: string; beforeProjectId?: string } & CommandBase)
   | ({ type: "archiveProject"; projectId: string } & CommandBase)
   | ({ type: "restoreProject"; projectId: string } & CommandBase)
   | ({ type: "newSession"; parentSessionId?: string; projectId?: string } & CommandBase)
@@ -83,6 +86,7 @@ export type WebCommand =
   | ({ type: "restoreSession"; sessionId: string } & CommandBase)
   | ({ type: "renameSession"; sessionId: string; name: string } & CommandBase)
   | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
+  | ({ type: "reorderActiveSession"; sessionId: string; beforeSessionId?: string } & CommandBase)
   | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "rewindPrompt"; entryId: string } & CommandBase)
   | ({ type: "fork"; entryId: string; position?: "before" | "at" } & CommandBase)

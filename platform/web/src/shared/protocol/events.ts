@@ -276,6 +276,12 @@ export interface TimelineCheckpointReadModel {
   branch?: string;
   verified: boolean;
   ownerSessionId: string;
+  changes?: {
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    binaryCount: number;
+  };
 }
 
 export interface TimelineReadModel { availability: FeatureState; revision: number; checkpoints: TimelineCheckpointReadModel[]; }

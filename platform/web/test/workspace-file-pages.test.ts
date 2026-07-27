@@ -16,6 +16,7 @@ test("workspace file pages drain, deduplicate, batch, and report truncation", as
   }));
   pages[5]!.files[0] = pages[0]!.files[0]!;
   const batches: number[] = [];
+  const progress: Array<[number, number]> = [];
   let truncated = false;
   const files = await drainWorkspaceFiles(
     (cursor) => Promise.resolve(pages[Number(cursor ?? 0)]!),
@@ -24,10 +25,12 @@ test("workspace file pages drain, deduplicate, batch, and report truncation", as
       batches.push(items.length);
       truncated = value;
     },
+    (loaded, total) => progress.push([loaded, total]),
   );
   assert.deepEqual(batches, [1_000, 1_199]);
   assert.equal(files.length, 1_199);
   assert.equal(truncated, true);
+  assert.deepEqual(progress.at(-1), [1_199, 1_200]);
 });
 
 test("workspace file page draining stops when its request is stale", async () => {

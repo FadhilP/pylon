@@ -4,6 +4,7 @@ export async function drainWorkspaceFiles(
   fetchPage: (cursor?: string) => Promise<WorkspaceFilePage>,
   signal: AbortSignal,
   publish: (files: WorkspaceFileReadModel[], truncated: boolean) => void,
+  progress?: (loaded: number, total: number) => void,
 ): Promise<WorkspaceFileReadModel[]> {
   const files = new Map<string, WorkspaceFileReadModel>();
   let cursor: string | undefined;
@@ -17,6 +18,7 @@ export async function drainWorkspaceFiles(
     sincePublish += page.files.length;
     cursor = page.nextCursor;
     truncated ||= page.truncated;
+    progress?.(files.size, page.totalCount);
     if (sincePublish >= 1_000 || !cursor) {
       publish([...files.values()], truncated);
       sincePublish = 0;

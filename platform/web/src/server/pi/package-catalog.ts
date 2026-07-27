@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { PackageSettingsReadModel } from "../../shared/protocol/snapshots.ts";
 import { validPackageSettings } from "../../shared/protocol/validation.ts";
 
@@ -21,6 +21,7 @@ export interface PackageDefinition {
   id: string;
   name: string;
   description: string;
+  required: boolean;
   extensionPaths: string[];
   settingsPath?: string;
 }
@@ -96,6 +97,9 @@ export class PackageCatalog {
       .filter((item) => item.extensionPaths.some((path) => rootPaths.includes(path)))
       .map((item) => item.id);
     const enabledIds = await this.readEnabled(defaultIds);
+    for (const item of packages) {
+      if (item.required) enabledIds.add(item.id);
+    }
     return {
       packages,
       enabledIds,
@@ -108,7 +112,9 @@ export class PackageCatalog {
 
   async setEnabled(packageId: string, enabled: boolean): Promise<PackageCatalogState> {
     const current = await this.scan();
-    if (!current.packages.some((item) => item.id === packageId)) throw new Error("package is unavailable");
+    const definition = current.packages.find((item) => item.id === packageId);
+    if (!definition) throw new Error("package is unavailable");
+    if (definition.required && !enabled) throw new Error(`${packageId} is required`);
     const enabledIds = new Set(current.enabledIds);
     if (enabled) enabledIds.add(packageId);
     else enabledIds.delete(packageId);
@@ -163,8 +169,18 @@ export class PackageCatalog {
         id,
         name: id,
         description: typeof manifest.description === "string" ? manifest.description.slice(0, 500) : "",
+        required: id === "pylon-core",
         extensionPaths: paths,
         settingsPath: await confinedFile(packageRoot, manifest.pylon?.settings).catch(() => undefined),
+      });
+    }
+    if (!packages.some((item) => item.id === "pylon-core")) {
+      packages.push({
+        id: "pylon-core",
+        name: "pylon-core",
+        description: "Required web runtime coordination",
+        required: true,
+        extensionPaths: [fileURLToPath(import.meta.resolve("pylon-core/extensions/pylon-core.ts"))],
       });
     }
     return packages.sort((left, right) => left.name.localeCompare(right.name));

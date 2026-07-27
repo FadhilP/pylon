@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, validateCommand } from "../src/shared/protocol/validation.ts";
+import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v13 commands and attachments", () => {
+test("command validation allowlists bounded v15 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -47,8 +47,11 @@ test("command validation allowlists bounded v13 commands and attachments", () =>
   assert.equal(validateCommand({ type: "rewindPrompt", entryId: "", commandId: "rewind", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "addProject", commandId: "project", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "removeProject", projectId: "project-one", commandId: "project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "reorderProject", projectId: "project-one", beforeProjectId: "project-two", commandId: "project-order", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "reorderProject", projectId: "project-one", beforeProjectId: "", commandId: "project-order", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "archiveProject", projectId: "project-one", commandId: "archive-project", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "restoreSession", sessionId: "session-one", commandId: "restore-session", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "reorderActiveSession", sessionId: "session-one", beforeSessionId: "session-two", commandId: "session-order", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "archiveSession", sessionId: "x".repeat(129), commandId: "archive-session", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "newSession", projectId: "project-one", parentSessionId: "session-1", commandId: "new", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "Use the coordinator", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, true);
@@ -239,6 +242,19 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], entryId: "" }] }), false);
   assert.equal(isConversationHistoryPage({ ...history, messages: Array(101).fill(history.messages[0]) }), false);
   assert.equal(isConversationHistoryPage({ ...history, remaining: -1 }), false);
+});
+
+test("conversation turn index validation keeps metadata bounded", () => {
+  const page = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: "session-one",
+    sessionGeneration: 1,
+    turns: [{ promptId: "prompt-one", preview: "Review the change", cursor: "aDox", createdAt: "2026-07-27T01:02:00.000Z" }],
+    totalCount: 3,
+  };
+  assert.equal(isConversationTurnIndexPage(page), true);
+  assert.equal(isConversationTurnIndexPage({ ...page, turns: [{ ...page.turns[0], preview: "x".repeat(121) }] }), false);
+  assert.equal(isConversationTurnIndexPage({ ...page, turns: Array(251).fill(page.turns[0]) }), false);
 });
 
 test("file suggestion validation confines bounded relative paths", () => {

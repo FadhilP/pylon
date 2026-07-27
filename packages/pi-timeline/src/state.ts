@@ -1,4 +1,11 @@
-export const TIMELINE_STATE_VERSION = 2 as const;
+export const TIMELINE_STATE_VERSION = 3 as const;
+
+export interface TimelineCheckpointChanges {
+  fileCount: number;
+  additions: number;
+  deletions: number;
+  binaryCount: number;
+}
 
 export interface TimelineCheckpointState {
   id: string;
@@ -7,6 +14,7 @@ export interface TimelineCheckpointState {
   branch?: string;
   verified: boolean;
   ownerSessionId: string;
+  changes?: TimelineCheckpointChanges;
 }
 
 export interface TimelineStateSnapshot {
@@ -44,6 +52,14 @@ export function timelineStateSnapshot(
       ...(item.branch ? { branch: item.branch.slice(0, 200) } : {}),
       verified: item.verified,
       ownerSessionId: item.ownerSessionId.slice(0, 128),
+      ...(item.changes ? {
+        changes: {
+          fileCount: Math.max(0, Math.min(10_000, Math.trunc(item.changes.fileCount))),
+          additions: Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(item.changes.additions))),
+          deletions: Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(item.changes.deletions))),
+          binaryCount: Math.max(0, Math.min(10_000, Math.trunc(item.changes.binaryCount))),
+        },
+      } : {}),
     })),
   };
 }

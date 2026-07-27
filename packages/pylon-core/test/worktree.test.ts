@@ -106,10 +106,12 @@ test("session worktrees isolate a dirty baseline and expose bounded files", asyn
     await writeFile(join(root, "tracked.txt"), "committed\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
+    await git(root, ["branch", "pylon"]);
     await writeFile(join(root, "tracked.txt"), "dirty baseline\n");
     await writeFile(join(root, "untracked.txt"), "also baseline\n");
 
     const worktree = await createSessionWorktree(root, target, owned, "session-one");
+    assert.equal(worktree.branch, "refs/heads/pylon-session-session-one");
     assert.equal((await readFile(join(target, "tracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "dirty baseline\n");
     assert.equal((await readFile(join(target, "untracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "also baseline\n");
     await writeFile(join(target, "tracked.txt"), "dirty baseline\nagent\n");

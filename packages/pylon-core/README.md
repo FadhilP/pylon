@@ -2,6 +2,8 @@
 
 Optional runtime tool coordination for local Pi packages. Packages remain fully functional without Pylon. When installed, they publish tool policies through Pi's event bus; Pylon merges them and becomes the sole active-tool reconciler.
 
+Pylon Web always loads pylon-core and does not expose a disable control because session coordination, delegated-run naming, and workspace reporting depend on it.
+
 ## Installation
 
 ```sh

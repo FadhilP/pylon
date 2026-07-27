@@ -3,11 +3,12 @@ import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../sha
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
-import { hasCompleteHistory, mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
+import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
+import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
+import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
 
 export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
@@ -20,21 +21,60 @@ export interface RuntimeStoreSnapshot {
   sessionStatuses?: Record<string, SessionRuntimeState>;
   error?: string;
   errorRevision?: number;
+  historyWindow?: TranscriptWindowReadModel;
+}
+
+export interface TranscriptWindowReadModel {
+  sessionId: string;
+  messages: MessageReadModel[];
+  earlierCursor?: string;
+  laterCursor?: string;
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
 const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
 const MAX_CACHED_SESSIONS = 10;
+const WORKSPACE_INVENTORY_TTL_MS = 60_000;
+
+interface CachedWorkspaceInventory {
+  revision?: string;
+  expiresAt: number;
+  files: WorkspaceFileReadModel[];
+  truncated: boolean;
+}
+
+interface HistorySegment {
+  messages: MessageReadModel[];
+  earlierCursor?: string;
+  laterCursor?: string;
+}
 
 function commandId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+function mergeDelegatedRun(previous: DelegatedAgentRunReadModel | undefined, next: DelegatedAgentRunReadModel): DelegatedAgentRunReadModel {
+  if (!previous) return next;
+  if (previous.status !== "running" && next.status === "running") {
+    return {
+      ...previous,
+      activity: next.activity.length >= previous.activity.length ? next.activity : previous.activity,
+    };
+  }
+  return {
+    ...previous,
+    ...next,
+    activity: next.activity.length >= previous.activity.length ? next.activity : previous.activity,
+    usage: next.usage ?? previous.usage,
+  };
+}
 
 export class RuntimeEventStore {
   private readonly api = new ApiClient();
   private readonly historyCache = new Map<string, CachedHistory>();
   private readonly invalidatedHistoryGenerations = new Map<string, number>();
+  private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
+  private readonly historyWindows = new Map<string, HistorySegment[]>();
   private snapshot = initial;
   private listeners = new Set<() => void>();
   private source?: EventSource;
@@ -94,8 +134,10 @@ export class RuntimeEventStore {
   async editPrompt(entryId: string, message: string, images: PromptImage[], rollbackFiles: boolean): Promise<void> {
     const runtime = this.requireReadyRuntime();
     const cachedHistory = this.historyCache.get(runtime.sessionId);
+    const cachedWindow = this.historyWindows.get(runtime.sessionId);
     this.invalidatedHistoryGenerations.set(runtime.sessionId, runtime.sessionGeneration);
     this.historyCache.delete(runtime.sessionId);
+    this.historyWindows.delete(runtime.sessionId);
     try {
       await this.sendCommand({
         type: "editPrompt",
@@ -110,6 +152,7 @@ export class RuntimeEventStore {
     } catch (error) {
       this.invalidatedHistoryGenerations.delete(runtime.sessionId);
       if (cachedHistory) this.historyCache.set(runtime.sessionId, cachedHistory);
+      if (cachedWindow) this.historyWindows.set(runtime.sessionId, cachedWindow);
       throw error;
     }
   }
@@ -117,8 +160,10 @@ export class RuntimeEventStore {
   async rewindPrompt(entryId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     const cachedHistory = this.historyCache.get(runtime.sessionId);
+    const cachedWindow = this.historyWindows.get(runtime.sessionId);
     this.invalidatedHistoryGenerations.set(runtime.sessionId, runtime.sessionGeneration);
     this.historyCache.delete(runtime.sessionId);
+    this.historyWindows.delete(runtime.sessionId);
     try {
       const accepted = await this.sendCommand({
         type: "rewindPrompt",
@@ -131,6 +176,7 @@ export class RuntimeEventStore {
     } catch (error) {
       this.invalidatedHistoryGenerations.delete(runtime.sessionId);
       if (cachedHistory) this.historyCache.set(runtime.sessionId, cachedHistory);
+      if (cachedWindow) this.historyWindows.set(runtime.sessionId, cachedWindow);
       throw error;
     }
   }
@@ -157,11 +203,22 @@ export class RuntimeEventStore {
     return result;
   }
 
-  async workspaceFiles(query = "", cursor?: string, signal?: AbortSignal): Promise<WorkspaceFilePage> {
+  async conversationTurnIndex(input: ConversationTurnIndexQuery = {}): Promise<ConversationTurnIndexPage> {
+    const runtime = this.requireReadyRuntime();
+    const page = await this.api.conversationTurnIndex(input, runtime.sessionGeneration);
+    if (!isConversationTurnIndexPage(page)
+      || page.sessionId !== runtime.sessionId
+      || page.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Conversation turn index is stale or invalid");
+    }
+    return page;
+  }
+
+  async workspaceFiles(query = "", cursor?: string, signal?: AbortSignal, refresh = false): Promise<WorkspaceFilePage> {
     const runtime = this.requireReadyRuntime();
     const sessionId = runtime.sessionId;
     const generation = runtime.sessionGeneration;
-    const result = await this.api.workspaceFiles(generation, query, cursor, signal);
+    const result = await this.api.workspaceFiles(generation, query, cursor, signal, refresh);
     const current = this.snapshot.runtime;
     if (!isWorkspaceFilePage(result) || result.sessionGeneration !== generation) {
       throw new Error("Workspace files are stale or invalid");
@@ -170,6 +227,46 @@ export class RuntimeEventStore {
       throw new Error("Workspace files belong to a previous session");
     }
     return result;
+  }
+
+  async workspaceInventory(
+    refresh: boolean,
+    signal: AbortSignal,
+    publish: (files: WorkspaceFileReadModel[], truncated: boolean) => void,
+    progress: (loaded: number, total: number) => void,
+  ): Promise<CachedWorkspaceInventory> {
+    const runtime = this.requireReadyRuntime();
+    const cached = this.workspaceInventories.get(runtime.sessionId);
+    if (!refresh && cached && cached.expiresAt > Date.now()
+      && cached.revision === runtime.workspace?.revision) {
+      this.workspaceInventories.delete(runtime.sessionId);
+      this.workspaceInventories.set(runtime.sessionId, cached);
+      publish(cached.files, cached.truncated);
+      progress(cached.files.length, cached.files.length);
+      return cached;
+    }
+    let truncated = false;
+    const files = await drainWorkspaceFiles(
+      (cursor) => this.workspaceFiles("", cursor, signal, refresh && !cursor),
+      signal,
+      (next, value) => {
+        truncated = value;
+        publish(next, value);
+      },
+      progress,
+    );
+    const inventory = {
+      revision: this.snapshot.runtime?.workspace?.revision,
+      expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
+      files,
+      truncated,
+    };
+    this.workspaceInventories.delete(runtime.sessionId);
+    this.workspaceInventories.set(runtime.sessionId, inventory);
+    while (this.workspaceInventories.size > MAX_CACHED_SESSIONS) {
+      this.workspaceInventories.delete(this.workspaceInventories.keys().next().value!);
+    }
+    return inventory;
   }
 
   async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
@@ -188,6 +285,23 @@ export class RuntimeEventStore {
       || String(result.state) === "deleted") {
       throw new Error("Workspace diff is stale or invalid");
     }
+    return result;
+  }
+
+  async timelineCheckpointFiles(checkpointId: string): Promise<TimelineCheckpointFiles> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.timelineCheckpointFiles(runtime.sessionGeneration, checkpointId);
+    if (result.sessionGeneration !== runtime.sessionGeneration || result.checkpointId !== checkpointId)
+      throw new Error("Timeline files are stale or invalid");
+    return result;
+  }
+
+  async timelineCheckpointDiff(checkpointId: string, path: string): Promise<TimelineCheckpointDiff> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.timelineCheckpointDiff(runtime.sessionGeneration, checkpointId, path);
+    if (result.sessionGeneration !== runtime.sessionGeneration
+      || result.checkpointId !== checkpointId || result.path !== path)
+      throw new Error("Timeline diff is stale or invalid");
     return result;
   }
 
@@ -214,11 +328,9 @@ export class RuntimeEventStore {
 
   async loadEarlierMessages(all = false): Promise<void> {
     const runtime = this.requireReadyRuntime();
-    let cursor = runtime.conversation.historyCursor;
+    let cursor = this.historyWindow(runtime).earlierCursor;
     if (!cursor) return;
     const seen = new Set<string>();
-    let earlier: MessageReadModel[] = [];
-    let remaining = runtime.conversation.historyRemaining ?? 0;
     try {
       do {
         if (seen.has(cursor)) throw new Error("History cursor repeated");
@@ -229,30 +341,18 @@ export class RuntimeEventStore {
           || page.sessionGeneration !== runtime.sessionGeneration) {
           throw new Error("Conversation history is stale or invalid");
         }
-        earlier = [...page.messages, ...earlier];
-        remaining = page.remaining;
-        cursor = page.nextCursor;
+        this.addHistorySegment(runtime.sessionId, "before", {
+          messages: page.messages,
+          earlierCursor: page.earlierCursor,
+          laterCursor: page.laterCursor,
+        });
+        cursor = page.earlierCursor;
       } while (all && cursor);
       const current = this.snapshot.runtime;
       if (!current || current.sessionId !== runtime.sessionId || current.sessionGeneration !== runtime.sessionGeneration) {
         throw new Error("Session changed while loading history");
       }
-      const messages = mergeHistoryMessages(current.conversation.messages, earlier);
-      const complete = hasCompleteHistory(messages);
-      this.set({
-        ...this.snapshot,
-        runtime: {
-          ...current,
-          conversation: {
-            ...current.conversation,
-            messages,
-            ...(cursor && !complete ? { historyCursor: cursor, historyRemaining: remaining } : {
-              historyCursor: undefined,
-              historyRemaining: undefined,
-            }),
-          },
-        },
-      });
+      this.set({ ...this.snapshot, historyWindow: this.historyWindow(current) });
     } catch (error) {
       this.set({
         ...this.snapshot,
@@ -261,6 +361,40 @@ export class RuntimeEventStore {
       });
       throw error;
     }
+  }
+
+  async loadLaterMessages(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    const cursor = this.historyWindow(runtime).laterCursor;
+    if (!cursor) return;
+    const page = await this.api.conversationHistory(cursor, runtime.sessionGeneration, 100, "after");
+    if (!isConversationHistoryPage(page)
+      || page.sessionId !== runtime.sessionId
+      || page.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Conversation history is stale or invalid");
+    }
+    this.addHistorySegment(runtime.sessionId, "after", {
+      messages: page.messages,
+      earlierCursor: page.earlierCursor,
+      laterCursor: page.laterCursor,
+    });
+    this.set({ ...this.snapshot, historyWindow: this.historyWindow(runtime) });
+  }
+
+  async jumpToHistory(cursor: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    const page = await this.api.conversationHistory(cursor, runtime.sessionGeneration, 100, "around");
+    if (!isConversationHistoryPage(page)
+      || page.sessionId !== runtime.sessionId
+      || page.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Conversation history is stale or invalid");
+    }
+    this.historyWindows.set(runtime.sessionId, [{
+      messages: page.messages,
+      earlierCursor: page.earlierCursor,
+      laterCursor: page.laterCursor,
+    }]);
+    this.set({ ...this.snapshot, historyWindow: this.historyWindow(runtime) });
   }
 
   async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
@@ -275,6 +409,17 @@ export class RuntimeEventStore {
   async removeProject(projectId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "removeProject", projectId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async reorderProject(projectId: string, beforeProjectId?: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "reorderProject",
+      projectId,
+      ...(beforeProjectId ? { beforeProjectId } : {}),
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
   }
 
   async archiveProject(projectId: string): Promise<void> {
@@ -415,9 +560,21 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "setSessionActive", sessionId, active, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async reorderActiveSession(sessionId: string, beforeSessionId?: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "reorderActiveSession",
+      sessionId,
+      ...(beforeSessionId ? { beforeSessionId } : {}),
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async timeline(action: "restore" | "fork" | "clear", checkpointId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "timeline", action, ...(checkpointId ? { checkpointId } : {}), commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+    if (action !== "clear") this.historyWindows.delete(runtime.sessionId);
   }
 
   async answerUi(request: UiRequestReadModel, body: Record<string, unknown>): Promise<void> {
@@ -472,6 +629,48 @@ export class RuntimeEventStore {
     const runtime = this.snapshot.runtime;
     if (!runtime || this.snapshot.connection !== "connected" || !runtime.ready) throw new Error("Runtime is not connected");
     return runtime;
+  }
+
+  private historyWindow(runtime: RuntimeSnapshot): TranscriptWindowReadModel {
+    let segments = this.historyWindows.get(runtime.sessionId);
+    if (!segments?.length) {
+      segments = [{
+        messages: runtime.conversation.messages.slice(-100),
+        earlierCursor: runtime.conversation.historyCursor,
+      }];
+      this.historyWindows.set(runtime.sessionId, segments);
+    } else {
+      const latest = segments.at(-1)!;
+      if (!latest.laterCursor) {
+        latest.messages = runtime.conversation.messages.slice(-100);
+        latest.earlierCursor = runtime.conversation.historyCursor;
+      }
+    }
+    const messages = segments.reduce<MessageReadModel[]>(
+      (current, segment) => mergeHistoryMessages(current, segment.messages),
+      [],
+    ).slice(-300);
+    return {
+      sessionId: runtime.sessionId,
+      messages,
+      earlierCursor: segments[0]?.earlierCursor,
+      laterCursor: segments.at(-1)?.laterCursor,
+    };
+  }
+
+  private addHistorySegment(sessionId: string, direction: "before" | "after", segment: HistorySegment): void {
+    const segments = this.historyWindows.get(sessionId) ?? [];
+    if (direction === "before") segments.unshift(segment);
+    else segments.push(segment);
+    while (segments.length > 3) {
+      if (direction === "before") segments.pop();
+      else segments.shift();
+    }
+    this.historyWindows.delete(sessionId);
+    this.historyWindows.set(sessionId, segments);
+    while (this.historyWindows.size > MAX_CACHED_SESSIONS) {
+      this.historyWindows.delete(this.historyWindows.keys().next().value!);
+    }
   }
 
   private async bootstrap(): Promise<void> {
@@ -557,6 +756,7 @@ export class RuntimeEventStore {
       }, true);
       return;
     }
+    if (event.type === "workspace.revision") this.workspaceInventories.delete(event.sessionId);
 
     let runtime = current.runtime;
     let pendingUi = current.pendingUi;
@@ -605,15 +805,17 @@ export class RuntimeEventStore {
 
   private set(next: RuntimeStoreSnapshot, batched = false): void {
     if (next.runtime) {
-      const sessionId = next.runtime.sessionId;
+      const runtime = next.runtime;
+      next = { ...next, historyWindow: this.historyWindow(runtime) };
+      const sessionId = runtime.sessionId;
       const invalidatedGeneration = this.invalidatedHistoryGenerations.get(sessionId);
-      if (invalidatedGeneration === undefined || next.runtime.sessionGeneration > invalidatedGeneration) {
+      if (invalidatedGeneration === undefined || runtime.sessionGeneration > invalidatedGeneration) {
         this.invalidatedHistoryGenerations.delete(sessionId);
         this.historyCache.delete(sessionId);
         this.historyCache.set(sessionId, {
-          messages: next.runtime.conversation.messages,
-          historyCursor: next.runtime.conversation.historyCursor,
-          historyRemaining: next.runtime.conversation.historyRemaining,
+          messages: runtime.conversation.messages.slice(-300),
+          historyCursor: runtime.conversation.historyCursor,
+          historyRemaining: runtime.conversation.historyRemaining,
         });
         while (this.historyCache.size > MAX_CACHED_SESSIONS) {
           this.historyCache.delete(this.historyCache.keys().next().value!);
@@ -682,11 +884,13 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
     case "tool.end": return { ...runtime, conversation: { ...conversation, tools: replaceTool(conversation.tools, payload as ToolActivityReadModel) } };
     case "delegate.update": {
       const run = payload as DelegatedAgentRunReadModel;
+      const previous = conversation.delegatedRuns.find((item) => item.id === run.id);
+      const next = mergeDelegatedRun(previous, run);
       return {
         ...runtime,
         conversation: {
           ...conversation,
-          delegatedRuns: [...conversation.delegatedRuns.filter((item) => item.id !== run.id), run].slice(-100),
+          delegatedRuns: [...conversation.delegatedRuns.filter((item) => item.id !== run.id), next].slice(-100),
         },
       };
     }

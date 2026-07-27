@@ -1,7 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -44,11 +44,20 @@ export interface WorkspaceFilesInput {
   query?: string;
   cursor?: string;
   limit?: number;
+  refresh?: boolean;
 }
 
 export interface WorkspaceFileInput {
   path: string;
   view?: "current" | "base";
+}
+
+export interface TimelineCheckpointInput {
+  checkpointId: string;
+}
+
+export interface TimelineCheckpointDiffInput extends TimelineCheckpointInput {
+  path: string;
 }
 
 export interface NewSessionInput {
@@ -72,6 +81,16 @@ export interface ProjectArchiveInput extends ProjectInput {
 export interface ProjectWorktreeSettingsInput extends ProjectInput {
   projectId: string;
   setupCommand: string;
+}
+
+export interface ReorderProjectInput extends ProjectInput {
+  projectId: string;
+  beforeProjectId?: string;
+}
+
+export interface ReorderActiveSessionInput extends ProjectInput {
+  sessionId: string;
+  beforeSessionId?: string;
 }
 
 export interface HandoffSessionInput {
@@ -223,10 +242,13 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
+  conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;
   workspaceFile?(input: WorkspaceFileInput): Promise<WorkspaceFileContent>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
+  timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
+  timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
@@ -241,6 +263,7 @@ export interface PiDriver {
   newSession(input?: NewSessionInput): Promise<ReplacementResult>;
   addProject(input: ProjectInput): Promise<ReplacementResult>;
   removeProject(input: RemoveProjectInput): Promise<ReplacementResult>;
+  reorderProject(input: ReorderProjectInput): Promise<void>;
   archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult>;
   restoreProject(input: ProjectArchiveInput): Promise<void>;
   updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
@@ -251,6 +274,7 @@ export interface PiDriver {
   restoreSession(input: SessionArchiveInput): Promise<void>;
   renameSession(input: RenameSessionInput): Promise<void>;
   setSessionActive(input: SetSessionActiveInput): Promise<void>;
+  reorderActiveSession(input: ReorderActiveSessionInput): Promise<void>;
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand>;
   rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand>;
   fork(input: ForkInput): Promise<ReplacementResult>;

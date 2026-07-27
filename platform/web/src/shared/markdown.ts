@@ -1,7 +1,9 @@
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
+import dart from "highlight.js/lib/languages/dart";
 import diff from "highlight.js/lib/languages/diff";
+import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import markdown from "highlight.js/lib/languages/markdown";
@@ -15,7 +17,9 @@ import { marked, Renderer } from "marked";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
+hljs.registerLanguage("dart", dart);
 hljs.registerLanguage("diff", diff);
+hljs.registerLanguage("java", java);
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("markdown", markdown);
@@ -51,6 +55,7 @@ export function renderMarkdown(text: string): string {
 const sourceLanguages: Record<string, string> = {
   bash: "bash",
   css: "css",
+  dart: "dart",
   diff: "diff",
   htm: "xml",
   html: "xml",
@@ -58,6 +63,7 @@ const sourceLanguages: Record<string, string> = {
   jsx: "javascript",
   json: "json",
   jsonc: "json",
+  java: "java",
   md: "markdown",
   mjs: "javascript",
   cjs: "javascript",

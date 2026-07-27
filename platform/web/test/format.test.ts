@@ -42,6 +42,8 @@ test("Markdown code fences preserve and highlight supported languages", () => {
 test("file source highlighting uses extensions and explicit diff grammar", () => {
   assert.match(highlightSource("const value: number = 1;", "src/app.ts"), /hljs-keyword/);
   assert.match(highlightSource('{"ok": true}', "config.json"), /hljs-literal/);
+  assert.match(highlightSource("class App { final int count = 1; }", "lib/app.dart"), /hljs-keyword/);
+  assert.match(highlightSource("public class App { private int count = 1; }", "src/App.java"), /hljs-keyword/);
   assert.match(highlightSource("+added\n-removed", "src/app.ts", true), /hljs-addition/);
   assert.match(highlightSource("<script>", "unknown.custom"), /&lt;script&gt;/);
 });

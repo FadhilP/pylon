@@ -27,7 +27,8 @@ const ident = {
   GIT_COMMITTER_EMAIL: "pylon@local",
 };
 const objectId = /^[0-9a-f]{40,64}$/i;
-const ownedBranch = /^refs\/heads\/pylon\/sessions\/[A-Za-z0-9._-]{1,80}$/;
+const worktreeId = /^[A-Za-z0-9._-]{8,80}$/;
+const ownedBranch = /^refs\/heads\/(?:pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylon-session-[A-Za-z0-9._-]{8,80})$/;
 const canonical = (path: string) => process.platform === "win32"
   ? resolve(path).toLowerCase()
   : resolve(path);
@@ -159,6 +160,8 @@ export interface WorkspaceFilePage {
   truncated: boolean;
   nextCursor?: string;
 }
+
+export type WorkspaceFileInventory = Omit<WorkspaceFilePage, "nextCursor">;
 
 export interface WorkspaceChangeList {
   revision: string;
@@ -361,6 +364,11 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspace | u
   }
 }
 
+export function sessionWorktreeBranch(opaqueId: string): string {
+  if (!worktreeId.test(opaqueId)) throw Error("Invalid worktree identifier.");
+  return `refs/heads/pylon-session-${opaqueId}`;
+}
+
 export async function captureCheckoutState(cwd: string, validateForMutation = false): Promise<CheckoutState> {
   const workspace = await inspectGitWorkspace(cwd);
   if (!workspace) throw Error("Workspace is not a Git checkout.");
@@ -376,7 +384,7 @@ export async function createSessionWorktree(
   ownedRoot: string,
   opaqueId = randomBytes(12).toString("base64url"),
 ): Promise<SessionWorktree> {
-  if (!/^[A-Za-z0-9._-]{8,80}$/.test(opaqueId)) throw Error("Invalid worktree identifier.");
+  const branch = sessionWorktreeBranch(opaqueId);
   const source = await captureCheckoutState(sourceCwd, true);
   const target = resolve(targetPath);
   const root = resolve(ownedRoot);
@@ -388,7 +396,6 @@ export async function createSessionWorktree(
     "commit-tree", source.worktreeTree, ...parents, "-m", "Pylon session baseline",
   ], ident);
   if (!objectId.test(baseline)) throw Error("Git returned an invalid baseline commit.");
-  const branch = `refs/heads/pylon/sessions/${opaqueId}`;
   await git(source.root, ["update-ref", branch, baseline, ""]);
   try {
     await git(source.root, ["worktree", "add", "--detach", target, baseline]);
@@ -548,14 +555,11 @@ export async function inspectWorkspaceChanges(cwd: string, baselineTree: string)
   };
 }
 
-export async function listWorkspaceFiles(options: {
+export async function collectWorkspaceFiles(options: {
   cwd: string;
   baselineTree?: string;
   query?: string;
-  cursor?: string;
-  limit?: number;
-}): Promise<WorkspaceFilePage> {
-  const limit = Math.min(200, Math.max(1, options.limit ?? 200));
+}): Promise<WorkspaceFileInventory> {
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
   const baseline = options.baselineTree;
   const { current, revision } = await workspaceRevision(options.cwd, baseline ?? (await git(options.cwd, ["write-tree"])));
@@ -573,17 +577,40 @@ export async function listWorkspaceFiles(options: {
       || left.localeCompare(right));
   const truncated = allPaths.length > MAX_WORKSPACE_FILES;
   const paths = allPaths.slice(0, MAX_WORKSPACE_FILES);
-  const offset = options.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
-  if (!Number.isSafeInteger(offset) || offset < 0 || offset > paths.length) throw Error("Invalid file cursor.");
-  const files = paths.slice(offset, offset + limit).map((path) => changed.get(path) ?? { path });
-  const next = offset + files.length;
   return {
     revision,
-    files,
+    files: paths.map((path) => changed.get(path) ?? { path }),
     totalCount: paths.length,
     truncated,
+  };
+}
+
+function pageWorkspaceFiles(
+  inventory: WorkspaceFileInventory,
+  cursor?: string,
+  requestedLimit?: number,
+): WorkspaceFilePage {
+  const limit = Math.min(200, Math.max(1, requestedLimit ?? 200));
+  const paths = inventory.files;
+  const offset = cursor ? Number(Buffer.from(cursor, "base64url").toString("utf8")) : 0;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > paths.length) throw Error("Invalid file cursor.");
+  const files = paths.slice(offset, offset + limit);
+  const next = offset + files.length;
+  return {
+    ...inventory,
+    files,
     ...(next < paths.length ? { nextCursor: Buffer.from(String(next)).toString("base64url") } : {}),
   };
+}
+
+export async function listWorkspaceFiles(options: {
+  cwd: string;
+  baselineTree?: string;
+  query?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<WorkspaceFilePage> {
+  return pageWorkspaceFiles(await collectWorkspaceFiles(options), options.cursor, options.limit);
 }
 
 function binary(buffer: Buffer): boolean {
@@ -658,12 +685,10 @@ export async function diffWorkspaceFile(options: {
   return { revision, path, state: "available", text: output };
 }
 
-export async function listPlainWorkspaceFiles(options: {
+export async function collectPlainWorkspaceFiles(options: {
   cwd: string;
   query?: string;
-  cursor?: string;
-  limit?: number;
-}): Promise<WorkspaceFilePage> {
+}): Promise<WorkspaceFileInventory> {
   const root = await realpath(options.cwd);
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
   const paths: string[] = [];
@@ -689,19 +714,22 @@ export async function listPlainWorkspaceFiles(options: {
   paths.sort((left, right) => left.localeCompare(right));
   const truncated = scanned > MAX_WORKSPACE_FILES || pending.length > 0;
   paths.length = Math.min(paths.length, MAX_WORKSPACE_FILES);
-  const limit = Math.min(200, Math.max(1, options.limit ?? 200));
-  const offset = options.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
-  if (!Number.isSafeInteger(offset) || offset < 0 || offset > paths.length) throw Error("Invalid file cursor.");
-  const files = paths.slice(offset, offset + limit).map((path) => ({ path }));
-  const next = offset + files.length;
   const revision = createHash("sha256").update(paths.join("\0")).digest("base64url").slice(0, 24);
   return {
     revision,
-    files,
+    files: paths.map((path) => ({ path })),
     totalCount: paths.length,
     truncated,
-    ...(next < paths.length ? { nextCursor: Buffer.from(String(next)).toString("base64url") } : {}),
   };
+}
+
+export async function listPlainWorkspaceFiles(options: {
+  cwd: string;
+  query?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<WorkspaceFilePage> {
+  return pageWorkspaceFiles(await collectPlainWorkspaceFiles(options), options.cursor, options.limit);
 }
 
 export async function readPlainWorkspaceFile(cwd: string, path: string): Promise<WorkspaceFileContent> {

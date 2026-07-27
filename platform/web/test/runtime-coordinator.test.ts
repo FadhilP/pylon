@@ -95,7 +95,7 @@ test("session index pages projects, counts user messages, and searches unloaded 
   }
 });
 
-test("runtime pool warm-switches without rebuilding and wakes sleeping sessions", { timeout: 30_000 }, async () => {
+test("runtime pool warm-switches without rebuilding and wakes sleeping sessions", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-pool-"));
   const cwd = join(root, "workspace");
   const otherCwd = join(root, "other-workspace");

@@ -109,8 +109,19 @@ export class SessionIndex {
           : {}),
       });
     }
+    const activeOrder = new Map((this.registry?.listActiveSessionOrder() ?? []).map((id, index) => [id, index]));
     const activeSessions = source
       .filter((session) => options.activeFor?.(session.id) ?? options.stateFor(session.id) !== "sleeping")
+      .sort((left, right) => {
+        const leftOrder = activeOrder.get(left.id);
+        const rightOrder = activeOrder.get(right.id);
+        if (leftOrder !== undefined || rightOrder !== undefined) {
+          if (leftOrder === undefined) return 1;
+          if (rightOrder === undefined) return -1;
+          return leftOrder - rightOrder;
+        }
+        return right.modified.getTime() - left.modified.getTime();
+      })
       .slice(0, 100)
       .map((session) => this.summary(session, options));
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, activeSessions, projects };

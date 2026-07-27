@@ -207,13 +207,24 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
 
 function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: string): TimelineReadModel {
   const input = record(value);
-  if (!input || input.version !== 2 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 2 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
+  if (!input || input.version !== 3 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 3 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
   if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   if (!Array.isArray(input.checkpoints)) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   const checkpoints = input.checkpoints.slice(-100).flatMap((value) => {
     const item = record(value); const id = identifier(item?.id); const title = string(item?.title, 500); const ownerSessionId = identifier(item?.ownerSessionId); const createdAt = string(item?.createdAt, 64);
     if (!item || !id || !title || !ownerSessionId || !createdAt) return [];
-    return [{ id, title, ownerSessionId, createdAt, verified: item.verified === true, ...(string(item.branch, 200) ? { branch: string(item.branch, 200) } : {}) }];
+    const changes = record(item.changes);
+    const boundedChanges = changes
+      && ["fileCount", "additions", "deletions", "binaryCount"].every((key) =>
+        Number.isSafeInteger(changes[key]) && (changes[key] as number) >= 0)
+      ? {
+          fileCount: Math.min(10_000, changes.fileCount as number),
+          additions: changes.additions as number,
+          deletions: changes.deletions as number,
+          binaryCount: Math.min(10_000, changes.binaryCount as number),
+        }
+      : undefined;
+    return [{ id, title, ownerSessionId, createdAt, verified: item.verified === true, ...(string(item.branch, 200) ? { branch: string(item.branch, 200) } : {}), ...(boundedChanges ? { changes: boundedChanges } : {}) }];
   });
   return { availability: "available", revision: input.revision as number, checkpoints };
 }

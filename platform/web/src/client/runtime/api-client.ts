@@ -1,5 +1,5 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -63,9 +63,19 @@ export class ApiClient {
     }));
   }
 
-  async conversationHistory(cursor: string, generation: number, limit = 100): Promise<ConversationHistoryPage> {
-    const query = new URLSearchParams({ cursor, generation: String(generation), limit: String(limit) });
+  async conversationHistory(cursor: string, generation: number, limit = 100, direction: "before" | "after" | "around" = "before"): Promise<ConversationHistoryPage> {
+    const query = new URLSearchParams({ cursor, generation: String(generation), limit: String(limit), direction });
     return json<ConversationHistoryPage>(await fetch(`/api/v1/conversation-history?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async conversationTurnIndex(input: ConversationTurnIndexQuery, generation: number): Promise<ConversationTurnIndexPage> {
+    const query = new URLSearchParams({ generation: String(generation), limit: String(input.limit ?? 250) });
+    if (input.cursor) query.set("cursor", input.cursor);
+    if (input.direction) query.set("direction", input.direction);
+    return json<ConversationTurnIndexPage>(await fetch(`/api/v1/conversation-turns?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));
@@ -79,10 +89,11 @@ export class ApiClient {
     }));
   }
 
-  async workspaceFiles(generation: number, queryValue = "", cursor?: string, signal?: AbortSignal): Promise<WorkspaceFilePage> {
+  async workspaceFiles(generation: number, queryValue = "", cursor?: string, signal?: AbortSignal, refresh = false): Promise<WorkspaceFilePage> {
     const query = new URLSearchParams({ generation: String(generation), limit: "200" });
     if (queryValue) query.set("q", queryValue);
     if (cursor) query.set("cursor", cursor);
+    if (refresh) query.set("refresh", "1");
     return json<WorkspaceFilePage>(await fetch(`/api/v1/workspace/files?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
@@ -101,6 +112,22 @@ export class ApiClient {
   async workspaceDiff(generation: number, path: string): Promise<WorkspaceFileDiff> {
     const query = new URLSearchParams({ generation: String(generation), path });
     return json<WorkspaceFileDiff>(await fetch(`/api/v1/workspace/diff?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async timelineCheckpointFiles(generation: number, checkpointId: string): Promise<TimelineCheckpointFiles> {
+    const query = new URLSearchParams({ generation: String(generation), checkpointId });
+    return json<TimelineCheckpointFiles>(await fetch(`/api/v1/timeline/files?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async timelineCheckpointDiff(generation: number, checkpointId: string, path: string): Promise<TimelineCheckpointDiff> {
+    const query = new URLSearchParams({ generation: String(generation), checkpointId, path });
+    return json<TimelineCheckpointDiff>(await fetch(`/api/v1/timeline/diff?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));
