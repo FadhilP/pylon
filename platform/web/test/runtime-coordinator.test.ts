@@ -9,7 +9,7 @@ import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

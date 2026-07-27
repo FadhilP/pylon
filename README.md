@@ -86,6 +86,8 @@ Raw verification and Heartbeat logs never cross package events.
 
 ## Development
 
+Platform applications live under `platform/`: `platform/web` contains the current local web client and host, while `platform/desktop` reserves the future desktop shell.
+
 Packages follow the same responsibility-based layout:
 
 - `extensions/` contains Pi entrypoints, registration metadata, and runtime wiring.

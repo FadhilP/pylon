@@ -9,7 +9,7 @@ import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-
 import { deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function persistSession(session: SessionManager, name: string): void {
   session.appendSessionInfo(name);

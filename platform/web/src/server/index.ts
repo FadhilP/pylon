@@ -33,7 +33,7 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   const port = options.port ?? 3141;
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) throw new Error("invalid server port");
   const driver = options.driver ?? new RuntimeCoordinator();
-  const repositoryRoot = options.repositoryRoot ?? resolve(webRoot, "..");
+  const repositoryRoot = options.repositoryRoot ?? resolve(webRoot, "../..");
   await driver.start({
     cwd: options.cwd ?? repositoryRoot,
     repositoryRoot,

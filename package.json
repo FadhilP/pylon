@@ -4,7 +4,7 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "web"
+    "platform/web"
   ],
   "description": "Complete Pylon package with all extensions and themes.",
   "type": "module",
