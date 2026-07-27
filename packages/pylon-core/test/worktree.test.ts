@@ -4,7 +4,13 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { worktreeDiff, worktreeSnapshot } from "../src/worktree.ts";
+import {
+  createWorktreeSummary,
+  parseWorktreeSummary,
+  readPersistedWorktreeSummaries,
+  worktreeDiff,
+  worktreeSnapshot,
+} from "../src/worktree.ts";
 
 function git(cwd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -38,4 +44,45 @@ test("worktree diff reports only changes made after a dirty baseline", async () 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("persisted summaries are sanitized and bounded", () => {
+  const summary = createWorktreeSummary("assistant-1", [
+    { path: "src/valid.ts", additions: 4, deletions: 2 },
+    { path: "../secret", additions: 1, deletions: 0 },
+    { path: "assets/image.png", binary: true },
+    ...Array.from({ length: 120 }, (_, index) => ({
+      path: `generated/${index}-${"界".repeat(490)}.ts`,
+      additions: 1,
+      deletions: 0,
+    })),
+  ]);
+  assert.ok(summary);
+  assert.deepEqual(summary.files.slice(0, 2), [
+    { path: "src/valid.ts", additions: 4, deletions: 2 },
+    { path: "assets/image.png", binary: true },
+  ]);
+  assert.ok(summary.files.length <= 100);
+  assert.ok(Buffer.byteLength(JSON.stringify(summary), "utf8") <= 64 * 1024);
+  assert.equal(createWorktreeSummary("../assistant", []), undefined);
+});
+
+test("persisted summaries are validated and follow the active branch", () => {
+  const valid = {
+    version: 1,
+    assistantEntryId: "assistant-1",
+    files: [{ path: "src/app.ts", additions: 4, deletions: 2 }],
+  };
+  assert.deepEqual(parseWorktreeSummary(valid), valid);
+  assert.equal(parseWorktreeSummary({ ...valid, files: [{ path: "../secret", additions: 1, deletions: 0 }] }), undefined);
+
+  const session = {
+    getBranch: () => [{ type: "message", id: "assistant-1", message: { role: "assistant" } }],
+    getEntries: () => [
+      { type: "custom", customType: "pylon-worktree-summary", data: valid },
+      { type: "custom", customType: "pylon-worktree-summary", data: { ...valid, files: [{ path: "../secret", additions: 1, deletions: 0 }] } },
+    ],
+  };
+  assert.deepEqual(readPersistedWorktreeSummaries(session).get("assistant-1"), valid.files);
+  assert.equal(readPersistedWorktreeSummaries({ ...session, getBranch: () => [] }).size, 0);
 });

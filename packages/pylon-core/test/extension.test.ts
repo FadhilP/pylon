@@ -178,7 +178,16 @@ test("run summary survives the final shell turn", async () => {
 
     const runtime = harness();
     const summaries: any[] = [];
-    const ctx = { cwd: root, sessionManager: { getBranch: () => [] } };
+    const ctx = {
+      cwd: root,
+      sessionManager: {
+        getBranch: () => [{
+          id: "assistant-1",
+          type: "message",
+          message: { role: "assistant" },
+        }],
+      },
+    };
     runtime.events.on("pylon:worktree-summary", (event) => summaries.push(event));
 
     await runtime.handlers.get("agent_start")![0]({}, ctx);
@@ -188,6 +197,18 @@ test("run summary survives the final shell turn", async () => {
     await runtime.handlers.get("agent_settled")![0]({}, ctx);
 
     assert.deepEqual(summaries[0]?.files, [{ path: "tracked.txt", additions: 1, deletions: 1 }]);
+    assert.equal(summaries[0]?.assistantEntryId, "assistant-1");
+    assert.deepEqual(runtime.entries.at(-1), {
+      customType: "pylon-worktree-summary",
+      data: {
+        version: 1,
+        assistantEntryId: "assistant-1",
+        files: [{ path: "tracked.txt", additions: 1, deletions: 1 }],
+      },
+    });
+    await runtime.handlers.get("agent_start")![0]({}, ctx);
+    await runtime.handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(runtime.entries.filter((entry) => entry.customType === "pylon-worktree-summary").length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

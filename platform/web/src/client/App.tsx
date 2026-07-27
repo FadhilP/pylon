@@ -98,12 +98,16 @@ export function App() {
   const timelineRollbackDefault = timelineSettings?.kind === "timeline"
     ? timelineSettings.editRollbackDefault
     : false;
+  const timelineEnabled = activePackages.has("pi-timeline")
+    || live.runtime?.operational.timeline.availability === "available";
+  const memoryEnabled = activePackages.has("pi-continuity")
+    || live.runtime?.operational.continuity.availability === "available";
   const availableViews = useMemo(() => new Set<ViewId>([
     "overview",
-    ...(activePackages.has("pi-timeline") ? ["timeline" as const] : []),
-    ...(activePackages.has("pi-continuity") ? ["memory" as const] : []),
+    ...(timelineEnabled ? ["timeline" as const] : []),
+    ...(memoryEnabled ? ["memory" as const] : []),
     "tools",
-  ]), [activePackages]);
+  ]), [memoryEnabled, timelineEnabled]);
   const applySessionList = (result: SessionListSnapshot) => {
     setSessionPages(result.projects);
     setActiveSessions(result.activeSessions);
@@ -523,6 +527,7 @@ export function App() {
               current={view}
               live={live}
               availableViews={availableViews}
+              timelineEnabled={timelineEnabled}
               isOpen
               overlay={inspectorOverlay}
               onClose={() => setRightPanel(null)}

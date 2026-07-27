@@ -50,13 +50,14 @@ interface InspectorProps {
   current: ViewId;
   live: RuntimeStoreSnapshot;
   availableViews: Set<ViewId>;
+  timelineEnabled: boolean;
   isOpen: boolean;
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
 }
 
-export function Inspector({ current, live, availableViews, isOpen, overlay, onClose, onNavigate }: InspectorProps) {
+export function Inspector({ current, live, availableViews, timelineEnabled, isOpen, overlay, onClose, onNavigate }: InspectorProps) {
   const copy = viewCopy[current];
   const items = navigation.flatMap((group) => group.items).filter((item) => availableViews.has(item.id));
   return (
@@ -76,7 +77,7 @@ export function Inspector({ current, live, availableViews, isOpen, overlay, onCl
       <p className="inspector-description">{copy.description}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
-        {current === "timeline" && <Timeline live={live} />}
+        {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
         {current === "memory" && <Memory live={live} />}
         {current === "tools" && <Tools live={live} pylonPolicies={live.runtime?.operational.tools.availability === "available"} />}
       </div>
@@ -239,7 +240,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   </div>;
 }
 
-function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
+function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapshot; enabled: boolean }) {
   const timeline = live.runtime?.operational.timeline;
   const checkpoints = timeline?.checkpoints ?? [];
   const [selected, setSelected] = useState<string>();
@@ -254,7 +255,12 @@ function Timeline({ live }: { live: RuntimeStoreSnapshot }) {
     catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline action failed"); }
     finally { setBusy(""); }
   };
-  return timeline?.availability === "unavailable" ? <FeatureUnavailable name="Timeline" /> : (
+  if (timeline?.availability !== "available") {
+    return packageEnabled
+      ? <div className="empty-state"><IconTimeline size={20} /><strong>Initializing Timeline</strong><span>Waiting for the first Timeline state.</span></div>
+      : <FeatureUnavailable name="Timeline" />;
+  }
+  return (
     <div className="timeline-layout">
       <section className="timeline-list" aria-label="Checkpoints">
         <div className="timeline-toolbar"><span>{checkpoints.length} checkpoints</span><button className="text-button danger" type="button" disabled={!enabled || checkpoints.length === 0} onClick={() => void act("clear")}><IconTrash size={13} />{busy === "clear" ? "Clearing…" : "Clear timeline"}</button></div>

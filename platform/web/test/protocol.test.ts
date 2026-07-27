@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { isArchiveListSnapshot, isConversationHistoryPage, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, validateCommand } from "../src/shared/protocol/validation.ts";
+import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v10 commands and attachments", () => {
+test("command validation allowlists bounded v11 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -117,6 +117,26 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot(snapshot), true);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
+    sessionControls: {
+      ...snapshot.sessionControls,
+      pending: {
+        model: { provider: "provider", id: "next-model", name: "Next Model", thinkingLevels: ["off", "high"] },
+        thinkingLevel: "high",
+      },
+    },
+  }), true);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    sessionControls: {
+      ...snapshot.sessionControls,
+      pending: {
+        model: { provider: "provider", id: "next-model", name: "x".repeat(201) },
+        thinkingLevel: "high",
+      },
+    },
+  }), false);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
     conversation: {
       ...snapshot.conversation,
       queue: {
@@ -213,4 +233,17 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], entryId: "" }] }), false);
   assert.equal(isConversationHistoryPage({ ...history, messages: Array(101).fill(history.messages[0]) }), false);
   assert.equal(isConversationHistoryPage({ ...history, remaining: -1 }), false);
+});
+
+test("file suggestion validation confines bounded relative paths", () => {
+  const suggestions = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    available: true,
+    paths: ["src/index.ts", "docs/with space.md"],
+  };
+  assert.equal(isFileSuggestionList(suggestions), true);
+  assert.equal(isFileSuggestionList({ ...suggestions, paths: ["../secret"] }), false);
+  assert.equal(isFileSuggestionList({ ...suggestions, paths: ["C:/secret.txt"] }), false);
+  assert.equal(isFileSuggestionList({ ...suggestions, paths: Array(21).fill("src/index.ts") }), false);
 });

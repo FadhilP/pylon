@@ -3,9 +3,9 @@ import type { QueuedPromptPayload, WebCommand } from "../../shared/protocol/comm
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { isArchiveListSnapshot, isConversationHistoryPage, isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../../shared/protocol/validation";
+import { isArchiveListSnapshot, isConversationHistoryPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent } from "../../shared/protocol/validation";
 import { hasCompleteHistory, mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 
@@ -23,7 +23,7 @@ export interface RuntimeStoreSnapshot {
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "retry.update", "compaction.update", "metrics.update", "session.controls", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
+const eventNames = ["message.start", "message.update", "message.end", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
 const MAX_CACHED_SESSIONS = 10;
 
 function commandId(): string {
@@ -125,6 +125,15 @@ export class RuntimeEventStore {
     const sessions = await this.api.sessions(input);
     if (!isSessionListSnapshot(sessions) || sessions.sessionGeneration !== runtime.sessionGeneration) throw new Error("Session list is stale or invalid");
     return sessions;
+  }
+
+  async fileSuggestions(query: string): Promise<FileSuggestionList> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.fileSuggestions(query, runtime.sessionGeneration);
+    if (!isFileSuggestionList(result) || result.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("File suggestions are stale or invalid");
+    }
+    return result;
   }
 
   async addProject(): Promise<void> {
@@ -441,6 +450,16 @@ export class RuntimeEventStore {
           sequence: event.sequence,
         }, true);
       }
+      return;
+    }
+    if (event.type === "runtime.error") {
+      const payload = asRecord(event.payload);
+      this.set({
+        ...current,
+        sequence: event.sequence,
+        error: typeof payload.message === "string" ? payload.message : "Runtime command failed",
+        errorRevision: (current.errorRevision ?? 0) + 1,
+      }, true);
       return;
     }
 

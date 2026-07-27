@@ -1,5 +1,5 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -66,6 +66,14 @@ export class ApiClient {
   async conversationHistory(cursor: string, generation: number, limit = 100): Promise<ConversationHistoryPage> {
     const query = new URLSearchParams({ cursor, generation: String(generation), limit: String(limit) });
     return json<ConversationHistoryPage>(await fetch(`/api/v1/conversation-history?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
+  async fileSuggestions(queryValue: string, generation: number, limit = 8): Promise<FileSuggestionList> {
+    const query = new URLSearchParams({ q: queryValue, generation: String(generation), limit: String(limit) });
+    return json<FileSuggestionList>(await fetch(`/api/v1/file-suggestions?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
     }));

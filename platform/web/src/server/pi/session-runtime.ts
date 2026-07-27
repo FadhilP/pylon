@@ -3,6 +3,10 @@ import { unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  parseWorktreeSummary,
+  readPersistedWorktreeSummaries,
+} from "pylon-core/src/worktree.ts";
+import {
   createAgentSessionRuntime,
   createEventBus,
   SessionManager,
@@ -17,8 +21,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { ChangedFileReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, DiscoverIndexReadModel, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -26,6 +30,7 @@ import type {
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
+  FileSuggestionInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
@@ -54,6 +59,7 @@ import { applyOperationalEvent, cloneOperational, initialOperational, withOperat
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
 import { decodeHistoryCursor, encodeHistoryCursor, HISTORY_PAGE_SIZE, projectConversation } from "./projections.ts";
+import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
 
@@ -150,6 +156,7 @@ export class SessionRuntime implements PiDriver {
   private readonly workDurations = new Map<string, number>();
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
   private readonly turnChanges = new Map<string, ChangedFileReadModel[]>();
+  private turnChangesLeafId: string | null | undefined;
   private timingSessionId?: string;
   private workStartedAt?: string;
   private workStartedAtMs?: number;
@@ -157,7 +164,7 @@ export class SessionRuntime implements PiDriver {
   private workThinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"];
   private workTurnId?: string;
   private nextTurnId = 0;
-  private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string }> = [];
+  private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string; assistantEntryId?: string }> = [];
   private discoverIndex?: DiscoverIndexReadModel;
   private gitBranch?: string;
   private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
@@ -249,6 +256,17 @@ export class SessionRuntime implements PiDriver {
       messages: projected,
       remaining: start,
       ...(start > 0 ? { nextCursor: encodeHistoryCursor(start) } : {}),
+    };
+  }
+
+  async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    const result = await suggestGitFiles(runtime.session.sessionManager.getCwd(), input.query, input.limit);
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.gate.generation,
+      ...result,
     };
   }
 
@@ -691,12 +709,10 @@ export class SessionRuntime implements PiDriver {
 
   async setSessionControls(input: SetSessionControlsInput): Promise<void> {
     const session = this.controlSession();
+    this.validateSessionControls(input);
     const model = this.requireRuntime().services.modelRuntime.getAvailableSnapshot()
       .find((item) => item.provider === input.provider && item.id === input.modelId);
     if (!model) throw new Error("model is unavailable or has no configured credentials");
-    if (!supportedThinkingLevels(model).includes(input.thinkingLevel)) {
-      throw new Error("thinking level is unavailable for this model");
-    }
     const previousModel = session.model;
     const previousThinking = session.thinkingLevel;
     try {
@@ -711,6 +727,26 @@ export class SessionRuntime implements PiDriver {
       this.refreshSnapshot();
       throw error;
     }
+  }
+
+  validateSessionControls(input: SetSessionControlsInput): ModelOptionReadModel {
+    const model = this.requireRuntime().services.modelRuntime.getAvailableSnapshot()
+      .find((item) => item.provider === input.provider && item.id === input.modelId);
+    if (!model) throw new Error("model is unavailable or has no configured credentials");
+    const thinkingLevels = supportedThinkingLevels(model);
+    if (!thinkingLevels.includes(input.thinkingLevel)) {
+      throw new Error("thinking level is unavailable for this model");
+    }
+    return {
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      thinkingLevels: [...thinkingLevels],
+    };
+  }
+
+  hasActiveAgentRun(): boolean {
+    return Boolean(this.workStartedAt);
   }
 
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
@@ -837,6 +873,7 @@ export class SessionRuntime implements PiDriver {
       this.workDurations.clear();
       this.turnControls.clear();
       this.turnChanges.clear();
+      this.turnChangesLeafId = undefined;
       this.pendingWorktreeTurns.length = 0;
       this.nextTurnId = 0;
       this.workTurnId = undefined;
@@ -896,6 +933,10 @@ export class SessionRuntime implements PiDriver {
           }
         }
         const messageId = assistantIndex >= 0 ? `history-${assistantIndex}` : undefined;
+        const assistantEntryId = assistantIndex >= 0
+          && typeof (messages[assistantIndex] as { entryId?: unknown }).entryId === "string"
+          ? (messages[assistantIndex] as { entryId: string }).entryId
+          : undefined;
         if (messageId) {
           this.workDurations.set(messageId, duration);
           this.turnControls.set(messageId, {
@@ -904,7 +945,7 @@ export class SessionRuntime implements PiDriver {
           });
         }
         const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
-        this.pendingWorktreeTurns.push({ turnId, messageId });
+        this.pendingWorktreeTurns.push({ turnId, messageId, assistantEntryId });
         if (this.pendingWorktreeTurns.length > 20) this.pendingWorktreeTurns.shift();
         const modelName = this.workModelName;
         const thinkingLevel = this.workThinkingLevel;
@@ -914,6 +955,7 @@ export class SessionRuntime implements PiDriver {
         this.workThinkingLevel = undefined;
         this.workTurnId = undefined;
         this.sessionIndex.invalidate();
+        invalidateFileSuggestions(session.sessionManager.getCwd());
         this.gitBranch = readGitBranch(session.sessionManager.getCwd());
         this.refreshSnapshot();
         forwarded = {
@@ -1133,6 +1175,7 @@ export class SessionRuntime implements PiDriver {
       message: this.sanitizeDiagnostic(diagnostic.message),
     }));
     const session = runtime.session;
+    this.hydrateTurnChanges(session);
     const stats = session.getSessionStats();
     const context = session.getContextUsage();
     const messages = this.transcriptMessages(session);
@@ -1141,7 +1184,7 @@ export class SessionRuntime implements PiDriver {
     const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = this.workDurations.get(message.id);
       const controls = this.turnControls.get(message.id);
-      const changedFiles = this.turnChanges.get(message.id);
+      const changedFiles = message.entryId ? this.turnChanges.get(message.entryId) : undefined;
       return workDurationMs === undefined && !controls && !changedFiles
         ? message
         : {
@@ -1287,34 +1330,35 @@ export class SessionRuntime implements PiDriver {
       const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
       if (raw?.version !== 1 || typeof raw.known !== "boolean" || !Array.isArray(raw.files)) return;
       const turn = this.pendingWorktreeTurns.shift();
-      if (!turn || raw.known !== true || !turn.messageId) return;
-      const files: ChangedFileReadModel[] = [];
-      for (const value of raw.files.slice(0, 100)) {
-        const file = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
-        const path = typeof file?.path === "string" ? file.path.replaceAll("\\", "/").slice(0, 500) : "";
-        if (!path || path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..")) continue;
-        if (file?.binary === true) {
-          files.push({ path, binary: true });
-          continue;
-        }
-        if (Number.isSafeInteger(file?.additions) && Number.isSafeInteger(file?.deletions)) {
-          files.push({
-            path,
-            additions: Math.min(1_000_000, Math.max(0, file!.additions as number)),
-            deletions: Math.min(1_000_000, Math.max(0, file!.deletions as number)),
-          });
-        }
-      }
+      if (!turn || raw.known !== true || !turn.messageId || !turn.assistantEntryId) return;
+      if (raw.assistantEntryId !== undefined && raw.assistantEntryId !== turn.assistantEntryId) return;
+      const summary = parseWorktreeSummary({
+        version: 1,
+        assistantEntryId: turn.assistantEntryId,
+        files: raw.files,
+      });
+      if (!summary) return;
       const messageId = turn.messageId;
-      this.turnChanges.set(messageId, files);
+      this.turnChanges.set(summary.assistantEntryId, summary.files);
+      this.turnChangesLeafId = this.runtime!.session.sessionManager.getLeafId();
       const sessionId = this.runtime!.session.sessionId;
       this.emit({
         type: "session.event",
         sessionId,
         sessionGeneration: generation,
-        payload: { type: "worktree_summary", turnId: turn.turnId, messageId, files },
+        payload: { type: "worktree_summary", turnId: turn.turnId, messageId, files: summary.files },
       });
     }));
+  }
+
+  private hydrateTurnChanges(session: AgentSession): void {
+    const leafId = session.sessionManager.getLeafId();
+    if (this.turnChangesLeafId === leafId) return;
+    this.turnChanges.clear();
+    for (const [entryId, files] of readPersistedWorktreeSummaries(session.sessionManager)) {
+      this.turnChanges.set(entryId, files);
+    }
+    this.turnChangesLeafId = leafId;
   }
 
   private transcriptMessages(session: AgentSession): unknown[] {

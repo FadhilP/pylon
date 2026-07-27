@@ -34,11 +34,12 @@ Guard remains the independent final safety authority; Pylon never approves or we
 - Lets Continuity planning retain read-only Scout and Advisor tools when enabled.
 - Coordinates pi-advisor, pi-grunt, pi-helios, pi-scout, and pi-continuity.
 - Fingerprints shell-driven worktree changes once per model turn for shared Continuity and Timeline consumption.
+- Persists bounded, path-only changed-file summaries in Pi session entries for platform clients.
 - Falls back to each package's standalone behavior when Pylon is absent.
 - Tests real package adapters together.
 - Tracks per-tool payloads plus privacy-safe package, context, cache, retry, recall, verification, and cost telemetry. Only validated Timeline aggregates are added to session data; prompts and evidence are never stored.
 
-V1 does not coordinate TUI ownership, context ordering, storage, child processes, or benchmark packages. Those remain out of scope until concrete conflicts appear.
+V1 does not coordinate TUI ownership, context ordering, general package storage, child processes, or benchmark packages. Durable storage is limited to bounded telemetry and changed-file summaries.
 
 ## Protocol
 

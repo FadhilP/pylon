@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type { DriverEvent, DriverEventListener, EditPromptInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
@@ -55,6 +55,14 @@ class FakeDriver implements PiDriver {
       sessionGeneration: this.current.sessionGeneration,
       messages: [{ id: "history-0", role: "user", text: "Earlier message", streaming: false }],
       remaining: 0,
+    });
+  }
+  fileSuggestions(): Promise<FileSuggestionList> {
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      available: true,
+      paths: ["src/index.ts"],
     });
   }
   listSessions(): Promise<SessionListSnapshot> {
@@ -285,6 +293,11 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(staleHistory.status, 409);
     const invalidHistory = await fetch(`${origin}/api/v1/conversation-history?cursor=not-valid&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(invalidHistory.status, 400);
+    const files = await fetch(`${origin}/api/v1/file-suggestions?q=src&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(files.status, 200);
+    assert.deepEqual((await body(files)).paths, ["src/index.ts"]);
+    assert.equal((await fetch(`${origin}/api/v1/file-suggestions?q=src&generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/file-suggestions?q=${"x".repeat(201)}&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 400);
     const archives = await fetch(`${origin}/api/v1/archives`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(archives.status, 200);
     assert.deepEqual((await body(archives)).projects, []);

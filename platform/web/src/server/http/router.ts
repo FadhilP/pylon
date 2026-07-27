@@ -65,6 +65,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions") return await this.fileSuggestions(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
@@ -209,6 +210,22 @@ export class ServerTransport {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid history limit");
     const result = await this.driver.conversationHistory({ cursor, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading history");
+    this.send(response, 200, result);
+  }
+
+  private async fileSuggestions(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    const generation = Number(url.searchParams.get("generation"));
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 8 : Number(rawLimit);
+    if (query.length > 200) throw httpError(400, "query is too long");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw httpError(400, "invalid limit");
+    const result = await this.driver.fileSuggestions({ query, limit });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing files");
     this.send(response, 200, result);
   }
 
@@ -375,7 +392,7 @@ export class ServerTransport {
     if (event.type === "ui.closed" && this.dialogOwner?.requestId === event.requestId) this.clearDialogOwner();
     if (event.type === "session.event") {
       const payload = event.payload && typeof event.payload === "object" ? event.payload as { type?: unknown } : {};
-      if (["message_end", "tool_execution_end", "agent_end"].includes(String(payload.type))) {
+      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed"].includes(String(payload.type))) {
         void this.driver.snapshot().then((snapshot) => this.projection.refresh(snapshot)).catch(() => undefined);
       }
     }

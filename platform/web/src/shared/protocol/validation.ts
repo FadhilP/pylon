@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -321,6 +321,19 @@ export function isConversationHistoryPage(value: unknown): value is Conversation
     && (value.nextCursor === undefined || identifier(value.nextCursor));
 }
 
+export function isFileSuggestionList(value: unknown): value is FileSuggestionList {
+  return record(value)
+    && value.protocolVersion === PROTOCOL_VERSION
+    && generation(value.sessionGeneration)
+    && typeof value.available === "boolean"
+    && Array.isArray(value.paths)
+    && value.paths.length <= 20
+    && value.paths.every((path) => typeof path === "string"
+      && path.length > 0 && path.length <= 500
+      && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) && !path.includes("\\") && !path.includes("\0")
+      && !path.split("/").some((part) => part === "" || part === "." || part === ".."));
+}
+
 export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean") return false;
@@ -399,6 +412,9 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       && value.thinkingLevels.length <= 7
       && value.thinkingLevels.every((level) => thinkingLevels.has(String(level))));
   if (!controls.models.every(model) || controls.model !== undefined && !model(controls.model)) return false;
+  if (controls.pending !== undefined && (!record(controls.pending)
+    || !model(controls.pending.model)
+    || !thinkingLevels.has(String(controls.pending.thinkingLevel)))) return false;
   const metrics = value.metrics;
   if (!record(metrics) || typeof metrics.model !== "string" || typeof metrics.provider !== "string"
     || !["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]

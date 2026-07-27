@@ -1,7 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -31,6 +31,11 @@ export interface QueueMutationInput {
   expectedGeneration: number;
   queueId: string;
   commandId?: string;
+}
+
+export interface FileSuggestionInput {
+  query: string;
+  limit?: number;
 }
 
 export interface NewSessionInput {
@@ -183,6 +188,7 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
+  fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;

@@ -1106,7 +1106,6 @@
     width: min(760px, 88%);
     align-self: flex-start;
     padding: 2px 0 8px;
-    border-bottom: 1px solid var(--line);
     color: var(--text-muted);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
@@ -1248,6 +1247,7 @@
   .slash-suggestions button:hover,
   .slash-suggestions button.is-selected { background: var(--surface-hover); color: var(--text); }
   .slash-suggestions strong { font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; }
+  .file-suggestions strong { display: flex; align-items: center; gap: 6px; }
   .slash-suggestions span { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 
   .prompt-form textarea {

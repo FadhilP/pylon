@@ -3,8 +3,8 @@ import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../sha
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
-import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot } from "../../shared/protocol/snapshots.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
   DeleteSessionInput,
@@ -12,6 +12,7 @@ import type {
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
+  FileSuggestionInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
@@ -68,6 +69,10 @@ interface RuntimeSlot {
     files?: PromptTextFile[];
     planMode: boolean;
     state: "queued" | "delivering";
+  };
+  pendingControls?: {
+    input: SetSessionControlsInput;
+    model: ModelOptionReadModel;
   };
   suppressEvents?: boolean;
   unsubscribe: () => void;
@@ -163,6 +168,11 @@ export class RuntimeCoordinator implements PiDriver {
 
   async listPackages(): Promise<PackageListSnapshot> {
     return this.selected().driver.listPackages();
+  }
+
+  async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
+    const result = await this.selected().driver.fileSuggestions(input);
+    return { ...result, sessionGeneration: this.generation };
   }
 
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -564,7 +574,18 @@ export class RuntimeCoordinator implements PiDriver {
 
   async setSessionControls(input: SetSessionControlsInput): Promise<void> {
     this.assertGeneration();
-    await this.selected().driver.setSessionControls(input);
+    const slot = this.selected();
+    const model = slot.driver.validateSessionControls(input);
+    if (!slot.driver.hasActiveAgentRun()) {
+      slot.pendingControls = undefined;
+      await slot.driver.setSessionControls(input);
+      return;
+    }
+    const current = (await slot.driver.snapshot()).sessionControls;
+    const unchanged = current.model?.provider === input.provider
+      && current.model.id === input.modelId
+      && current.thinkingLevel === input.thinkingLevel;
+    slot.pendingControls = unchanged ? undefined : { input: { ...input }, model };
   }
 
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
@@ -700,7 +721,7 @@ export class RuntimeCoordinator implements PiDriver {
         ? event.payload as Record<string, unknown>
         : {};
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
-        queueMicrotask(() => void this.flushQueuedPrompt(slot));
+        queueMicrotask(() => void this.settleAgentRun(slot));
       }
     }
     this.publishStatus(slot.id);
@@ -737,6 +758,15 @@ export class RuntimeCoordinator implements PiDriver {
       conversation: {
         ...snapshot.conversation,
         queue: this.queueReadModel(slot),
+      },
+      sessionControls: {
+        ...snapshot.sessionControls,
+        ...(slot.pendingControls ? {
+          pending: {
+            model: { ...slot.pendingControls.model },
+            thinkingLevel: slot.pendingControls.input.thinkingLevel,
+          },
+        } : { pending: undefined }),
       },
     };
   }
@@ -806,8 +836,44 @@ export class RuntimeCoordinator implements PiDriver {
     }
   }
 
+  private async settleAgentRun(slot: RuntimeSlot): Promise<void> {
+    const pending = slot.pendingControls;
+    if (pending) {
+      slot.pendingControls = undefined;
+      try {
+        await slot.driver.setSessionControls(pending.input);
+      } catch (error) {
+        if (slot.id === this.selectedId) {
+          this.emit({
+            type: "session.event",
+            sessionId: slot.id,
+            sessionGeneration: this.generation,
+            payload: {
+              type: "session_controls_error",
+              message: error instanceof Error ? error.message : "Could not apply the queued model change",
+            },
+          });
+        }
+        this.emitControlsChanged(slot);
+        return;
+      }
+      this.emitControlsChanged(slot);
+    }
+    await this.flushQueuedPrompt(slot);
+  }
+
   private slotCanSleep(slot: RuntimeSlot): boolean {
-    return !slot.queuedPrompt && slot.driver.canSleep();
+    return !slot.queuedPrompt && !slot.pendingControls && slot.driver.canSleep();
+  }
+
+  private emitControlsChanged(slot: RuntimeSlot): void {
+    if (slot.id !== this.selectedId) return;
+    this.emit({
+      type: "session.event",
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      payload: { type: "session_controls_changed" },
+    });
   }
 
   private baseTarget(): RuntimeTarget {

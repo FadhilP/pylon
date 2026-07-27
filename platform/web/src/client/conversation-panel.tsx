@@ -1,9 +1,10 @@
-import { IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquare, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { renderMarkdown } from "../shared/markdown";
+import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import { thinkingLabel } from "./format";
@@ -55,7 +56,12 @@ export function ConversationPanel({
   const [queueBusy, setQueueBusy] = useState<"edit" | "steer">();
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [caretPosition, setCaretPosition] = useState(0);
+  const [fileSuggestions, setFileSuggestions] = useState<string[]>([]);
   const streamRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const followBottomRef = useRef(true);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const runtime = live.runtime;
   const controls = runtime?.sessionControls;
@@ -63,10 +69,21 @@ export function ConversationPanel({
   const editorText = runtime?.extensionUi.editorText ?? "";
   useEffect(() => { if (editorRevision > 0) setMessage(editorText); }, [editorRevision, editorText]);
   useEffect(() => {
+    followBottomRef.current = true;
     const frame = requestAnimationFrame(() => {
       if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight;
     });
     return () => cancelAnimationFrame(frame);
+  }, [runtime?.sessionId]);
+  useEffect(() => {
+    const stream = streamRef.current;
+    const transcript = transcriptRef.current;
+    if (!stream || !transcript || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (followBottomRef.current) stream.scrollTop = stream.scrollHeight;
+    });
+    observer.observe(transcript);
+    return () => observer.disconnect();
   }, [runtime?.sessionId]);
   useEffect(() => {
     setHistoryLoading(undefined);
@@ -124,12 +141,47 @@ export function ConversationPanel({
         .filter((command) => command.name.toLowerCase().startsWith(slashMatch[1]!.toLowerCase()))
         .slice(0, 8)
     : [];
-  useEffect(() => { setSuggestionIndex(0); }, [message, controls?.commands]);
+  const fileMention = useMemo(
+    () => slashMatch || suggestionsDismissed ? undefined : fileMentionAtCaret(message, caretPosition),
+    [caretPosition, message, slashMatch, suggestionsDismissed],
+  );
+  useEffect(() => {
+    if (!fileMention || !connected) {
+      setFileSuggestions([]);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void runtimeStore.fileSuggestions(fileMention.query).then((result) => {
+        if (active) setFileSuggestions(result.available ? result.paths : []);
+      }).catch(() => {
+        if (active) setFileSuggestions([]);
+      });
+    }, 120);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [connected, fileMention?.query, runtime?.sessionId]);
+  useEffect(() => { setSuggestionIndex(0); }, [message, controls?.commands, fileSuggestions.join("\0")]);
   const chooseSuggestion = (index: number) => {
     const suggestion = suggestions[index];
     if (!suggestion) return;
     setMessage(`/${suggestion.name} `);
     setSuggestionIndex(0);
+  };
+  const chooseFileSuggestion = (index: number) => {
+    const path = fileSuggestions[index];
+    if (!path || !fileMention) return;
+    const next = replaceFileMention(message, fileMention, path);
+    setMessage(next.value);
+    setCaretPosition(next.caret);
+    setFileSuggestions([]);
+    setSuggestionsDismissed(true);
+    requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(next.caret, next.caret);
+    });
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -178,7 +230,7 @@ export function ConversationPanel({
     try { await runtimeStore.setSessionControls(model.provider, model.id, level); }
     finally { setControlBusy(""); }
   };
-  const controlsDisabled = !connected || running || submitting || Boolean(controlBusy);
+  const controlsDisabled = !connected || submitting || Boolean(controlBusy);
   const restoreQueued = async () => {
     if (!queued || queued.state !== "queued") return;
     setQueueBusy("edit");
@@ -203,6 +255,7 @@ export function ConversationPanel({
   };
   const loadHistory = async (all: boolean) => {
     const stream = streamRef.current;
+    followBottomRef.current = false;
     setHistoryLoading(all ? "all" : "page");
     try {
       await runtimeStore.loadEarlierMessages(all);
@@ -247,15 +300,17 @@ export function ConversationPanel({
     }
   };
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (suggestions.length) {
+    const activeSuggestions = suggestions.length ? suggestions : fileSuggestions;
+    if (activeSuggestions.length) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        setSuggestionIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length);
+        setSuggestionIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + activeSuggestions.length) % activeSuggestions.length);
         return;
       }
       if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault();
-        chooseSuggestion(suggestionIndex);
+        if (suggestions.length) chooseSuggestion(suggestionIndex);
+        else chooseFileSuggestion(suggestionIndex);
         return;
       }
       if (event.key === "Escape") {
@@ -274,9 +329,16 @@ export function ConversationPanel({
       {live.connection === "error" && <div className="conversation-state error">{live.error || "Unable to load runtime."}</div>}
       {live.connection === "disconnected" && <div className="conversation-state">Disconnected. Waiting to reconnect…</div>}
       {activeAgents.length > 0 && <ActiveAgents runs={activeAgents} onSelect={onSelectAgent} />}
-      {runtime && <div ref={streamRef} className="message-stream" aria-live="polite">
+      {runtime && <div
+        ref={streamRef}
+        className="message-stream"
+        aria-live="polite"
+        onScroll={(event) => {
+          followBottomRef.current = isNearTranscriptBottom(event.currentTarget);
+        }}
+      >
         <div className="transcript-layout">
-          <div className="transcript-column">
+          <div ref={transcriptRef} className="transcript-column">
         {runtime.conversation.historyCursor && <div className="history-loader">
           <span>{runtime.conversation.historyRemaining?.toLocaleString()} earlier entries</span>
           <div>
@@ -394,18 +456,43 @@ export function ConversationPanel({
               {command.description && <span>{command.description}</span>}
             </button>)}
           </div>}
+          {suggestions.length === 0 && fileSuggestions.length > 0 && <div className="slash-suggestions file-suggestions" id="file-mention-suggestions" role="listbox" aria-label="Project files">
+            {fileSuggestions.map((path, index) => {
+              const separator = path.lastIndexOf("/");
+              const name = separator >= 0 ? path.slice(separator + 1) : path;
+              const directory = separator >= 0 ? path.slice(0, separator) : "";
+              return <button
+                className={index === suggestionIndex ? "is-selected" : ""}
+                type="button"
+                role="option"
+                aria-selected={index === suggestionIndex}
+                key={path}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => chooseFileSuggestion(index)}
+              >
+                <strong><IconFileText size={13} />{name}</strong>
+                {directory && <span>{directory}</span>}
+              </button>;
+            })}
+          </div>}
           <textarea
+            ref={promptRef}
             id="runtime-prompt"
             rows={1}
             value={message}
-            onChange={(event) => { setMessage(event.target.value); setSuggestionsDismissed(false); }}
+            onChange={(event) => {
+              setMessage(event.target.value);
+              setCaretPosition(event.target.selectionStart);
+              setSuggestionsDismissed(false);
+            }}
+            onSelect={(event) => setCaretPosition(event.currentTarget.selectionStart)}
             onPaste={(event) => void onPaste(event)}
             onKeyDown={onPromptKeyDown}
             placeholder={!projectAvailable ? "Add a project to start" : connected ? (queued ? "A message is already queued" : running ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
             disabled={!connected || submitting || Boolean(queued)}
             aria-autocomplete="list"
-            aria-controls={suggestions.length ? "slash-command-suggestions" : undefined}
-            aria-expanded={suggestions.length > 0}
+            aria-controls={suggestions.length ? "slash-command-suggestions" : fileSuggestions.length ? "file-mention-suggestions" : undefined}
+            aria-expanded={suggestions.length > 0 || fileSuggestions.length > 0}
           />
         </div>
         {queued && <div className="queued-prompt" role="status">
@@ -450,12 +537,13 @@ export function ConversationPanel({
             open={openMenu === "model"}
             disabled={controlsDisabled}
             busy={controlBusy === "controls"}
+            running={running}
             onToggle={() => setOpenMenu((current) => current === "model" ? undefined : "model")}
             onClose={() => setOpenMenu(undefined)}
             onApply={setSessionControls}
           />
           {running && !hasDraft
-            ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected} aria-label="Stop response"><IconSquare size={13} /></button>
+            ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected} aria-label="Stop response"><IconSquareFilled size={13} /></button>
             : <button className="prompt-send" disabled={!connected || submitting || Boolean(queued) || !hasDraft || !controls?.model} type="submit" aria-label={running ? "Queue message" : "Send message"}><IconArrowUp size={16} /></button>}
           </div>
         </div>
@@ -534,6 +622,7 @@ function ModelControl({
   open,
   disabled,
   busy,
+  running,
   onToggle,
   onClose,
   onApply,
@@ -542,6 +631,7 @@ function ModelControl({
   open: boolean;
   disabled: boolean;
   busy: boolean;
+  running: boolean;
   onToggle: () => void;
   onClose: () => void;
   onApply: (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => Promise<void>;
@@ -556,12 +646,13 @@ function ModelControl({
 
   useEffect(() => {
     if (!open) return;
-    const currentKey = controls?.model ? `${controls.model.provider}/${controls.model.id}` : "";
+    const selectedControls = controls?.pending ?? controls;
+    const currentKey = selectedControls?.model ? `${selectedControls.model.provider}/${selectedControls.model.id}` : "";
     const currentModel = controls?.models.find((model) => `${model.provider}/${model.id}` === currentKey);
     const availableLevels = currentModel?.thinkingLevels ?? [];
     setModelKey(currentKey);
-    setLevel(availableLevels.includes(controls?.thinkingLevel ?? "off")
-      ? controls?.thinkingLevel ?? "off"
+    setLevel(availableLevels.includes(selectedControls?.thinkingLevel ?? "off")
+      ? selectedControls?.thinkingLevel ?? "off"
       : availableLevels[0] ?? "off");
     const pointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onClose();
@@ -616,8 +707,8 @@ function ModelControl({
       aria-expanded={open}
       onClick={onToggle}
     >
-      <span>{controls?.model?.name ?? "No model"}</span>
-      {controls?.thinkingLevel && <small>{thinkingLabel(controls.thinkingLevel)}</small>}
+      <span>{controls?.pending ? `Next: ${controls.pending.model.name}` : controls?.model?.name ?? "No model"}</span>
+      {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && <small>{thinkingLabel(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel ?? "off")}</small>}
       <IconChevronDown size={14} />
     </button>
     {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" onKeyDown={navigateModels}>
@@ -657,7 +748,7 @@ function ModelControl({
       <footer>
         <button type="button" onClick={() => { onClose(); triggerRef.current?.focus(); }}>Cancel</button>
         <button className="primary-button" type="button" disabled={busy || !selectedModel || !levels.length} onClick={() => void apply()}>
-          {busy ? "Applying…" : "Apply"}
+          {busy ? "Applying…" : running ? "Use next turn" : "Apply"}
         </button>
       </footer>
     </div>}

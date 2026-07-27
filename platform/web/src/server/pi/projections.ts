@@ -479,6 +479,10 @@ export class RuntimeProjection {
       this.publish("session.info", { sessionId: this.runtime.sessionId, name: this.runtime.sessionName });
       return;
     }
+    if (kind === "session_controls_error") {
+      this.publish("runtime.error", { message: text(raw.message, 1_000) || "Could not apply the queued model change" });
+      return;
+    }
     if (kind === "agent_start") {
       if (raw.metrics) this.metrics(object(raw.metrics));
       const startedAt = typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))

@@ -15,7 +15,14 @@ import {
   recordToolResult,
   recordVerificationOutcome,
 } from "../src/token-meter.ts";
-import { worktreeDiff, worktreeFingerprint, worktreeSnapshot, type WorktreeSnapshot } from "../src/worktree.ts";
+import {
+  createWorktreeSummary,
+  WORKTREE_SUMMARY_ENTRY_TYPE,
+  worktreeDiff,
+  worktreeFingerprint,
+  worktreeSnapshot,
+  type WorktreeSnapshot,
+} from "../src/worktree.ts";
 
 export default function pylonCoreExtension(pi: ExtensionAPI) {
   const baseline = new Set<string>();
@@ -284,11 +291,23 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     if (!beforePromise) return;
     const [before, after] = await Promise.all([beforePromise, worktreeSnapshot(cwd)]);
     const files = before && after ? await worktreeDiff(before, after) : undefined;
+    const assistantEntryId = [...(ctx.sessionManager?.getBranch?.() ?? [])]
+      .reverse()
+      .find((entry: any) => entry?.type === "message" && entry.message?.role === "assistant")
+      ?.id;
+    const summary = files && typeof assistantEntryId === "string"
+      ? createWorktreeSummary(assistantEntryId, files)
+      : undefined;
+    if (summary?.files.length) {
+      try { pi.appendEntry(WORKTREE_SUMMARY_ENTRY_TYPE, summary); }
+      catch { /* Summary persistence must not disrupt a completed model turn. */ }
+    }
     pi.events.emit("pylon:worktree-summary", {
       version: 1,
       cwd,
       known: Boolean(files),
-      files: files ?? [],
+      assistantEntryId: summary?.assistantEntryId,
+      files: summary?.files ?? [],
     });
   });
   pi.on("tool_call", async (event, ctx) => {

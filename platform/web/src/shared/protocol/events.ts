@@ -140,6 +140,10 @@ export interface SessionControlsReadModel {
   models: ModelOptionReadModel[];
   thinkingLevel?: ThinkingLevelReadModel;
   thinkingLevels: ThinkingLevelReadModel[];
+  pending?: {
+    model: ModelOptionReadModel;
+    thinkingLevel: ThinkingLevelReadModel;
+  };
   commands?: SlashCommandReadModel[];
 }
 

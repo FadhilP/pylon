@@ -59,6 +59,13 @@ export interface ConversationHistoryPage {
   nextCursor?: string;
 }
 
+export interface FileSuggestionList {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  available: boolean;
+  paths: string[];
+}
+
 export interface SessionSummary {
   id: string;
   projectId: string;
