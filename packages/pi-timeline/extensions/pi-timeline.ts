@@ -144,9 +144,11 @@ export default function timelineExtension(
     ephemeralSession = false,
     currentSessionId = "",
     currentGit: any,
-    lastCtx: any;
+    lastCtx: any,
+    enabled = true;
   const changeCache = new Map<string, TimelineChangeSet>();
   const changeBases = new Map<string, CheckpointRecord | null>();
+  const confirmedForks = new Set<string>();
   pi.events.emit?.("pylon:worktree-observer-request", {
     version: 1,
     respond: (value: any) => {
@@ -177,6 +179,13 @@ export default function timelineExtension(
         && compatibleCheckpoints.some((bound) =>
           (positions.get(bound.record.promptEntryId) ?? Number.POSITIVE_INFINITY) < index))
       .map((entry: any) => entry.id);
+    const forkPromptEntryIds = compatibleCheckpoints.map((bound) => bound.record.promptEntryId);
+    const forkPromptCheckpoints = [...records]
+      .filter(([, bound]) => compatibleCheckpoints.includes(bound))
+      .map(([checkpointId, bound]) => ({
+        promptEntryId: bound.record.promptEntryId,
+        checkpointId,
+      }));
     return timelineStateSnapshot(
       currentSessionId,
       stateRevision,
@@ -191,8 +200,10 @@ export default function timelineExtension(
           ? { changes: bound.record.changes ?? changeCache.get(id) }
           : {}),
       })),
-      available,
+      available && enabled,
       undoPromptEntryIds,
+      forkPromptEntryIds,
+      forkPromptCheckpoints,
     );
   };
   const publishState = (available = true) => {
@@ -203,6 +214,17 @@ export default function timelineExtension(
     if (request?.version !== TIMELINE_STATE_VERSION || request.sessionId !== currentSessionId || typeof request.respond !== "function") return;
     try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Timeline. */ }
   });
+  const disposeRuntimePolicy = pi.events.on("pylon:runtime-policy", (value: any) => {
+    if (value?.version !== 1
+      || value.sessionId !== currentSessionId
+      || typeof value.timelineEnabled !== "boolean") return;
+    enabled = value.timelineEnabled;
+    if (!enabled) {
+      automaticMutation = false;
+      pendingBash.clear();
+    }
+    publishState();
+  });
   const disposeEditNavigation = pi.events.on("pi-timeline:edit-navigation", (request: any) => {
     if (request?.version !== 1
       || request.sessionId !== currentSessionId
@@ -211,6 +233,7 @@ export default function timelineExtension(
       || typeof request.respond !== "function"
       || !lastCtx) return;
     request.respond((async () => {
+      if (request.rollbackFiles && !enabled) throw new Error("Pi Timeline is disabled for this session");
       const previousPaired = paired;
       if (!request.rollbackFiles) {
         suppressNextTreeWarning = true;
@@ -272,6 +295,15 @@ export default function timelineExtension(
       };
     })());
   });
+  const disposePromptFork = pi.events.on("pi-timeline:prompt-fork", (request: any) => {
+    if (request?.version !== 1
+      || request.sessionId !== currentSessionId
+      || typeof request.checkpointId !== "string"
+      || typeof request.respond !== "function") return;
+    const available = enabled && records.has(request.checkpointId);
+    if (available) confirmedForks.add(request.checkpointId);
+    request.respond({ version: 1, available });
+  });
   const calculateChanges = async (id: string, bound: Bound) => {
     const candidates = [...records.entries()]
       .filter(([candidateId, candidate]) =>
@@ -308,6 +340,7 @@ export default function timelineExtension(
       || typeof request.respond !== "function") return;
     const bound = records.get(request.checkpointId);
     request.respond((async () => {
+      if (!enabled) throw Error("Pi Timeline is disabled for this session");
       if (!bound || bound.sessionId !== currentSessionId)
         throw Error("Timeline checkpoint is unavailable");
       const changes = await changesFor(request.checkpointId, bound);
@@ -328,6 +361,7 @@ export default function timelineExtension(
       || typeof request.respond !== "function") return;
     const bound = records.get(request.checkpointId);
     request.respond((async () => {
+      if (!enabled) throw Error("Pi Timeline is disabled for this session");
       if (!bound || bound.sessionId !== currentSessionId)
         throw Error("Timeline checkpoint is unavailable");
       return {
@@ -557,6 +591,7 @@ export default function timelineExtension(
     }
   };
   async function checkpoint(ctx: any): Promise<Snapshot | undefined> {
+    if (!enabled) return;
     const branch = ctx.sessionManager.getBranch(),
       user = [...branch]
         .reverse()
@@ -640,7 +675,7 @@ export default function timelineExtension(
   });
   const disposeCheckpoint = pi.events.on("pi-timeline:checkpoint-request", (event: any) => {
     if (event?.version === 1 && lastCtx && typeof event.respond === "function")
-      event.respond(checkpoint(lastCtx));
+      event.respond(enabled ? checkpoint(lastCtx) : undefined);
   });
   const disposeRelocation = pi.events.on("pi-timeline:relocation-readiness", (request: any) => {
     if (request?.version !== 1
@@ -673,6 +708,7 @@ export default function timelineExtension(
     lastCtx = ctx;
     latestVerification = undefined;
     pendingBash.clear();
+    confirmedForks.clear();
     automaticMutation = false;
     const nextSessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!releaseSessionLease && currentSessionId === nextSessionId;
@@ -696,15 +732,18 @@ export default function timelineExtension(
   pi.on("session_shutdown", async () => {
     namingGeneration++;
     namingInFlight = undefined;
+    confirmedForks.clear();
     publishState(false);
     disposeStateRequest();
     disposeEditNavigation();
+    disposePromptFork();
     disposeVerify();
     disposeCheckpoint();
     disposeRelocation();
     disposeWorktreeChange();
     disposeFilesRequest();
     disposeDiffRequest();
+    disposeRuntimePolicy();
     await releaseSessionLease?.(ephemeralSession);
     releaseSessionLease = undefined;
     currentSessionId = "";
@@ -716,10 +755,11 @@ export default function timelineExtension(
     if (event.source !== "extension") paired = false;
   });
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName === "bash" && !sharedWorktreeObserver)
+    if (enabled && event.toolName === "bash" && !sharedWorktreeObserver)
       pendingBash.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
   pi.on("tool_result", async (event, ctx) => {
+    if (!enabled) return;
     if (event.toolName === "bash" && !sharedWorktreeObserver) {
       const before = pendingBash.get(event.toolCallId);
       pendingBash.delete(event.toolCallId);
@@ -730,7 +770,7 @@ export default function timelineExtension(
     }
   });
   pi.on("agent_settled", async (_e, ctx) => {
-    if (automaticMutation && await checkpoint(ctx)) automaticMutation = false;
+    if (enabled && automaticMutation && await checkpoint(ctx)) automaticMutation = false;
     await nameSession(ctx);
   });
   pi.on("session_tree", (_e, ctx) => {
@@ -767,6 +807,10 @@ export default function timelineExtension(
     description: "List, view, fork, or clear Git-backed prompt checkpoints",
     handler: async (args, ctx) => {
       await ctx.waitForIdle();
+      if (!enabled) {
+        ctx.ui.notify("Timeline is disabled for this session.", "warning");
+        return;
+      }
       await load(ctx);
       const [actionRaw, idRaw] = args.trim().split(/\s+/, 2),
         action = actionRaw || "select";
@@ -839,6 +883,7 @@ export default function timelineExtension(
         ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
         return;
       }
+      const preconfirmed = mode === "fork" && !!id && confirmedForks.delete(id);
       let current = await inspectGitState(ctx.cwd),
         compatibility = classifyCompatibility(target.record, current);
       if (!compatibility.allowed) {
@@ -859,10 +904,10 @@ export default function timelineExtension(
         );
         return;
       }
-      const ok = await ctx.ui.confirm(
-        mode === "fork" ? "Fork and restore?" : "View and restore?",
-        `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
-      );
+      const ok = preconfirmed || await ctx.ui.confirm(
+          mode === "fork" ? "Fork and restore?" : "View and restore?",
+          `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
+        );
       if (!ok) return;
       const foreign =
         target.sessionId !== ctx.sessionManager.getSessionId() &&

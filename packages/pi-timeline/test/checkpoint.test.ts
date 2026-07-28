@@ -117,7 +117,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
           customType: "pi-prompt-checkpoint",
           id: "checkpoint-1",
           data: {
-            version: 3,
+            version: 4,
             kind: "pi-prompt-checkpoint",
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
@@ -138,7 +138,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
           customType: "pi-prompt-checkpoint",
           id: "checkpoint-unsupported",
           data: {
-            version: 3,
+            version: 4,
             kind: "pi-prompt-checkpoint",
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
@@ -219,7 +219,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
         id: "checkpoint-1",
         parentId: "assistant-1",
         data: {
-          version: 3,
+          version: 4,
           kind: "pi-prompt-checkpoint",
           promptEntryId: "user-1",
           ownerSessionId: "edit-session",
@@ -233,7 +233,10 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     ];
     const sessionHandlers = new Map<string, Function[]>();
     const eventHandlers = new Map<string, Function>();
+    const commands = new Map<string, any>();
     const notices: string[] = [];
+    let confirmations = 0;
+    let forks = 0;
     const pi: any = {
       events: {
         on: (name: string, handler: Function) => {
@@ -244,7 +247,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
       },
       on: (name: string, handler: Function) =>
         sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
-      registerCommand() {},
+      registerCommand: (name: string, command: any) => commands.set(name, command),
       appendEntry() {},
       setSessionName() {},
     };
@@ -253,6 +256,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
       cwd: root,
       hasUI: true,
       mode: "rpc",
+      waitForIdle: async () => {},
       sessionManager: {
         getBranch: () => entries,
         getEntries: () => entries,
@@ -263,16 +267,29 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
       ui: {
         notify: (message: string) => notices.push(message),
         setStatus() {},
+        confirm: async () => {
+          confirmations++;
+          return false;
+        },
+      },
+      fork: async (_entryId: string, options: any) => {
+        forks++;
+        await options.withSession({
+          cwd: root,
+          sendMessage: async () => {},
+          ui: { notify: (message: string) => notices.push(message) },
+        });
       },
     };
     await sessionHandlers.get("session_start")![0]({}, ctx);
     let state: any;
     eventHandlers.get("pi-timeline:state-request")!({
-      version: 3,
+      version: 4,
       sessionId: "edit-session",
       respond: (value: unknown) => { state = value; },
     });
     assert.deepEqual(state.undoPromptEntryIds, ["user-2"]);
+    const timelineCheckpointId = state.checkpoints[0].id;
 
     let operation: Promise<any> | undefined;
     eventHandlers.get("pi-timeline:edit-navigation")!({
@@ -289,6 +306,18 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "after first turn\n");
     await transaction.rollback();
     assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "current work\n");
+
+    let forkAvailability: any;
+    eventHandlers.get("pi-timeline:prompt-fork")!({
+      version: 1,
+      sessionId: "edit-session",
+      checkpointId: timelineCheckpointId,
+      respond: (value: unknown) => { forkAvailability = value; },
+    });
+    assert.deepEqual(forkAvailability, { version: 1, available: true });
+    await commands.get("timeline").handler(`fork ${timelineCheckpointId}`, ctx);
+    assert.equal(confirmations, 0);
+    assert.equal(forks, 1);
   } finally {
     if (checkpoint) await deleteRefs(root, [checkpoint.worktreeRef, checkpoint.indexRef]);
     await rm(root, { recursive: true, force: true });
