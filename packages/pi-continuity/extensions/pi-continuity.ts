@@ -101,24 +101,7 @@ const Kind = StringEnum([
     "state",
   ] as const),
   MemAction = StringEnum(["list", "add", "replace", "remove"] as const),
-  ScopeName = StringEnum(["user", "project"] as const),
-  QuestionOption = Type.Object({
-    label: Type.String({
-      maxLength: 120,
-      description: "Short, distinct answer label. Put the recommended option first.",
-    }),
-    description: Type.Optional(Type.String({
-      maxLength: 240,
-      description: "Practical outcome or tradeoff; for the recommended option, include why it is recommended.",
-    })),
-  }),
-  ClarificationQuestion = Type.Object({
-    question: Type.String({
-      maxLength: 500,
-      description: "One concrete decision in plain language.",
-    }),
-    options: Type.Array(QuestionOption, { minItems: 2, maxItems: 4 }),
-  });
+  ScopeName = StringEnum(["user", "project"] as const);
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
   pi.events.emit("pi-continuity:instance-claim", {
@@ -157,6 +140,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
     approvalSelectionOpen = false,
+    clarifyTimeoutSeconds: number | null | undefined,
     sessionGeneration = 0,
     stateRevision = 0,
     releaseSessionLease: ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
@@ -191,14 +175,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
       .slice(0, callIndex)
       .some((part: any) => part?.type === "text" && part.text.trim());
   };
-  const hasUnsafeExecutionClarificationBatch = (ctx: any) => {
-    if (work?.mode !== "executing") return false;
+  const hasUnsafeClarificationBatch = (ctx: any) => {
     const calls = assistantContent(ctx).filter((part: any) => part?.type === "toolCall");
     return calls.length > 1 && calls.some(
       (part: any) =>
         part.name === "continuity_update" && part.arguments?.action === "clarify",
     );
   };
+  const disposeRuntimePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
+    if (event?.version !== 2) return;
+    const value = event.dialogTimeouts?.clarify;
+    if (value === null || Number.isInteger(value) && value >= 15 && value <= 86_400) {
+      clarifyTimeoutSeconds = value;
+    }
+  });
+  const clarifyDialogOptions = () => clarifyTimeoutSeconds === undefined
+    ? undefined
+    : { timeout: clarifyTimeoutSeconds === null ? 0 : clarifyTimeoutSeconds * 1_000 };
   const tripsCircuitBreaker = (params: unknown) => {
     const now = Date.now(), cutoff = now - 30_000;
     for (const [key, times] of recentCalls) {
@@ -640,6 +633,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     disposeVerify();
     disposeHeartbeat();
     disposeWorktreeChange();
+    disposeRuntimePolicy?.();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
@@ -679,10 +673,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Ask the pending clarification in prose and stop. Do not call more tools until the user answers.",
       };
-    if (hasUnsafeExecutionClarificationBatch(ctx))
+    if (hasUnsafeClarificationBatch(ctx))
       return {
         block: true,
-        reason: "Execution clarification must be the only tool call in its assistant message. Retry it alone at a safe checkpoint.",
+        reason: "Clarification must be the only tool call at a safe checkpoint. Retry it alone.",
       };
     if (blocked(work?.mode === "planning", event.toolName))
       return {
@@ -899,7 +893,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     promptGuidelines: [
       "Use set_plan for explicit /plan, risky or multi-phase work, handoffs/background jobs, or likely blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. During explicit planning, Continuity owns plan presentation; otherwise it maintains an internal task list.",
-      "Clarify only blocking user decisions: ask one plain-language question, or batch up to six related independent questions, with the recommended option first. Clarification must be the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
+      "Clarify only a blocking user decision: ask one plain-language question with the recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
       "Keep verification out of new todo lists and finish implementation todos before Verify; a sole verification-only todo completes automatically when Verify passes. Make nonterminal continuity updates before final text without progress narration.",
     ],
     renderShell: "self",
@@ -909,7 +903,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const text = item?.type === "text" ? item.text : undefined;
       const details = result.details as any;
       const clarification = details?.clarification;
-      const clarifications = details?.clarifications;
       const plan = details?.plan;
       if (clarification)
         return new Text(
@@ -917,9 +910,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
           0,
           0,
         );
-      if (Array.isArray(clarifications))
-        return new Text(clarifications.map((item: any) =>
-          `${theme.fg("muted", `? ${item.question}`)}\n${theme.fg("accent", item.answer)}`).join("\n"), 0, 0);
       if (plan) return new Text(plan, 0, 0);
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
@@ -934,12 +924,27 @@ export default function continuityExtension(pi: ExtensionAPI) {
           maxLength: 500,
           description: "One concrete decision in plain language. Include one short sentence of decision-relevant context only when needed.",
         })),
-        options: Type.Optional(Type.Array(QuestionOption, { minItems: 2, maxItems: 4 })),
-        questions: Type.Optional(Type.Array(ClarificationQuestion, {
-          minItems: 2,
-          maxItems: 6,
-          description: "Related blocking decisions to ask together. Do not combine with question/options.",
-        })),
+        options: Type.Optional(
+          Type.Array(
+            Type.Object({
+              label: Type.String({
+                maxLength: 120,
+                description: "Short, distinct answer label. Put the recommended option first.",
+              }),
+              description: Type.Optional(Type.String({
+                maxLength: 240,
+                description: "Practical outcome or tradeoff; for the recommended option, include why it is recommended.",
+              })),
+            }),
+          ),
+        ),
+        questions: Type.Optional(Type.Array(Type.Object({
+          question: Type.String({ maxLength: 500 }),
+          options: Type.Array(Type.Object({
+            label: Type.String({ maxLength: 120 }),
+            description: Type.Optional(Type.String({ maxLength: 240 })),
+          }), { minItems: 2, maxItems: 4 }),
+        }), { minItems: 2, maxItems: 6 })),
         goal: Type.Optional(Type.String({ maxLength: 2000 })),
         constraints: Type.Optional(
           Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 }),
@@ -986,19 +991,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (p.action === "clarify") {
         const executing = work?.mode === "executing";
-        if (work?.mode !== "planning" && !executing)
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Clarification requires active planning or execution work.",
-              },
-            ],
-          };
         if (p.questions !== undefined && (p.question !== undefined || p.options !== undefined))
           throw Error("Use either questions or question/options, not both.");
-        if (p.questions !== undefined && p.questions.length < 2)
-          throw Error("Bulk clarification requires 2-6 questions.");
         const questions = p.questions ?? [{ question: p.question || "", options: p.options || [] }];
         validateQuestions(questions);
         if (!ctx.hasUI) {
@@ -1016,7 +1010,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           };
         }
         if (questions.length > 1) {
-          const answers = await askQuestionnaire(ctx.ui, ctx.mode, questions);
+          const answers = await askQuestionnaire(
+            ctx.ui,
+            ctx.mode,
+            questions,
+            clarifyDialogOptions(),
+          );
           if (!answers) {
             if (executing) {
               ctx.abort();
@@ -1028,20 +1027,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
             return { content: [{ type: "text", text: "No answers submitted." }] };
           }
           return {
-            content: [{ type: "text", text: answers.map((answer, index) =>
-              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n") }],
+            content: [{
+              type: "text",
+              text: answers.map((answer, index) =>
+                `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n"),
+            }],
             details: { clarifications: answers },
           };
         }
         const item = questions[0];
         validateQuestion(item.question, item.options);
         const labels = [
-          ...item.options.map((option) =>
-            option.description ? `${option.label} — ${option.description}` : option.label,
+          ...item.options.map((o) =>
+            o.description ? `${o.label} — ${o.description}` : o.label,
           ),
           "Write a different answer…",
         ];
-        const choice = await ctx.ui.select(item.question, labels);
+        const choice = await ctx.ui.select(item.question, labels, clarifyDialogOptions());
         if (!choice) {
           if (executing) {
             ctx.abort();
@@ -1053,7 +1055,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           return { content: [{ type: "text", text: "No answer selected." }] };
         }
         if (choice === "Write a different answer…") {
-          const answer = (await ctx.ui.editor("Custom answer", ""))?.trim();
+          const answer = (await ctx.ui.input("Custom answer", undefined, clarifyDialogOptions()))?.trim();
           if (!answer && executing) {
             ctx.abort();
             return {

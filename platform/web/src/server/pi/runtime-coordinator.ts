@@ -1045,6 +1045,8 @@ export class RuntimeCoordinator implements PiDriver {
       verify: input.verify,
       timeline: input.timeline,
       workspace: input.workspace,
+      guardTimeoutSeconds: input.guardTimeoutSeconds,
+      clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
       expectedRevision: input.expectedRevision,
     });
     try {
@@ -1061,6 +1063,8 @@ export class RuntimeCoordinator implements PiDriver {
           ? "inherit"
           : previous.session.timelineEnabled ? "enabled" : "disabled",
         workspace: previous.session.workspace ?? "inherit",
+        guardTimeoutSeconds: previous.session.guardTimeoutSeconds === undefined ? "inherit" : previous.session.guardTimeoutSeconds,
+        clarifyTimeoutSeconds: previous.session.clarifyTimeoutSeconds === undefined ? "inherit" : previous.session.clarifyTimeoutSeconds,
         expectedRevision: this.registry().runtimePolicy(projectId, selected.id).revision,
       }).catch(() => {});
       throw error;
@@ -1163,6 +1167,12 @@ export class RuntimeCoordinator implements PiDriver {
   async answerUiRequest(input: UiResponse): Promise<void> {
     const slot = this.selected();
     await slot.driver.answerUiRequest({ ...input, sessionGeneration: slot.innerGeneration });
+  }
+
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
+    this.assertGeneration(sessionGeneration);
+    const slot = this.selected();
+    slot.driver.keepUiRequestAlive(requestId, slot.innerGeneration);
   }
 
   subscribe(listener: DriverEventListener): () => void {

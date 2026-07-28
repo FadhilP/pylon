@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type { JobReadModel } from "../shared/protocol/events";
-import type { TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type { DialogTimeoutSeconds, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -147,6 +147,8 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
   const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("automatic");
+  const [guardTimeout, setGuardTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
+  const [clarifyTimeout, setClarifyTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
   const [busy, setBusy] = useState(false);
 
   const resetDraft = () => {
@@ -160,6 +162,12 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     setWorkspace(scope === "project"
       ? policy.project.workspace
       : policy.session.workspace ?? "inherit");
+    setGuardTimeout(scope === "project"
+      ? policy.project.guardTimeoutSeconds
+      : policy.session.guardTimeoutSeconds === undefined ? "inherit" : policy.session.guardTimeoutSeconds);
+    setClarifyTimeout(scope === "project"
+      ? policy.project.clarifyTimeoutSeconds
+      : policy.session.clarifyTimeoutSeconds === undefined ? "inherit" : policy.session.clarifyTimeoutSeconds);
   };
   useEffect(() => {
     resetDraft();
@@ -178,10 +186,14 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     nextVerify: VerifyPolicyReadModel | "inherit",
     nextTimeline: "inherit" | "enabled" | "disabled",
     nextWorkspace: WorkspacePolicyMode | "inherit" = workspace,
+    nextGuardTimeout: DialogTimeoutSeconds | "inherit" = guardTimeout,
+    nextClarifyTimeout: DialogTimeoutSeconds | "inherit" = clarifyTimeout,
   ) => {
     setVerify(nextVerify);
     setTimeline(nextTimeline);
     setWorkspace(nextWorkspace);
+    setGuardTimeout(nextGuardTimeout);
+    setClarifyTimeout(nextClarifyTimeout);
     setBusy(true);
     try {
       await runtimeStore.updateRuntimePolicy(
@@ -189,6 +201,8 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         nextVerify,
         nextTimeline === "inherit" ? "inherit" : nextTimeline === "enabled",
         nextWorkspace,
+        nextGuardTimeout,
+        nextClarifyTimeout,
         policy.revision,
       );
     } catch (error) {
@@ -264,8 +278,120 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         ? "Applies to new sessions. Automatic gives the first session the project folder and isolates concurrent sessions."
         : "Changing this session moves it immediately when possible. Local does not create a branch or worktree."}</small>
     </label>
+    <TimeoutPolicyControl
+      label="Guard timeout"
+      value={guardTimeout === "inherit" ? policy.effective.guardTimeoutSeconds : guardTimeout}
+      inherited={guardTimeout === "inherit"}
+      disabled={!idle}
+      onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
+      onReset={scope === "session" && guardTimeout !== "inherit"
+        ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined)
+        : undefined}
+    />
+    <TimeoutPolicyControl
+      label="Clarify timeout"
+      value={clarifyTimeout === "inherit" ? policy.effective.clarifyTimeoutSeconds : clarifyTimeout}
+      inherited={clarifyTimeout === "inherit"}
+      disabled={!idle}
+      onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
+      onReset={scope === "session" && clarifyTimeout !== "inherit"
+        ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined)
+        : undefined}
+    />
     {busy && <small className="policy-saving" role="status">Saving…</small>}
   </InspectorSection>;
+}
+
+type TimeoutUnit = "seconds" | "minutes" | "hours";
+const timeoutUnitSeconds: Record<TimeoutUnit, number> = { seconds: 1, minutes: 60, hours: 3_600 };
+
+function timeoutParts(value: number): { amount: number; unit: TimeoutUnit } {
+  if (value % 3_600 === 0) return { amount: value / 3_600, unit: "hours" };
+  if (value % 60 === 0) return { amount: value / 60, unit: "minutes" };
+  return { amount: value, unit: "seconds" };
+}
+
+function TimeoutPolicyControl({
+  label,
+  value,
+  inherited,
+  disabled,
+  onChange,
+  onReset,
+}: {
+  label: string;
+  value: DialogTimeoutSeconds;
+  inherited: boolean;
+  disabled: boolean;
+  onChange(value: DialogTimeoutSeconds): void;
+  onReset?: () => void;
+}) {
+  const initial = timeoutParts(value ?? 60);
+  const [amount, setAmount] = useState(String(initial.amount));
+  const [unit, setUnit] = useState<TimeoutUnit>(initial.unit);
+  useEffect(() => {
+    const next = timeoutParts(value ?? 60);
+    setAmount(String(next.amount));
+    setUnit(next.unit);
+  }, [value]);
+  const commit = (nextAmount = amount, nextUnit = unit) => {
+    const seconds = Number(nextAmount) * timeoutUnitSeconds[nextUnit];
+    if (!Number.isInteger(seconds) || seconds < 15 || seconds > 86_400) {
+      const previous = timeoutParts(value ?? 60);
+      setAmount(String(previous.amount));
+      setUnit(previous.unit);
+      return;
+    }
+    onChange(seconds);
+  };
+
+  return <div className="policy-timeout">
+    <div className="policy-label-row">
+      <span>{label}{inherited ? " · Project default" : ""}</span>
+      {onReset && <button className="text-button" type="button" disabled={disabled} onClick={onReset}>Use project default</button>}
+    </div>
+    <div className="policy-timeout-controls">
+      {value === null
+        ? <span className="policy-timeout-never">Never</span>
+        : <>
+          <input
+            type="number"
+            min={unit === "seconds" ? 15 : 1}
+            max={unit === "hours" ? 24 : unit === "minutes" ? 1_440 : 86_400}
+            step="1"
+            value={amount}
+            disabled={disabled}
+            aria-label={`${label} duration`}
+            onChange={(event) => setAmount(event.target.value)}
+            onBlur={() => commit()}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              commit();
+              event.currentTarget.blur();
+            }}
+          />
+          <select
+            value={unit}
+            disabled={disabled}
+            aria-label={`${label} unit`}
+            onChange={(event) => {
+              const next = event.target.value as TimeoutUnit;
+              setUnit(next);
+              commit(amount, next);
+            }}
+          >
+            <option value="seconds">Seconds</option>
+            <option value="minutes">Minutes</option>
+            <option value="hours">Hours</option>
+          </select>
+        </>}
+      <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value === null ? 60 : null)}>
+        {value === null ? "Use timeout" : "Never"}
+      </button>
+    </div>
+    <small>Paused while the response tab is visible and focused.</small>
+  </div>;
 }
 
 function Memory({ live }: { live: RuntimeStoreSnapshot }) {

@@ -36,6 +36,7 @@ export type VerifyPolicyReadModel =
   | { mode: "selected"; checks: string[] };
 
 export type WorkspacePolicyMode = "automatic" | "checkout" | "worktree" | "local";
+export type DialogTimeoutSeconds = number | null;
 
 export interface RuntimePolicyReadModel {
   revision: number;
@@ -43,16 +44,22 @@ export interface RuntimePolicyReadModel {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
     workspace: WorkspacePolicyMode;
+    guardTimeoutSeconds: DialogTimeoutSeconds;
+    clarifyTimeoutSeconds: DialogTimeoutSeconds;
   };
   session: {
     verify?: VerifyPolicyReadModel;
     timelineEnabled?: boolean;
     workspace?: WorkspacePolicyMode;
+    guardTimeoutSeconds?: DialogTimeoutSeconds;
+    clarifyTimeoutSeconds?: DialogTimeoutSeconds;
   };
   effective: {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
     workspace: WorkspacePolicyMode;
+    guardTimeoutSeconds: DialogTimeoutSeconds;
+    clarifyTimeoutSeconds: DialogTimeoutSeconds;
   };
   availableVerifyChecks: VerifyOptionReadModel[];
 }

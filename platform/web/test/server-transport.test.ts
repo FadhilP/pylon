@@ -24,7 +24,7 @@ const snapshot: RuntimeSnapshot = {
   diagnostics: [],
   conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
   sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
-  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" }, availableVerifyChecks: [] },
+  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
   metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
   operational: initialOperational([], []),
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
@@ -41,6 +41,7 @@ class FakeDriver implements PiDriver {
   rewinds: RewindPromptInput[] = [];
   forks: ForkInput[] = [];
   answers: UiResponse[] = [];
+  keepAlives: Array<{ requestId: string; sessionGeneration: number }> = [];
   deletedSessions: string[] = [];
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
   activatedSessions: Array<{ sessionId: string; active: boolean }> = [];
@@ -158,6 +159,9 @@ class FakeDriver implements PiDriver {
   updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
+    this.keepAlives.push({ requestId, sessionGeneration });
+  }
   subscribe(listener: DriverEventListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emitRuntime(runtime: RuntimeSnapshot): void {
     this.emit({ type: "session.replaced", sessionId: runtime.sessionId, sessionGeneration: runtime.sessionGeneration, runtime });
@@ -313,6 +317,19 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const responseBody = JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true });
     const foreignAnswer = await fetch(`${origin}/api/v1/ui-responses/dialog-1`, { method: "POST", headers: otherHeaders, body: responseBody });
     assert.equal(foreignAnswer.status, 409);
+    const foreignKeepAlive = await fetch(`${origin}/api/v1/ui-keepalive/dialog-1`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ sessionGeneration: 1 }),
+    });
+    assert.equal(foreignKeepAlive.status, 409);
+    const keepAlive = await fetch(`${origin}/api/v1/ui-keepalive/dialog-1`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({ sessionGeneration: 1 }),
+    });
+    assert.equal(keepAlive.status, 200);
+    assert.deepEqual(driver.keepAlives, [{ requestId: "dialog-1", sessionGeneration: 1 }]);
 
     const release = await fetch(`${origin}/api/v1/ui-ownership/dialog-1`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ sessionGeneration: 1, action: "release" }) });
     assert.equal(release.status, 200);
@@ -467,7 +484,7 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
   }
 });
 
-test("dialog owner reconnect preserves Guard confirmation and owner loss cancels it", { timeout: 10_000 }, async () => {
+test("dialog owner reconnect preserves Guard confirmation and owner loss releases it", { timeout: 10_000 }, async () => {
   const driver = new FakeDriver();
   let transport: ServerTransport;
   const server = createServer((request, response) => void transport.handle(request, response));
@@ -503,11 +520,31 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss cancels
     assert.equal((await prompt("guard-owner-loss")).status, 200);
     stream.abort();
     await new Promise((resolve) => setTimeout(resolve, 80));
-    assert.deepEqual(driver.answers.at(-1), { requestId: "dialog-2", sessionGeneration: 1, method: "confirm", cancelled: true });
-    const late = await fetch(`${origin}/api/v1/ui-responses/dialog-2`, {
-      method: "POST", headers, body: JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true }),
+    assert.notEqual(driver.answers.at(-1)?.requestId, "dialog-2");
+    const otherTab = "guard-observer";
+    const otherBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, {
+      headers: { cookie, "x-pylon-tab-id": otherTab },
+    }));
+    assert.equal((otherBoot.pendingUi as { ownershipAvailable: boolean }).ownershipAvailable, true);
+    const otherStream = new AbortController();
+    await fetch(`${origin}/api/v1/events?tabId=${otherTab}&cursor=1:${String(otherBoot.sequence)}`, {
+      headers: { cookie },
+      signal: otherStream.signal,
     });
-    assert.equal(late.status, 409);
+    const otherHeaders = { ...headers, "x-pylon-tab-id": otherTab };
+    const claim = await fetch(`${origin}/api/v1/ui-ownership/dialog-2`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ sessionGeneration: 1, action: "claim" }),
+    });
+    assert.equal(claim.status, 200);
+    const answer = await fetch(`${origin}/api/v1/ui-responses/dialog-2`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true }),
+    });
+    assert.equal(answer.status, 200);
+    otherStream.abort();
   } finally {
     stream.abort();
     transport.dispose();

@@ -89,9 +89,21 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
-    project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
+    project: {
+      verify: { mode: "auto" },
+      timelineEnabled: true,
+      workspace: "automatic",
+      guardTimeoutSeconds: 60,
+      clarifyTimeoutSeconds: 60,
+    },
     session: {},
-    effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
+    effective: {
+      verify: { mode: "auto" },
+      timelineEnabled: true,
+      workspace: "automatic",
+      guardTimeoutSeconds: 60,
+      clarifyTimeoutSeconds: 60,
+    },
     availableVerifyChecks: [],
   };
 }
@@ -532,6 +544,8 @@ export class SessionRuntime implements PiDriver {
         ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
         ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
         ...(policy.session.workspace ? { workspace: policy.session.workspace } : {}),
+        ...(policy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: policy.session.guardTimeoutSeconds } : {}),
+        ...(policy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: policy.session.clarifyTimeoutSeconds } : {}),
       },
       effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify) },
       availableVerifyChecks: policy.availableVerifyChecks.map((check) => ({ ...check })),
@@ -1060,6 +1074,11 @@ export class SessionRuntime implements PiDriver {
 
   async answerUiRequest(input: UiResponse): Promise<void> {
     this.ui.answer(input);
+  }
+
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
+    this.gate.assert(sessionGeneration);
+    this.ui.keepAlive(requestId, sessionGeneration);
   }
 
   subscribe(listener: DriverEventListener): () => void {
@@ -1600,6 +1619,8 @@ export class SessionRuntime implements PiDriver {
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
           ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
           ...(this.runtimePolicy.session.workspace ? { workspace: this.runtimePolicy.session.workspace } : {}),
+          ...(this.runtimePolicy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: this.runtimePolicy.session.guardTimeoutSeconds } : {}),
+          ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds } : {}),
         },
         effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify) },
         availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check })),
@@ -1625,10 +1646,14 @@ export class SessionRuntime implements PiDriver {
     const sessionId = this.runtime?.session.sessionId;
     if (!sessionId) return;
     this.eventBus.emit("pylon:runtime-policy", {
-      version: 1,
+      version: 2,
       sessionId,
       verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
       timelineEnabled: this.runtimePolicy.effective.timelineEnabled,
+      dialogTimeouts: {
+        guard: this.runtimePolicy.effective.guardTimeoutSeconds,
+        clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,
+      },
     });
     this.eventBus.emit("pi-verify:catalog-request", {
       version: 1,

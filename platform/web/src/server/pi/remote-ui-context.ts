@@ -42,6 +42,7 @@ interface PendingDialog {
   questions?: QuestionnaireQuestion[];
   resolve(value: unknown): void;
   timer?: NodeJS.Timeout;
+  timeoutMs?: number;
   signal?: AbortSignal;
   abort?: () => void;
 }
@@ -145,7 +146,10 @@ export class RemoteUiBridge {
     if (input.sessionGeneration !== this.activeGeneration || dialogOptions?.signal?.aborted || this.pending.size > 0) return Promise.resolve(input.neutral);
 
     const requestId = randomUUID();
-    const timeoutMs = Math.max(1, Math.min(dialogOptions?.timeout ?? this.defaultTimeoutMs, this.defaultTimeoutMs));
+    const requestedTimeout = dialogOptions?.timeout ?? this.defaultTimeoutMs;
+    const timeoutMs = requestedTimeout === 0
+      ? undefined
+      : Math.max(1, Math.min(requestedTimeout, 24 * 60 * 60_000));
     const request: UiRequest = {
       kind: "request",
       requestId,
@@ -154,7 +158,7 @@ export class RemoteUiBridge {
       method: input.method,
       payload: input.payload,
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+      ...(timeoutMs ? { expiresAt: new Date(Date.now() + timeoutMs).toISOString() } : {}),
     };
 
     return new Promise<T>((resolve) => {
@@ -168,9 +172,9 @@ export class RemoteUiBridge {
         options: input.options,
         questions: input.questions,
         resolve: finish,
+        timeoutMs,
       };
-      pending.timer = setTimeout(() => finish(input.neutral), timeoutMs);
-      pending.timer.unref?.();
+      this.scheduleTimeout(pending);
       if (dialogOptions?.signal) {
         pending.signal = dialogOptions.signal;
         pending.abort = () => finish(input.neutral);
@@ -212,12 +216,22 @@ export class RemoteUiBridge {
         pending.resolve(response.value);
         return;
       case "questionnaire":
-        if (!Array.isArray(response.answers) || response.answers.length !== pending.questions?.length ||
-            response.answers.some((answer) => typeof answer !== "string" || !answer.trim() || answer.length > 4_000)) {
+        if (!Array.isArray(response.answers)
+          || response.answers.length !== pending.questions?.length
+          || response.answers.some((answer) =>
+            typeof answer !== "string" || !answer.trim() || answer.length > 4_000)) {
           throw new Error("questionnaire response requires one bounded answer per question");
         }
         pending.resolve(response.answers.map((answer) => answer.trim()));
     }
+  }
+
+  keepAlive(requestId: string, sessionGeneration: number): void {
+    const pending = this.pending.get(requestId);
+    if (!pending) throw new Error("unknown or expired UI request");
+    if (pending.request.sessionGeneration !== sessionGeneration) throw new Error("stale UI request generation");
+    if (!pending.timeoutMs) return;
+    this.scheduleTimeout(pending);
   }
 
   private retain(request: UiRequest): void {
@@ -243,6 +257,14 @@ export class RemoteUiBridge {
       this.state.editorText = payload.text;
       this.state.editorRevision++;
     }
+  }
+
+  private scheduleTimeout(pending: PendingDialog): void {
+    if (!pending.timeoutMs) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.request.expiresAt = new Date(Date.now() + pending.timeoutMs).toISOString();
+    pending.timer = setTimeout(() => pending.resolve(pending.neutral), pending.timeoutMs);
+    pending.timer.unref?.();
   }
 
   cancelGeneration(sessionGeneration: number): void {
@@ -285,24 +307,6 @@ class GenerationUiContext implements ExtensionUIContext {
     });
   }
 
-  questionnaire(questions: Array<{ question: string; options: Array<{ label: string; description?: string }> }>): Promise<string[] | undefined> {
-    const offered = questions.slice(0, 6).map((item) => ({
-      question: bounded(item.question),
-      options: item.options.slice(0, 4).map((option) => bounded(
-        option.description ? `${option.label} — ${option.description}` : option.label,
-        500,
-      )),
-    }));
-    return this.bridge.dialog({
-      sessionId: this.sessionId,
-      sessionGeneration: this.generation,
-      method: "questionnaire",
-      payload: { title: "Clarification", questions: offered },
-      neutral: undefined,
-      questions: offered,
-    });
-  }
-
   confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean> {
     return this.bridge.dialog({
       sessionId: this.sessionId,
@@ -332,6 +336,28 @@ class GenerationUiContext implements ExtensionUIContext {
       method: "editor",
       payload: { title: bounded(title), prefill: prefill && bounded(prefill, MAX_EVENT_TEXT) },
       neutral: undefined,
+    });
+  }
+
+  questionnaire(
+    questions: QuestionnaireQuestion[],
+    opts?: ExtensionUIDialogOptions,
+  ): Promise<string[] | undefined> {
+    const offered = questions.slice(0, 6).map((item) => ({
+      question: bounded(item.question, 500),
+      options: item.options.slice(0, 5).map((option) => bounded(option, 500)),
+    }));
+    if (!offered.length || offered.some((item) => item.options.length < 2)) {
+      return Promise.resolve(undefined);
+    }
+    return this.bridge.dialog({
+      sessionId: this.sessionId,
+      sessionGeneration: this.generation,
+      method: "questionnaire",
+      payload: { questions: offered },
+      neutral: undefined,
+      questions: offered,
+      dialogOptions: opts,
     });
   }
 

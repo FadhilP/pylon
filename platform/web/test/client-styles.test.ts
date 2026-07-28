@@ -61,6 +61,9 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.match(inspector, /No verification run yet/);
   assert.match(inspector, /Verify is unavailable for this runtime/);
   assert.match(inspector, /className="mono">\{check\.label\}/);
+  assert.match(inspector, /label="Guard timeout"/);
+  assert.match(inspector, /label="Clarify timeout"/);
+  assert.match(inspector, /Paused while the response tab is visible and focused/);
   assert.match(conversation, /<IconPaperclip size=\{16\}/);
   assert.match(conversation, /<IconBulb size=\{16\}/);
   assert.match(conversation, /<IconLoader2 className="prompt-send-spinner"/);
@@ -71,4 +74,15 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.doesNotMatch(eventStore, /Unsupported runtime protocol/);
   assert.match(eventStore, /scheduleBootstrapRetry/);
   assert.match(app, /<RecoveryToast recovery=\{live\.recovery\}/);
+});
+
+test("inline runtime requests hide timers and manual ownership release", async () => {
+  const [dialog, css] = await Promise.all([
+    readFile(new URL("../src/client/ui-dialog.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(dialog, /Let another tab respond|expiresAt|countdown/);
+  assert.doesNotMatch(css, /ui-request-expiry|ui-transfer/);
+  assert.match(dialog, /setInterval\(renew,\s*5_000\)/);
+  assert.match(dialog, /document\.visibilityState !== "visible" \|\| !document\.hasFocus\(\)/);
 });

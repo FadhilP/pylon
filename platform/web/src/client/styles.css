@@ -295,7 +295,6 @@
   .ui-request textarea { min-height: 130px; resize: vertical; }
   .ui-request-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 11px; }
   .ui-request-actions .primary-button { width: auto; }
-  .ui-request-actions .ui-transfer { margin-left: auto; }
   .ui-request-options { display: grid; gap: 5px; }
   .ui-request-options button { display: grid; min-height: 34px; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 8px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text-soft); font-size: 13px; text-align: left; }
   .ui-request-options kbd { display: grid; width: 20px; height: 20px; place-items: center; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text-muted); font: 12px/1 ui-monospace, "SFMono-Regular", Consolas, monospace; }
@@ -304,7 +303,6 @@
   .ui-questionnaire { display: grid; gap: 12px; }
   .ui-questionnaire fieldset { display: grid; gap: 7px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; }
   .ui-questionnaire legend { padding: 0 4px; color: var(--text); font-size: 12px; font-weight: 600; }
-  .ui-request .ui-request-expiry { margin-top: 8px; }
   .ui-request .ui-request-error { color: var(--red); }
 
   @keyframes breathe { 0%, 100% { opacity: .55; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
@@ -649,7 +647,7 @@
     padding: 10px 10px 10px 12px;
     border-radius: 8px;
     background: var(--surface-raised);
-    box-shadow: 0 5px 5px rgb(0 0 0 / 24%);
+    box-shadow: 0 12px 30px rgb(0 0 0 / 24%);
     color: var(--text);
     font-size: 12px;
     line-height: 1.45;
@@ -881,7 +879,7 @@
     border: 1px solid var(--line-strong);
     border-radius: 9px;
     background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
-    box-shadow: 0 10px 28px rgb(0 0 0 / 14%);
+    box-shadow: 0 10px 10px rgb(0 0 0 / 14%);
     backdrop-filter: blur(10px);
     animation: active-agent-in var(--motion-standard) var(--motion-ease-out);
   }
@@ -1188,10 +1186,12 @@
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--surface-subtle);
+    margin-top: 12px;
   }
   .changed-files .changed-file { animation: reveal-row var(--motion-fast) var(--motion-ease-out); }
   .changed-file { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border: 0; background: transparent; text-align: left; }
   .changed-file:hover { background: var(--surface-hover); }
+  .changed-file + .changed-file { border-top: 1px solid var(--line); }
   .changed-file code { min-width: 0; overflow: hidden; color: var(--text-soft); font: 12px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
   .changed-file > span { display: flex; flex: 0 0 auto; gap: 5px; font: 12px ui-monospace, monospace; }
   .changed-file ins { color: var(--green); text-decoration: none; }
@@ -1332,7 +1332,7 @@
     border: 1px solid var(--line);
     border-radius: 9px;
     background: var(--surface-raised);
-    box-shadow: 0 14px 32px rgb(0 0 0 / 18%);
+    box-shadow: 0 1px 10px rgb(0 0 0 / 18%);
   }
   .slash-suggestions button { display: grid; gap: 2px; padding: 7px 9px; border-radius: 6px; color: var(--text-soft); text-align: left; }
   .slash-suggestions button:hover,
@@ -1636,6 +1636,11 @@
   .policy-checks span { min-width: 0; overflow-wrap: anywhere; }
   .policy-checks label.is-missing { color: var(--red); }
   .policy-checks small { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+  .policy-timeout { display: grid; gap: 5px; color: var(--text-muted); }
+  .policy-timeout-controls { display: grid; grid-template-columns: minmax(70px, .7fr) minmax(90px, 1fr) auto; align-items: center; gap: 6px; }
+  .policy-timeout-controls input { width: 100%; min-width: 0; min-height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+  .policy-timeout-never { grid-column: span 2; color: var(--text-soft); }
+  .policy-timeout small { color: var(--text-muted); }
   .policy-label-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); }
   .policy-label-row .text-button { text-align: right; white-space: normal; }
   .policy-saving { color: var(--text-muted); }

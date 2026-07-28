@@ -3,7 +3,7 @@ import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../sha
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
@@ -280,6 +280,8 @@ export class RuntimeEventStore {
     verify: VerifyPolicyReadModel | "inherit",
     timeline: boolean | "inherit",
     workspace: WorkspacePolicyMode | "inherit",
+    guardTimeoutSeconds: DialogTimeoutSeconds | "inherit",
+    clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit",
     expectedRevision: number,
   ): Promise<void> {
     const runtime = this.requireReadyRuntime();
@@ -289,6 +291,8 @@ export class RuntimeEventStore {
       verify: verify === "inherit" ? { mode: "inherit" } : verify,
       timeline: timeline === "inherit" ? "inherit" : timeline ? "enabled" : "disabled",
       workspace,
+      guardTimeoutSeconds,
+      clarifyTimeoutSeconds,
       expectedRevision,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
@@ -704,6 +708,12 @@ export class RuntimeEventStore {
   async changeUiOwnership(request: UiRequestReadModel, action: "claim" | "release"): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.api.uiOwnership(request.requestId, runtime.sessionGeneration, action);
+  }
+
+  async keepUiRequestAlive(request: UiRequestReadModel): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    if (!request.owned) return;
+    await this.api.uiKeepAlive(request.requestId, runtime.sessionGeneration);
   }
 
   private async sendCommand(command: WebCommand): Promise<AcceptedCommand> {

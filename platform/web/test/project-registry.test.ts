@@ -20,7 +20,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 6);
+    assert.equal(stored.version, 7);
     assert.equal(stored.projects.length, 2);
 
     let seeded = false;
@@ -129,6 +129,8 @@ test("project registry migrates and persists reversible project and session arch
     const id = projectIdForCwd(project);
     const registry = new ProjectRegistry(config);
     await registry.load();
+    assert.equal(registry.runtimePolicy(id, "session-one").effective.guardTimeoutSeconds, 60);
+    assert.equal(registry.runtimePolicy(id, "session-one").effective.clarifyTimeoutSeconds, 60);
     await registry.archiveSession("session-one");
     await registry.archiveProject(id);
     assert.deepEqual(registry.list(), []);
@@ -164,6 +166,8 @@ test("runtime policy persists project defaults and session overrides", async () 
       verify: { mode: "selected", checks: ["npm:test"] },
       timeline: "disabled",
       workspace: "worktree",
+      guardTimeoutSeconds: null,
+      clarifyTimeoutSeconds: 90,
       expectedRevision: 0,
     });
     await registry.updateRuntimePolicy({
@@ -173,17 +177,23 @@ test("runtime policy persists project defaults and session overrides", async () 
       verify: { mode: "auto" },
       timeline: "enabled",
       workspace: "local",
+      guardTimeoutSeconds: 120,
+      clarifyTimeoutSeconds: "inherit",
       expectedRevision: 1,
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
       verify: { mode: "auto" },
       timelineEnabled: true,
       workspace: "local",
+      guardTimeoutSeconds: 120,
+      clarifyTimeoutSeconds: 90,
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-two").effective, {
       verify: { mode: "selected", checks: ["npm:test"] },
       timelineEnabled: false,
       workspace: "worktree",
+      guardTimeoutSeconds: null,
+      clarifyTimeoutSeconds: 90,
     });
 
     const reloaded = new ProjectRegistry(config);

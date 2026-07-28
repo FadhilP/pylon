@@ -78,6 +78,7 @@ export class ServerTransport {
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-ownership/")) return await this.uiOwnership(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-ownership/".length)));
+      if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-keepalive/")) return await this.uiKeepAlive(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-keepalive/".length)));
       if (request.method === "GET" && url.pathname === "/api/v1/health") {
         const runtime = await this.driver.snapshot();
         return this.send(response, 200, {
@@ -388,7 +389,15 @@ export class ServerTransport {
     const value = body as Record<string, unknown>;
     if (value.requestId !== undefined && value.requestId !== requestId) throw httpError(400, "requestId does not match path");
     if (value.sessionGeneration !== this.journal.sessionGeneration || value.method !== pending.method) throw httpError(409, "UI response does not match pending request");
-    const responseValue = { requestId, sessionGeneration: value.sessionGeneration, method: value.method, cancelled: value.cancelled === true, value: value.value, confirmed: value.confirmed, answers: value.answers } as Parameters<PiDriver["answerUiRequest"]>[0];
+    const responseValue = {
+      requestId,
+      sessionGeneration: value.sessionGeneration,
+      method: value.method,
+      cancelled: value.cancelled === true,
+      value: value.value,
+      confirmed: value.confirmed,
+      answers: value.answers,
+    } as Parameters<PiDriver["answerUiRequest"]>[0];
     try { await this.driver.answerUiRequest(responseValue); }
     catch (error) { throw httpError(400, error instanceof Error ? error.message : "invalid UI response"); }
     this.renew(tabId);
@@ -418,6 +427,27 @@ export class ServerTransport {
       throw httpError(400, "unknown ownership action");
     }
     this.publishOwnership(requestId);
+    this.send(response, 200, { accepted: true, requestId });
+  }
+
+  private async uiKeepAlive(request: IncomingMessage, response: ServerResponse, requestId: string): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const pending = this.projection.pendingUi;
+    const owner = this.dialogOwner;
+    if (!pending || !owner || pending.requestId !== requestId || owner.requestId !== requestId) {
+      throw httpError(409, "UI request is not pending");
+    }
+    if (owner.tabId !== tabId) throw httpError(409, "UI request belongs to another tab");
+    const body = await readJson(request);
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw httpError(400, "keepalive request must be an object");
+    const generation = (body as Record<string, unknown>).sessionGeneration;
+    if (generation !== owner.sessionGeneration || owner.sessionGeneration !== this.journal.sessionGeneration) {
+      throw httpError(409, "stale session generation");
+    }
+    try { this.driver.keepUiRequestAlive(requestId, generation); }
+    catch (error) { throw httpError(409, error instanceof Error ? error.message : "UI request is unavailable"); }
+    this.renew(tabId);
     this.send(response, 200, { accepted: true, requestId });
   }
 
@@ -518,7 +548,7 @@ export class ServerTransport {
     // UI event is personalized correctly for every connected tab.
     if (event.type === "ui.event") {
       const raw = event.payload && typeof event.payload === "object" ? event.payload as { requestId?: unknown; method?: unknown } : {};
-      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))) {
+      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor"].includes(String(raw.method))) {
         this.openDialog(raw.requestId, event.sessionGeneration, this.lastCommandOwner);
       }
     }
@@ -589,16 +619,12 @@ export class ServerTransport {
     if (owner?.tabId === client.tabId && ![...this.clients].some((item) => item.tabId === client.tabId)) {
       const expected = owner;
       owner.lossTimer = setTimeout(() => {
-        if (this.dialogOwner === expected && expected.tabId === client.tabId) void this.cancelOwnedDialog(expected);
+        if (this.dialogOwner !== expected || expected.tabId !== client.tabId) return;
+        this.releaseDialogOwner(expected);
+        this.publishOwnership(expected.requestId);
       }, this.options.dialogReconnectGraceMs ?? 10_000);
       owner.lossTimer.unref?.();
     }
-  }
-  private async cancelOwnedDialog(owner: DialogOwner): Promise<void> {
-    const pending = this.projection.pendingUi;
-    if (this.dialogOwner !== owner || !pending || pending.requestId !== owner.requestId || owner.sessionGeneration !== this.journal.sessionGeneration) return;
-    try { await this.driver.answerUiRequest({ requestId: owner.requestId, sessionGeneration: owner.sessionGeneration, method: pending.method, cancelled: true }); }
-    catch { /* Driver expiry/closure already resolved neutrally. */ }
   }
   private releaseDialogOwner(owner: DialogOwner): void {
     if (owner.lossTimer) clearTimeout(owner.lossTimer);

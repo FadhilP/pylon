@@ -585,7 +585,6 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
   let aborts = 0;
   let selection: string | undefined;
   let customAnswer = "";
-  let questionnaireAnswers: string[] | undefined;
   const ctx: any = {
     cwd, hasUI: false, mode: "json",
     abort: () => { aborts++; },
@@ -602,8 +601,8 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       setStatus: () => {},
       setWidget: () => {},
       select: async () => selection,
+      input: async () => customAnswer,
       editor: async () => customAnswer,
-      questionnaire: async () => questionnaireAnswers,
     },
   };
   try {
@@ -693,27 +692,82 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     assert.deepEqual(custom.details.clarification, {
       question: "Any constraints?", answer: "Only API changes",
     });
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
 
-    ctx.mode = "rpc";
-    questionnaireAnswers = ["API only", "Ship now"];
-    const bulk = await tool.execute("bulk-answer", {
+test("standalone and bulk clarification use the effective timeout without creating work", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-standalone-clarify-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const app = runtime();
+  const selectionOptions: Array<{ timeout?: number } | undefined> = [];
+  const questionnaireOptions: Array<{ timeout?: number } | undefined> = [];
+  const ctx: any = {
+    cwd,
+    hasUI: true,
+    mode: "rpc",
+    abort: () => assert.fail("standalone clarification must not abort"),
+    sessionManager: {
+      getSessionId: () => "standalone-clarify-session",
+      getEntries: () => [],
+      getLeafEntry: () => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "toolCall",
+            id: "clarify",
+            name: "continuity_update",
+            arguments: { action: "clarify" },
+          }],
+        },
+      }),
+    },
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async (_title: string, _choices: string[], options?: { timeout?: number }) => {
+        selectionOptions.push(options);
+        return "Small";
+      },
+      input: async () => "Custom",
+      questionnaire: async (_questions: unknown[], options?: { timeout?: number }) => {
+        questionnaireOptions.push(options);
+        return ["Small", "Later"];
+      },
+    },
+  };
+  try {
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    app.emit("pylon:runtime-policy", {
+      version: 2,
+      dialogTimeouts: { guard: 60, clarify: 120 },
+    });
+    const tool = app.tools.get("continuity_update");
+    const single = await tool.execute("single", {
+      action: "clarify",
+      question: "Scope?",
+      options: [{ label: "Small" }, { label: "Large" }],
+    }, undefined, undefined, ctx);
+    assert.equal(single.content[0].text, "Small");
+    assert.deepEqual(selectionOptions, [{ timeout: 120_000 }]);
+
+    const bulk = await tool.execute("bulk", {
       action: "clarify",
       questions: [
-        { question: "Which scope?", options: [{ label: "API only" }, { label: "Full stack" }] },
-        { question: "When ship?", options: [{ label: "Ship now" }, { label: "Later" }] },
+        { question: "Scope?", options: [{ label: "Small" }, { label: "Large" }] },
+        { question: "Deploy?", options: [{ label: "Now" }, { label: "Later" }] },
       ],
     }, undefined, undefined, ctx);
-    assert.match(bulk.content[0].text, /1\. Which scope\?\nAnswer: API only/);
-    assert.deepEqual(bulk.details.clarifications, [
-      { question: "Which scope?", answer: "API only" },
-      { question: "When ship?", answer: "Ship now" },
-    ]);
-    await assert.rejects(() => tool.execute("mixed-answer", {
-      action: "clarify",
-      question: "Legacy?",
-      options: [{ label: "Yes" }, { label: "No" }],
-      questions: [{ question: "Bulk?", options: [{ label: "Yes" }, { label: "No" }] }],
-    }, undefined, undefined, ctx), /either questions or question\/options/);
+    assert.match(bulk.content[0].text, /1\. Scope\?/);
+    assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }]);
+    assert.equal(app.appended.some((entry) => entry.customType.includes("run")), false);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

@@ -490,7 +490,6 @@ export class RuntimeProjection {
           requestId: id(raw.requestId, "invalid"),
           method: method as UiRequestReadModel["method"],
           payload: browserValue(payload) as Record<string, unknown>,
-          expiresAt: typeof raw.expiresAt === "string" ? raw.expiresAt : undefined,
           owned: false,
           ownershipAvailable: false,
         };

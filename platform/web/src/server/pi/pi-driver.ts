@@ -293,6 +293,7 @@ export interface PiDriver {
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): void;
   subscribe(listener: DriverEventListener): () => void;
   dispose(): Promise<void>;
 }

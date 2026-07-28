@@ -168,7 +168,6 @@ export interface UiRequestReadModel {
   requestId: string;
   method: "select" | "confirm" | "input" | "editor" | "questionnaire";
   payload: Record<string, unknown>;
-  expiresAt?: string;
   owned: boolean;
   ownershipAvailable: boolean;
 }

@@ -23,43 +23,6 @@ test("remote UI correlates every RPC dialog and validates responses", async () =
   bridge.answer({ requestId: requests.at(-1)!.requestId, sessionGeneration: 3, method: "editor", value: "after" });
   assert.equal(await edited, "after");
 
-  const questionnaire = (ui as any).questionnaire([
-    { question: "Scope?", options: [{ label: "API" }, { label: "All" }] },
-    { question: "Ship?", options: [{ label: "Now" }, { label: "Later" }] },
-  ]);
-  const questionnaireRequest = requests.at(-1)!;
-  assert.equal(questionnaireRequest.method, "questionnaire");
-  assert.deepEqual(questionnaireRequest.payload.questions, [
-    { question: "Scope?", options: ["API", "All"] },
-    { question: "Ship?", options: ["Now", "Later"] },
-  ]);
-  bridge.answer({
-    requestId: questionnaireRequest.requestId,
-    sessionGeneration: 3,
-    method: "questionnaire",
-    answers: ["API", "Custom date"],
-  });
-  assert.deepEqual(await questionnaire, ["API", "Custom date"]);
-
-  const invalidQuestionnaire = (ui as any).questionnaire([
-    { question: "Scope?", options: [{ label: "API" }, { label: "All" }] },
-    { question: "Ship?", options: [{ label: "Now" }, { label: "Later" }] },
-  ]);
-  const invalidRequest = requests.at(-1)!;
-  assert.throws(() => bridge.answer({
-    requestId: invalidRequest.requestId,
-    sessionGeneration: 3,
-    method: "questionnaire",
-    answers: ["API"],
-  }), /one bounded answer per question/);
-  bridge.answer({
-    requestId: invalidRequest.requestId,
-    sessionGeneration: 3,
-    method: "questionnaire",
-    cancelled: true,
-  });
-  assert.equal(await invalidQuestionnaire, undefined);
-
   assert.throws(() => bridge.answer({
     requestId: "missing",
     sessionGeneration: 3,
@@ -86,6 +49,58 @@ test("remote UI fails closed on abort, timeout, and generation cancellation", as
   const editor = ui.editor("Edit");
   bridge.cancelGeneration(4);
   assert.equal(await editor, undefined);
+});
+
+test("remote UI renews owned deadlines and supports Never", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge((request) => requests.push(request), 100);
+  const ui = bridge.context("session-1", 7);
+
+  const renewed = ui.select("Choose", ["A"]);
+  const renewedRequest = requests.at(-1)!;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  bridge.keepAlive(renewedRequest.requestId, 7);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  bridge.answer({
+    requestId: renewedRequest.requestId,
+    sessionGeneration: 7,
+    method: "select",
+    value: "A",
+  });
+  assert.equal(await renewed, "A");
+  assert.throws(() => bridge.keepAlive(renewedRequest.requestId, 7), /unknown or expired/);
+
+  const never = ui.confirm("Confirm", "Proceed?", { timeout: 0 });
+  const neverRequest = requests.at(-1)!;
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  bridge.keepAlive(neverRequest.requestId, 7);
+  bridge.answer({
+    requestId: neverRequest.requestId,
+    sessionGeneration: 7,
+    method: "confirm",
+    confirmed: true,
+  });
+  assert.equal(await never, true);
+});
+
+test("remote UI returns one bounded answer for every questionnaire item", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge((request) => requests.push(request));
+  const ui = bridge.context("session-1", 8) as ReturnType<RemoteUiBridge["context"]> & {
+    questionnaire(questions: Array<{ question: string; options: string[] }>): Promise<string[] | undefined>;
+  };
+  const pending = ui.questionnaire([
+    { question: "Scope?", options: ["Small", "Large"] },
+    { question: "Deploy?", options: ["Now", "Later"] },
+  ]);
+  const request = requests.at(-1)!;
+  bridge.answer({
+    requestId: request.requestId,
+    sessionGeneration: 8,
+    method: "questionnaire",
+    answers: ["Small", "Later"],
+  });
+  assert.deepEqual(await pending, ["Small", "Later"]);
 });
 
 test("remote UI allows one active dialog and fails concurrent safety prompts closed", async () => {

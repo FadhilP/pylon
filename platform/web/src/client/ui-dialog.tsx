@@ -48,6 +48,23 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     return () => { if (previous?.isConnected) previous.focus(); };
   }, [request.owned]);
 
+  useEffect(() => {
+    if (!request.owned) return;
+    const renew = () => {
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      void runtimeStore.keepUiRequestAlive(request).catch(() => undefined);
+    };
+    renew();
+    const interval = window.setInterval(renew, 5_000);
+    window.addEventListener("focus", renew);
+    document.addEventListener("visibilitychange", renew);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", renew);
+      document.removeEventListener("visibilitychange", renew);
+    };
+  }, [request.requestId, request.owned]);
+
   const respond = async (body: Record<string, unknown>) => {
     if (actionLock.current) return;
     actionLock.current = true;
@@ -88,7 +105,8 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
   const chooseAnswer = (answer: string) => {
     const questionIndex = answers.findIndex((current) => !current);
     if (questionIndex < 0 || !answer.trim() || busy) return;
-    const next = answers.map((current, index) => index === questionIndex ? answer.trim() : current);
+    const next = answers.map((current, index) =>
+      index === questionIndex ? answer.trim() : current);
     setAnswers(next);
     setValue("");
     if (questionIndex === questions.length - 1) void respond({ answers: next });
@@ -130,7 +148,9 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
       if (!busy) void respond({ value });
       return;
     }
-    if (request.method === "questionnaire" && event.key === "Enter" && event.target instanceof HTMLInputElement) {
+    if (request.method === "questionnaire"
+      && event.key === "Enter"
+      && event.target instanceof HTMLInputElement) {
       event.preventDefault();
       chooseAnswer(value);
       return;
@@ -222,6 +242,5 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
       {request.method === "editor" ? "Ctrl/Command + Enter to submit · Escape to cancel" : "Enter to submit · Escape to cancel"}
     </small>}
     {error && <p className="ui-request-error" role="alert">{error}</p>}
-    <button className="text-button ui-transfer" type="button" disabled={busy} onClick={() => void ownership("release")}>Let another tab respond</button>
   </div>;
 }

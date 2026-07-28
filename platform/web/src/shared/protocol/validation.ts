@@ -79,6 +79,12 @@ function validVerifyPolicy(value: unknown, allowInherit = false): boolean {
     && new Set(value.checks).size === value.checks.length;
 }
 
+function validDialogTimeout(value: unknown, allowInherit = false): boolean {
+  return value === null
+    || allowInherit && value === "inherit"
+    || Number.isSafeInteger(value) && (value as number) >= 15 && (value as number) <= 86_400;
+}
+
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
@@ -218,6 +224,10 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     if (!["inherit", "automatic", "checkout", "worktree", "local"].includes(String(value.workspace))
       || value.scope === "project" && value.workspace === "inherit") {
       return { ok: false, error: "invalid workspace policy" };
+    }
+    if (!validDialogTimeout(value.guardTimeoutSeconds, value.scope === "session")
+      || !validDialogTimeout(value.clarifyTimeoutSeconds, value.scope === "session")) {
+      return { ok: false, error: "invalid dialog timeout policy" };
     }
   }
   if (value.type === "handoffSession"
@@ -464,13 +474,19 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
     || typeof policy.project.timelineEnabled !== "boolean"
     || !["automatic", "checkout", "worktree", "local"].includes(String(policy.project.workspace))
+    || !validDialogTimeout(policy.project.guardTimeoutSeconds)
+    || !validDialogTimeout(policy.project.clarifyTimeoutSeconds)
     || !record(policy.session)
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
     || (policy.session.workspace !== undefined && !["automatic", "checkout", "worktree", "local"].includes(String(policy.session.workspace)))
+    || (policy.session.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.guardTimeoutSeconds))
+    || (policy.session.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.clarifyTimeoutSeconds))
     || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
     || typeof policy.effective.timelineEnabled !== "boolean"
     || !["automatic", "checkout", "worktree", "local"].includes(String(policy.effective.workspace))
+    || !validDialogTimeout(policy.effective.guardTimeoutSeconds)
+    || !validDialogTimeout(policy.effective.clarifyTimeoutSeconds)
     || !Array.isArray(policy.availableVerifyChecks) || policy.availableVerifyChecks.length > 100
     || !policy.availableVerifyChecks.every((check) => record(check)
       && boundedString(check.id, 100)
@@ -662,9 +678,9 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["runtime policy", {
         runtimePolicy: {
           revision: 0,
-          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
+          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           session: {},
-          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
+          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           availableVerifyChecks: [],
         },
       }],

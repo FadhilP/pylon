@@ -187,6 +187,15 @@ export class ApiClient {
     }));
   }
 
+  async uiKeepAlive(requestId: string, sessionGeneration: number): Promise<void> {
+    await json(await fetch(`/api/v1/ui-keepalive/${encodeURIComponent(requestId)}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify({ sessionGeneration }),
+    }));
+  }
+
   private headers(): HeadersInit {
     if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
     return {

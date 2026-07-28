@@ -1,4 +1,4 @@
-import type { PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
+import type { DialogTimeoutSeconds, PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
@@ -106,6 +106,8 @@ export type WebCommand =
       verify: VerifyPolicyReadModel | { mode: "inherit" };
       timeline: "inherit" | "enabled" | "disabled";
       workspace: WorkspacePolicyMode | "inherit";
+      guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
+      clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       expectedRevision: number;
     } & CommandBase);
 
