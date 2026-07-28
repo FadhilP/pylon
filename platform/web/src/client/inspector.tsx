@@ -146,7 +146,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const [scope, setScope] = useState<"project" | "session">("project");
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
-  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("automatic");
+  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("local");
   const [guardTimeout, setGuardTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
   const [clarifyTimeout, setClarifyTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
   const [busy, setBusy] = useState(false);
@@ -269,14 +269,13 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         onChange={(event) => void save(verify, timeline, event.target.value as typeof workspace).catch(() => undefined)}
       >
         {scope === "session" && <option value="inherit">Inherit project</option>}
-        <option value="automatic">Automatic</option>
+        <option value="local">Local</option>
         <option value="checkout">Project folder</option>
         <option value="worktree">Session worktree</option>
-        <option value="local">Local (unmanaged)</option>
       </select>
       <small>{scope === "project"
-        ? "Applies to new sessions. Automatic gives the first session the project folder and isolates concurrent sessions."
-        : "Changing this session moves it immediately when possible. Local does not create a branch or worktree."}</small>
+        ? "Applies to new sessions. Local does not create a branch or worktree."
+        : "Changing this session moves it immediately when possible."}</small>
     </label>
     <TimeoutPolicyControl
       label="Guard timeout"

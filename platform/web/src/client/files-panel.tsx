@@ -6,18 +6,21 @@ import {
   IconFiles,
   IconFolder,
   IconGitCompare,
+  IconGitMerge,
+  IconLoader2,
   IconRefresh,
   IconSearch,
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type {
   WorkspaceFileContent,
   WorkspaceFileDiff,
   WorkspaceFileReadModel,
+  WorkspaceReadModel,
 } from "../shared/protocol/snapshots";
 import { displayTime } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -41,6 +44,8 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   const [viewerLoading, setViewerLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
   const requestRevision = useRef(0);
 
   useEffect(() => {
@@ -114,7 +119,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   }, [files, query]);
   const visible = tab === "changes" ? matchingFiles.filter((file) => file.status) : matchingFiles;
   const workspace = runtime?.workspace;
-  return <aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
+  return <><aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
     <header>
       <div><IconFiles size={18} /><strong id="files-title">Files</strong></div>
       <button className="icon-button" type="button" onClick={onClose} aria-label="Close files"><IconX size={17} /></button>
@@ -148,7 +153,21 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     <nav className="files-tabs" aria-label="File views">
       <button className={tab === "changes" ? "is-active" : ""} onClick={() => setTab("changes")}>Changes <span>{workspace?.changedCount ?? 0}</span></button>
       <button className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}>Files</button>
+      {(workspace?.mode === "checkout" || workspace?.mode === "worktree") && <button
+        className="files-apply-button"
+        type="button"
+        disabled={!workspace.canApplyChanges}
+        title={workspace.applyUnavailableReason ?? `Apply session changes to ${workspace.applyTargetBranch}`}
+        onClick={() => setApplyOpen(true)}
+      >
+        {workspace.applyState === "applying" ? <IconLoader2 className="spin" size={14} /> : <IconGitMerge size={14} />}
+        Apply to {workspace.applyTargetBranch ?? "project branch"}
+      </button>}
     </nav>
+    {workspace?.lastApply && <div className={`files-apply-status is-${workspace.lastApply.state}`} role={workspace.lastApply.state === "error" ? "alert" : "status"}>
+      <span>{workspace.lastApply.message}</span>
+      {workspace.lastApply.conflicts?.length ? <ul>{workspace.lastApply.conflicts.map((path) => <li key={path}><code>{path}</code></li>)}</ul> : null}
+    </div>}
     <label className="files-search"><IconSearch size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" /></label>
     <div className={`files-panel-body${selectedPath ? "" : " is-list-only"}`}>
       <div className="files-list" aria-label={tab === "changes" ? "Changed files" : "Project files"}>
@@ -191,7 +210,84 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
         </>
       </div>}
     </div>
-  </aside>;
+  </aside>
+  {applyOpen && workspace?.revision && workspace.applyTargetBranch && <ApplyChangesDialog
+    workspace={workspace}
+    busy={applyBusy}
+    onCancel={() => setApplyOpen(false)}
+    onConfirm={() => {
+      setApplyBusy(true);
+      void runtimeStore.applySessionChanges(workspace.revision!)
+        .then(() => setApplyOpen(false))
+        .catch((error) => {
+          setApplyOpen(false);
+          onError(error, "Unable to apply session changes");
+        })
+        .finally(() => setApplyBusy(false));
+    }}
+  />}
+  </>;
+}
+
+function ApplyChangesDialog({
+  workspace,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  workspace: WorkspaceReadModel;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && !busy) {
+      event.preventDefault();
+      onCancel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])");
+    if (!focusable?.length) return;
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  return <div className="edit-confirm-backdrop" onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && !busy) onCancel();
+  }}>
+    <div ref={dialogRef} className="edit-confirm-dialog apply-changes-dialog" role="dialog" aria-modal="true" aria-labelledby="apply-dialog-title" onKeyDown={onKeyDown}>
+      <header>
+        <strong id="apply-dialog-title">Apply session changes?</strong>
+        <button className="icon-button" type="button" onClick={onCancel} disabled={busy} aria-label="Close"><IconX size={16} /></button>
+      </header>
+      <div>
+        <p>Apply <strong>{workspace?.changedCount ?? 0}</strong> changed files to <code>{workspace?.applyTargetBranch}</code> as uncommitted working-tree changes.</p>
+        <p>The target currently has <strong>{workspace?.applyTargetChangedCount ?? 0}</strong> local changes. Non-conflicting changes and its staging state will be preserved.</p>
+        <p>{workspace?.mode === "checkout"
+          ? "This session will continue locally on the original branch after applying."
+          : "This session will remain isolated in its worktree after applying."}</p>
+      </div>
+      <footer>
+        <button type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button data-autofocus className="primary-button" type="button" onClick={onConfirm} disabled={busy}>
+          {busy ? "Applying…" : "Apply changes"}
+        </button>
+      </footer>
+    </div>
+  </div>;
 }
 
 function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {

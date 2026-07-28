@@ -5,7 +5,7 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/
 import { basename, dirname, resolve } from "node:path";
 import type { DialogTimeoutSeconds, RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 7;
+const VERSION = 8;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
@@ -78,6 +78,17 @@ export interface HandoffJournal {
   sessionState: HandoffJournal["projectState"];
 }
 
+export interface ApplyJournal {
+  version: 1;
+  sessionId: string;
+  projectId: string;
+  mode: "checkout" | "worktree";
+  workspace: SessionWorkspaceRecord;
+  targetState: HandoffJournal["projectState"];
+  sourceState: HandoffJournal["projectState"];
+  mergedState: HandoffJournal["projectState"];
+}
+
 export interface ProvisionJournal {
   version: 1;
   projectId: string;
@@ -140,18 +151,21 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, 5, 6, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, 6, 7, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
         const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
+        const workspacePolicy = record.workspacePolicy === undefined
+          ? undefined
+          : migrateWorkspacePolicy(record.workspacePolicy);
         if (typeof record.directory !== "string" || !record.directory || record.directory.length > 4_096) return [];
         if (record.archivedAt !== undefined && (typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt)))) return [];
         if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
         if (record.verifyPolicy !== undefined && !validVerifyPolicy(record.verifyPolicy)) return [];
         if (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean") return [];
-        if (record.workspacePolicy !== undefined && !validWorkspacePolicy(record.workspacePolicy)) return [];
+        if (record.workspacePolicy !== undefined && workspacePolicy === undefined) return [];
         if (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds)) return [];
         if (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds)) return [];
         return [{
@@ -160,7 +174,7 @@ export class ProjectRegistry {
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
           ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
           ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-          ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
+          ...(workspacePolicy ? { workspacePolicy } : {}),
           ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
           ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
         }];
@@ -228,7 +242,7 @@ export class ProjectRegistry {
       id,
       cwd,
       label: basename(cwd) || cwd,
-      workspacePolicy: "automatic" as const,
+      workspacePolicy: "local" as const,
       guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS,
       clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS,
     };
@@ -397,6 +411,19 @@ export class ProjectRegistry {
     return record;
   }
 
+  async rekeySession(previousId: string, sessionId: string): Promise<void> {
+    this.assertLoaded();
+    if (previousId === sessionId) return;
+    const workspace = this.sessionWorkspaces.find((item) => item.sessionId === previousId);
+    if (workspace) workspace.sessionId = sessionId;
+    const policy = this.sessionPolicies.find((item) => item.sessionId === previousId);
+    if (policy) policy.sessionId = sessionId;
+    const archived = this.archivedSessions.find((item) => item.id === previousId);
+    if (archived) archived.id = sessionId;
+    this.activeSessionOrder = this.activeSessionOrder.map((id) => id === previousId ? sessionId : id);
+    await this.save();
+  }
+
   async updateWorktreeSettings(projectId: string, setupCommand: string): Promise<void> {
     const project = this.requireProject(projectId);
     if (setupCommand.length > 2_000) throw new Error("setup command is too long");
@@ -410,7 +437,7 @@ export class ProjectRegistry {
     const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
     const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
     const projectTimeline = project.timelineEnabled ?? true;
-    const projectWorkspace = project.workspacePolicy ?? "automatic";
+    const projectWorkspace = project.workspacePolicy ?? "local";
     const projectGuardTimeout = project.guardTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : project.guardTimeoutSeconds;
     const projectClarifyTimeout = project.clarifyTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : project.clarifyTimeoutSeconds;
     return {
@@ -524,6 +551,36 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "handoff.json"), { force: true });
   }
 
+  async writeApplyJournal(value: ApplyJournal): Promise<void> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "apply.json");
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, path);
+  }
+
+  async readApplyJournal(): Promise<ApplyJournal | undefined> {
+    this.assertLoaded();
+    const path = resolve(dirname(this.configPath), "apply.json");
+    try {
+      const value = JSON.parse(await readFile(path, "utf8")) as ApplyJournal;
+      if (value?.version !== 1 || !["checkout", "worktree"].includes(value.mode)
+        || typeof value.sessionId !== "string" || typeof value.projectId !== "string"
+        || !value.workspace || !value.targetState || !value.sourceState || !value.mergedState) {
+        throw new Error("invalid workspace apply recovery journal");
+      }
+      return value;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  async clearApplyJournal(): Promise<void> {
+    this.assertLoaded();
+    await rm(resolve(dirname(this.configPath), "apply.json"), { force: true });
+  }
+
   async writeProvisionJournal(value: ProvisionJournal): Promise<void> {
     this.assertLoaded();
     const path = resolve(dirname(this.configPath), "provision.json");
@@ -567,7 +624,7 @@ export class ProjectRegistry {
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
             ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
             ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-            workspacePolicy: record.workspacePolicy ?? "automatic",
+            workspacePolicy: record.workspacePolicy ?? "local",
             guardTimeoutSeconds: record.guardTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : record.guardTimeoutSeconds,
             clarifyTimeoutSeconds: record.clarifyTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : record.clarifyTimeoutSeconds,
           });
@@ -644,11 +701,14 @@ export class ProjectRegistry {
   private parseSessionPolicy(value: unknown): SessionPolicyRecord[] {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const record = value as Record<string, unknown>;
+    const workspace = record.workspace === undefined
+      ? undefined
+      : migrateWorkspacePolicy(record.workspace);
     if (typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 128
       || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
       || (record.verify !== undefined && !validVerifyPolicy(record.verify))
       || (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean")
-      || (record.workspace !== undefined && !validWorkspacePolicy(record.workspace))
+      || (record.workspace !== undefined && workspace === undefined)
       || (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds))
       || (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds))) return [];
     return [{
@@ -656,7 +716,7 @@ export class ProjectRegistry {
       projectId: record.projectId,
       ...(record.verify ? { verify: cloneVerifyPolicy(record.verify) } : {}),
       ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-      ...(record.workspace ? { workspace: record.workspace } : {}),
+      ...(workspace ? { workspace } : {}),
       ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
       ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
     }];
@@ -679,7 +739,12 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
 }
 
 function validWorkspacePolicy(value: unknown): value is WorkspacePolicyMode {
-  return value === "automatic" || value === "checkout" || value === "worktree" || value === "local";
+  return value === "checkout" || value === "worktree" || value === "local";
+}
+
+function migrateWorkspacePolicy(value: unknown): WorkspacePolicyMode | undefined {
+  if (value === "automatic") return "local";
+  return validWorkspacePolicy(value) ? value : undefined;
 }
 
 function validDialogTimeout(value: unknown): value is DialogTimeoutSeconds {

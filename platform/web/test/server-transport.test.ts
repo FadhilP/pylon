@@ -24,7 +24,7 @@ const snapshot: RuntimeSnapshot = {
   diagnostics: [],
   conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
   sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
-  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
+  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
   metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
   operational: initialOperational([], []),
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
@@ -50,6 +50,7 @@ class FakeDriver implements PiDriver {
   packageSettingsUpdates: unknown[] = [];
   indexRebuilds = 0;
   newSessionParent?: string;
+  dialogMethod: "confirm" | "questionnaire" = "confirm";
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
   conversationHistory(): Promise<ConversationHistoryPage> {
@@ -81,7 +82,10 @@ class FakeDriver implements PiDriver {
     this.prompts.push(input.message);
     this.promptImages.push(input.images);
     const requestId = `dialog-${++this.calls}`;
-    this.emit({ type: "ui.event", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, payload: { kind: "request", requestId, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, method: "confirm", payload: { title: "Guard approval", message: "Allow risky action?" }, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } });
+    const payload = this.dialogMethod === "questionnaire"
+      ? { title: "Clarify", questions: [{ question: "Which target?", options: ["Tests", "Build"] }] }
+      : { title: "Guard approval", message: "Allow risky action?" };
+    this.emit({ type: "ui.event", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, payload: { kind: "request", requestId, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, method: this.dialogMethod, payload, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } });
     return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true });
   }
   queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -342,6 +346,32 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(driver.answers.at(-1)?.confirmed, true);
     const duplicateAnswer = await fetch(`${origin}/api/v1/ui-responses/dialog-1`, { method: "POST", headers: otherHeaders, body: responseBody });
     assert.equal(duplicateAnswer.status, 409);
+
+    driver.dialogMethod = "questionnaire";
+    const questionnaire = await fetch(`${origin}/api/v1/commands`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({ type: "prompt", commandId: "questionnaire", expectedGeneration: 1, message: "clarify" }),
+    });
+    assert.equal(questionnaire.status, 200);
+    const questionnaireBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, {
+      headers: { cookie, "x-pylon-tab-id": tab },
+    }));
+    assert.equal((questionnaireBoot.pendingUi as { owned: boolean }).owned, true);
+    assert.equal((questionnaireBoot.pendingUi as { method: string }).method, "questionnaire");
+    const questionnaireKeepAlive = await fetch(`${origin}/api/v1/ui-keepalive/dialog-2`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({ sessionGeneration: 1 }),
+    });
+    assert.equal(questionnaireKeepAlive.status, 200);
+    const questionnaireAnswer = await fetch(`${origin}/api/v1/ui-responses/dialog-2`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({ sessionGeneration: 1, method: "questionnaire", answers: ["Tests"] }),
+    });
+    assert.equal(questionnaireAnswer.status, 200);
+    assert.deepEqual(driver.answers.at(-1)?.answers, ["Tests"]);
 
     const editCommand = {
       type: "editPrompt",

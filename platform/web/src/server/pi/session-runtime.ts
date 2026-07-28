@@ -64,6 +64,7 @@ import { createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
+import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
 import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, projectConversation, projectConversationTurnIndex } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
@@ -92,7 +93,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
     project: {
       verify: { mode: "auto" },
       timelineEnabled: true,
-      workspace: "automatic",
+      workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
     },
@@ -100,7 +101,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
     effective: {
       verify: { mode: "auto" },
       timelineEnabled: true,
-      workspace: "automatic",
+      workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
     },
@@ -196,6 +197,7 @@ export class SessionRuntime implements PiDriver {
   private sessionMutation?: "lifecycle" | "delete";
   private readonly sessionIndex = new SessionIndex();
   private readonly promptAttachments = new PromptAttachmentBridge();
+  private readonly workspaceApplyTool = new WorkspaceApplyTool();
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
@@ -248,7 +250,7 @@ export class SessionRuntime implements PiDriver {
     const createRuntime = await createPylonRuntimeFactory({
       agentDir: target.agentDir,
       additionalExtensionPaths: this.packageState.extensionPaths,
-      extensionFactories: [this.promptAttachments.extension, ...(this.options.extensionFactories ?? [])],
+      extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, ...(this.options.extensionFactories ?? [])],
       eventBus: this.eventBus,
     });
     this.createRuntime = createRuntime;
@@ -642,6 +644,25 @@ export class SessionRuntime implements PiDriver {
     if (result.ready !== true) throw new Error("Timeline checkpoints are not portable.");
   }
 
+  workspaceApplied(): void {
+    const runtime = this.requireRuntime();
+    this.gitBranch = readGitBranch(runtime.cwd);
+    this.eventBus.emit("pylon:workspace-applied", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+    });
+    this.refreshSnapshot();
+  }
+
+  setWorkspaceApplyHandler(handler: (request: { type: "inspect" } | { type: "schedule"; revision: string }) =>
+    Promise<WorkspaceApplyToolInfo | void>): void {
+    this.workspaceApplyTool.setHandler(handler);
+  }
+
+  recordWorkspaceApplyResult(result: string): void {
+    this.workspaceApplyTool.recordResult(result);
+  }
+
   async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
     const runtime = this.requireRuntime();
     let response: Promise<any> | undefined;
@@ -945,7 +966,7 @@ export class SessionRuntime implements PiDriver {
       const nextFactory = await createPylonRuntimeFactory({
         agentDir: this.target.agentDir,
         additionalExtensionPaths: change.next.extensionPaths,
-        extensionFactories: [this.promptAttachments.extension, ...(this.options.extensionFactories ?? [])],
+        extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, ...(this.options.extensionFactories ?? [])],
         eventBus: this.eventBus,
       });
       this.packageState = change.next;

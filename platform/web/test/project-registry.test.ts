@@ -20,8 +20,9 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 7);
+    assert.equal(stored.version, 8);
     assert.equal(stored.projects.length, 2);
+    assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
 
     let seeded = false;
     const reloaded = new ProjectRegistry(config);
@@ -145,6 +146,51 @@ test("project registry migrates and persists reversible project and session arch
     assert.equal(reloaded.isSessionArchived("session-one"), true);
     await reloaded.remove(id, ["session-one"]);
     assert.equal(reloaded.isSessionArchived("session-one"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("version 7 Automatic policies migrate to Local without moving session workspaces", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-policy-migration-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  await mkdir(join(root, "agent", "pylon-web"), { recursive: true });
+  const workspace = {
+    sessionId: "session-one",
+    projectId: projectIdForCwd(project),
+    mode: "worktree",
+    worktreePath: join(root, "worktree"),
+    commonDir: join(project, ".git"),
+    branch: "refs/heads/pylon-session-one",
+    baseline: "a".repeat(40),
+    baselineTree: "b".repeat(40),
+  };
+  await writeFile(config, JSON.stringify({
+    version: 7,
+    projects: [{ directory: project, workspacePolicy: "automatic" }],
+    archivedSessions: [],
+    sessionWorkspaces: [workspace],
+    activeSessionOrder: [],
+    sessionPolicies: [{
+      sessionId: "session-one",
+      projectId: workspace.projectId,
+      workspace: "automatic",
+    }],
+    policyRevision: 2,
+  }));
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load();
+    assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").project.workspace, "local");
+    assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").session.workspace, "local");
+    assert.deepEqual(registry.workspaceForSession("session-one"), workspace);
+    const stored = JSON.parse(await readFile(config, "utf8"));
+    assert.equal(stored.version, 8);
+    assert.equal(stored.projects[0].workspacePolicy, "local");
+    assert.equal(stored.sessionPolicies[0].workspace, "local");
+    assert.deepEqual(stored.sessionWorkspaces[0], workspace);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

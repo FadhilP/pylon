@@ -64,10 +64,15 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.match(inspector, /label="Guard timeout"/);
   assert.match(inspector, /label="Clarify timeout"/);
   assert.match(inspector, /Paused while the response tab is visible and focused/);
+  assert.doesNotMatch(inspector, /<option value="automatic">/);
+  assert.match(inspector, /<option value="local">Local<\/option>/);
   assert.match(conversation, /<IconPaperclip size=\{16\}/);
   assert.match(conversation, /<IconBulb size=\{16\}/);
   assert.match(conversation, /<IconLoader2 className="prompt-send-spinner"/);
   assert.match(conversation, /sending \? "Sending message"/);
+  assert.match(conversation, /aria-label=\{stopping \? "Stopping response" : "Stop response"\}/);
+  assert.match(conversation, /aria-busy=\{stopping\}/);
+  assert.doesNotMatch(conversation, />Stopping…<\/span>/);
   assert.match(css, /\.prompt-send-spinner\s*\{\s*animation:\s*spin/);
   assert.match(css, /\.conversation-panel > \.ui-request-motion\s*\{/);
   assert.match(css, /\.ui-request-motion \+ \.prompt-form\s*\{\s*border-radius:/);

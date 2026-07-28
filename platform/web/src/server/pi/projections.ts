@@ -566,7 +566,7 @@ export class RuntimeProjection {
       this.publish("session.info", { sessionId: this.runtime.sessionId, name: this.runtime.sessionName });
       return;
     }
-    if (kind === "session_controls_error") {
+    if (kind === "session_controls_error" || kind === "runtime_error") {
       this.publish("runtime.error", { message: text(raw.message, 1_000) || "Could not apply the queued model change" });
       return;
     }

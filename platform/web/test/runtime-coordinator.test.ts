@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
@@ -11,6 +13,7 @@ import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const run = promisify(execFile);
 
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -195,6 +198,102 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal((await driver.listArchived()).sessions[0]?.id, other.getSessionId());
     await driver.restoreSession({ sessionId: other.getSessionId(), expectedGeneration: archived.sessionGeneration });
     assert.equal((await driver.listArchived()).sessions.length, 0);
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Local draft provisioning leaves the project branch and worktree list unchanged", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-local-workspace-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "local\n");
+  await run("git", ["init"], { cwd });
+  await run("git", ["config", "user.name", "Pylon Test"], { cwd });
+  await run("git", ["config", "user.email", "pylon@test.local"], { cwd });
+  await run("git", ["add", "README.md"], { cwd });
+  await run("git", ["commit", "-m", "Initial"], { cwd });
+  const branchBefore = (await run("git", ["branch", "--show-current"], { cwd })).stdout.trim();
+  const worktreesBefore = (await run("git", ["worktree", "list", "--porcelain"], { cwd })).stdout;
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    const slot = (driver as any).selected();
+    persistSession((slot.driver as any).runtime.session.sessionManager, "Apply session changes");
+    await ((driver as any).registry() as ProjectRegistry).setSessionWorkspace({
+      sessionId: slot.id,
+      projectId: projectIdForCwd(cwd),
+      mode: "local",
+    });
+    const registry = (driver as any).registry() as ProjectRegistry;
+    assert.equal(registry.workspaceForSession(slot.id)?.mode, "local");
+    assert.equal((await run("git", ["branch", "--show-current"], { cwd })).stdout.trim(), branchBefore);
+    assert.equal((await run("git", ["worktree", "list", "--porcelain"], { cwd })).stdout, worktreesBefore);
+    assert.equal((await run("git", ["branch", "--list", "pylon-session-*"], { cwd })).stdout.trim(), "");
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session changes apply from a worktree and Project folder without committing", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-apply-session-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "base\n");
+  await run("git", ["init"], { cwd });
+  await run("git", ["config", "user.name", "Pylon Test"], { cwd });
+  await run("git", ["config", "user.email", "pylon@test.local"], { cwd });
+  await run("git", ["add", "README.md"], { cwd });
+  await run("git", ["commit", "-m", "Initial"], { cwd });
+  const originalBranch = (await run("git", ["branch", "--show-current"], { cwd })).stdout.trim();
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    const slot = (driver as any).selected();
+    await (driver as any).ensureDraftWorkspace(slot);
+    await (driver as any).moveSelectedFromLocal(slot, projectIdForCwd(cwd), "worktree");
+    await writeFile(join(slot.driver.runtimeDetails().cwd, "README.md"), "base\nisolated\n");
+    await writeFile(join(cwd, "local.txt"), "keep local\n");
+    const worktreeSnapshot = await driver.snapshot();
+    assert.equal(worktreeSnapshot.workspace?.mode, "worktree");
+    await assert.rejects(driver.applySessionChanges({
+      expectedGeneration: worktreeSnapshot.sessionGeneration,
+      expectedRevision: "stale-revision",
+    }), /session changes changed/);
+    assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\n");
+    const applied = await driver.applySessionChanges({
+      expectedGeneration: worktreeSnapshot.sessionGeneration,
+      expectedRevision: worktreeSnapshot.workspace!.revision!,
+    });
+    assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\nisolated\n");
+    assert.equal((await readFile(join(cwd, "local.txt"), "utf8")).trim(), "keep local");
+    assert.equal((await driver.snapshot()).workspace?.mode, "worktree");
+    assert.equal((await run("git", ["status", "--porcelain"], { cwd })).stdout.includes("README.md"), true);
+
+    const moved = await driver.handoffSession({ destination: "checkout", expectedGeneration: applied.sessionGeneration });
+    await writeFile(join(cwd, "README.md"), "base\nisolated\nproject-folder\n");
+    const checkoutSnapshot = await driver.snapshot();
+    assert.equal(checkoutSnapshot.workspace?.mode, "checkout");
+    const localized = await driver.applySessionChanges({
+      expectedGeneration: moved.sessionGeneration,
+      expectedRevision: checkoutSnapshot.workspace!.revision!,
+    });
+    assert.equal((await driver.snapshot()).workspace?.mode, "local");
+    assert.equal((await run("git", ["branch", "--show-current"], { cwd })).stdout.trim(), originalBranch);
+    assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"),
+      "base\nisolated\nproject-folder\n");
+    assert.equal(localized.sessionId, slot.id);
+    assert.equal((await run("git", ["log", "-1", "--pretty=%s"], { cwd })).stdout.trim(), "Initial");
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));

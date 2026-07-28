@@ -32,7 +32,9 @@ npm run start --workspace @pylon/web
 
 ## Session workspaces
 
-The first accepted prompt in a new Git-backed session lazily creates a Pylon-owned linked worktree under the agent directory. Its synthetic baseline includes the registered checkout's tracked and non-ignored untracked state, so the Files panel reports only session changes. Existing sessions remain checkout-bound until explicitly moved. Project setup commands run only inside newly created worktrees; sessions are never merged back automatically.
+New sessions use the project's explicit workspace policy. Local works directly in the registered folder without changing branches, Project folder uses a Pylon session branch in that checkout, and Session worktree creates a linked worktree under the agent directory. Project setup commands run only inside newly created worktrees.
+
+Project-folder and Session-worktree sessions can apply their bounded session delta to the branch currently checked out in the registered project folder. The merge preserves that branch's index and unrelated working changes, and leaves the applied result uncommitted. Project-folder sessions continue as Local afterward; Session-worktree sessions remain isolated.
 
 The Files right panel exposes bounded, read-only file content and per-session diffs. “Move to project checkout” parks the checkout's branch, index, and working state and moves the session branch there; “Move to worktree” reverses that operation. Timeline must confirm checkpoint portability before either handoff.
 

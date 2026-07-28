@@ -1537,6 +1537,14 @@
   .files-tabs button { display: flex; min-height: 30px; align-items: center; gap: 6px; padding: 0 10px; border-radius: 6px; color: var(--text-muted); font-size: 12px; line-height: 1; }
   .files-tabs button.is-active { background: var(--surface-active); color: var(--text); }
   .files-tabs span { display: inline-flex; min-height: 1em; align-items: center; color: var(--accent-text); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1; }
+  .files-tabs .files-apply-button { margin-left: auto; border: 1px solid var(--line-strong); color: var(--text-soft); }
+  .files-tabs .files-apply-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  .files-apply-status { display: grid; gap: 5px; margin: 7px 10px 0; padding: 7px 9px; border-left: 2px solid var(--accent); color: var(--text-muted); font-size: 12px; }
+  .files-apply-status.is-conflict,
+  .files-apply-status.is-error { border-left-color: var(--danger); }
+  .files-apply-status ul { display: grid; gap: 3px; margin: 0; padding-left: 17px; }
+  .files-apply-status code { overflow-wrap: anywhere; }
+  .apply-changes-dialog code { color: var(--text); }
   .files-search { display: flex; align-items: center; gap: 7px; margin: 7px 10px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-muted); }
   .files-search input { width: 100%; height: 30px; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
   .files-panel-body { display: grid; min-height: 0; flex: 1; grid-template-rows: minmax(120px, 35%) minmax(0, 1fr); border-top: 1px solid var(--line); }

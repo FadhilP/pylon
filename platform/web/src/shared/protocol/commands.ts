@@ -34,6 +34,7 @@ export const COMMAND_NAMES = [
   "updateContinuityMemory",
   "deleteContinuityMemory",
   "handoffSession",
+  "applySessionChanges",
   "updateProjectWorktreeSettings",
   "updateRuntimePolicy",
 ] as const;
@@ -99,6 +100,7 @@ export type WebCommand =
   | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
+  | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
   | ({
       type: "updateRuntimePolicy";

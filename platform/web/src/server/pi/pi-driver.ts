@@ -98,6 +98,11 @@ export interface HandoffSessionInput {
   destination: "checkout" | "worktree";
 }
 
+export interface ApplySessionChangesInput {
+  expectedGeneration: number;
+  expectedRevision: string;
+}
+
 export interface SwitchSessionInput {
   sessionId: string;
 }
@@ -273,6 +278,7 @@ export interface PiDriver {
   restoreProject(input: ProjectArchiveInput): Promise<void>;
   updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
   handoffSession?(input: HandoffSessionInput): Promise<ReplacementResult>;
+  applySessionChanges?(input: ApplySessionChangesInput): Promise<ReplacementResult>;
   switchSession(input: SwitchSessionInput): Promise<ReplacementResult>;
   deleteSession(input: DeleteSessionInput): Promise<void>;
   archiveSession(input: SessionArchiveInput): Promise<ReplacementResult>;

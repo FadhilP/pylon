@@ -526,6 +526,9 @@ export class ServerTransport {
       case "handoffSession":
         if (!this.driver.handoffSession) return Promise.reject(httpError(409, "workspace handoff is unavailable"));
         return this.driver.handoffSession(command).then((result) => accepted(result.sessionGeneration));
+      case "applySessionChanges":
+        if (!this.driver.applySessionChanges) return Promise.reject(httpError(409, "applying session changes is unavailable"));
+        return this.driver.applySessionChanges(command).then((result) => accepted(result.sessionGeneration));
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings) return Promise.reject(httpError(409, "worktree settings are unavailable"));
         return this.driver.updateProjectWorktreeSettings(command).then(() => accepted(command.expectedGeneration));
@@ -548,7 +551,7 @@ export class ServerTransport {
     // UI event is personalized correctly for every connected tab.
     if (event.type === "ui.event") {
       const raw = event.payload && typeof event.payload === "object" ? event.payload as { requestId?: unknown; method?: unknown } : {};
-      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor"].includes(String(raw.method))) {
+      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))) {
         this.openDialog(raw.requestId, event.sessionGeneration, this.lastCommandOwner);
       }
     }

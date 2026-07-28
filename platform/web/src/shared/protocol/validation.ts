@@ -221,7 +221,7 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
       || value.scope === "project" && value.timeline === "inherit") {
       return { ok: false, error: "invalid Timeline policy" };
     }
-    if (!["inherit", "automatic", "checkout", "worktree", "local"].includes(String(value.workspace))
+    if (!["inherit", "checkout", "worktree", "local"].includes(String(value.workspace))
       || value.scope === "project" && value.workspace === "inherit") {
       return { ok: false, error: "invalid workspace policy" };
     }
@@ -233,6 +233,9 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "handoffSession"
     && value.destination !== "checkout" && value.destination !== "worktree") {
     return { ok: false, error: "invalid handoff destination" };
+  }
+  if (value.type === "applySessionChanges" && !boundedString(value.expectedRevision, 128)) {
+    return { ok: false, error: "invalid workspace revision" };
   }
   if (value.type === "setModel" && (!boundedString(value.provider) || !boundedString(value.modelId))) {
     return { ok: false, error: "invalid model" };
@@ -463,28 +466,41 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       || !Number.isSafeInteger(value.workspace.changedCount) || (value.workspace.changedCount as number) < 0
       || typeof value.workspace.canMoveToCheckout !== "boolean"
       || typeof value.workspace.canMoveToWorktree !== "boolean"
+      || typeof value.workspace.canApplyChanges !== "boolean"
       || (value.workspace.revision !== undefined && !boundedString(value.workspace.revision, 128))
       || (value.workspace.setupState !== undefined && !["idle", "running", "failed"].includes(String(value.workspace.setupState)))
       || (value.workspace.setupError !== undefined && !boundedString(value.workspace.setupError, 500))
       || (value.workspace.checkoutOwner !== undefined && !identifier(value.workspace.checkoutOwner))
-      || (value.workspace.handoffUnavailableReason !== undefined && !boundedString(value.workspace.handoffUnavailableReason, 500))) return false;
+      || (value.workspace.handoffUnavailableReason !== undefined && !boundedString(value.workspace.handoffUnavailableReason, 500))
+      || (value.workspace.applyTargetBranch !== undefined && !boundedString(value.workspace.applyTargetBranch, 200))
+      || (value.workspace.applyTargetChangedCount !== undefined
+        && (!Number.isSafeInteger(value.workspace.applyTargetChangedCount) || (value.workspace.applyTargetChangedCount as number) < 0))
+      || (value.workspace.applyUnavailableReason !== undefined && !boundedString(value.workspace.applyUnavailableReason, 500))
+      || (value.workspace.applyState !== undefined && !["pending", "applying"].includes(String(value.workspace.applyState)))
+      || (value.workspace.lastApply !== undefined && (!record(value.workspace.lastApply)
+        || !["applied", "unchanged", "conflict", "error"].includes(String(value.workspace.lastApply.state))
+        || (value.workspace.lastApply.targetBranch !== undefined && !boundedString(value.workspace.lastApply.targetBranch, 200))
+        || (value.workspace.lastApply.message !== undefined && !boundedString(value.workspace.lastApply.message, 500))
+        || (value.workspace.lastApply.conflicts !== undefined && (!Array.isArray(value.workspace.lastApply.conflicts)
+          || value.workspace.lastApply.conflicts.length > 100
+          || !value.workspace.lastApply.conflicts.every((path) => boundedString(path, 500))))))) return false;
   }
   const policy = value.runtimePolicy;
   if (!record(policy) || !Number.isSafeInteger(policy.revision) || (policy.revision as number) < 0
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
     || typeof policy.project.timelineEnabled !== "boolean"
-    || !["automatic", "checkout", "worktree", "local"].includes(String(policy.project.workspace))
+    || !["checkout", "worktree", "local"].includes(String(policy.project.workspace))
     || !validDialogTimeout(policy.project.guardTimeoutSeconds)
     || !validDialogTimeout(policy.project.clarifyTimeoutSeconds)
     || !record(policy.session)
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
-    || (policy.session.workspace !== undefined && !["automatic", "checkout", "worktree", "local"].includes(String(policy.session.workspace)))
+    || (policy.session.workspace !== undefined && !["checkout", "worktree", "local"].includes(String(policy.session.workspace)))
     || (policy.session.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.guardTimeoutSeconds))
     || (policy.session.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.clarifyTimeoutSeconds))
     || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
     || typeof policy.effective.timelineEnabled !== "boolean"
-    || !["automatic", "checkout", "worktree", "local"].includes(String(policy.effective.workspace))
+    || !["checkout", "worktree", "local"].includes(String(policy.effective.workspace))
     || !validDialogTimeout(policy.effective.guardTimeoutSeconds)
     || !validDialogTimeout(policy.effective.clarifyTimeoutSeconds)
     || !Array.isArray(policy.availableVerifyChecks) || policy.availableVerifyChecks.length > 100
@@ -678,9 +694,9 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["runtime policy", {
         runtimePolicy: {
           revision: 0,
-          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           session: {},
-          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           availableVerifyChecks: [],
         },
       }],

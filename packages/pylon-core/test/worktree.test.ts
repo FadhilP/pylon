@@ -10,6 +10,7 @@ import {
   createWorktreeSummary,
   diffWorkspaceFile,
   listWorkspaceFiles,
+  mergeWorkspaceChanges,
   parseWorktreeSummary,
   readWorkspaceFile,
   recreateSessionWorktree,
@@ -200,6 +201,76 @@ test("session state moves to the project checkout and back without merging", asy
     await assert.rejects(stat(join(recreated, "orphan.txt")));
     assert.equal((await readFile(join(root, "file.txt"), "utf8")).trim(), "project");
     assert.equal((await readFile(join(recreated, "file.txt"), "utf8")).trim(), "session");
+    await removeSessionWorktree(root, worktree, owned);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(owned, { recursive: true, force: true });
+  }
+});
+
+test("session changes merge onto a dirty checkout without changing its index", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-apply-"));
+  const owned = await mkdtemp(join(tmpdir(), "pylon-apply-worktrees-"));
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "shared.txt"), "first\nmiddle\nlast\n");
+    await writeFile(join(root, "target.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const worktree = await createSessionWorktree(root, join(owned, "session-apply"), owned, "session-apply");
+
+    await writeFile(join(root, "shared.txt"), "target\nmiddle\nlast\n");
+    await writeFile(join(root, "target.txt"), "staged target\n");
+    await git(root, ["add", "target.txt"]);
+    const target = await captureCheckoutState(root);
+
+    await writeFile(join(worktree.root, "shared.txt"), "first\nmiddle\nsession\n");
+    await writeFile(join(worktree.root, "session.txt"), "new\n");
+    const source = await captureCheckoutState(worktree.root);
+    const result = await mergeWorkspaceChanges(root, worktree.baselineTree, target, source);
+    assert.equal(result.state, "applied");
+    assert.ok("checkout" in result);
+    if (!("checkout" in result)) return;
+    assert.equal(result.checkout.indexTree, target.indexTree);
+    await restoreCheckoutState(root, result.checkout);
+    assert.equal((await readFile(join(root, "shared.txt"), "utf8")).replaceAll("\r\n", "\n"),
+      "target\nmiddle\nsession\n");
+    assert.equal((await readFile(join(root, "target.txt"), "utf8").then((value) => value.trim())), "staged target");
+    assert.equal((await readFile(join(root, "session.txt"), "utf8").then((value) => value.trim())), "new");
+    assert.equal((await captureCheckoutState(root)).indexTree, target.indexTree);
+
+    const repeated = await mergeWorkspaceChanges(root, worktree.baselineTree, await captureCheckoutState(root), source);
+    assert.equal(repeated.state, "unchanged");
+    await removeSessionWorktree(root, worktree, owned);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(owned, { recursive: true, force: true });
+  }
+});
+
+test("conflicting session changes leave both checkout states untouched", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-apply-conflict-"));
+  const owned = await mkdtemp(join(tmpdir(), "pylon-apply-conflict-worktrees-"));
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "shared.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const worktree = await createSessionWorktree(root, join(owned, "session-conflict"), owned, "session-conflict");
+    await writeFile(join(root, "shared.txt"), "target\n");
+    await writeFile(join(worktree.root, "shared.txt"), "session\n");
+    const target = await captureCheckoutState(root);
+    const source = await captureCheckoutState(worktree.root);
+
+    const result = await mergeWorkspaceChanges(root, worktree.baselineTree, target, source);
+    assert.equal(result.state, "conflict");
+    assert.deepEqual(result.state === "conflict" && result.conflicts.map((item) => item.path), ["shared.txt"]);
+    assert.equal((await captureCheckoutState(root)).worktreeTree, target.worktreeTree);
+    assert.equal((await captureCheckoutState(worktree.root)).worktreeTree, source.worktreeTree);
     await removeSessionWorktree(root, worktree, owned);
   } finally {
     await rm(root, { recursive: true, force: true });

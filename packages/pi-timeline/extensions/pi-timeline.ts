@@ -704,6 +704,12 @@ export default function timelineExtension(
       return { version: 1, ready: true };
     })());
   });
+  const disposeWorkspaceApplied = pi.events.on("pylon:workspace-applied", (event: any) => {
+    if (event?.version !== 1 || event.sessionId !== currentSessionId || !lastCtx) return;
+    confirmedForks.clear();
+    refresh(lastCtx);
+    publishState();
+  });
   pi.on("session_start", async (_e, ctx) => {
     lastCtx = ctx;
     latestVerification = undefined;
@@ -740,6 +746,7 @@ export default function timelineExtension(
     disposeVerify();
     disposeCheckpoint();
     disposeRelocation();
+    disposeWorkspaceApplied();
     disposeWorktreeChange();
     disposeFilesRequest();
     disposeDiffRequest();

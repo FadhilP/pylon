@@ -753,8 +753,15 @@ export function ConversationPanel({
             onApply={setSessionControls}
           />
           {running && !hasDraft
-            ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected || stopping} aria-label="Stop response">
-                <IconSquareFilled size={13} />{stopping && <span>Stopping…</span>}
+            ? <button
+                className="prompt-abort"
+                type="button"
+                onClick={() => void runtimeStore.abort().catch(() => undefined)}
+                disabled={!connected || stopping}
+                aria-label={stopping ? "Stopping response" : "Stop response"}
+                aria-busy={stopping}
+              >
+                <IconSquareFilled size={13} />
               </button>
             : <button
                 className="prompt-send"

@@ -172,6 +172,15 @@ export interface WorkspaceChangeList {
   files: WorkspaceFile[];
 }
 
+export interface WorkspaceApplyConflict {
+  path: string;
+  context?: string;
+}
+
+export type WorkspaceApplyResult =
+  | { state: "applied" | "unchanged"; checkout: CheckoutState }
+  | { state: "conflict"; conflicts: WorkspaceApplyConflict[] };
+
 export interface WorkspaceFileContent {
   revision: string;
   path: string;
@@ -570,6 +579,129 @@ export async function restoreCheckoutState(cwd: string, target: CheckoutState): 
   });
 }
 
+export async function mergeWorkspaceChanges(
+  repositoryCwd: string,
+  baselineTree: string,
+  target: CheckoutState,
+  source: CheckoutState,
+): Promise<WorkspaceApplyResult> {
+  if (!objectId.test(baselineTree)
+    || !objectId.test(target.indexTree) || !objectId.test(target.worktreeTree)
+    || !objectId.test(source.indexTree) || !objectId.test(source.worktreeTree)) {
+    throw Error("Invalid workspace state.");
+  }
+  const repository = await inspectGitWorkspace(repositoryCwd);
+  if (!repository
+    || canonical(repository.commonDir) !== canonical(target.commonDir)
+    || canonical(repository.commonDir) !== canonical(source.commonDir)) {
+    throw Error("Workspace states belong to different repositories.");
+  }
+  if (source.worktreeTree === baselineTree) {
+    return { state: "unchanged", checkout: target };
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "pylon-apply-"));
+  const workTree = join(directory, "worktree");
+  const env = {
+    GIT_INDEX_FILE: join(directory, "index"),
+    GIT_WORK_TREE: workTree,
+  };
+  await mkdir(workTree);
+  try {
+    await git(repository.root, [
+      "read-tree", "-m", baselineTree, target.worktreeTree, source.worktreeTree,
+    ], env);
+    let merged = await git(repository.root, [
+      "merge-index", "git-merge-one-file", "-a",
+    ], env).then(() => true, () => false);
+    if (!merged) {
+      const entries = splitNul(await git(repository.root, ["ls-files", "-u", "-z"], env));
+      const conflicts = new Map<string, Map<number, { mode: string; object: string }>>();
+      for (const entry of entries) {
+        const match = /^(\d+) ([0-9a-f]+) ([123])\t(.+)$/i.exec(entry);
+        if (!match) continue;
+        const [, mode, object, stage, path] = match;
+        const stages = conflicts.get(path) ?? new Map();
+        stages.set(Number(stage), { mode, object });
+        conflicts.set(path, stages);
+      }
+      for (const [path, stages] of conflicts) {
+        const targetBlob = stages.get(2);
+        const sourceBlob = stages.get(3);
+        if (!targetBlob || !sourceBlob) continue;
+        const [targetText, sourceText] = await Promise.all([
+          git(repository.root, ["show", `:2:${safeRelativePath(path)}`], env).catch(() => undefined),
+          git(repository.root, ["show", `:3:${safeRelativePath(path)}`], env).catch(() => undefined),
+        ]);
+        const selected = targetText !== undefined && sourceText !== undefined
+          ? sourceText.includes(targetText)
+            ? sourceBlob
+            : targetText.includes(sourceText)
+              ? targetBlob
+              : undefined
+          : undefined;
+        if (selected) {
+          await git(repository.root, [
+            "update-index", "--add", "--cacheinfo", `${selected.mode},${selected.object},${safeRelativePath(path)}`,
+          ], env);
+        }
+      }
+      merged = !(await git(repository.root, ["ls-files", "-u"], env)).trim();
+    }
+    if (!merged) {
+      const paths = [...new Set(splitNul(await git(repository.root, ["ls-files", "-u", "-z"], env))
+        .map((entry) => entry.slice(entry.indexOf("\t") + 1))
+        .filter(Boolean))]
+        .slice(0, 100);
+      const conflicts: WorkspaceApplyConflict[] = [];
+      let contextBytes = 0;
+      for (const path of paths) {
+        const safe = safeRelativePath(path);
+        let context: string | undefined;
+        if (contextBytes < 32 * 1024) {
+          const value = await readFile(resolve(workTree, safe)).catch(() => undefined);
+          if (value && !value.includes(0)) {
+            context = value.toString("utf8").slice(0, Math.min(4_096, 32 * 1024 - contextBytes));
+            contextBytes += Buffer.byteLength(context);
+          }
+        }
+        conflicts.push({ path: safe, ...(context ? { context } : {}) });
+      }
+      return { state: "conflict", conflicts };
+    }
+    const worktreeTree = await git(repository.root, ["write-tree"], env);
+    if (!objectId.test(worktreeTree)) throw Error("Git returned an invalid merged tree.");
+    return {
+      state: worktreeTree === target.worktreeTree ? "unchanged" : "applied",
+      checkout: { ...target, worktreeTree },
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+export async function snapshotSessionBranch(
+  repositoryCwd: string,
+  branch: string,
+  expectedCommonDir: string,
+  tree: string,
+): Promise<string> {
+  if (!ownedBranch.test(branch) || !objectId.test(tree)) {
+    throw Error("Invalid Pylon session snapshot.");
+  }
+  const repository = await inspectGitWorkspace(repositoryCwd);
+  if (!repository || canonical(repository.commonDir) !== canonical(expectedCommonDir)) {
+    throw Error("Session branch belongs to a different repository.");
+  }
+  const previous = await git(repository.root, ["rev-parse", "--verify", branch]);
+  const snapshot = await git(repository.root, [
+    "commit-tree", tree, "-p", previous, "-m", "Pylon session apply snapshot",
+  ], ident);
+  if (!objectId.test(snapshot)) throw Error("Git returned an invalid session snapshot.");
+  await git(repository.root, ["update-ref", branch, snapshot, previous]);
+  return snapshot;
+}
+
 async function workspaceRevision(cwd: string, baselineTree: string) {
   if (!objectId.test(baselineTree)) throw Error("Invalid workspace baseline.");
   const current = await captureCheckoutState(cwd);
@@ -617,6 +749,11 @@ export async function inspectWorkspaceChanges(cwd: string, baselineTree: string)
     revision,
     files: (await changesBetween(current.root, baselineTree, current.worktreeTree)).slice(0, 5_000),
   };
+}
+
+export async function inspectTreeChanges(cwd: string, baselineTree: string, tree: string): Promise<WorkspaceFile[]> {
+  if (!objectId.test(baselineTree) || !objectId.test(tree)) throw Error("Invalid workspace tree.");
+  return changesBetween(cwd, baselineTree, tree);
 }
 
 export async function collectWorkspaceFiles(options: {

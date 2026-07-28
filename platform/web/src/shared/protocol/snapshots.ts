@@ -35,7 +35,7 @@ export type VerifyPolicyReadModel =
   | { mode: "auto" }
   | { mode: "selected"; checks: string[] };
 
-export type WorkspacePolicyMode = "automatic" | "checkout" | "worktree" | "local";
+export type WorkspacePolicyMode = "checkout" | "worktree" | "local";
 export type DialogTimeoutSeconds = number | null;
 
 export interface RuntimePolicyReadModel {
@@ -75,6 +75,17 @@ export interface WorkspaceReadModel {
   canMoveToCheckout: boolean;
   canMoveToWorktree: boolean;
   handoffUnavailableReason?: string;
+  canApplyChanges: boolean;
+  applyTargetBranch?: string;
+  applyTargetChangedCount?: number;
+  applyUnavailableReason?: string;
+  applyState?: "pending" | "applying";
+  lastApply?: {
+    state: "applied" | "unchanged" | "conflict" | "error";
+    targetBranch?: string;
+    conflicts?: string[];
+    message?: string;
+  };
 }
 
 export interface WorkspaceFileReadModel {

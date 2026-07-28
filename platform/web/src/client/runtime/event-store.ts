@@ -421,6 +421,16 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "handoffSession", destination, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async applySessionChanges(expectedRevision: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "applySessionChanges",
+      expectedRevision,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async updateProjectWorktreeSettings(projectId: string, setupCommand: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
