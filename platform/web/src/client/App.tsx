@@ -106,8 +106,9 @@ export function App() {
     id: page.id,
     label: page.label,
     sessions: page.sessions,
-    active: page.sessions.some((session) => session.active),
-  })), [sessionPages]);
+    active: activeSessions.some((session) => session.projectId === page.id && session.active)
+      || page.sessions.some((session) => session.active),
+  })), [activeSessions, sessionPages]);
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
@@ -127,7 +128,8 @@ export function App() {
   const applySessionList = (result: SessionListSnapshot) => {
     setSessionPages(result.projects);
     setActiveSessions(result.activeSessions);
-    const projectId = result.projects.find((page) => page.sessions.some((session) => session.active))?.id;
+    const projectId = result.activeSessions.find((session) => session.active)?.projectId
+      ?? result.projects.find((page) => page.sessions.some((session) => session.active))?.id;
     if (projectId) setExpandedProjects((current) => new Set([...current, projectId]));
   };
   const reportError = (cause: unknown, fallback: string) => {
@@ -143,7 +145,8 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("pylon-theme", theme);
+    try { localStorage.setItem("pylon-theme", theme); }
+    catch { /* The theme still applies for the current page. */ }
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#111318" : "#e9eaec");
   }, [theme]);
 
@@ -669,7 +672,10 @@ function PanelResizer({ container, width, onCommit }: {
       cleanup();
       onCommit(next);
     };
-    const cancel = () => cleanup();
+    const cancel = () => {
+      cleanup();
+      container.current?.style.setProperty("--inspector-width", `${width}px`);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
     window.addEventListener("pointercancel", cancel, { once: true });

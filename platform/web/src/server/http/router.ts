@@ -59,8 +59,8 @@ export class ServerTransport {
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     applySecurityHeaders(response);
     if (!requestAllowed(request, this.options)) return this.send(response, 403, { error: "request origin is not allowed" });
-    const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
     try {
+      const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
       if (request.method === "GET" && url.pathname === "/api/v1/bootstrap") return this.bootstrap(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
@@ -90,7 +90,11 @@ export class ServerTransport {
       }
       return this.send(response, 404, { error: "not found" });
     } catch (error) {
-      const status = error && typeof error === "object" && "statusCode" in error ? (error as { statusCode: number }).statusCode : 500;
+      const status = error instanceof URIError
+        ? 400
+        : error && typeof error === "object" && "statusCode" in error
+          ? (error as { statusCode: number }).statusCode
+          : 500;
       this.send(response, status, { error: error instanceof Error ? error.message.slice(0, 500) : "internal server error" });
     }
   }
@@ -165,6 +169,9 @@ export class ServerTransport {
     this.renew(tabId);
     try {
       const accepted = await this.idempotency.execute(command, () => {
+        if (command.expectedGeneration !== this.journal.sessionGeneration) {
+          throw httpError(409, "stale session generation");
+        }
         this.lastCommandOwner = tabId;
         return this.execute(command);
       });

@@ -862,7 +862,7 @@ export class SessionRuntime implements PiDriver {
     const catalog = this.packageCatalog;
     if (!catalog) throw new Error("runtime is not ready");
     this.assertPackageModels(input.settings);
-    return this.changePackages(async (previous) => {
+    return this.changePackages(async () => {
       const oldSettings = await catalog.updateSettings(input.packageId, input.settings);
       return {
         next: await catalog.scan(),

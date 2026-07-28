@@ -38,8 +38,14 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
     cwd: options.cwd ?? repositoryRoot,
     repositoryRoot,
     agentDir: options.agentDir ?? getAgentDir(),
+  }).catch(async (error) => {
+    await driver.dispose().catch(() => undefined);
+    throw error;
   });
-  const assets = await createAssetHost(webRoot, options.development ?? process.env.NODE_ENV !== "production");
+  const assets = await createAssetHost(webRoot, options.development ?? process.env.NODE_ENV !== "production").catch(async (error) => {
+    await driver.dispose().catch(() => undefined);
+    throw error;
+  });
   let transport: ServerTransport | undefined;
   let allowedHost: string | undefined;
   const server = createServer({

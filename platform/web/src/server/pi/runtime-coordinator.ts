@@ -208,7 +208,7 @@ export class RuntimeCoordinator implements PiDriver {
     const slot = this.selected();
     const generation = this.generation;
     const page = await slot.driver.conversationHistory(input);
-    if (slot.id !== this.selectedId || generation !== this.generation) throw new Error("session changed while loading history");
+    this.assertSelected(slot, generation, "loading history");
     return { ...page, sessionGeneration: generation };
   }
 
@@ -217,9 +217,7 @@ export class RuntimeCoordinator implements PiDriver {
     const generation = this.generation;
     if (!slot.driver.conversationTurnIndex) throw new Error("conversation turn index is unavailable");
     const page = await slot.driver.conversationTurnIndex(input);
-    if (slot.id !== this.selectedId || generation !== this.generation) {
-      throw new Error("session changed while loading turn index");
-    }
+    this.assertSelected(slot, generation, "loading turn index");
     return { ...page, sessionGeneration: generation };
   }
 
@@ -262,16 +260,24 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async listPackages(): Promise<PackageListSnapshot> {
-    return this.selected().driver.listPackages();
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await slot.driver.listPackages();
+    this.assertSelected(slot, generation, "listing packages");
+    return { ...result, sessionGeneration: generation };
   }
 
   async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
-    const result = await this.selected().driver.fileSuggestions(input);
-    return { ...result, sessionGeneration: this.generation };
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await slot.driver.fileSuggestions(input);
+    this.assertSelected(slot, generation, "loading file suggestions");
+    return { ...result, sessionGeneration: generation };
   }
 
   async workspaceFiles(input: WorkspaceFilesInput): Promise<WorkspaceFilePage> {
     const slot = this.selected();
+    const generation = this.generation;
     const record = this.registry().workspaceForSession(slot.id);
     const cwd = slot.driver.runtimeDetails().cwd;
     const inventoryKey = workspaceInventoryKey(cwd, record?.baselineTree);
@@ -305,9 +311,10 @@ export class RuntimeCoordinator implements PiDriver {
     const limit = Math.min(200, Math.max(1, input.limit ?? 200));
     const files = filtered.slice(offset, offset + limit);
     const next = offset + files.length;
+    this.assertSelected(slot, generation, "listing workspace files");
     return {
       protocolVersion: PROTOCOL_VERSION,
-      sessionGeneration: this.generation,
+      sessionGeneration: generation,
       revision: inventory.revision,
       files,
       totalCount: filtered.length,
@@ -318,16 +325,19 @@ export class RuntimeCoordinator implements PiDriver {
 
   async workspaceFile(input: WorkspaceFileInput): Promise<WorkspaceFileContent> {
     const slot = this.selected();
+    const generation = this.generation;
     const record = this.registry().workspaceForSession(slot.id);
     const cwd = slot.driver.runtimeDetails().cwd;
     const file = await (await inspectGitWorkspace(cwd)
       ? readWorkspaceFile({ cwd, path: input.path, baselineTree: record?.baselineTree, view: input.view })
       : readPlainWorkspaceFile(cwd, input.path));
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...file };
+    this.assertSelected(slot, generation, "loading a workspace file");
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, ...file };
   }
 
   async workspaceDiff(input: WorkspaceFileInput): Promise<WorkspaceFileDiff> {
     const slot = this.selected();
+    const generation = this.generation;
     const record = this.registry().workspaceForSession(slot.id);
     if (!record?.baselineTree) throw new Error("This session has no isolated Git baseline.");
     const diff = await diffWorkspaceFile({
@@ -335,17 +345,24 @@ export class RuntimeCoordinator implements PiDriver {
       path: input.path,
       baselineTree: record.baselineTree,
     });
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.generation, ...diff };
+    this.assertSelected(slot, generation, "loading a workspace diff");
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, ...diff };
   }
 
   async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
-    const result = await this.selected().driver.timelineCheckpointFiles(input);
-    return { ...result, sessionGeneration: this.generation };
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await slot.driver.timelineCheckpointFiles(input);
+    this.assertSelected(slot, generation, "loading checkpoint files");
+    return { ...result, sessionGeneration: generation };
   }
 
   async timelineCheckpointDiff(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff> {
-    const result = await this.selected().driver.timelineCheckpointDiff(input);
-    return { ...result, sessionGeneration: this.generation };
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await slot.driver.timelineCheckpointDiff(input);
+    this.assertSelected(slot, generation, "loading a checkpoint diff");
+    return { ...result, sessionGeneration: generation };
   }
 
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -906,7 +923,6 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async renameSession(input: RenameSessionInput): Promise<void> {
-    this.assertGeneration();
     if (this.registry().isSessionArchived(input.sessionId)) throw new Error("restore the session before renaming it");
     const slot = this.slots.get(input.sessionId);
     if (slot) slot.lastActivityAt = Date.now();
@@ -916,7 +932,6 @@ export class RuntimeCoordinator implements PiDriver {
 
   setSessionActive(input: SetSessionActiveInput): Promise<void> {
     return this.withLifecycle(async () => {
-      this.assertGeneration();
       if (this.registry().isSessionArchived(input.sessionId)) throw new Error("restore the session before activating it");
       const awake = this.slots.get(input.sessionId);
       if (input.active) {
@@ -1053,24 +1068,20 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async rebuildDiscoverIndex(): Promise<void> {
-    this.assertGeneration();
     const slot = this.selected();
     slot.lastActivityAt = Date.now();
     await slot.driver.rebuildDiscoverIndex();
   }
 
   async setModel(input: SetModelInput): Promise<void> {
-    this.assertGeneration();
     await this.selected().driver.setModel(input);
   }
 
   setThinkingLevel(input: SetThinkingLevelInput): void {
-    this.assertGeneration();
     this.selected().driver.setThinkingLevel(input);
   }
 
   async setSessionControls(input: SetSessionControlsInput): Promise<void> {
-    this.assertGeneration();
     const slot = this.selected();
     const model = slot.driver.validateSessionControls(input);
     if (!slot.driver.hasActiveAgentRun()) {
@@ -1688,6 +1699,12 @@ export class RuntimeCoordinator implements PiDriver {
       const error = new Error(`stale session generation: expected ${this.generation}, received ${expected}`);
       error.name = "StaleGenerationError";
       throw error;
+    }
+  }
+
+  private assertSelected(slot: RuntimeSlot, generation: number, action: string): void {
+    if (slot.id !== this.selectedId || generation !== this.generation) {
+      throw new Error(`session changed while ${action}`);
     }
   }
 

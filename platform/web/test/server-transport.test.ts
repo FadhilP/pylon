@@ -197,6 +197,23 @@ test("local server rejects foreign Host before API and asset routing", async () 
   }
 });
 
+test("server startup disposes a driver that fails to initialize", async () => {
+  class FailingDriver extends FakeDriver {
+    disposed = false;
+    override start(): Promise<RuntimeHandle> {
+      return Promise.reject(new Error("startup failed"));
+    }
+    override dispose(): Promise<void> {
+      this.disposed = true;
+      return Promise.resolve();
+    }
+  }
+  const driver = new FailingDriver();
+
+  await assert.rejects(startPylonServer({ port: 0, development: false, driver }), /startup failed/);
+  assert.equal(driver.disposed, true);
+});
+
 test("transport enforces origin, CSRF, size, generation, readiness, idempotency, and dialog ownership", { timeout: 10_000 }, async () => {
   const driver = new FakeDriver();
   let transport: ServerTransport;
@@ -232,6 +249,12 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const csrf = String(boot.csrfToken);
     const mutationHeaders = { cookie, "content-type": "application/json", "x-pylon-csrf": csrf, "x-pylon-tab-id": tab };
 
+    const malformedPath = await fetch(`${origin}/api/v1/ui-responses/%E0%A4%A`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: "{}",
+    });
+    assert.equal(malformedPath.status, 400);
     const noStream = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "prompt", commandId: "before-stream", expectedGeneration: 1, message: "hello" }) });
     assert.equal(noStream.status, 409);
     const badCsrf = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ type: "abort", commandId: "bad", expectedGeneration: 1 }) });

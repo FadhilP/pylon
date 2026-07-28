@@ -349,6 +349,12 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
 }) {
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
+  const relativeTime = formatRelativeTime(session.modifiedAt, now);
+  const activity = relativeTime === "now"
+    ? "Active now"
+    : relativeTime === "Unknown"
+      ? "Activity unknown"
+      : `Active ${relativeTime} ago`;
 
   return <div className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`} data-reorder-kind={reorderKind} data-reorder-id={reorderKind ? session.id : undefined}>
     <button
@@ -367,7 +373,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
           {showProject ? `${session.cwdLabel} · ` : ""}
           <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>{displayDate(session.createdAt)}</time>
           {" · "}
-          <time dateTime={session.modifiedAt} title={`Last active ${displayTime(session.modifiedAt)}`}>Active {formatRelativeTime(session.modifiedAt, now)} ago</time>
+          <time dateTime={session.modifiedAt} title={`Last active ${displayTime(session.modifiedAt)}`}>{activity}</time>
         </small>
       </span>
       {!sleeping && <span className={`session-runtime-state is-${session.runtimeState}`} aria-label={session.runtimeState} title={session.runtimeState} />}

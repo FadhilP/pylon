@@ -171,7 +171,7 @@ export class SessionIndex {
   }
 
   private async refresh(): Promise<void> {
-    if (this.sessions.length && Date.now() - this.scannedAt < REFRESH_MS) return;
+    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS) return;
     if (this.scan) return this.scan;
     this.scan = SessionManager.listAll().then((sessions) => {
       this.sessions = sessions;

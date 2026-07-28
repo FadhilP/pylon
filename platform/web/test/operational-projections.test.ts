@@ -77,3 +77,13 @@ test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {
     purpose: "verification",
   });
 });
+
+test("operational projections reject out-of-range timestamps without throwing", () => {
+  const state = applyOperationalEvent(
+    initialOperational([], ["pi-heartbeat.ts"]),
+    "pi-heartbeat:job",
+    { version: 1, id: "job-1", state: "running", startedAt: 1e100 },
+  );
+
+  assert.deepEqual(state.jobs, { availability: "unavailable", items: [] });
+});

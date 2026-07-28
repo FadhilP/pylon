@@ -23,7 +23,10 @@ function string(value: unknown, maximum: number): string | undefined {
   return typeof value === "string" && value.length > 0 ? value.slice(0, maximum) : undefined;
 }
 function timestamp(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
   const text = string(value, 64);
   return text && !Number.isNaN(Date.parse(text)) ? text : undefined;
 }
@@ -96,7 +99,7 @@ export function applyOperationalEvent(
   redact: (value: string) => string = (value) => value,
 ): OperationalReadModel {
   let next = cloneOperational(current);
-  if (channel === "pi-verify:lifecycle" || channel === "pi-verify:result") next.verification = verification(current.verification, value, redact);
+  if (channel === "pi-verify:lifecycle" || channel === "pi-verify:result") next.verification = verification(value, redact);
   else if (channel === "pi-heartbeat:job") next.jobs = jobs(current.jobs, value);
   else if (channel === "pi-guard:decision") next.guard = guard(current.guard, value);
   else if (channel === "pi-continuity:state-change") next.continuity = continuity(current.continuity, value, expectedSessionId);
@@ -106,7 +109,7 @@ export function applyOperationalEvent(
   return withHealth(next, diagnostics);
 }
 
-function verification(old: VerificationReadModel, value: unknown, redact: (value: string) => string): VerificationReadModel {
+function verification(value: unknown, redact: (value: string) => string): VerificationReadModel {
   const input = record(value);
   if (!input || input.version !== 1 || !verificationStates.has(String(input.state))) return { availability: "unavailable", checks: [] };
   const rawResults = Array.isArray(input.results) ? input.results : [];

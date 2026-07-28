@@ -38,8 +38,6 @@ export const COMMAND_NAMES = [
   "updateRuntimePolicy",
 ] as const;
 
-export type CommandName = (typeof COMMAND_NAMES)[number];
-
 interface CommandBase {
   commandId: string;
   expectedGeneration: number;

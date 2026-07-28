@@ -145,6 +145,32 @@ test("history projection retains bounded Pi entry IDs for editable prompts", () 
   assert.equal(projected.messages[1]?.entryId, "pi-entry-2");
 });
 
+test("projections reject invalid dates and negative worktree counts", () => {
+  assert.equal(projectMessages([
+    { role: "user", content: "Bad timestamp", timestamp: 1e100 },
+  ])[0]?.createdAt, undefined);
+
+  const initial = runtime();
+  initial.conversation.messages = [{
+    id: "assistant-1",
+    role: "assistant",
+    text: "Done",
+    streaming: false,
+  }];
+  const projection = new RuntimeProjection(initial, () => undefined);
+  projection.apply(session({
+    type: "worktree_summary",
+    messageId: "assistant-1",
+    files: [
+      { path: "invalid.ts", additions: -1, deletions: 2 },
+      { path: "valid.ts", additions: 3, deletions: 1 },
+    ],
+  }));
+  assert.deepEqual(projection.snapshot().conversation.messages[0]?.changedFiles, [
+    { path: "valid.ts", additions: 3, deletions: 1 },
+  ]);
+});
+
 test("Timeline undo availability is published without exposing Pi entry IDs", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const initial = runtime();

@@ -52,7 +52,9 @@ function text(value: unknown, maximum = MAX_TEXT): string {
 }
 function createdAt(value: unknown): string | undefined {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+  if (!Number.isFinite(parsed)) return undefined;
+  const date = new Date(parsed);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function id(value: unknown, fallback: string): string { return typeof value === "string" && value.length > 0 ? value.slice(0, 128) : fallback; }
@@ -766,7 +768,8 @@ export class RuntimeProjection {
         files.push({ path, binary: true });
         continue;
       }
-      if (Number.isSafeInteger(file.additions) && Number.isSafeInteger(file.deletions)) {
+      if (Number.isSafeInteger(file.additions) && (file.additions as number) >= 0
+        && Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0) {
         files.push({ path, additions: file.additions as number, deletions: file.deletions as number });
       }
     }

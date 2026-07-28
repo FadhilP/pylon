@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
@@ -129,12 +130,28 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal((await driver.snapshot()).metrics.userMessages, 0);
     await driver.switchSession({ sessionId: other.getSessionId() });
     assert.equal(starts, 2);
+    assert.equal((await driver.listPackages()).sessionGeneration, (await driver.snapshot()).sessionGeneration);
     assert.equal((await driver.listSessions()).activeSessions.some((session) => session.id === other.getSessionId()), false);
     const awakeSessions = await driver.listSessions({ projectId: projectIdForCwd(cwd) });
     assert.equal(awakeSessions.projects[0]?.sessions.some((session) => session.id === initial.sessionId) ?? false, false);
 
+    const selectedSlot = (driver as any).selected();
+    const originalFileSuggestions = selectedSlot.driver.fileSuggestions.bind(selectedSlot.driver);
+    let releaseSuggestions!: () => void;
+    selectedSlot.driver.fileSuggestions = () => new Promise((resolve) => {
+      releaseSuggestions = () => resolve({
+        protocolVersion: PROTOCOL_VERSION,
+        sessionGeneration: 1,
+        available: true,
+        paths: [],
+      });
+    });
+    const staleSuggestions = driver.fileSuggestions({ query: "" });
     const warmStartedAt = Date.now();
     const warm = await driver.switchSession({ sessionId: initial.sessionId });
+    releaseSuggestions();
+    await assert.rejects(staleSuggestions, /session changed while loading file suggestions/);
+    selectedSlot.driver.fileSuggestions = originalFileSuggestions;
     assert.equal(warm.sessionId, initial.sessionId);
     assert.equal(starts, 2);
     assert.ok(Date.now() - warmStartedAt < 500);

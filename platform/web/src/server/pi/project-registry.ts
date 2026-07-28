@@ -108,6 +108,7 @@ export class ProjectRegistry {
   private sessionPolicies: SessionPolicyRecord[] = [];
   private policyRevision = 0;
   private loaded = false;
+  private saveQueue = Promise.resolve();
 
   constructor(private readonly configPath: string) {}
 
@@ -520,7 +521,13 @@ export class ProjectRegistry {
     return projects;
   }
 
-  private async save(): Promise<void> {
+  private save(): Promise<void> {
+    const pending = this.saveQueue.then(() => this.write());
+    this.saveQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async write(): Promise<void> {
     await mkdir(dirname(this.configPath), { recursive: true });
     const temporary = `${this.configPath}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify({

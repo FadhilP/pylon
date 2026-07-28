@@ -99,8 +99,10 @@ test("project and active-session ordering persists and rejects stale members", a
     await registry.restoreProject(one!);
     assert.deepEqual(registry.list().map((project) => project.id), [two, one, three]);
 
-    await registry.activateSession("session-one");
-    await registry.activateSession("session-two");
+    await Promise.all([
+      registry.activateSession("session-one"),
+      registry.activateSession("session-two"),
+    ]);
     assert.deepEqual(registry.listActiveSessionOrder(), ["session-two", "session-one"]);
     await registry.reorderActiveSession("session-two");
     await registry.deactivateSession("session-one");

@@ -5,7 +5,7 @@ import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadMo
 import type { SessionRuntimeState } from "../../shared/protocol/events";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
+import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -318,6 +318,7 @@ export class RuntimeEventStore {
     progress: (loaded: number, total: number) => void,
   ): Promise<CachedWorkspaceInventory> {
     const runtime = this.requireReadyRuntime();
+    const revision = runtime.workspace?.revision;
     const cached = this.workspaceInventories.get(runtime.sessionId);
     if (!refresh && cached && cached.expiresAt > Date.now()
       && cached.revision === runtime.workspace?.revision) {
@@ -337,8 +338,13 @@ export class RuntimeEventStore {
       },
       progress,
     );
+    const current = this.snapshot.runtime;
+    if (current?.sessionId !== runtime.sessionId
+      || current.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Workspace files belong to a previous session");
+    }
     const inventory = {
-      revision: this.snapshot.runtime?.workspace?.revision,
+      revision,
       expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
       files,
       truncated,
@@ -773,7 +779,12 @@ export class RuntimeEventStore {
     const epoch = ++this.bootstrapEpoch;
     try {
       const boot = await this.api.bootstrap();
-      if (boot.protocolVersion !== PROTOCOL_VERSION || boot.runtime.protocolVersion !== PROTOCOL_VERSION || !Number.isSafeInteger(boot.sequence)) throw new Error("Unsupported runtime protocol");
+      if (boot.protocolVersion !== PROTOCOL_VERSION
+        || !isRuntimeSnapshot(boot.runtime)
+        || !Number.isSafeInteger(boot.sequence)
+        || boot.sequence < 0) {
+        throw new Error("Unsupported runtime protocol");
+      }
       if (this.disposed || epoch !== this.bootstrapEpoch) return;
       this.resetting = false;
       const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));

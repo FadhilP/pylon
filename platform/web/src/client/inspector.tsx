@@ -30,30 +30,20 @@ export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
 type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
 
-const navigation: Array<{ label: string; items: Array<{ id: ViewId; label: string; icon: IconComponent; hint: string }> }> = [
-  {
-    label: "Workspace",
-    items: [
-      { id: "overview", label: "Overview", icon: IconLayoutDashboard, hint: "Run summary" },
-      { id: "policy", label: "Policy", icon: IconAdjustmentsHorizontal, hint: "Runtime behavior" },
-      { id: "timeline", label: "Timeline", icon: IconTimeline, hint: "Checkpoints" },
-      { id: "memory", label: "Memory", icon: IconDatabase, hint: "Continuity facts" },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { id: "tools", label: "Tools", icon: IconTool, hint: "Policies and availability" },
-    ],
-  },
+const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
+  { id: "overview", label: "Overview", icon: IconLayoutDashboard },
+  { id: "policy", label: "Policy", icon: IconAdjustmentsHorizontal },
+  { id: "timeline", label: "Timeline", icon: IconTimeline },
+  { id: "memory", label: "Memory", icon: IconDatabase },
+  { id: "tools", label: "Tools", icon: IconTool },
 ];
 
-const viewCopy: Record<ViewId, { title: string; description: string }> = {
-  overview: { title: "Workspace overview", description: "Live state for the active Pylon session." },
-  policy: { title: "Runtime policy", description: "Project and session behavior for Verify and Timeline." },
-  timeline: { title: "Timeline", description: "Recoverable checkpoints across the current run." },
-  memory: { title: "Project memory", description: "Durable facts Continuity keeps for this project." },
-  tools: { title: "Tools", description: "Package policies and tool availability." },
+const viewDescriptions: Record<ViewId, string> = {
+  overview: "Live state for the active Pylon session.",
+  policy: "Project and session behavior for Verify and Timeline.",
+  timeline: "Recoverable checkpoints across the current run.",
+  memory: "Durable facts Continuity keeps for this project.",
+  tools: "Package policies and tool availability.",
 };
 
 interface InspectorProps {
@@ -68,8 +58,7 @@ interface InspectorProps {
 }
 
 export function Inspector({ current, live, availableViews, timelineEnabled, isOpen, overlay, onClose, onNavigate }: InspectorProps) {
-  const copy = viewCopy[current];
-  const items = navigation.flatMap((group) => group.items).filter((item) => availableViews.has(item.id));
+  const items = navigation.filter((item) => availableViews.has(item.id));
   return (
     <aside id="session-inspector" className={`inspector ${isOpen ? "is-open" : ""}`} aria-label="Session inspector" aria-hidden={!isOpen} inert={!isOpen}>
       <header className="inspector-header">
@@ -84,7 +73,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, isOp
           </button>;
         })}
       </div>
-      <p className="inspector-description">{copy.description}</p>
+      <p className="inspector-description">{viewDescriptions[current]}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
         {current === "policy" && live.runtime && <RuntimePolicy live={live} />}
@@ -139,7 +128,6 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
                 <span className="mono">{formatDuration(check.durationMs)}</span>
               </div>
             ))}
-            {/* {operational?.verification.checks.length === 0 && <div className="conversation-state">{operational?.verification.message || (operational?.verification.state ? `Verification ${operational.verification.state}.` : "No verification run yet.")}</div>} */}
           </div>
         </InspectorSection>}
         {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}

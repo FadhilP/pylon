@@ -8,13 +8,6 @@ export function displayDate(value: string): string {
   return Number.isNaN(time) ? "Unknown" : new Date(time).toLocaleDateString();
 }
 
-export function displayClockTime(value: string): string {
-  const time = Date.parse(value);
-  return Number.isNaN(time)
-    ? "Unknown"
-    : new Date(time).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
 export function displayTimelineTime(value: string): string {
   const time = Date.parse(value);
   if (Number.isNaN(time)) return "Unknown";

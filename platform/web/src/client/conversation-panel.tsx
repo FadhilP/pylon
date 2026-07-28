@@ -205,7 +205,10 @@ export function ConversationPanel({
     return () => { active = false; };
   }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.metrics.userMessages]);
   const latestTurnTimer = latestTimedAssistant(visibleMessages);
-  const activeAgents = runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [];
+  const activeAgents = useMemo(
+    () => runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [],
+    [runtime?.conversation.delegatedRuns],
+  );
   const slashMatch = /^\/([^\s]*)$/.exec(message);
   const suggestions = slashMatch && !suggestionsDismissed
     ? (controls?.commands ?? [])
@@ -424,6 +427,8 @@ export function ConversationPanel({
         false,
       );
       setEdit(undefined);
+    } catch {
+      // The store routes the failure through the application toast.
     } finally {
       setSubmitting(false);
     }
@@ -441,6 +446,8 @@ export function ConversationPanel({
       setPlanMode(false);
       setUndo(undefined);
       requestAnimationFrame(() => promptRef.current?.focus());
+    } catch {
+      // The store routes the failure through the application toast.
     } finally {
       setSubmitting(false);
     }
@@ -472,6 +479,8 @@ export function ConversationPanel({
     setSubmitting(true);
     try {
       await runtimeStore.forkPrompt(fork.entryId, name, mode);
+    } catch {
+      // The store routes the failure through the application toast.
     } finally {
       setFork(undefined);
       setSubmitting(false);
@@ -1392,11 +1401,11 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
   const [now, setNow] = useState(Date.now());
   const [displayed, setDisplayed] = useState(runs);
   const [exiting, setExiting] = useState(false);
-  const runKey = runs.map((run) => run.id).join("\0");
   useEffect(() => {
+    if (!displayed.length) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [displayed.length]);
   useEffect(() => {
     if (runs.length) {
       setDisplayed(runs);
@@ -1410,7 +1419,7 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
       setExiting(false);
     }, 140);
     return () => window.clearTimeout(timer);
-  }, [runKey]);
+  }, [runs]);
   if (!displayed.length) return null;
   return <aside className={`active-agents${exiting ? " is-exiting" : ""}`} aria-label="Active delegated agents">
     {displayed.slice(0, 3).map((run) => {
