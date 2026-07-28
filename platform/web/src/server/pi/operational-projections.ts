@@ -11,7 +11,7 @@ import type {
 import type { RuntimeDiagnostic } from "../../shared/protocol/snapshots.ts";
 
 const verificationStates = new Set(["running", "passed", "failed", "cancelled", "stale", "error", "no_checks", "clean"]);
-const jobStates = new Set(["running", "completed", "failed", "cancelled", "timed_out"]);
+const jobStates = new Set(["running", "cancelling", "completed", "failed", "cancelled", "timed_out"]);
 const todoStates = new Set(["pending", "in_progress", "done", "blocked"]);
 const workModes = new Set(["planning", "executing", "handed_off", "completed", "cancelled"]);
 const idPattern = /^[A-Za-z0-9._:@/-]+$/;
@@ -21,6 +21,11 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 function string(value: unknown, maximum: number): string | undefined {
   return typeof value === "string" && value.length > 0 ? value.slice(0, maximum) : undefined;
+}
+function timestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  const text = string(value, 64);
+  return text && !Number.isNaN(Date.parse(text)) ? text : undefined;
 }
 function identifier(value: unknown): string | undefined {
   const item = string(value, 128);
@@ -139,13 +144,14 @@ function verification(old: VerificationReadModel, value: unknown, redact: (value
 
 function jobs(old: JobsReadModel, value: unknown): JobsReadModel {
   const input = record(value);
-  if (!input || input.version !== 1 || !identifier(input.id) || !jobStates.has(String(input.state)) || !string(input.startedAt, 64)) return { availability: "unavailable", items: [] };
+  const startedAt = timestamp(input?.startedAt);
+  if (!input || input.version !== 1 || !identifier(input.id) || !jobStates.has(String(input.state)) || !startedAt) return { availability: "unavailable", items: [] };
   const item = {
     id: identifier(input.id)!,
     label: string(input.label, 120) ?? identifier(input.id)!,
     state: input.state as JobsReadModel["items"][number]["state"],
-    startedAt: string(input.startedAt, 64)!,
-    ...(string(input.finishedAt, 64) ? { finishedAt: string(input.finishedAt, 64) } : {}),
+    startedAt,
+    ...(timestamp(input.finishedAt) ? { finishedAt: timestamp(input.finishedAt) } : {}),
     ...(typeof input.exitCode === "number" || input.exitCode === null ? { exitCode: input.exitCode as number | null } : {}),
     ...(input.purpose === "verification" || input.purpose === "build" || input.purpose === "other" ? { purpose: input.purpose as "verification" | "build" | "other" } : {}),
     ...(identifier(input.todoId) ? { todoId: identifier(input.todoId) } : {}),
@@ -207,7 +213,7 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
 
 function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: string): TimelineReadModel {
   const input = record(value);
-  if (!input || input.version !== 3 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 3 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
+  if (!input || input.version !== 4 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 4 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
   if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   if (!Array.isArray(input.checkpoints)) return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   const checkpoints = input.checkpoints.slice(-100).flatMap((value) => {

@@ -6,6 +6,7 @@ export interface MessageReadModel {
   streaming: boolean;
   createdAt?: string;
   canUndo?: boolean;
+  canForkWithTimeline?: boolean;
   attachmentCount?: number;
   fileAttachmentCount?: number;
   workDurationMs?: number;
@@ -108,6 +109,14 @@ export interface ConversationReadModel {
   workStartedAt?: string;
   workModelName?: string;
   workThinkingLevel?: ThinkingLevelReadModel;
+  stopping?: boolean;
+  stoppedRun?: {
+    turnId: string;
+    userEntryId?: string;
+    durationMs: number;
+    modelName?: string;
+    thinkingLevel?: ThinkingLevelReadModel;
+  };
   queue: QueueReadModel;
   retry: RetryReadModel;
   compaction: CompactionReadModel;
@@ -207,10 +216,16 @@ export interface VerificationReadModel {
   message?: string;
 }
 
+export interface VerifyOptionReadModel {
+  id: string;
+  label: string;
+  command: string;
+}
+
 export interface JobReadModel {
   id: string;
   label: string;
-  state: "running" | "completed" | "failed" | "cancelled" | "timed_out";
+  state: "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out";
   startedAt: string;
   finishedAt?: string;
   exitCode?: number | null;

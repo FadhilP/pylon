@@ -3,7 +3,7 @@ import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../sha
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
@@ -22,17 +22,19 @@ export interface RuntimeStoreSnapshot {
   error?: string;
   errorRevision?: number;
   historyWindow?: TranscriptWindowReadModel;
+  treeChanging?: boolean;
 }
 
 export interface TranscriptWindowReadModel {
   sessionId: string;
+  sessionGeneration: number;
   messages: MessageReadModel[];
   earlierCursor?: string;
   laterCursor?: string;
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
+const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
 const MAX_CACHED_SESSIONS = 10;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
@@ -47,6 +49,10 @@ interface HistorySegment {
   messages: MessageReadModel[];
   earlierCursor?: string;
   laterCursor?: string;
+}
+
+function historyKey(sessionId: string, generation: number): string {
+  return `${sessionId}:${generation}`;
 }
 
 function commandId(): string {
@@ -134,10 +140,12 @@ export class RuntimeEventStore {
   async editPrompt(entryId: string, message: string, images: PromptImage[], rollbackFiles: boolean): Promise<void> {
     const runtime = this.requireReadyRuntime();
     const cachedHistory = this.historyCache.get(runtime.sessionId);
-    const cachedWindow = this.historyWindows.get(runtime.sessionId);
+    const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
+    const cachedWindow = this.historyWindows.get(key);
     this.invalidatedHistoryGenerations.set(runtime.sessionId, runtime.sessionGeneration);
     this.historyCache.delete(runtime.sessionId);
-    this.historyWindows.delete(runtime.sessionId);
+    this.historyWindows.delete(key);
+    this.set({ ...this.snapshot, treeChanging: true });
     try {
       await this.sendCommand({
         type: "editPrompt",
@@ -148,11 +156,15 @@ export class RuntimeEventStore {
         commandId: commandId(),
         expectedGeneration: runtime.sessionGeneration,
       });
+      if (this.snapshot.runtime?.sessionGeneration === runtime.sessionGeneration) {
+        this.set({ ...this.snapshot, treeChanging: false });
+      }
       this.set({ ...this.snapshot, sessionRevision: (this.snapshot.sessionRevision ?? 0) + 1 });
     } catch (error) {
       this.invalidatedHistoryGenerations.delete(runtime.sessionId);
       if (cachedHistory) this.historyCache.set(runtime.sessionId, cachedHistory);
-      if (cachedWindow) this.historyWindows.set(runtime.sessionId, cachedWindow);
+      if (cachedWindow) this.historyWindows.set(key, cachedWindow);
+      this.set({ ...this.snapshot, treeChanging: false });
       throw error;
     }
   }
@@ -160,10 +172,12 @@ export class RuntimeEventStore {
   async rewindPrompt(entryId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     const cachedHistory = this.historyCache.get(runtime.sessionId);
-    const cachedWindow = this.historyWindows.get(runtime.sessionId);
+    const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
+    const cachedWindow = this.historyWindows.get(key);
     this.invalidatedHistoryGenerations.set(runtime.sessionId, runtime.sessionGeneration);
     this.historyCache.delete(runtime.sessionId);
-    this.historyWindows.delete(runtime.sessionId);
+    this.historyWindows.delete(key);
+    this.set({ ...this.snapshot, treeChanging: true });
     try {
       const accepted = await this.sendCommand({
         type: "rewindPrompt",
@@ -176,7 +190,35 @@ export class RuntimeEventStore {
     } catch (error) {
       this.invalidatedHistoryGenerations.delete(runtime.sessionId);
       if (cachedHistory) this.historyCache.set(runtime.sessionId, cachedHistory);
-      if (cachedWindow) this.historyWindows.set(runtime.sessionId, cachedWindow);
+      if (cachedWindow) this.historyWindows.set(key, cachedWindow);
+      this.set({ ...this.snapshot, treeChanging: false });
+      throw error;
+    }
+  }
+
+  async forkPrompt(entryId: string, name: string, mode: "conversation" | "timeline"): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
+    this.invalidatedHistoryGenerations.set(runtime.sessionId, runtime.sessionGeneration);
+    this.historyCache.delete(runtime.sessionId);
+    this.historyWindows.delete(key);
+    this.set({ ...this.snapshot, treeChanging: true });
+    try {
+      await this.sendCommand({
+        type: "fork",
+        entryId,
+        name,
+        position: "at",
+        mode,
+        commandId: commandId(),
+        expectedGeneration: runtime.sessionGeneration,
+      });
+      if (this.snapshot.runtime?.sessionGeneration === runtime.sessionGeneration) {
+        this.set({ ...this.snapshot, treeChanging: false });
+      }
+    } catch (error) {
+      this.invalidatedHistoryGenerations.delete(runtime.sessionId);
+      this.set({ ...this.snapshot, treeChanging: false });
       throw error;
     }
   }
@@ -184,7 +226,29 @@ export class RuntimeEventStore {
   async abort(): Promise<void> {
     const runtime = this.snapshot.runtime;
     if (!runtime || this.snapshot.connection !== "connected") throw new Error("Runtime is not connected");
-    await this.sendCommand({ type: "abort", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+    if (runtime.conversation.stopping) return;
+    this.set({
+      ...this.snapshot,
+      runtime: {
+        ...runtime,
+        conversation: { ...runtime.conversation, stopping: true },
+      },
+    });
+    try {
+      await this.sendCommand({ type: "abort", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+    } catch (error) {
+      const current = this.snapshot.runtime;
+      if (current?.sessionId === runtime.sessionId) {
+        this.set({
+          ...this.snapshot,
+          runtime: {
+            ...current,
+            conversation: { ...current.conversation, stopping: false },
+          },
+        });
+      }
+      throw error;
+    }
   }
 
   async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
@@ -192,6 +256,24 @@ export class RuntimeEventStore {
     const sessions = await this.api.sessions(input);
     if (!isSessionListSnapshot(sessions) || sessions.sessionGeneration !== runtime.sessionGeneration) throw new Error("Session list is stale or invalid");
     return sessions;
+  }
+
+  async updateRuntimePolicy(
+    scope: "project" | "session",
+    verify: VerifyPolicyReadModel | "inherit",
+    timeline: boolean | "inherit",
+    expectedRevision: number,
+  ): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updateRuntimePolicy",
+      scope,
+      verify: verify === "inherit" ? { mode: "inherit" } : verify,
+      timeline: timeline === "inherit" ? "inherit" : timeline ? "enabled" : "disabled",
+      expectedRevision,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
   }
 
   async fileSuggestions(query: string): Promise<FileSuggestionList> {
@@ -341,7 +423,7 @@ export class RuntimeEventStore {
           || page.sessionGeneration !== runtime.sessionGeneration) {
           throw new Error("Conversation history is stale or invalid");
         }
-        this.addHistorySegment(runtime.sessionId, "before", {
+        this.addHistorySegment(runtime, "before", {
           messages: page.messages,
           earlierCursor: page.earlierCursor,
           laterCursor: page.laterCursor,
@@ -373,7 +455,7 @@ export class RuntimeEventStore {
       || page.sessionGeneration !== runtime.sessionGeneration) {
       throw new Error("Conversation history is stale or invalid");
     }
-    this.addHistorySegment(runtime.sessionId, "after", {
+    this.addHistorySegment(runtime, "after", {
       messages: page.messages,
       earlierCursor: page.earlierCursor,
       laterCursor: page.laterCursor,
@@ -389,7 +471,7 @@ export class RuntimeEventStore {
       || page.sessionGeneration !== runtime.sessionGeneration) {
       throw new Error("Conversation history is stale or invalid");
     }
-    this.historyWindows.set(runtime.sessionId, [{
+    this.historyWindows.set(historyKey(runtime.sessionId, runtime.sessionGeneration), [{
       messages: page.messages,
       earlierCursor: page.earlierCursor,
       laterCursor: page.laterCursor,
@@ -573,8 +655,19 @@ export class RuntimeEventStore {
 
   async timeline(action: "restore" | "fork" | "clear", checkpointId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
-    await this.sendCommand({ type: "timeline", action, ...(checkpointId ? { checkpointId } : {}), commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
-    if (action !== "clear") this.historyWindows.delete(runtime.sessionId);
+    if (action !== "clear") {
+      this.historyWindows.delete(historyKey(runtime.sessionId, runtime.sessionGeneration));
+      this.set({ ...this.snapshot, treeChanging: true });
+    }
+    try {
+      await this.sendCommand({ type: "timeline", action, ...(checkpointId ? { checkpointId } : {}), commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+      if (action !== "clear" && this.snapshot.runtime?.sessionGeneration === runtime.sessionGeneration) {
+        this.set({ ...this.snapshot, treeChanging: false });
+      }
+    } catch (error) {
+      this.set({ ...this.snapshot, treeChanging: false });
+      throw error;
+    }
   }
 
   async answerUi(request: UiRequestReadModel, body: Record<string, unknown>): Promise<void> {
@@ -632,13 +725,14 @@ export class RuntimeEventStore {
   }
 
   private historyWindow(runtime: RuntimeSnapshot): TranscriptWindowReadModel {
-    let segments = this.historyWindows.get(runtime.sessionId);
+    const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
+    let segments = this.historyWindows.get(key);
     if (!segments?.length) {
       segments = [{
         messages: runtime.conversation.messages.slice(-100),
         earlierCursor: runtime.conversation.historyCursor,
       }];
-      this.historyWindows.set(runtime.sessionId, segments);
+      this.historyWindows.set(key, segments);
     } else {
       const latest = segments.at(-1)!;
       if (!latest.laterCursor) {
@@ -652,22 +746,24 @@ export class RuntimeEventStore {
     ).slice(-300);
     return {
       sessionId: runtime.sessionId,
+      sessionGeneration: runtime.sessionGeneration,
       messages,
       earlierCursor: segments[0]?.earlierCursor,
       laterCursor: segments.at(-1)?.laterCursor,
     };
   }
 
-  private addHistorySegment(sessionId: string, direction: "before" | "after", segment: HistorySegment): void {
-    const segments = this.historyWindows.get(sessionId) ?? [];
+  private addHistorySegment(runtime: RuntimeSnapshot, direction: "before" | "after", segment: HistorySegment): void {
+    const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
+    const segments = this.historyWindows.get(key) ?? [];
     if (direction === "before") segments.unshift(segment);
     else segments.push(segment);
     while (segments.length > 3) {
       if (direction === "before") segments.pop();
       else segments.shift();
     }
-    this.historyWindows.delete(sessionId);
-    this.historyWindows.set(sessionId, segments);
+    this.historyWindows.delete(key);
+    this.historyWindows.set(key, segments);
     while (this.historyWindows.size > MAX_CACHED_SESSIONS) {
       this.historyWindows.delete(this.historyWindows.keys().next().value!);
     }
@@ -866,7 +962,10 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
           ? (asRecord(payload).items as unknown[]).flatMap((item) => {
               const value = asRecord(item);
               return typeof value.id === "string" && typeof value.canUndo === "boolean"
-                ? [[value.id, value.canUndo] as const]
+                ? [[value.id, {
+                    canUndo: value.canUndo,
+                    canForkWithTimeline: value.canForkWithTimeline === true,
+                  }] as const]
                 : [];
             })
           : [],
@@ -876,7 +975,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         conversation: {
           ...conversation,
           messages: conversation.messages.map((message) =>
-            updates.has(message.id) ? { ...message, canUndo: updates.get(message.id) } : message),
+            updates.has(message.id) ? { ...message, ...updates.get(message.id) } : message),
         },
       };
     }
@@ -908,6 +1007,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
       };
     }
     case "session.controls": return { ...runtime, sessionControls: payload as SessionControlsReadModel };
+    case "runtime.policy": return { ...runtime, runtimePolicy: payload as RuntimeSnapshot["runtimePolicy"] };
     case "queue.update": return { ...runtime, conversation: { ...conversation, queue: payload as ConversationReadModel["queue"] } };
     case "workspace.revision": return { ...runtime, workspace: payload as RuntimeSnapshot["workspace"] };
     case "retry.update": return { ...runtime, conversation: { ...conversation, retry: payload as ConversationReadModel["retry"] } };
@@ -938,6 +1038,8 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
           workStartedAt: typeof info.startedAt === "string" ? info.startedAt : new Date().toISOString(),
           workModelName: typeof info.modelName === "string" ? info.modelName : undefined,
           workThinkingLevel: typeof info.thinkingLevel === "string" ? info.thinkingLevel as ConversationReadModel["workThinkingLevel"] : undefined,
+          stopping: false,
+          stoppedRun: undefined,
         },
       };
     }
@@ -962,6 +1064,18 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
           workStartedAt: undefined,
           workModelName: undefined,
           workThinkingLevel: undefined,
+          stopping: false,
+          stoppedRun: info.stopped === true && durationMs !== undefined
+            ? {
+                turnId: typeof info.turnId === "string" ? info.turnId : "",
+                userEntryId: typeof info.userEntryId === "string" ? info.userEntryId : undefined,
+                durationMs,
+                modelName: typeof info.modelName === "string" ? info.modelName : undefined,
+                thinkingLevel: typeof info.thinkingLevel === "string"
+                  ? info.thinkingLevel as ConversationReadModel["workThinkingLevel"]
+                  : undefined,
+              }
+            : undefined,
         },
       };
     }

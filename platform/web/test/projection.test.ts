@@ -11,6 +11,7 @@ function runtime(): RuntimeSnapshot {
     activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [],
     conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
     sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
+    runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true }, availableVerifyChecks: [] },
     metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
     operational: initialOperational([], []),
     extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
@@ -158,7 +159,9 @@ test("Timeline undo availability is published without exposing Pi entry IDs", ()
   projection.apply(session({ type: "prompt_undo", entryIds: ["entry-1"] }));
   assert.equal(projection.snapshot().conversation.messages[0]?.canUndo, true);
   const event = published.find((item) => item.type === "message.undo");
-  assert.deepEqual(event?.payload, { items: [{ id: "message-1", canUndo: true }] });
+  assert.deepEqual(event?.payload, {
+    items: [{ id: "message-1", canUndo: true, canForkWithTimeline: false }],
+  });
   assert.doesNotMatch(JSON.stringify(event), /entry-1/);
 });
 
@@ -426,6 +429,34 @@ test("projection publishes live session names and agent timing metadata", () => 
   assert.equal((published.find((event) => event.type === "agent.start")?.payload as { startedAt: string }).startedAt, startedAt);
   assert.equal((published.find((event) => event.type === "agent.end")?.payload as { durationMs: number }).durationMs, 1_234);
   assert.ok(published.some((event) => event.type === "turn.changes"));
+});
+
+test("projection retains stopped tool-only run metadata without an assistant message", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({
+    type: "agent_start",
+    turnId: "turn-stopped",
+    workStartedAt: new Date().toISOString(),
+    modelName: "GPT-5",
+    thinkingLevel: "medium",
+  }));
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-stopped",
+    userEntryId: "user-entry",
+    workDurationMs: 500,
+    modelName: "GPT-5",
+    thinkingLevel: "medium",
+    stopped: true,
+  }));
+  assert.deepEqual(projection.snapshot().conversation.stoppedRun, {
+    turnId: "turn-stopped",
+    userEntryId: "user-entry",
+    durationMs: 500,
+    modelName: "GPT-5",
+    thinkingLevel: "medium",
+  });
+  assert.equal(projection.snapshot().conversation.stopping, false);
 });
 
 test("projection publishes bounded discover index state", () => {

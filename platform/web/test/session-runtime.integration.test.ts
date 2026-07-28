@@ -305,6 +305,94 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
   }
 });
 
+test("fork validates idle state without rejecting its own lifecycle mutation", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-fork-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
+  const session = SessionManager.create(cwd, sessionDir);
+  const userEntryId = session.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "Fork from here" }],
+    timestamp: Date.now(),
+  });
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Done" }],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  const blocker: InlineExtension = {
+    name: "pylon-web-fork-blocker",
+    factory(pi) {
+      pi.registerCommand("fork-blocker", {
+        handler: async (_args, ctx) => { await ctx.ui.confirm("Keep open?", "Block lifecycle controls"); },
+      });
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [blocker] });
+  let receiveRequest!: (request: UiRequest) => void;
+  const pendingRequest = new Promise<UiRequest>((resolve) => { receiveRequest = resolve; });
+  const unsubscribe = driver.subscribe((event) => {
+    if (event.type === "ui.event") receiveRequest(event.payload as UiRequest);
+  });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
+    const prompt = driver.prompt({
+      commandId: "fork-blocker",
+      expectedGeneration: handle.sessionGeneration,
+      message: "/fork-blocker",
+    });
+    const request = await pendingRequest;
+    await assert.rejects(driver.fork({
+      expectedGeneration: handle.sessionGeneration,
+      entryId: userEntryId,
+      name: "Blocked fork",
+      mode: "conversation",
+      position: "at",
+    }), /only change while the session is idle/);
+    await driver.answerUiRequest({
+      requestId: request.requestId,
+      sessionGeneration: request.sessionGeneration,
+      method: "confirm",
+      confirmed: false,
+    });
+    await prompt;
+
+    const forked = await driver.fork({
+      expectedGeneration: handle.sessionGeneration,
+      entryId: userEntryId,
+      name: "Forked session",
+      mode: "conversation",
+      position: "at",
+    });
+    assert.equal(forked.cancelled, false);
+    assert.equal((await driver.snapshot()).sessionName, "Forked session");
+    await assert.rejects(driver.fork({
+      expectedGeneration: handle.sessionGeneration,
+      entryId: userEntryId,
+      name: "Stale fork",
+      mode: "conversation",
+    }), /stale session generation/);
+  } finally {
+    unsubscribe();
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("driver starts without a root manifest and still loads required core", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-standalone-"));
   const cwd = join(root, "workspace");

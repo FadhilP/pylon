@@ -68,6 +68,17 @@ function validTextFiles(value: unknown): boolean {
   return totalBytes <= MAX_TEXT_FILE_TOTAL_BYTES;
 }
 
+function validVerifyPolicy(value: unknown, allowInherit = false): boolean {
+  if (!record(value)) return false;
+  if (allowInherit && value.mode === "inherit") return true;
+  if (value.mode === "auto") return true;
+  return value.mode === "selected"
+    && Array.isArray(value.checks)
+    && value.checks.length <= 6
+    && value.checks.every((check) => boundedString(check, 100))
+    && new Set(value.checks).size === value.checks.length;
+}
+
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
@@ -149,8 +160,14 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (value.type === "fork") {
     if (!identifier(value.entryId)) return { ok: false, error: "invalid entryId" };
+    if (!boundedString(value.name, 200) || !value.name.trim()) {
+      return { ok: false, error: "invalid fork name" };
+    }
     if (value.position !== undefined && value.position !== "before" && value.position !== "at") {
       return { ok: false, error: "invalid fork position" };
+    }
+    if (value.mode !== undefined && value.mode !== "conversation" && value.mode !== "timeline") {
+      return { ok: false, error: "invalid fork mode" };
     }
   }
   if (value.type === "newSession" && value.parentSessionId !== undefined && !identifier(value.parentSessionId)) {
@@ -183,6 +200,21 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "updateProjectWorktreeSettings"
     && (typeof value.setupCommand !== "string" || value.setupCommand.length > 2_000)) {
     return { ok: false, error: "invalid worktree setup command" };
+  }
+  if (value.type === "updateRuntimePolicy") {
+    if (value.scope !== "project" && value.scope !== "session") {
+      return { ok: false, error: "invalid runtime policy scope" };
+    }
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+      return { ok: false, error: "invalid runtime policy revision" };
+    }
+    if (!validVerifyPolicy(value.verify, value.scope === "session")) {
+      return { ok: false, error: "invalid Verify policy" };
+    }
+    if (!["inherit", "enabled", "disabled"].includes(String(value.timeline))
+      || value.scope === "project" && value.timeline === "inherit") {
+      return { ok: false, error: "invalid Timeline policy" };
+    }
   }
   if (value.type === "handoffSession"
     && value.destination !== "checkout" && value.destination !== "worktree") {
@@ -422,6 +454,20 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       || (value.workspace.setupError !== undefined && !boundedString(value.workspace.setupError, 500))
       || (value.workspace.checkoutOwner !== undefined && !identifier(value.workspace.checkoutOwner))) return false;
   }
+  const policy = value.runtimePolicy;
+  if (!record(policy) || !Number.isSafeInteger(policy.revision) || (policy.revision as number) < 0
+    || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
+    || typeof policy.project.timelineEnabled !== "boolean"
+    || !record(policy.session)
+    || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
+    || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
+    || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
+    || typeof policy.effective.timelineEnabled !== "boolean"
+    || !Array.isArray(policy.availableVerifyChecks) || policy.availableVerifyChecks.length > 100
+    || !policy.availableVerifyChecks.every((check) => record(check)
+      && boundedString(check.id, 100)
+      && boundedString(check.label, 200)
+      && boundedString(check.command, 500))) return false;
   if (!value.activeTools.every((item) => typeof item === "string") || !value.availableTools.every((item) => typeof item === "string")) return false;
   if (!record(value.optionalCapabilities) || !Object.values(value.optionalCapabilities).every((item) => item === "available" || item === "unavailable")) return false;
   if (!Array.isArray(value.diagnostics) || !value.diagnostics.every((item) => record(item)
@@ -435,6 +481,16 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && (typeof conversation.workStartedAt !== "string" || Number.isNaN(Date.parse(conversation.workStartedAt)))) return false;
   if (conversation.workModelName !== undefined && (typeof conversation.workModelName !== "string" || conversation.workModelName.length > 200)) return false;
   if (conversation.workThinkingLevel !== undefined && !thinkingLevels.has(String(conversation.workThinkingLevel))) return false;
+  if (conversation.stopping !== undefined && typeof conversation.stopping !== "boolean") return false;
+  if (conversation.stoppedRun !== undefined) {
+    const stopped = conversation.stoppedRun;
+    if (!record(stopped) || !identifier(stopped.turnId)
+      || (stopped.userEntryId !== undefined && !identifier(stopped.userEntryId))
+      || !Number.isSafeInteger(stopped.durationMs) || (stopped.durationMs as number) < 0
+      || (stopped.durationMs as number) > 7 * 24 * 60 * 60 * 1_000
+      || (stopped.modelName !== undefined && !boundedString(stopped.modelName, 200))
+      || (stopped.thinkingLevel !== undefined && !thinkingLevels.has(String(stopped.thinkingLevel)))) return false;
+  }
   if (conversation.historyCursor !== undefined && !identifier(conversation.historyCursor)) return false;
   if (conversation.historyRemaining !== undefined
     && (!Number.isSafeInteger(conversation.historyRemaining) || (conversation.historyRemaining as number) < 0)) return false;
@@ -446,6 +502,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && typeof message.text === "string" && message.text.length <= MAX_MESSAGE_LENGTH && typeof message.streaming === "boolean"
     && (message.createdAt === undefined || typeof message.createdAt === "string" && !Number.isNaN(Date.parse(message.createdAt)))
     && (message.canUndo === undefined || typeof message.canUndo === "boolean")
+    && (message.canForkWithTimeline === undefined || typeof message.canForkWithTimeline === "boolean")
     && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount) && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
     && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount) && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
     && (message.workDurationMs === undefined || Number.isSafeInteger(message.workDurationMs)

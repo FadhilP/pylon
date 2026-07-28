@@ -1,4 +1,4 @@
-import type { PackageSettingsReadModel } from "./snapshots.ts";
+import type { PackageSettingsReadModel, VerifyPolicyReadModel } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
@@ -35,6 +35,7 @@ export const COMMAND_NAMES = [
   "deleteContinuityMemory",
   "handoffSession",
   "updateProjectWorktreeSettings",
+  "updateRuntimePolicy",
 ] as const;
 
 export type CommandName = (typeof COMMAND_NAMES)[number];
@@ -89,7 +90,7 @@ export type WebCommand =
   | ({ type: "reorderActiveSession"; sessionId: string; beforeSessionId?: string } & CommandBase)
   | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "rewindPrompt"; entryId: string } & CommandBase)
-  | ({ type: "fork"; entryId: string; position?: "before" | "at" } & CommandBase)
+  | ({ type: "fork"; entryId: string; name: string; position?: "before" | "at"; mode?: "conversation" | "timeline" } & CommandBase)
   | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
   | ({ type: "updatePackageSettings"; packageId: string; settings: PackageSettingsReadModel } & CommandBase)
@@ -100,7 +101,14 @@ export type WebCommand =
   | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
-  | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase);
+  | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
+  | ({
+      type: "updateRuntimePolicy";
+      scope: "project" | "session";
+      verify: VerifyPolicyReadModel | { mode: "inherit" };
+      timeline: "inherit" | "enabled" | "disabled";
+      expectedRevision: number;
+    } & CommandBase);
 
 export interface AcceptedCommand {
   commandId: string;

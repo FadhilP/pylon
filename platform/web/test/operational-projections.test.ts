@@ -32,7 +32,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.continuity.memory[0]?.key, "project.arch");
 
   state = applyOperationalEvent(state, "pi-timeline:state-change", {
-    version: 3,
+    version: 4,
     revision: 1,
     sessionId: "session",
     available: true,
@@ -51,4 +51,29 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.tools.policies.length, 1);
   state = applyOperationalEvent(state, "pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-test" });
   assert.equal(state.tools.policies.length, 0);
+});
+
+test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {
+  let state = initialOperational([], ["pi-heartbeat.ts"]);
+  state = applyOperationalEvent(state, "pi-heartbeat:job", {
+    version: 1,
+    id: "job-1",
+    label: "Run checks",
+    state: "cancelling",
+    startedAt: 1_000,
+    finishedAt: 2_000,
+    purpose: "verification",
+    exitCode: null,
+  });
+
+  assert.equal(state.jobs.availability, "available");
+  assert.deepEqual(state.jobs.items[0], {
+    id: "job-1",
+    label: "Run checks",
+    state: "cancelling",
+    startedAt: new Date(1_000).toISOString(),
+    finishedAt: new Date(2_000).toISOString(),
+    exitCode: null,
+    purpose: "verification",
+  });
 });

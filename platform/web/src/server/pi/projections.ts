@@ -384,6 +384,7 @@ export class RuntimeProjection {
       optionalCapabilities: { ...runtime.optionalCapabilities },
       diagnostics: [...runtime.diagnostics],
       sessionControls: structuredClone(runtime.sessionControls),
+      runtimePolicy: structuredClone(runtime.runtimePolicy),
       metrics: { ...runtime.metrics },
       discoverIndex: runtime.discoverIndex ? { ...runtime.discoverIndex } : undefined,
       conversation: {
@@ -391,10 +392,15 @@ export class RuntimeProjection {
         workStartedAt: runtime.conversation.workStartedAt,
         workModelName: runtime.conversation.workModelName,
         workThinkingLevel: runtime.conversation.workThinkingLevel,
+        stopping: runtime.conversation.stopping,
+        stoppedRun: runtime.conversation.stoppedRun
+          ? { ...runtime.conversation.stoppedRun }
+          : undefined,
       },
       operational: cloneOperational(runtime.operational),
     };
     this.publish("session.controls", this.runtime.sessionControls);
+    this.publish("runtime.policy", this.runtime.runtimePolicy);
     this.publish("metrics.update", this.runtime.metrics);
   }
 
@@ -541,11 +547,21 @@ export class RuntimeProjection {
           ? raw.entryIds.filter((entryId): entryId is string => typeof entryId === "string").slice(0, 10_000)
           : [],
       );
-      const items: Array<{ id: string; canUndo: boolean }> = [];
+      const forkEntryIds = new Set(
+        Array.isArray(raw.forkEntryIds)
+          ? raw.forkEntryIds.filter((entryId): entryId is string => typeof entryId === "string").slice(0, 10_000)
+          : [],
+      );
+      const items: Array<{ id: string; canUndo: boolean; canForkWithTimeline: boolean }> = [];
       for (const message of this.messages.values()) {
         if (message.role !== "user" || !message.entryId) continue;
         message.canUndo = entryIds.has(message.entryId);
-        items.push({ id: message.id, canUndo: message.canUndo });
+        message.canForkWithTimeline = forkEntryIds.has(message.entryId);
+        items.push({
+          id: message.id,
+          canUndo: message.canUndo,
+          canForkWithTimeline: message.canForkWithTimeline,
+        });
       }
       this.publish("message.undo", { items });
       return;
@@ -558,6 +574,8 @@ export class RuntimeProjection {
       this.runtime.conversation.workStartedAt = startedAt;
       this.runtime.conversation.workModelName = text(raw.modelName, 200) || undefined;
       this.runtime.conversation.workThinkingLevel = thinkingLevel(raw.thinkingLevel);
+      this.runtime.conversation.stopping = false;
+      this.runtime.conversation.stoppedRun = undefined;
       this.publish("agent.start", {
         startedAt,
         turnId: id(raw.turnId, ""),
@@ -589,6 +607,17 @@ export class RuntimeProjection {
       this.runtime.conversation.workStartedAt = undefined;
       this.runtime.conversation.workModelName = undefined;
       this.runtime.conversation.workThinkingLevel = undefined;
+      this.runtime.conversation.stopping = false;
+      const stopped = raw.stopped === true;
+      this.runtime.conversation.stoppedRun = stopped && durationMs !== undefined
+        ? {
+            turnId,
+            userEntryId: text(raw.userEntryId, 128) || undefined,
+            durationMs,
+            modelName: text(raw.modelName, 200) || undefined,
+            thinkingLevel: thinkingLevel(raw.thinkingLevel),
+          }
+        : undefined;
       this.publish(`agent.${kind.slice(6)}`, {
         willRetry: raw.willRetry === true,
         message: text(raw.errorMessage, 1_000) || undefined,
@@ -598,6 +627,8 @@ export class RuntimeProjection {
         modelName: assistant?.modelName,
         thinkingLevel: assistant?.thinkingLevel,
         gitBranch: this.runtime.gitBranch,
+        stopped,
+        userEntryId: this.runtime.conversation.stoppedRun?.userEntryId,
       });
     }
   }

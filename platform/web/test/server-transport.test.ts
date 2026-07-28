@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
-import type { DriverEvent, DriverEventListener, EditPromptInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
+import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
 import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
@@ -24,6 +24,7 @@ const snapshot: RuntimeSnapshot = {
   diagnostics: [],
   conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
   sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
+  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true }, availableVerifyChecks: [] },
   metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
   operational: initialOperational([], []),
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
@@ -38,6 +39,7 @@ class FakeDriver implements PiDriver {
   queued?: QueuedPromptPayload;
   edits: EditPromptInput[] = [];
   rewinds: RewindPromptInput[] = [];
+  forks: ForkInput[] = [];
   answers: UiResponse[] = [];
   deletedSessions: string[] = [];
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
@@ -126,7 +128,10 @@ class FakeDriver implements PiDriver {
   deleteSession(input: { sessionId: string }): Promise<void> { this.deletedSessions.push(input.sessionId); return Promise.resolve(); }
   renameSession(input: { sessionId: string; name: string }): Promise<void> { this.renamedSessions.push(input); return Promise.resolve(); }
   setSessionActive(input: { sessionId: string; active: boolean }): Promise<void> { this.activatedSessions.push(input); return Promise.resolve(); }
-  fork(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-fork", this.current.cwdLabel)); }
+  fork(input: ForkInput): Promise<ReplacementResult> {
+    this.forks.push(input);
+    return Promise.resolve({ cancelled: true, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration });
+  }
   setPackageEnabled(): Promise<ReplacementResult> { return Promise.resolve(this.replace(this.current.sessionId, this.current.cwdLabel)); }
   updatePackageSettings(input: unknown): Promise<ReplacementResult> {
     this.packageSettingsUpdates.push(input);
@@ -149,6 +154,7 @@ class FakeDriver implements PiDriver {
     this.current.sessionControls.thinkingLevel = input.thinkingLevel;
     return Promise.resolve();
   }
+  updateRuntimePolicy(): Promise<void> { return Promise.resolve(); }
   updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
@@ -381,6 +387,17 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const replayDelete = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(deleteCommand) });
     assert.equal(replayDelete.status, 200);
     assert.deepEqual(driver.deletedSessions, ["session-old"]);
+
+    const forkCommand = { type: "fork", entryId: "entry-1", name: "Forked session", mode: "conversation", commandId: "fork-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(forkCommand) })).status, 200);
+    assert.equal(driver.forks.length, 1);
+    assert.deepEqual(driver.forks[0], {
+      expectedGeneration: 1,
+      entryId: "entry-1",
+      name: "Forked session",
+      position: undefined,
+      mode: "conversation",
+    });
 
     const replacement = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "newSession", parentSessionId: "session-1", commandId: "replace-once", expectedGeneration: 1 }) });
     assert.equal(replacement.status, 200);

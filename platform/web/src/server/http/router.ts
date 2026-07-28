@@ -442,7 +442,13 @@ export class ServerTransport {
       case "reorderActiveSession": return this.driver.reorderActiveSession(command).then(() => accepted(command.expectedGeneration));
       case "editPrompt": return this.driver.editPrompt(command);
       case "rewindPrompt": return this.driver.rewindPrompt(command);
-      case "fork": return this.driver.fork({ entryId: command.entryId, position: command.position }).then((result) => accepted(result.sessionGeneration));
+      case "fork": return this.driver.fork({
+        expectedGeneration: command.expectedGeneration,
+        entryId: command.entryId,
+        name: command.name,
+        position: command.position,
+        mode: command.mode,
+      }).then((result) => accepted(result.sessionGeneration));
       case "timeline": {
         const action = command.action === "restore" ? "jump" : command.action;
         const message = `/timeline ${action}${command.checkpointId ? ` ${command.checkpointId}` : ""}`;
@@ -484,6 +490,11 @@ export class ServerTransport {
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings) return Promise.reject(httpError(409, "worktree settings are unavailable"));
         return this.driver.updateProjectWorktreeSettings(command).then(() => accepted(command.expectedGeneration));
+      case "updateRuntimePolicy":
+        return this.driver.updateRuntimePolicy(command).then(async () => {
+          this.projection.refresh(await this.driver.snapshot());
+          return accepted(command.expectedGeneration);
+        });
     }
   }
 
@@ -506,7 +517,7 @@ export class ServerTransport {
     if (event.type === "ui.closed" && this.dialogOwner?.requestId === event.requestId) this.clearDialogOwner();
     if (event.type === "session.event") {
       const payload = event.payload && typeof event.payload === "object" ? event.payload as { type?: unknown } : {};
-      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed"].includes(String(payload.type))) {
+      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed", "runtime_policy_changed"].includes(String(payload.type))) {
         void this.driver.snapshot().then((snapshot) => this.projection.refresh(snapshot)).catch(() => undefined);
       }
     }

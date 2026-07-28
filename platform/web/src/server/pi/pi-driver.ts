@@ -1,4 +1,4 @@
-import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
+import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
@@ -121,9 +121,14 @@ export interface SetSessionActiveInput {
 }
 
 export interface ForkInput {
+  expectedGeneration: number;
   entryId: string;
+  name: string;
   position?: "before" | "at";
+  mode?: "conversation" | "timeline";
 }
+
+export type UpdateRuntimePolicyInput = Extract<WebCommand, { type: "updateRuntimePolicy" }>;
 
 export interface EditPromptInput extends PromptInput {
   entryId: string;
@@ -278,6 +283,7 @@ export interface PiDriver {
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand>;
   rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand>;
   fork(input: ForkInput): Promise<ReplacementResult>;
+  updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
   rebuildDiscoverIndex(): Promise<void>;

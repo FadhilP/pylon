@@ -60,6 +60,7 @@ import type {
   TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
+  UpdateRuntimePolicyInput,
   WorkspaceFileInput,
   WorkspaceFilesInput,
 } from "./pi-driver.ts";
@@ -898,6 +899,7 @@ export class RuntimeCoordinator implements PiDriver {
       }, this.registry().worktreeRoot(project.id));
     }
     await this.registry().removeSessionWorkspace(input.sessionId);
+    await this.registry().removeSessionPolicy(input.sessionId);
     await this.registry().deactivateSession(input.sessionId);
     this.sessionIndex.remove(input.sessionId);
     this.emitStatus(input.sessionId, "sleeping");
@@ -972,11 +974,44 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async fork(input: ForkInput): Promise<ReplacementResult> {
-    this.assertGeneration();
+    this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
     slot.lastActivityAt = Date.now();
     await slot.driver.fork(input);
     return this.replacement(false);
+  }
+
+  async updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const selected = this.selected();
+    const projectId = this.projectIdForSlot(selected);
+    if (!projectId) throw new Error("runtime policy requires a registered project");
+    const affected = input.scope === "project"
+      ? [...this.slots.values()].filter((slot) => this.projectIdForSlot(slot) === projectId)
+      : [selected];
+    if (affected.some((slot) => !this.slotCanSleep(slot))) {
+      throw new Error("runtime policy can only change while affected sessions are idle");
+    }
+    await this.registry().updateRuntimePolicy({
+      scope: input.scope,
+      projectId,
+      sessionId: selected.id,
+      verify: input.verify,
+      timeline: input.timeline,
+      expectedRevision: input.expectedRevision,
+    });
+    for (const slot of affected) {
+      const current = await slot.driver.snapshot();
+      const policy = this.registry().runtimePolicy(projectId, slot.id);
+      policy.availableVerifyChecks = current.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check }));
+      slot.driver.applyRuntimePolicy(policy);
+    }
+    this.emit({
+      type: "session.event",
+      sessionId: selected.id,
+      sessionGeneration: this.generation,
+      payload: { type: "runtime_policy_changed" },
+    });
   }
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {

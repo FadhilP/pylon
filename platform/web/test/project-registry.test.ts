@@ -20,7 +20,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 4);
+    assert.equal(stored.version, 5);
     assert.equal(stored.projects.length, 2);
 
     let seeded = false;
@@ -141,6 +141,49 @@ test("project registry migrates and persists reversible project and session arch
     assert.equal(reloaded.isSessionArchived("session-one"), true);
     await reloaded.remove(id, ["session-one"]);
     assert.equal(reloaded.isSessionArchived("session-one"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime policy persists project defaults and session overrides", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-policy-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load([project]);
+    const projectId = projectIdForCwd(project);
+    await registry.updateRuntimePolicy({
+      scope: "project",
+      projectId,
+      sessionId: "session-one",
+      verify: { mode: "selected", checks: ["npm:test"] },
+      timeline: "disabled",
+      expectedRevision: 0,
+    });
+    await registry.updateRuntimePolicy({
+      scope: "session",
+      projectId,
+      sessionId: "session-one",
+      verify: { mode: "auto" },
+      timeline: "enabled",
+      expectedRevision: 1,
+    });
+    assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
+      verify: { mode: "auto" },
+      timelineEnabled: true,
+    });
+    assert.deepEqual(registry.runtimePolicy(projectId, "session-two").effective, {
+      verify: { mode: "selected", checks: ["npm:test"] },
+      timelineEnabled: false,
+    });
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load();
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").revision, 2);
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.timelineEnabled, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

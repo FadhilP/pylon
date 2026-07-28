@@ -1,5 +1,8 @@
 import {
+  IconActivityHeartbeat,
+  IconAdjustmentsHorizontal,
   IconCheck,
+  IconChevronDown,
   IconCircle,
   IconClock,
   IconDatabase,
@@ -18,11 +21,12 @@ import DOMPurify from "dompurify";
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
-import type { TimelineCheckpointDiff, TimelineCheckpointFiles } from "../shared/protocol/snapshots";
+import type { JobReadModel } from "../shared/protocol/events";
+import type { TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
-export type ViewId = "overview" | "timeline" | "memory" | "tools";
+export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
 type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
 
@@ -31,6 +35,7 @@ const navigation: Array<{ label: string; items: Array<{ id: ViewId; label: strin
     label: "Workspace",
     items: [
       { id: "overview", label: "Overview", icon: IconLayoutDashboard, hint: "Run summary" },
+      { id: "policy", label: "Policy", icon: IconAdjustmentsHorizontal, hint: "Runtime behavior" },
       { id: "timeline", label: "Timeline", icon: IconTimeline, hint: "Checkpoints" },
       { id: "memory", label: "Memory", icon: IconDatabase, hint: "Continuity facts" },
     ],
@@ -45,6 +50,7 @@ const navigation: Array<{ label: string; items: Array<{ id: ViewId; label: strin
 
 const viewCopy: Record<ViewId, { title: string; description: string }> = {
   overview: { title: "Workspace overview", description: "Live state for the active Pylon session." },
+  policy: { title: "Runtime policy", description: "Project and session behavior for Verify and Timeline." },
   timeline: { title: "Timeline", description: "Recoverable checkpoints across the current run." },
   memory: { title: "Project memory", description: "Durable facts Continuity keeps for this project." },
   tools: { title: "Tools", description: "Package policies and tool availability." },
@@ -67,7 +73,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, isOp
   return (
     <aside id="session-inspector" className={`inspector ${isOpen ? "is-open" : ""}`} aria-label="Session inspector" aria-hidden={!isOpen} inert={!isOpen}>
       <header className="inspector-header">
-        <div><span className="section-kicker">Inspector</span><h2>{copy.title}</h2></div>
+        <div><span className="section-kicker">Inspector</span></div>
         <button className="icon-button" type="button" onClick={onClose} aria-label={overlay ? "Close inspector" : "Collapse inspector"}><IconX size={17} /></button>
       </header>
       <div className="inspector-tabs" role="tablist" aria-label="Session details">
@@ -81,6 +87,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, isOp
       <p className="inspector-description">{copy.description}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
+        {current === "policy" && live.runtime && <RuntimePolicy live={live} />}
         {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
         {current === "memory" && <Memory live={live} />}
         {current === "tools" && <Tools live={live} pylonPolicies={live.runtime?.operational.tools.availability === "available"} />}
@@ -95,15 +102,16 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const work = operational?.continuity.work;
   return (
     <div className="page-grid">
-      <section className="usage-strip" aria-label="Session usage">
+      <InspectorSection title="Usage">
+        <div className="usage-strip" aria-label="Session usage">
         <div><small>Input</small><strong>{runtime ? formatCompactNumber(runtime.metrics.inputTokens) : "—"}</strong><span>tokens</span></div>
         <div><small>Output</small><strong>{runtime ? formatCompactNumber(runtime.metrics.outputTokens) : "—"}</strong><span>tokens</span></div>
         <div><small>Cache reads</small><strong>{runtime ? formatCompactNumber(runtime.metrics.cacheReadTokens) : "—"}</strong><span>tokens</span></div>
         <div><small>Tool calls</small><strong>{runtime ? formatCompactNumber(runtime.metrics.toolCalls) : "—"}</strong><span>session total</span></div>
-      </section>
+        </div>
+      </InspectorSection>
       <div className="overview-columns">
-        {operational?.continuity.availability === "available" && <section className="panel run-panel">
-          <PanelHeader title="Current run" meta={work ? displayTime(work.updatedAt) : undefined} />
+        {operational?.continuity.availability === "available" && <InspectorSection title="Current run" meta={work ? displayTime(work.updatedAt) : undefined} className="run-panel">
           {work ? <>
             <div className="run-title-row">
               <div className="run-icon"><IconListCheck size={20} /></div>
@@ -115,14 +123,12 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
             </div>
             <TodoList work={work} />
           </> : <div className="empty-state"><IconListCheck size={20} /><strong>No active work</strong><span>Continuity has no plan for this session.</span></div>}
-        </section>}
+        </InspectorSection>}
 
-        {runtime?.discoverIndex && <DiscoverIndex live={live} />}
       </div>
 
       <div className="overview-lower">
-        {operational?.verification.availability === "available" && <section className="panel verification-panel">
-          <PanelHeader title="Verification" meta={operational?.verification.scope || "No run"} />
+        {operational?.verification.availability === "available" && <InspectorSection title="Verification" meta={operational?.verification.scope || "No run"} className="verification-panel">
           <div className="check-list">
             {operational?.verification.checks.map((check) => (
               <div className="check-row" key={check.id}>
@@ -133,40 +139,119 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
                 <span className="mono">{formatDuration(check.durationMs)}</span>
               </div>
             ))}
-            {operational?.verification.checks.length === 0 && <div className="conversation-state">{operational?.verification.message || (operational?.verification.state ? `Verification ${operational.verification.state}.` : "No verification run yet.")}</div>}
+            {/* {operational?.verification.checks.length === 0 && <div className="conversation-state">{operational?.verification.message || (operational?.verification.state ? `Verification ${operational.verification.state}.` : "No verification run yet.")}</div>} */}
           </div>
-        </section>}
-
+        </InspectorSection>}
+        {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
       </div>
     </div>
   );
 }
 
-function DiscoverIndex({ live }: { live: RuntimeStoreSnapshot }) {
+function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
+  const runtime = live.runtime!;
+  const policy = runtime.runtimePolicy;
+  const [scope, setScope] = useState<"project" | "session">("project");
+  const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
+  const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
   const [busy, setBusy] = useState(false);
-  const index = live.runtime!.discoverIndex!;
+
+  const resetDraft = () => {
+    const value = scope === "project" ? policy.project.verify : policy.session.verify;
+    setVerify(value ?? "inherit");
+    setTimeline(scope === "project"
+      ? policy.project.timelineEnabled ? "enabled" : "disabled"
+      : policy.session.timelineEnabled === undefined
+        ? "inherit"
+        : policy.session.timelineEnabled ? "enabled" : "disabled");
+  };
+  useEffect(() => {
+    resetDraft();
+  }, [policy.revision, scope]);
+
   const idle = live.connection === "connected"
-    && live.runtime?.ready === true
-    && !live.runtime.conversation.workStartedAt
+    && runtime.ready
+    && !runtime.conversation.workStartedAt
     && !live.pendingUi
-    && !busy
-    && index.state !== "indexing";
-  return <section className="panel index-panel">
-    <PanelHeader title="File index" meta={index.state === "indexing" ? "Rebuilding…" : index.state} />
-    <dl className="index-metrics">
-      <div><dt>Files</dt><dd>{index.files === undefined ? "—" : formatCompactNumber(index.files)}</dd></div>
-      <div><dt>Symbols</dt><dd>{index.symbols === undefined ? "—" : formatCompactNumber(index.symbols)}</dd></div>
-      <div><dt>Updated</dt><dd>{index.indexedAt ? displayTime(index.indexedAt) : "Not indexed"}</dd></div>
-    </dl>
-    {index.error && <p className="index-error" role="alert">{index.error}</p>}
-    <button className="secondary-button" type="button" disabled={!idle} onClick={() => {
-      setBusy(true);
-      void runtimeStore.rebuildDiscoverIndex().catch(() => undefined).finally(() => setBusy(false));
-    }}>{busy || index.state === "indexing" ? "Rebuilding…" : "Rebuild index"}</button>
-  </section>;
+    && !busy;
+  const displayedVerify = verify === "inherit" ? policy.effective.verify : verify;
+  const checks = displayedVerify.mode === "selected"
+    ? displayedVerify.checks
+    : policy.availableVerifyChecks.slice(0, 6).map((check) => check.id);
+  const save = async (
+    nextVerify: VerifyPolicyReadModel | "inherit",
+    nextTimeline: "inherit" | "enabled" | "disabled",
+  ) => {
+    setVerify(nextVerify);
+    setTimeline(nextTimeline);
+    setBusy(true);
+    try {
+      await runtimeStore.updateRuntimePolicy(
+        scope,
+        nextVerify,
+        nextTimeline === "inherit" ? "inherit" : nextTimeline === "enabled",
+        policy.revision,
+      );
+    } catch (error) {
+      resetDraft();
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggleCheck = (id: string) => {
+    const next = checks.includes(id)
+      ? checks.filter((item) => item !== id)
+      : checks.length < 6 ? [...checks, id] : checks;
+    if (next === checks) return;
+    void save({ mode: "selected", checks: next }, timeline).catch(() => undefined);
+  };
+  const canResetVerify = scope === "project"
+    ? verify !== "inherit" && verify.mode !== "auto"
+    : verify !== "inherit";
+
+  return <InspectorSection title="Runtime policy" className="runtime-policy">
+    <div className="policy-scope" role="group" aria-label="Policy scope">
+      <button type="button" disabled={busy} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
+      <button type="button" disabled={busy} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
+    </div>
+    <div className="policy-label-row">
+      <span>Verify</span>
+      {canResetVerify && <button
+        className="text-button"
+        type="button"
+        disabled={!idle}
+        onClick={() => void save(scope === "project" ? { mode: "auto" } : "inherit", timeline).catch(() => undefined)}
+      >{scope === "project" ? "Use automatic detection" : "Use project defaults"}</button>}
+    </div>
+    <div className="policy-checks">
+      {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}>
+        <input
+          type="checkbox"
+          checked={checks.includes(check.id)}
+          disabled={!idle || !checks.includes(check.id) && checks.length >= 6}
+          onChange={() => toggleCheck(check.id)}
+        />
+        <span>{check.label}</span>
+      </label>)}
+      {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
+        .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
+      {policy.availableVerifyChecks.length === 0 && checks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
+    </div>
+    <label>Timeline
+      <select
+        value={timeline}
+        disabled={!idle}
+        onChange={(event) => void save(verify, event.target.value as typeof timeline).catch(() => undefined)}
+      >
+        {scope === "session" && <option value="inherit">Inherit project</option>}
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+      </select>
+    </label>
+    {busy && <small className="policy-saving" role="status">Saving…</small>}
+  </InspectorSection>;
 }
-
-
 
 function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   const memory = live.runtime?.operational.continuity.memory ?? [];
@@ -214,8 +299,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   };
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
   return <div className="memory-page">
-    <section className="panel memory-panel">
-      <PanelHeader title="Saved facts" meta={`${memory.length} project facts`} />
+    <InspectorSection title="Saved facts" meta={`${memory.length} project facts`} className="memory-panel">
       {memory.map((fact) => <article className="memory-fact" key={fact.key}>
         <header>
           <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
@@ -240,7 +324,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
       {memory.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
       {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
       {error && <p className="ui-request-error" role="alert">{error}</p>}
-    </section>
+    </InspectorSection>
   </div>;
 }
 
@@ -287,7 +371,7 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
   }
   return (
     <div className="timeline-layout">
-      <section className="timeline-list" aria-label="Checkpoints">
+      <InspectorSection title="Checkpoints" meta={`${checkpoints.length}`} className="timeline-list">
         <div className="timeline-toolbar"><span>{checkpoints.length} checkpoints</span><button className="text-button danger" type="button" disabled={!enabled || checkpoints.length === 0} onClick={() => void act("clear")}><IconTrash size={13} />{busy === "clear" ? "Clearing…" : "Clear timeline"}</button></div>
         {checkpoints.map((checkpoint) => (
           <button
@@ -303,9 +387,8 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
           </button>
         ))}
         {checkpoints.length === 0 && <div className="empty-state"><IconTimeline size={20} /><strong>No checkpoints</strong><span>Timeline has not captured this run.</span></div>}
-      </section>
-      {active && <aside className="panel checkpoint-detail">
-        <span className="section-kicker">Selected checkpoint</span>
+      </InspectorSection>
+      {active && <InspectorSection title="Selected checkpoint" className="checkpoint-detail">
         <h2 title={active.title}>{active.title}</h2>
         <dl className="checkpoint-summary">
           <div><dt>Branch</dt><dd>{active.branch || "Detached or unavailable"}</dd></div>
@@ -328,7 +411,7 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
         {selectedPath && <TimelineDiff value={diff} />}
         <div className="runtime-note"><IconShieldCheck size={15} /><span>Timeline confirms every restore, fork, and clear through its remote safety dialog.</span></div>
         {error && <p className="ui-request-error" role="alert">{error}</p>}
-      </aside>}
+      </InspectorSection>}
     </div>
   );
 }
@@ -358,9 +441,9 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
   }, [query, runtime?.activeTools, tools]);
   return (
     <div className="tools-page">
-      <section className="panel tool-table-panel">
+      <InspectorSection title="Available tools" meta={`${visibleTools.length}`} className="tool-table-panel">
         <div className="table-toolbar">
-          <div><h2>Available tools</h2><p>Effective state for this session.</p></div>
+          <div><p>Effective state for this session.</p></div>
           <label className="table-search"><IconSearch size={15} /><span className="sr-only">Filter tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" /></label>
         </div>
         <div className="generic-tool-list">
@@ -371,9 +454,9 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
           </div>)}
           {visibleTools.length === 0 && <div className="empty-state"><IconSearch size={20} /><strong>{tools.length ? "No matching tools" : "No tools available"}</strong><span>{tools.length ? "Try another tool name." : "Enable a package or configure Pi tools for this workspace."}</span></div>}
         </div>
-      </section>
-      {pylonPolicies && <section className="panel tool-table-panel">
-        <div className="table-toolbar"><div><h2>Package policies</h2><p>Pylon coordination state.</p></div></div>
+      </InspectorSection>
+      {pylonPolicies && <InspectorSection title="Package policies" meta={`${policies.length}`} className="tool-table-panel">
+        <div className="table-toolbar"><div><p>Pylon coordination state.</p></div></div>
         {runtime?.operational.tools.availability === "unavailable" ? <FeatureUnavailable name="Tool policy" /> : <div className="tool-table" role="table" aria-label="Pylon package policies">
           <div className="tool-table-head" role="row"><span role="columnheader">Package</span><span role="columnheader">Managed tools</span><span role="columnheader">State</span><span role="columnheader">Count</span></div>
           {policies.map((policy) => {
@@ -387,9 +470,79 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
           })}
           {policies.length === 0 && <div className="empty-state"><IconTool size={20} /><strong>No package policies</strong><span>No policy owners registered for this session.</span></div>}
         </div>}
-      </section>}
+      </InspectorSection>}
     </div>
   );
+}
+
+function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
+  const active = jobs
+    .filter((job) => job.state === "running" || job.state === "cancelling")
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt));
+  const settled = jobs
+    .filter((job) => job.state !== "running" && job.state !== "cancelling")
+    .sort((left, right) => Date.parse(right.finishedAt ?? right.startedAt) - Date.parse(left.finishedAt ?? left.startedAt))
+    .slice(0, 6);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!active.length) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active.length]);
+  const visible = [...active, ...settled];
+  return <InspectorSection title="Heartbeat jobs" meta={`${active.length} running`} className="heartbeat-panel">
+    <div className="heartbeat-list">
+      {visible.map((job) => {
+        const startedAt = Date.parse(job.startedAt);
+        const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : now;
+        const duration = Math.max(0, finishedAt - startedAt);
+        const tone: Tone = job.state === "completed"
+          ? "success"
+          : job.state === "failed" || job.state === "timed_out"
+            ? "danger"
+            : job.state === "running" || job.state === "cancelling"
+              ? "active"
+              : "neutral";
+        return <article className="heartbeat-row" key={job.id}>
+          <span className="heartbeat-icon"><IconActivityHeartbeat size={16} /></span>
+          <div>
+            <strong title={job.label}>{job.label}</strong>
+            <span>{job.purpose ?? "other"} · {displayTime(job.startedAt)} · {formatDuration(duration)}</span>
+          </div>
+          <div>
+            <Status tone={tone}>{job.state}</Status>
+            {job.exitCode !== undefined && <small>exit {job.exitCode ?? "signal"}</small>}
+          </div>
+        </article>;
+      })}
+      {visible.length === 0 && <div className="empty-state"><IconActivityHeartbeat size={20} /><strong>No background jobs</strong><span>Heartbeat has not started work in this session.</span></div>}
+    </div>
+  </InspectorSection>;
+}
+
+function InspectorSection({
+  title,
+  meta,
+  className = "",
+  children,
+}: {
+  title: string;
+  meta?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return <details
+    className={`inspector-section ${className}`}
+    open={open}
+    onToggle={(event) => setOpen(event.currentTarget.open)}
+  >
+    <summary>
+      <span><strong>{title}</strong>{meta && <small>{meta}</small>}</span>
+      <IconChevronDown size={15} aria-hidden="true" />
+    </summary>
+    <div className="inspector-section-content">{children}</div>
+  </details>;
 }
 
 function TodoList({ work }: { work: NonNullable<NonNullable<RuntimeStoreSnapshot["runtime"]>["operational"]["continuity"]["work"]> }) {
@@ -407,10 +560,6 @@ function TodoList({ work }: { work: NonNullable<NonNullable<RuntimeStoreSnapshot
 
 function FeatureUnavailable({ name }: { name: string }) {
   return <div className="empty-state" role="status"><IconX size={20} /><strong>{name} unavailable</strong><span>Installed package version does not expose compatible state.</span></div>;
-}
-
-function PanelHeader({ title, meta }: { title: string; meta?: string }) {
-  return <header className="panel-header"><div><h2>{title}</h2>{meta && <span>{meta}</span>}</div></header>;
 }
 
 function Status({ tone, children }: { tone: Tone; children: ReactNode }) {

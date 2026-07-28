@@ -1,4 +1,4 @@
-import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
@@ -11,6 +11,8 @@ import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../sh
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor } from "./agent-color";
+import { AnimatedDetails } from "./animated-details";
+import { UiDialog } from "./ui-dialog";
 
 const markdownTags = ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"];
 const markdownAttributes = ["alt", "checked", "class", "data-language", "disabled", "href", "src", "title", "type"];
@@ -28,6 +30,12 @@ interface PromptUndo {
   entryId: string;
   text: string;
   attachmentCount: number;
+}
+interface PromptFork {
+  entryId: string;
+  name: string;
+  canUseTimeline: boolean;
+  timelineReason?: string;
 }
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -51,6 +59,7 @@ export function ConversationPanel({
   const [dropActive, setDropActive] = useState(false);
   const [edit, setEdit] = useState<PromptEdit>();
   const [undo, setUndo] = useState<PromptUndo>();
+  const [fork, setFork] = useState<PromptFork>();
   const [visibleTurnIds, setVisibleTurnIds] = useState<Set<string>>(() => new Set());
   const [railPage, setRailPage] = useState<ConversationTurnIndexPage>();
   const [railLoading, setRailLoading] = useState(false);
@@ -82,6 +91,11 @@ export function ConversationPanel({
     return () => cancelAnimationFrame(frame);
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
   useEffect(() => {
+    if (!live.treeChanging) return;
+    setRailPage(undefined);
+    setVisibleTurnIds(new Set());
+  }, [live.treeChanging]);
+  useEffect(() => {
     const stream = streamRef.current;
     const transcript = transcriptRef.current;
     if (!stream || !transcript || typeof ResizeObserver === "undefined") return;
@@ -95,18 +109,23 @@ export function ConversationPanel({
     setHistoryLoading(undefined);
     setEdit(undefined);
     setUndo(undefined);
+    setFork(undefined);
     setRailPage(undefined);
     setVisibleTurnIds(new Set());
     turnRefs.current.clear();
-  }, [runtime?.sessionId]);
+  }, [runtime?.sessionId, runtime?.sessionGeneration]);
   const connected = live.connection === "connected" && runtime?.ready === true && projectAvailable;
   const streaming = runtime?.conversation.streaming === true;
   const running = Boolean(runtime?.conversation.workStartedAt);
+  const stopping = runtime?.conversation.stopping === true;
   const queued = runtime?.conversation.queue.pending;
+  const composerBlocked = Boolean(live.pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
   const activeHistoryWindow = live.historyWindow;
-  const transcriptMessages = activeHistoryWindow && activeHistoryWindow.sessionId === runtime?.sessionId
+  const transcriptMessages = activeHistoryWindow
+    && activeHistoryWindow.sessionId === runtime?.sessionId
+    && activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
     ? activeHistoryWindow.messages
     : runtime?.conversation.messages ?? [];
   const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
@@ -238,7 +257,7 @@ export function ConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
-    if ((!value && images.length === 0 && files.length === 0) || !connected || queued) return;
+    if ((!value && images.length === 0 && files.length === 0) || !connected || queued || composerBlocked) return;
     setSubmitting(true);
     try {
       await runtimeStore.sendMessage(
@@ -394,6 +413,8 @@ export function ConversationPanel({
   };
   const submitEdit = async () => {
     if (!edit || (!edit.text.trim() && edit.images.length === 0)) return;
+    setRailPage(undefined);
+    setVisibleTurnIds(new Set());
     setSubmitting(true);
     try {
       await runtimeStore.editPrompt(
@@ -409,6 +430,8 @@ export function ConversationPanel({
   };
   const submitUndo = async () => {
     if (!undo) return;
+    setRailPage(undefined);
+    setVisibleTurnIds(new Set());
     setSubmitting(true);
     try {
       await runtimeStore.rewindPrompt(undo.entryId);
@@ -419,6 +442,38 @@ export function ConversationPanel({
       setUndo(undefined);
       requestAnimationFrame(() => promptRef.current?.focus());
     } finally {
+      setSubmitting(false);
+    }
+  };
+  const startFork = (item: MessageReadModel) => {
+    if (!item.entryId) return;
+    const timelineEnabled = runtime?.runtimePolicy.effective.timelineEnabled === true;
+    const timelineAvailable = runtime?.operational.timeline.availability === "available";
+    const canUseTimeline = timelineEnabled && timelineAvailable && item.canForkWithTimeline === true;
+    const timelineReason = !timelineEnabled
+      ? "Timeline is disabled by the effective runtime policy."
+      : !timelineAvailable
+        ? "Timeline is unavailable or still initializing for this session."
+        : !item.canForkWithTimeline
+          ? "No compatible Timeline checkpoint exists for this prompt."
+          : undefined;
+    const sourceName = runtime?.sessionName?.trim();
+    setFork({
+      entryId: item.entryId,
+      name: sourceName ? `${sourceName} (fork)`.slice(0, 200) : "Forked session",
+      canUseTimeline,
+      timelineReason,
+    });
+  };
+  const submitFork = async (name: string, mode: "conversation" | "timeline") => {
+    if (!fork) return;
+    setRailPage(undefined);
+    setVisibleTurnIds(new Set());
+    setSubmitting(true);
+    try {
+      await runtimeStore.forkPrompt(fork.entryId, name, mode);
+    } finally {
+      setFork(undefined);
       setSubmitting(false);
     }
   };
@@ -450,7 +505,7 @@ export function ConversationPanel({
     <section className="conversation-panel" aria-label="Live conversation">
       {live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
       {live.connection === "error" && <div className="conversation-state error">{live.error || "Unable to load runtime."}</div>}
-      {activeAgents.length > 0 && <ActiveAgents runs={activeAgents} onSelect={onSelectAgent} />}
+      <ActiveAgents runs={activeAgents} onSelect={onSelectAgent} />
       {runtime && <div
         ref={streamRef}
         className="message-stream"
@@ -514,6 +569,7 @@ export function ConversationPanel({
                 text: block.text,
                 attachmentCount: block.attachmentCount ?? 0,
               }) : undefined}
+              onFork={block.role === "user" && block.entryId ? () => startFork(block) : undefined}
             />}
             {block.role === "assistant" && block.id !== latestTurnTimer?.id && block.workDurationMs !== undefined && <WorkTimer
               durationMs={block.workDurationMs}
@@ -526,6 +582,11 @@ export function ConversationPanel({
           startedAt={runtime.conversation.workStartedAt}
           modelName={runtime.conversation.workModelName}
           thinkingLevel={runtime.conversation.workThinkingLevel}
+        /> : runtime.conversation.stoppedRun ? <WorkTimer
+          durationMs={runtime.conversation.stoppedRun.durationMs}
+          modelName={runtime.conversation.stoppedRun.modelName}
+          thinkingLevel={runtime.conversation.stoppedRun.thinkingLevel}
+          stopped
         /> : latestTurnTimer && <WorkTimer
           durationMs={latestTurnTimer.workDurationMs}
           modelName={latestTurnTimer.modelName}
@@ -540,7 +601,7 @@ export function ConversationPanel({
         </div>
       </div>}
       {runtime && <HistoryRail
-        page={railPage}
+        page={live.treeChanging ? undefined : railPage}
         visibleIds={visibleTurnIds}
         loading={railLoading}
         onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
@@ -552,9 +613,16 @@ export function ConversationPanel({
         onCancel={() => setUndo(undefined)}
         onConfirm={() => void submitUndo()}
       />}
+      {fork && <ForkDialog
+        fork={fork}
+        submitting={submitting}
+        onCancel={() => setFork(undefined)}
+        onConfirm={(name, mode) => void submitFork(name, mode)}
+      />}
       {runtime?.conversation.retry.active && <p className="conversation-note">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
       {runtime?.conversation.compaction.active && <p className="conversation-note">Compacting context…</p>}
       {runtime && <ExtensionUiSurface runtime={runtime} />}
+      <RetainedUiDialog request={live.pendingUi} />
       <form
         className={`prompt-form${dropActive ? " is-drop-active" : ""}`}
         onSubmit={submit}
@@ -621,7 +689,7 @@ export function ConversationPanel({
             onPaste={(event) => void onPaste(event)}
             onKeyDown={onPromptKeyDown}
             placeholder={!projectAvailable ? "Add a project to start" : connected ? (queued ? "A message is already queued" : running ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
-            disabled={!connected || submitting || Boolean(queued)}
+            disabled={!connected || submitting || Boolean(queued) || composerBlocked}
             aria-autocomplete="list"
             aria-controls={suggestions.length ? "slash-command-suggestions" : fileSuggestions.length ? "file-mention-suggestions" : undefined}
             aria-expanded={suggestions.length > 0 || fileSuggestions.length > 0}
@@ -649,7 +717,7 @@ export function ConversationPanel({
             <PlusMenu
               open={openMenu === "plus"}
               active={planMode}
-              disabled={!connected || submitting || Boolean(queued)}
+              disabled={!connected || submitting || Boolean(queued) || composerBlocked}
               available={planAvailable}
               onToggle={() => setOpenMenu((current) => current === "plus" ? undefined : "plus")}
               onClose={() => setOpenMenu(undefined)}
@@ -675,13 +743,37 @@ export function ConversationPanel({
             onApply={setSessionControls}
           />
           {running && !hasDraft
-            ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected} aria-label="Stop response"><IconSquareFilled size={13} /></button>
-            : <button className="prompt-send" disabled={!connected || submitting || Boolean(queued) || !hasDraft || !controls?.model} type="submit" aria-label={running ? "Queue message" : "Send message"}><IconArrowUp size={16} /></button>}
+            ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected || stopping} aria-label="Stop response">
+                <IconSquareFilled size={13} />{stopping && <span>Stopping…</span>}
+              </button>
+            : <button className="prompt-send" disabled={!connected || composerBlocked || submitting || Boolean(queued) || !hasDraft || !controls?.model} type="submit" aria-label={running ? "Queue message" : "Send message"}><IconArrowUp size={16} /></button>}
           </div>
         </div>
       </form>
     </section>
   );
+}
+
+function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingUi"] }) {
+  const [displayed, setDisplayed] = useState(request);
+  const [exiting, setExiting] = useState(false);
+
+  useEffect(() => {
+    if (request) {
+      setDisplayed(request);
+      setExiting(false);
+      return;
+    }
+    if (!displayed) return;
+    setExiting(true);
+    const timer = window.setTimeout(() => setDisplayed(undefined), 140);
+    return () => window.clearTimeout(timer);
+  }, [request, displayed]);
+
+  if (!displayed) return null;
+  return <div className={exiting ? "ui-request-motion is-exiting" : "ui-request-motion"}>
+    <UiDialog key={displayed.requestId} request={displayed} />
+  </div>;
 }
 
 function PlusMenu({
@@ -1061,6 +1153,97 @@ function UndoConfirmDialog({
   </div>;
 }
 
+function ForkDialog({
+  fork,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  fork: PromptFork;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: (name: string, mode: "conversation" | "timeline") => void;
+}) {
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const [name, setName] = useState(fork.name);
+  const [withTimeline, setWithTimeline] = useState(fork.canUseTimeline);
+  const validName = name.trim().length > 0 && name.trim().length <= 200;
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLInputElement>("[data-autofocus]")?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
+    if (event.key === "Escape" && !submitting) {
+      event.preventDefault();
+      onCancel();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])");
+    if (!focusable?.length) return;
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  return <div className="edit-confirm-backdrop fork-dialog-backdrop" onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && !submitting) onCancel();
+  }}>
+    <form
+      ref={dialogRef}
+      className="edit-confirm-dialog fork-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fork-dialog-title"
+      aria-describedby="fork-dialog-description"
+      onKeyDown={onKeyDown}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (validName && !submitting) onConfirm(name.trim(), withTimeline ? "timeline" : "conversation");
+      }}
+    >
+      <header>
+        <strong id="fork-dialog-title">Fork from this prompt</strong>
+        <button className="icon-button" type="button" onClick={onCancel} disabled={submitting} aria-label="Close"><IconX size={16} /></button>
+      </header>
+      <div>
+        <p id="fork-dialog-description">Create a separate session from this point in the conversation.</p>
+        <label className="fork-name">Session name
+          <input
+            data-autofocus
+            value={name}
+            maxLength={200}
+            disabled={submitting}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <label className={`fork-timeline ${fork.canUseTimeline ? "" : "is-disabled"}`}>
+          <input
+            type="checkbox"
+            checked={withTimeline}
+            disabled={!fork.canUseTimeline || submitting}
+            onChange={(event) => setWithTimeline(event.target.checked)}
+          />
+          <span>Restore files from Timeline checkpoint</span>
+        </label>
+        {fork.timelineReason && <p className="fork-timeline-reason">{fork.timelineReason}</p>}
+      </div>
+      <footer>
+        <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+        <button className="primary-button" type="submit" disabled={!validName || submitting}>
+          {submitting ? "Forking…" : "Fork session"}
+        </button>
+      </footer>
+    </form>
+  </div>;
+}
+
 function ImageStrip({ images, label, onRemove }: { images: PastedImage[]; label: string; onRemove: (id: string) => void }) {
   return <div className="prompt-images" aria-label={label}>
     {images.map((image, index) => <div className="prompt-image" key={image.id}>
@@ -1112,12 +1295,14 @@ function MessageFooter({
   disabled,
   onEdit,
   onUndo,
+  onFork,
 }: {
   message: MessageReadModel;
   canCopy: boolean;
   disabled: boolean;
   onEdit?: () => void;
   onUndo?: () => void;
+  onFork?: () => void;
 }) {
   const timestamp = formatMessageTime(message.createdAt);
   return <footer className="message-footer">
@@ -1131,6 +1316,13 @@ function MessageFooter({
       aria-label="Undo to this prompt"
       title={message.canUndo ? "Undo to this prompt and restore files" : "No compatible Timeline checkpoint exists before this prompt"}
     ><IconArrowBackUp size={14} /></button>}
+    {onFork && <button
+      type="button"
+      disabled={disabled}
+      onClick={onFork}
+      aria-label="Fork from this prompt"
+      title="Fork from this prompt"
+    ><IconGitFork size={14} /></button>}
   </footer>;
 }
 
@@ -1179,7 +1371,7 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
   </section>;
 }
 
-function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"] }) {
+function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; stopped?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!startedAt) return;
@@ -1190,7 +1382,7 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel }: { starte
   const started = startedAt ? Date.parse(startedAt) : Number.NaN;
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
   return <div className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
-    {startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
+    {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
     {modelName && <> · {modelName}</>}
     {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
   </div>;
@@ -1198,12 +1390,30 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel }: { starte
 
 function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; onSelect?: (id: string) => void }) {
   const [now, setNow] = useState(Date.now());
+  const [displayed, setDisplayed] = useState(runs);
+  const [exiting, setExiting] = useState(false);
+  const runKey = runs.map((run) => run.id).join("\0");
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
-  return <aside className="active-agents" aria-label="Active delegated agents">
-    {runs.slice(0, 3).map((run) => {
+  useEffect(() => {
+    if (runs.length) {
+      setDisplayed(runs);
+      setExiting(false);
+      return;
+    }
+    if (!displayed.length) return;
+    setExiting(true);
+    const timer = window.setTimeout(() => {
+      setDisplayed([]);
+      setExiting(false);
+    }, 140);
+    return () => window.clearTimeout(timer);
+  }, [runKey]);
+  if (!displayed.length) return null;
+  return <aside className={`active-agents${exiting ? " is-exiting" : ""}`} aria-label="Active delegated agents">
+    {displayed.slice(0, 3).map((run) => {
       const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
       const elapsed = Number.isNaN(started) ? run.durationMs ?? 0 : Math.max(0, now - started);
       return <button type="button" key={run.id} style={agentColor(run.id)} onClick={() => onSelect?.(run.id)}>
@@ -1213,7 +1423,7 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
         <time>{formatWorkDuration(elapsed)}</time>
       </button>;
     })}
-    {runs.length > 3 && <span className="active-agent-overflow">+{runs.length - 3} more</span>}
+    {displayed.length > 3 && <span className="active-agent-overflow">+{displayed.length - 3} more</span>}
   </aside>;
 }
 
@@ -1225,12 +1435,14 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
 
 function ToolTurnGroup({ tools }: { tools: MessageReadModel[] }) {
   const names = [...new Set(tools.map((tool) => tool.tool?.name || "Tool"))];
-  return <details className="tool-turn-group">
-    <summary><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(0, 3).join(", ")}{names.length > 3 ? "…" : ""}</span></summary>
+  return <AnimatedDetails
+    className="tool-turn-group"
+    summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(0, 3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
+  >
     <div className="tool-turn-items">
       {tools.map((tool) => <ToolDisclosure key={tool.id} name={tool.tool?.name || "Tool"} status={tool.tool?.status || "completed"} input={tool.tool?.input} output={tool.text} />)}
     </div>
-  </details>;
+  </AnimatedDetails>;
 }
 
 function SystemDisclosure({ message }: { message: MessageReadModel }) {

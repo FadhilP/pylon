@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
+import type { RuntimePolicyReadModel, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 4;
+const VERSION = 5;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 
@@ -14,6 +15,24 @@ export interface RegisteredProject {
   label: string;
   archivedAt?: string;
   setupCommand?: string;
+  verifyPolicy?: VerifyPolicyReadModel;
+  timelineEnabled?: boolean;
+}
+
+interface SessionPolicyRecord {
+  sessionId: string;
+  projectId: string;
+  verify?: VerifyPolicyReadModel;
+  timelineEnabled?: boolean;
+}
+
+export interface RuntimePolicyUpdate {
+  scope: "project" | "session";
+  projectId: string;
+  sessionId: string;
+  verify: VerifyPolicyReadModel | { mode: "inherit" };
+  timeline: "inherit" | "enabled" | "disabled";
+  expectedRevision: number;
 }
 
 export interface SessionWorkspaceRecord {
@@ -86,6 +105,8 @@ export class ProjectRegistry {
   private archivedSessions: ArchivedSessionRecord[] = [];
   private sessionWorkspaces: SessionWorkspaceRecord[] = [];
   private activeSessionOrder: string[] = [];
+  private sessionPolicies: SessionPolicyRecord[] = [];
+  private policyRevision = 0;
   private loaded = false;
 
   constructor(private readonly configPath: string) {}
@@ -99,7 +120,7 @@ export class ProjectRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("invalid project registry");
-      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown };
+      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown; sessionPolicies?: unknown; policyRevision?: unknown };
       if (value.version === 1 && Array.isArray(value.directories)) {
         const directories = value.directories.filter((item): item is string =>
           typeof item === "string" && item.length > 0 && item.length <= 4_096);
@@ -108,19 +129,23 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown };
+        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown };
         if (typeof record.directory !== "string" || !record.directory || record.directory.length > 4_096) return [];
         if (record.archivedAt !== undefined && (typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt)))) return [];
         if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
+        if (record.verifyPolicy !== undefined && !validVerifyPolicy(record.verifyPolicy)) return [];
+        if (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean") return [];
         return [{
           directory: record.directory,
           ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
+          ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
+          ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
         }];
       });
       this.projects = await this.resolveProjects(projects);
@@ -139,6 +164,12 @@ export class ProjectRegistry {
             typeof item === "string" && item.length > 0 && item.length <= 128)
             .slice(0, MAX_ARCHIVED_SESSIONS)
         : [];
+      this.sessionPolicies = Array.isArray(value.sessionPolicies)
+        ? value.sessionPolicies.flatMap((item) => this.parseSessionPolicy(item)).slice(0, MAX_ARCHIVED_SESSIONS)
+        : [];
+      this.policyRevision = Number.isSafeInteger(value.policyRevision) && (value.policyRevision as number) >= 0
+        ? value.policyRevision as number
+        : 0;
       this.loaded = true;
       if (value.version !== VERSION) await this.save();
       return;
@@ -187,6 +218,7 @@ export class ProjectRegistry {
     if (!this.projects.some((project) => project.id === projectId)) throw new Error("project is unavailable");
     this.projects = this.projects.filter((project) => project.id !== projectId);
     this.sessionWorkspaces = this.sessionWorkspaces.filter((workspace) => workspace.projectId !== projectId);
+    this.sessionPolicies = this.sessionPolicies.filter((policy) => policy.projectId !== projectId);
     const removedSessions = new Set(sessionIds);
     this.archivedSessions = this.archivedSessions.filter((session) => !removedSessions.has(session.id));
     this.activeSessionOrder = this.activeSessionOrder.filter((sessionId) => !removedSessions.has(sessionId));
@@ -349,6 +381,64 @@ export class ProjectRegistry {
     await this.save();
   }
 
+  runtimePolicy(projectId: string, sessionId: string): RuntimePolicyReadModel {
+    const project = this.requireProject(projectId);
+    const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
+    const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
+    const projectTimeline = project.timelineEnabled ?? true;
+    return {
+      revision: this.policyRevision,
+      project: {
+        verify: projectVerify,
+        timelineEnabled: projectTimeline,
+      },
+      session: {
+        ...(session?.verify ? { verify: cloneVerifyPolicy(session.verify) } : {}),
+        ...(session?.timelineEnabled !== undefined ? { timelineEnabled: session.timelineEnabled } : {}),
+      },
+      effective: {
+        verify: cloneVerifyPolicy(session?.verify ?? projectVerify),
+        timelineEnabled: session?.timelineEnabled ?? projectTimeline,
+      },
+      availableVerifyChecks: [],
+    };
+  }
+
+  async updateRuntimePolicy(input: RuntimePolicyUpdate): Promise<RuntimePolicyReadModel> {
+    if (input.expectedRevision !== this.policyRevision) throw new Error("runtime policy changed; refresh and try again");
+    const project = this.requireProject(input.projectId);
+    if (input.scope === "project") {
+      if (input.verify.mode === "inherit" || input.timeline === "inherit") throw new Error("project policy cannot inherit");
+      project.verifyPolicy = cloneVerifyPolicy(input.verify);
+      project.timelineEnabled = input.timeline === "enabled";
+    } else {
+      let session = this.sessionPolicies.find((item) => item.sessionId === input.sessionId);
+      if (!session) {
+        session = { sessionId: input.sessionId, projectId: input.projectId };
+        this.sessionPolicies.push(session);
+      }
+      if (session.projectId !== input.projectId) throw new Error("session policy project mismatch");
+      if (input.verify.mode === "inherit") delete session.verify;
+      else session.verify = cloneVerifyPolicy(input.verify);
+      if (input.timeline === "inherit") delete session.timelineEnabled;
+      else session.timelineEnabled = input.timeline === "enabled";
+      if (!session.verify && session.timelineEnabled === undefined) {
+        this.sessionPolicies = this.sessionPolicies.filter((item) => item !== session);
+      }
+    }
+    this.policyRevision++;
+    await this.save();
+    return this.runtimePolicy(input.projectId, input.sessionId);
+  }
+
+  async removeSessionPolicy(sessionId: string): Promise<void> {
+    const next = this.sessionPolicies.filter((item) => item.sessionId !== sessionId);
+    if (next.length === this.sessionPolicies.length) return;
+    this.sessionPolicies = next;
+    this.policyRevision++;
+    await this.save();
+  }
+
   async writeHandoffJournal(value: HandoffJournal): Promise<void> {
     this.assertLoaded();
     const path = resolve(dirname(this.configPath), "handoff.json");
@@ -406,7 +496,7 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
   }
 
-  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string }>): Promise<RegisteredProject[]> {
+  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
@@ -419,6 +509,8 @@ export class ProjectRegistry {
             label: basename(cwd) || cwd,
             ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
+            ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
+            ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
           });
         }
       } catch {
@@ -437,10 +529,14 @@ export class ProjectRegistry {
         directory: project.cwd,
         ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
         ...(project.setupCommand ? { setupCommand: project.setupCommand } : {}),
+        ...(project.verifyPolicy ? { verifyPolicy: project.verifyPolicy } : {}),
+        ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
       })),
       archivedSessions: this.archivedSessions,
       sessionWorkspaces: this.sessionWorkspaces,
       activeSessionOrder: this.activeSessionOrder,
+      sessionPolicies: this.sessionPolicies,
+      policyRevision: this.policyRevision,
     }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await rename(temporary, this.configPath);
   }
@@ -476,6 +572,36 @@ export class ProjectRegistry {
       ...Object.fromEntries(optional.flatMap((key) => record[key] ? [[key, record[key]]] : [])),
     } as SessionWorkspaceRecord];
   }
+
+  private parseSessionPolicy(value: unknown): SessionPolicyRecord[] {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 128
+      || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
+      || (record.verify !== undefined && !validVerifyPolicy(record.verify))
+      || (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean")) return [];
+    return [{
+      sessionId: record.sessionId,
+      projectId: record.projectId,
+      ...(record.verify ? { verify: cloneVerifyPolicy(record.verify) } : {}),
+      ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+    }];
+  }
+}
+
+function validVerifyPolicy(value: unknown): value is VerifyPolicyReadModel {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  return policy.mode === "auto"
+    || policy.mode === "selected"
+      && Array.isArray(policy.checks)
+      && policy.checks.length <= 6
+      && policy.checks.every((check) => typeof check === "string" && check.length > 0 && check.length <= 100)
+      && new Set(policy.checks).size === policy.checks.length;
+}
+
+function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel {
+  return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
 }
 
 export interface ProjectPickerCommand {

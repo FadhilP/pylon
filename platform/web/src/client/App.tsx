@@ -19,7 +19,6 @@ import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
-import { UiDialog } from "./ui-dialog";
 
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | null;
@@ -112,12 +111,15 @@ export function App() {
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
-  const timelineEnabled = activePackages.has("pi-timeline")
+  const timelinePackageAvailable = activePackages.has("pi-timeline")
     || live.runtime?.operational.timeline.availability === "available";
+  const timelineEnabled = timelinePackageAvailable
+    && (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
   const memoryEnabled = activePackages.has("pi-continuity")
     || live.runtime?.operational.continuity.availability === "available";
   const availableViews = useMemo(() => new Set<ViewId>([
     "overview",
+    "policy",
     ...(timelineEnabled ? ["timeline" as const] : []),
     ...(memoryEnabled ? ["memory" as const] : []),
     "tools",
@@ -130,6 +132,7 @@ export function App() {
   };
   const reportError = (cause: unknown, fallback: string) => {
     const message = cause instanceof Error ? cause.message : fallback;
+    if (/session changed while listing sessions|session list is stale/i.test(message)) return;
     const now = Date.now();
     if (lastError.current.message === message && now - lastError.current.at < 100) return;
     lastError.current = { message, at: now };
@@ -186,8 +189,6 @@ export function App() {
       if (!active || request !== sessionListRequest.current) return;
       applySessionList(result);
     }).catch((cause) => {
-      const message = cause instanceof Error ? cause.message : "Unable to list sessions";
-      if (/session changed while listing sessions|session list is stale/i.test(message)) return;
       if (active && request === sessionListRequest.current) reportError(cause, "Unable to list sessions");
     }).finally(() => {
       if (active && request === sessionListRequest.current) setSessionsLoading(false);
@@ -618,7 +619,7 @@ export function App() {
           />}
           {rightPanel === "files" && <FilesPanel
             key={`files:${live.runtime?.sessionId ?? "loading"}`}
-            runtime={live.runtime}
+            live={live}
             requestedPath={requestedFile}
             onClose={() => setRightPanel(null)}
             onError={reportError}
@@ -639,7 +640,6 @@ export function App() {
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
       />}
-      {live.pendingUi && <UiDialog key={live.pendingUi.requestId} request={live.pendingUi} />}
     </div>
   );
 }
@@ -747,13 +747,19 @@ function SidebarResizer({ container, width, onCommit }: {
 }
 
 function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
+  const [exiting, setExiting] = useState(false);
+  const close = () => {
+    if (exiting) return;
+    setExiting(true);
+    window.setTimeout(onClose, 140);
+  };
   useEffect(() => {
-    const timer = window.setTimeout(onClose, 8_000);
+    const timer = window.setTimeout(close, 8_000);
     return () => window.clearTimeout(timer);
   }, []);
-  return <div className="app-error-toast" role="alert">
+  return <div className={`app-error-toast${exiting ? " is-exiting" : ""}`} role="alert">
     <span>{message}</span>
-    <button type="button" onClick={onClose} aria-label="Dismiss error"><IconX size={15} /></button>
+    <button type="button" onClick={close} aria-label="Dismiss error"><IconX size={15} /></button>
   </div>;
 }
 

@@ -3,7 +3,21 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapshot["pendingUi"]> }) {
   const payload = request.payload;
-  const [value, setValue] = useState(() => typeof payload.prefill === "string" ? payload.prefill : "");
+  const options = Array.isArray(payload.options) ? payload.options : [];
+  const optionValue = (option: unknown, index: number) => {
+    const item = typeof option === "object" && option ? option as Record<string, unknown> : {};
+    return typeof option === "string" ? option : typeof item.value === "string" ? item.value : String(index);
+  };
+  const optionLabel = (option: unknown, index: number) => {
+    const item = typeof option === "object" && option ? option as Record<string, unknown> : {};
+    return typeof option === "string" ? option : typeof item.label === "string" ? item.label : optionValue(option, index);
+  };
+  const allowOnce = options.findIndex((option, index) =>
+    optionLabel(option, index).trim().toLowerCase() === "allow once");
+  const [value, setValue] = useState(() =>
+    typeof payload.prefill === "string"
+      ? payload.prefill
+      : allowOnce >= 0 ? optionValue(options[allowOnce], allowOnce) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [remaining, setRemaining] = useState(() => request.expiresAt ? Math.max(0, Date.parse(request.expiresAt) - Date.now()) : undefined);
@@ -14,7 +28,6 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
   const titleId = `ui-title-${request.requestId}`;
   const descriptionId = `ui-description-${request.requestId}`;
   const expired = remaining !== undefined && remaining <= 0;
-  const options = Array.isArray(payload.options) ? payload.options : [];
 
   useEffect(() => {
     if (!request.expiresAt) return;
@@ -50,12 +63,6 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!busy && !expired) void respond({ cancelled: true }); return; }
     if (event.key === "Enter" && request.method === "input" && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); if (!busy && !expired) void submit(); return; }
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
-    if (!focusable?.length) return;
-    const first = focusable[0]; const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
 
   if (!request.owned) return <div className="ui-request ui-request-observer" role="status" aria-live="polite">
@@ -65,10 +72,24 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     {error && <p className="ui-request-error" role="alert">{error}</p>}
   </div>;
 
-  return <div className="ui-request-backdrop">
-    <div ref={dialogRef} className="ui-request" role={request.method === "confirm" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} onKeyDown={onKeyDown}>
+  return <div ref={dialogRef} className="ui-request ui-request-inline" role={request.method === "confirm" ? "alertdialog" : "dialog"} aria-labelledby={titleId} aria-describedby={descriptionId} onKeyDown={onKeyDown}>
       <strong id={titleId}>{title}</strong><p id={descriptionId}>{description}</p>
-      {request.method === "select" && <select data-autofocus value={value} onChange={(event) => setValue(event.target.value)} disabled={busy || expired}><option value="">Select an option</option>{options.map((option, index) => { const item = typeof option === "object" && option ? option as Record<string, unknown> : {}; const optionValue = typeof option === "string" ? option : typeof item.value === "string" ? item.value : String(index); const label = typeof option === "string" ? option : typeof item.label === "string" ? item.label : optionValue; return <option key={optionValue} value={optionValue}>{label}</option>; })}</select>}
+      {request.method === "select" && <div className="ui-request-options" role="listbox" aria-label={title}>
+        {options.map((option, index) => {
+          const nextValue = optionValue(option, index);
+          const label = optionLabel(option, index);
+          return <button
+            key={nextValue}
+            type="button"
+            role="option"
+            aria-selected={value === nextValue}
+            className={value === nextValue ? "is-selected" : ""}
+            data-autofocus={index === allowOnce || allowOnce < 0 && index === 0 ? "" : undefined}
+            disabled={busy || expired}
+            onClick={() => setValue(nextValue)}
+          >{label}</button>;
+        })}
+      </div>}
       {(request.method === "input" || request.method === "editor") && (request.method === "editor" ? <textarea data-autofocus value={value} onChange={(event) => setValue(event.target.value)} disabled={busy || expired} /> : <input data-autofocus value={value} placeholder={typeof payload.placeholder === "string" ? payload.placeholder : undefined} onChange={(event) => setValue(event.target.value)} disabled={busy || expired} />)}
       {remaining !== undefined && <p className="ui-request-expiry" aria-live="polite">{expired ? "Request expired. Waiting for runtime closure." : `Expires in ${Math.ceil(remaining / 1_000)} seconds.`}</p>}
       {error && <p className="ui-request-error" role="alert">{error}</p>}
@@ -77,6 +98,5 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
         <button className="secondary-button" type="button" disabled={busy || expired} onClick={() => void respond({ cancelled: true })}>Cancel</button>
         <button className="text-button ui-transfer" type="button" disabled={busy || expired} onClick={() => void ownership("release")}>Let another tab respond</button>
       </div>
-    </div>
   </div>;
 }

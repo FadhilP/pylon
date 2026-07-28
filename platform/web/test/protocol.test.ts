@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v15 commands and attachments", () => {
+test("command validation allowlists bounded v17 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -61,6 +61,13 @@ test("command validation allowlists bounded v15 commands and attachments", () =>
   assert.equal(validateCommand({ type: "handoffSession", destination: "merge", commandId: "handoff", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "npm install", commandId: "setup", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "x".repeat(2_001), commandId: "setup", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: ["npm:test"] }, timeline: "inherit", expectedRevision: 1, commandId: "policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "inherit" }, timeline: "inherit", expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: Array(7).fill("check") }, timeline: "enabled", expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "timeline", name: "Investigate fix", commandId: "fork", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: " ", commandId: "fork", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: "x".repeat(201), commandId: "fork", expectedGeneration: 1 }).ok, false);
   const image = { mimeType: "image/png", data: Buffer.from("image").toString("base64") };
   const file = { name: "notes.txt", mimeType: "text/plain", text: "context", size: 7 };
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: [image] }).ok, true);
@@ -110,6 +117,13 @@ test("event and snapshot validators reject incompatible versions", () => {
       models: [{ provider: "provider", id: "model", name: "Model", thinkingLevels: ["off", "high"] }],
       thinkingLevel: "high",
       thinkingLevels: ["low", "medium", "high"],
+    },
+    runtimePolicy: {
+      revision: 1,
+      project: { verify: { mode: "auto" }, timelineEnabled: true },
+      session: {},
+      effective: { verify: { mode: "auto" }, timelineEnabled: true },
+      availableVerifyChecks: [],
     },
     metrics: {
       model: "model", provider: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,

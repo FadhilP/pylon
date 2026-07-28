@@ -5,6 +5,7 @@ import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgen
 import { MarkdownContent } from "./conversation-panel";
 import { thinkingLabel } from "./format";
 import { agentColor } from "./agent-color";
+import { AnimatedDetails } from "./animated-details";
 
 export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
   runs: DelegatedAgentRunReadModel[];
@@ -69,11 +70,10 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
       <div><dt>Cost</dt><dd>{usage ? `$${usage.cost.toFixed(4)}` : "—"}</dd></div>
     </dl>
     {run.request && <section className="agent-section"><h2>Request</h2><pre>{run.request}</pre></section>}
-    {tools.length > 0 && <details className={`agent-tool-group is-${toolStatus}`}><summary>
-      <IconTool size={15} />
-      <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>
-      <span>{toolNames.slice(0, 3).join(", ")}{toolNames.length > 3 ? "…" : ""}</span>
-    </summary><div className="agent-tools">
+    {tools.length > 0 && <AnimatedDetails
+      className={`agent-tool-group is-${toolStatus}`}
+      summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{toolNames.slice(0, 3).join(", ")}{toolNames.length > 3 ? "…" : ""}</span></>}
+    ><div className="agent-tools">
       {tools.map((tool, index) => <details className={`tool-disclosure ${tool.failed ? "is-failed" : run.status === "running" && !tool.output ? "is-running" : ""}`} key={`${tool.tool}-${index}`}>
         <summary>
           <IconTool size={15} />
@@ -85,7 +85,7 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
           <section><small>Output</small><pre>{tool.output || (run.status === "running" ? "Waiting for output…" : "No output")}</pre></section>
         </div>
       </details>)}
-    </div></details>}
+    </div></AnimatedDetails>}
     {scout && tools.length === 0 && <div className="agent-activity-empty">
       <IconTool size={16} />
       <span>{run.status === "running" ? "Waiting for child tool activity…" : "No child tool activity recorded."}</span>

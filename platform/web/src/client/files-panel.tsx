@@ -1,6 +1,7 @@
 import {
   IconArrowBackUp,
   IconCopy,
+  IconDatabase,
   IconFile,
   IconFiles,
   IconFolder,
@@ -11,23 +12,25 @@ import {
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type {
-  RuntimeSnapshot,
   WorkspaceFileContent,
   WorkspaceFileDiff,
   WorkspaceFileReadModel,
 } from "../shared/protocol/snapshots";
-import { runtimeStore } from "./runtime/event-store";
+import { displayTime } from "./format";
+import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 type FileView = "current" | "base" | "diff";
 
-export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
-  runtime?: RuntimeSnapshot;
+export function FilesPanel({ live, requestedPath, onClose, onError }: {
+  live: RuntimeStoreSnapshot;
   requestedPath?: string;
   onClose: () => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
+  const runtime = live.runtime;
   const [tab, setTab] = useState<"changes" | "files">("changes");
   const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
   const [query, setQuery] = useState("");
@@ -135,6 +138,7 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
         setRefreshRevision((current) => current + 1);
       }} aria-label="Refresh files"><IconRefresh size={15} /></button>
     </div>
+    {runtime?.discoverIndex && <DiscoverIndexBar live={live} />}
     <nav className="files-tabs" aria-label="File views">
       <button className={tab === "changes" ? "is-active" : ""} onClick={() => setTab("changes")}>Changes <span>{workspace?.changedCount ?? 0}</span></button>
       <button className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}>Files</button>
@@ -182,6 +186,34 @@ export function FilesPanel({ runtime, requestedPath, onClose, onError }: {
       </div>}
     </div>
   </aside>;
+}
+
+function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {
+  const [busy, setBusy] = useState(false);
+  const index = live.runtime!.discoverIndex!;
+  const idle = live.connection === "connected"
+    && live.runtime?.ready === true
+    && !live.runtime.conversation.workStartedAt
+    && !live.pendingUi
+    && !busy
+    && index.state !== "indexing";
+  return <section className="files-index-bar" aria-label="Discover index">
+    <div className="files-index-title">
+      <IconDatabase size={14} />
+      <strong>Discover index</strong>
+      <span>{index.state === "indexing" ? "Rebuilding…" : index.state}</span>
+    </div>
+    <div className="files-index-metrics">
+      <span>{index.files === undefined ? "—" : formatCompactNumber(index.files)} files</span>
+      <span>{index.symbols === undefined ? "—" : formatCompactNumber(index.symbols)} symbols</span>
+      <span>{index.indexedAt ? displayTime(index.indexedAt) : "Not indexed"}</span>
+    </div>
+    <button type="button" disabled={!idle} onClick={() => {
+      setBusy(true);
+      void runtimeStore.rebuildDiscoverIndex().catch(() => undefined).finally(() => setBusy(false));
+    }}>{busy || index.state === "indexing" ? "Rebuilding…" : "Rebuild index"}</button>
+    {index.error && <p role="alert">{index.error}</p>}
+  </section>;
 }
 
 interface FileTreeNode {

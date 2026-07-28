@@ -22,7 +22,7 @@ import {
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -57,6 +57,7 @@ import type {
   TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
+  UpdateRuntimePolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
 import { createPylonRuntimeFactory } from "./runtime-factory.ts";
@@ -79,6 +80,31 @@ interface TimelineEditTransaction {
   rollback(): Promise<void>;
   commit(): Promise<void>;
   cancel(): Promise<void>;
+}
+
+function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel {
+  return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
+}
+
+function defaultRuntimePolicy(): RuntimePolicyReadModel {
+  return {
+    revision: 0,
+    project: { verify: { mode: "auto" }, timelineEnabled: true },
+    session: {},
+    effective: { verify: { mode: "auto" }, timelineEnabled: true },
+    availableVerifyChecks: [],
+  };
+}
+
+function agentWasAborted(value: Record<string, unknown>): boolean {
+  if (!Array.isArray(value.messages)) return false;
+  for (let index = value.messages.length - 1; index >= 0; index--) {
+    const message = value.messages[index];
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const item = message as Record<string, unknown>;
+    if (item.role === "assistant") return item.stopReason === "aborted";
+  }
+  return false;
 }
 
 function moveToTrash(sessionPath: string): TrashAttempt {
@@ -145,6 +171,7 @@ export class SessionRuntime implements PiDriver {
   private replacementGeneration?: number;
   private replacementInvalidated = false;
   private implicitReplacement = false;
+  private replacementSessionName?: string;
   private runtimeDisposable = false;
   private diagnostics: RuntimeDiagnostic[] = [];
   private lastSnapshot?: RuntimeSnapshot;
@@ -168,12 +195,18 @@ export class SessionRuntime implements PiDriver {
   private workModelName?: string;
   private workThinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"];
   private workTurnId?: string;
+  private workUserEntryId?: string;
+  private stopping = false;
+  private stoppedRun?: RuntimeSnapshot["conversation"]["stoppedRun"];
   private nextTurnId = 0;
   private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string; assistantEntryId?: string }> = [];
   private discoverIndex?: DiscoverIndexReadModel;
   private gitBranch?: string;
+  private runtimePolicy: RuntimePolicyReadModel = defaultRuntimePolicy();
   private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
   private undoPromptEntryIds = new Set<string>();
+  private forkPromptEntryIds = new Set<string>();
+  private forkPromptCheckpoints = new Map<string, string>();
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -221,6 +254,7 @@ export class SessionRuntime implements PiDriver {
       this.runtime = runtime;
       this.runtimeDisposable = true;
       this.installRuntimeHooks(runtime);
+      this.loadRuntimePolicy(runtime.session.sessionId);
       await this.bindSession(runtime.session, generation);
       this.refreshSnapshot();
       return { sessionId: runtime.session.sessionId, sessionGeneration: generation };
@@ -473,7 +507,35 @@ export class SessionRuntime implements PiDriver {
 
   async abort(): Promise<void> {
     if (!this.runtime || !this.gate.ready) throw new Error("runtime is not ready");
-    await this.runtime.session.abort();
+    if (this.stopping) return;
+    this.stopping = true;
+    this.refreshSnapshot();
+    try {
+      await this.runtime.session.abort();
+    } catch (error) {
+      this.stopping = false;
+      this.refreshSnapshot();
+      throw error;
+    }
+  }
+
+  applyRuntimePolicy(policy: RuntimePolicyReadModel): void {
+    this.runtimePolicy = {
+      ...policy,
+      project: { ...policy.project, verify: cloneVerifyPolicy(policy.project.verify) },
+      session: {
+        ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
+        ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
+      },
+      effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify) },
+      availableVerifyChecks: policy.availableVerifyChecks.map((check) => ({ ...check })),
+    };
+    this.publishRuntimePolicy();
+    this.refreshSnapshot();
+  }
+
+  updateRuntimePolicy(_input: UpdateRuntimePolicyInput): Promise<void> {
+    return Promise.reject(new Error("runtime policy updates require the runtime coordinator"));
   }
 
   addProject(_input: ProjectInput): Promise<ReplacementResult> {
@@ -752,7 +814,34 @@ export class SessionRuntime implements PiDriver {
   }
 
   fork(input: ForkInput): Promise<ReplacementResult> {
-    return this.withSessionMutation("lifecycle", () => this.replace(() => this.requireRuntime().fork(input.entryId, { position: input.position })));
+    return this.withSessionMutation("lifecycle", async () => {
+      const session = this.sessionFor(input.expectedGeneration);
+      if (!session.isIdle || this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+        throw new Error("Session controls can only change while the session is idle");
+      }
+      const target = session.sessionManager.getBranch().find((entry) => entry.id === input.entryId);
+      if (target?.type !== "message" || target.message.role !== "user") {
+        throw new Error("the selected prompt is not on the active branch");
+      }
+      const name = input.name.trim();
+      this.replacementSessionName = name;
+      try {
+        if (input.mode !== "timeline") {
+          return await this.replace(() => this.requireRuntime().fork(input.entryId, { position: input.position }));
+        }
+        const checkpointId = this.forkPromptCheckpoints.get(input.entryId);
+        if (!checkpointId || !this.runtimePolicy.effective.timelineEnabled) {
+          throw new Error("No compatible Timeline checkpoint exists for this prompt");
+        }
+        await this.confirmTimelinePromptFork(session, checkpointId);
+        return await this.replace(async () => {
+          await session.prompt(`/timeline fork ${checkpointId}`, { source: "rpc" });
+          return { cancelled: false };
+        });
+      } finally {
+        this.replacementSessionName = undefined;
+      }
+    });
   }
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {
@@ -1044,7 +1133,9 @@ export class SessionRuntime implements PiDriver {
     runtime.setRebindSession(async (session) => {
       const generation = this.replacementGeneration;
       if (generation === undefined) throw new Error("replacement session arrived without an allocated generation");
+      if (this.replacementSessionName) session.setSessionName(this.replacementSessionName);
       this.runtimeDisposable = true;
+      this.loadRuntimePolicy(session.sessionId);
       await this.bindSession(session, generation);
       this.gate.commitReplacement();
       this.installBusHooks(generation);
@@ -1073,6 +1164,9 @@ export class SessionRuntime implements PiDriver {
       this.pendingWorktreeTurns.length = 0;
       this.nextTurnId = 0;
       this.workTurnId = undefined;
+      this.workUserEntryId = undefined;
+      this.stopping = false;
+      this.stoppedRun = undefined;
       this.discoverIndex = undefined;
       this.workModelName = undefined;
       this.workThinkingLevel = undefined;
@@ -1095,6 +1189,7 @@ export class SessionRuntime implements PiDriver {
       shutdownHandler: () => this.options.onShutdownRequested?.(),
       onError: (error) => this.recordExtensionError(error),
     });
+    this.publishRuntimePolicy();
     this.unsubscribeSession = session.subscribe((payload) => {
       if (!this.gate.accepts(generation)) return;
       const raw = payload && typeof payload === "object" && !Array.isArray(payload)
@@ -1108,6 +1203,9 @@ export class SessionRuntime implements PiDriver {
         this.workStartedAt = new Date(this.workStartedAtMs).toISOString();
         this.workModelName = session.model?.name;
         this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;
+        this.workUserEntryId = this.latestUserEntryId(session);
+        this.stopping = false;
+        this.stoppedRun = undefined;
         this.sessionIndex.invalidate();
         this.refreshSnapshot();
         forwarded = {
@@ -1145,11 +1243,24 @@ export class SessionRuntime implements PiDriver {
         if (this.pendingWorktreeTurns.length > 20) this.pendingWorktreeTurns.shift();
         const modelName = this.workModelName;
         const thinkingLevel = this.workThinkingLevel;
+        const userEntryId = this.workUserEntryId;
+        const stopped = this.stopping || agentWasAborted(raw);
+        if (stopped) {
+          this.stoppedRun = {
+            turnId,
+            ...(this.workUserEntryId ? { userEntryId: this.workUserEntryId } : {}),
+            durationMs: duration,
+            ...(modelName ? { modelName } : {}),
+            ...(thinkingLevel ? { thinkingLevel } : {}),
+          };
+        }
         this.workStartedAt = undefined;
         this.workStartedAtMs = undefined;
         this.workModelName = undefined;
         this.workThinkingLevel = undefined;
         this.workTurnId = undefined;
+        this.workUserEntryId = undefined;
+        this.stopping = false;
         this.sessionIndex.invalidate();
         invalidateFileSuggestions(session.sessionManager.getCwd());
         this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
@@ -1162,6 +1273,8 @@ export class SessionRuntime implements PiDriver {
           thinkingLevel,
           gitBranch: this.gitBranch,
           metrics: this.lastSnapshot?.metrics,
+          stopped,
+          userEntryId,
         };
       } else if (kind === "session_info_changed") {
         this.sessionIndex.invalidate();
@@ -1329,7 +1442,7 @@ export class SessionRuntime implements PiDriver {
   private controlSession(): AgentSession {
     const runtime = this.requireRuntime();
     if (!this.gate.ready || !runtime.session.isIdle || this.sessionMutation || this.packageUpdate || this.ui.hasPendingDialog) {
-      throw new Error("session controls can only change while the session is idle");
+      throw new Error("Session controls can only change while the session is idle");
     }
     return runtime.session;
   }
@@ -1437,6 +1550,8 @@ export class SessionRuntime implements PiDriver {
         workStartedAt: this.workStartedAt,
         workModelName: this.workModelName,
         workThinkingLevel: this.workThinkingLevel,
+        ...(this.stopping ? { stopping: true } : {}),
+        ...(this.stoppedRun ? { stoppedRun: { ...this.stoppedRun } } : {}),
         queue: { steering: 0, followUp: 0 },
         retry: { active: false },
         compaction: { active: false },
@@ -1465,6 +1580,16 @@ export class SessionRuntime implements PiDriver {
       },
       ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
+      runtimePolicy: {
+        ...this.runtimePolicy,
+        project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify) },
+        session: {
+          ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
+          ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
+        },
+        effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify) },
+        availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check })),
+      },
     };
   }
 
@@ -1473,6 +1598,58 @@ export class SessionRuntime implements PiDriver {
       ? this.projectRegistry?.get(this.target.projectId)
       : undefined;
     return selected ?? (sessionId ? this.projectRegistry?.projectForSession(sessionId, cwd) : undefined);
+  }
+
+  private loadRuntimePolicy(sessionId: string): void {
+    const project = this.displayProject(this.runtime?.session.sessionManager.getCwd() ?? this.target?.cwd ?? "", sessionId);
+    this.runtimePolicy = project && this.projectRegistry
+      ? this.projectRegistry.runtimePolicy(project.id, sessionId)
+      : defaultRuntimePolicy();
+  }
+
+  private publishRuntimePolicy(): void {
+    const sessionId = this.runtime?.session.sessionId;
+    if (!sessionId) return;
+    this.eventBus.emit("pylon:runtime-policy", {
+      version: 1,
+      sessionId,
+      verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
+      timelineEnabled: this.runtimePolicy.effective.timelineEnabled,
+    });
+    this.eventBus.emit("pi-verify:catalog-request", {
+      version: 1,
+      sessionId,
+      respond: (value: unknown) => this.captureVerifyCatalog(value),
+    });
+  }
+
+  private captureVerifyCatalog(value: unknown): void {
+    if (value && typeof (value as PromiseLike<unknown>).then === "function") {
+      void Promise.resolve(value).then((resolved) => this.captureVerifyCatalog(resolved), (error) => this.recordError(error));
+      return;
+    }
+    const raw = value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+    if (raw?.version !== 1 || !Array.isArray(raw.checks)) return;
+    const checks = raw.checks.slice(0, 100).flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const check = value as Record<string, unknown>;
+      if (typeof check.id !== "string" || !check.id || check.id.length > 100
+        || typeof check.label !== "string" || !check.label || check.label.length > 200
+        || typeof check.command !== "string" || !check.command || check.command.length > 500) return [];
+      return [{ id: check.id, label: check.label, command: check.command }];
+    });
+    this.runtimePolicy = { ...this.runtimePolicy, availableVerifyChecks: checks };
+    if (this.gate.ready && this.runtime) {
+      this.refreshSnapshot();
+      this.emit({
+        type: "session.event",
+        sessionId: this.runtime.session.sessionId,
+        sessionGeneration: this.gate.generation,
+        payload: { type: "runtime_policy_changed" },
+      });
+    }
   }
 
   private displayCwdLabel(cwd: string, sessionId?: string): string {
@@ -1510,6 +1687,10 @@ export class SessionRuntime implements PiDriver {
         payload: { type: "discover_index", value: this.discoverIndex },
       });
     }));
+    this.busUnsubscribers.push(this.eventBus.on("pi-verify:catalog", (payload) => {
+      if (!this.gate.accepts(generation)) return;
+      this.captureVerifyCatalog(payload);
+    }));
     for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {
         const active = this.gate.accepts(generation);
@@ -1533,7 +1714,10 @@ export class SessionRuntime implements PiDriver {
           sessionGeneration: generation,
           channel,
           payload: channel === "pi-timeline:state-change" && raw
-            ? Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "undoPromptEntryIds"))
+            ? Object.fromEntries(Object.entries(raw).filter(([key]) =>
+                key !== "undoPromptEntryIds"
+                && key !== "forkPromptEntryIds"
+                && key !== "forkPromptCheckpoints"))
             : payload,
           operational: cloneOperational(this.operational),
         });
@@ -1589,9 +1773,19 @@ export class SessionRuntime implements PiDriver {
           timestamp: (message as { timestamp?: unknown }).timestamp
             ?? (entry as { timestamp?: unknown }).timestamp,
           ...(this.undoPromptEntryIds.has(entry.id) ? { canUndo: true } : {}),
+          ...(this.forkPromptEntryIds.has(entry.id) ? { canForkWithTimeline: true } : {}),
         })));
     this.transcriptCache = { sessionId, leafId, messages };
     return messages;
+  }
+
+  private latestUserEntryId(session: AgentSession): string | undefined {
+    const branch = session.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index--) {
+      const entry = branch[index] as { id?: unknown; type?: unknown; message?: { role?: unknown } } | undefined;
+      if (entry?.type === "message" && entry.message?.role === "user" && typeof entry.id === "string") return entry.id;
+    }
+    return undefined;
   }
 
   private prepareTimelineEdit(
@@ -1620,12 +1814,30 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
+  private confirmTimelinePromptFork(session: AgentSession, checkpointId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let handled = false;
+      this.eventBus.emit("pi-timeline:prompt-fork", {
+        version: 1,
+        sessionId: session.sessionId,
+        checkpointId,
+        respond: (result: unknown) => {
+          handled = true;
+          const value = result && typeof result === "object" ? result as Record<string, unknown> : undefined;
+          if (value?.version === 1 && value.available === true) resolve();
+          else reject(new Error("No compatible Timeline checkpoint exists for this prompt"));
+        },
+      });
+      if (!handled) reject(new Error("Pi Timeline is unavailable for this prompt"));
+    });
+  }
+
   private requestPackageStates(sessionId: string): void {
     for (const channel of ["pi-continuity:state-request", "pi-timeline:state-request"]) {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel === "pi-timeline:state-request" ? 3 : 2,
+          version: channel === "pi-timeline:state-request" ? 4 : 2,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
@@ -1650,11 +1862,31 @@ export class SessionRuntime implements PiDriver {
   }
 
   private captureTimelineUndo(raw?: Record<string, unknown>, publish = true): void {
-    if (raw?.version !== 3 || !Array.isArray(raw.undoPromptEntryIds)) return;
+    if (raw?.version !== 4 || !Array.isArray(raw.undoPromptEntryIds)) return;
+    const available = raw.available === true;
     this.undoPromptEntryIds = new Set(
-      raw.undoPromptEntryIds
+      (available ? raw.undoPromptEntryIds : [])
         .filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 128)
         .slice(0, 10_000),
+    );
+    this.forkPromptEntryIds = new Set(
+      available && Array.isArray(raw.forkPromptEntryIds)
+        ? raw.forkPromptEntryIds
+            .filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 128)
+            .slice(0, 10_000)
+        : [],
+    );
+    this.forkPromptCheckpoints = new Map(
+      available && Array.isArray(raw.forkPromptCheckpoints)
+        ? raw.forkPromptCheckpoints.flatMap((value) => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+            const item = value as Record<string, unknown>;
+            return typeof item.promptEntryId === "string" && item.promptEntryId.length <= 128
+              && typeof item.checkpointId === "string" && item.checkpointId.length <= 128
+              ? [[item.promptEntryId, item.checkpointId] as const]
+              : [];
+          }).slice(0, 10_000)
+        : [],
     );
     const sessionId = this.runtime?.session.sessionId;
     if (!publish || !sessionId) return;
@@ -1662,7 +1894,11 @@ export class SessionRuntime implements PiDriver {
       type: "session.event",
       sessionId,
       sessionGeneration: this.gate.generation,
-      payload: { type: "prompt_undo", entryIds: [...this.undoPromptEntryIds] },
+      payload: {
+        type: "prompt_undo",
+        entryIds: [...this.undoPromptEntryIds],
+        forkEntryIds: [...this.forkPromptEntryIds],
+      },
     });
   }
 
