@@ -120,14 +120,18 @@ test("Repo Scout renders collapsed failures with reason", async () => {
 
 test("Repo Scout publishes sanitized bounded child failure details", async () => {
   const secret = `sk-${"x".repeat(40)}`;
-  const runtime = await harness(async (): Promise<ScoutRun> => ({
-    text: "", error: `bad\napi_key=${secret}\u2028${"z".repeat(600)}`,
-    stderr: "", durationMs: 1,
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-    turns: [], truncated: false, exitCode: 1, activity: [],
-    budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
-    contextTokens: 0, cacheReadTokens: 0,
-  }));
+  let calls = 0;
+  const runtime = await harness(async (): Promise<ScoutRun> => {
+    calls++;
+    return {
+      text: "", error: `bad\napi_key=${secret}\u2028${"z".repeat(600)}`,
+      stderr: "", durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 1, activity: [],
+      budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
+      contextTokens: 0, cacheReadTokens: 0,
+    };
+  });
   try {
     const result = await runtime.tools.get("repo_scout").execute(
       "failure", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
@@ -138,7 +142,71 @@ test("Repo Scout publishes sanitized bounded child failure details", async () =>
     assert.doesNotMatch(result.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.match(result.content[0].text, /\[possible credential redacted\]/);
     assert.doesNotMatch(result.content[0].text, new RegExp(secret));
+    assert.equal(calls, 1);
   } finally { runtime.restore(); }
+});
+
+test("Repo Scout retries exhausted transient child provider failures", async () => {
+  const childResult = (overrides: Partial<ScoutRun> = {}): ScoutRun => ({
+    text: "", stderr: "", durationMs: 1,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    turns: [], truncated: false, exitCode: 0, activity: [],
+    budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
+    contextTokens: 0, cacheReadTokens: 0,
+    ...overrides,
+  });
+  let recoveredCalls = 0;
+  const updates: any[] = [];
+  const recoveredRuntime = await harness(async () => {
+    recoveredCalls++;
+    return recoveredCalls < 3
+      ? childResult({ stopReason: "error", error: "Codex servers are overloaded" })
+      : childResult({ text: "## Findings\n\n- Recovered. `src/a.ts:1-2`", stopReason: "stop" });
+  });
+  try {
+    const result = await recoveredRuntime.tools.get("repo_scout").execute(
+      "recovered", { task: "inspect" }, undefined, (update: any) => updates.push(update), context({ hasUI: false }),
+    );
+    assert.equal(recoveredCalls, 3);
+    assert.equal(result.details.retryAttempts, 2);
+    assert.equal(result.details.failureCode, undefined);
+    assert.match(result.content[0].text, /Recovered/);
+    assert.deepEqual(updates.filter((update) => update.details?.retryAttempts).map((update) => update.details.retryAttempts), [1, 2]);
+  } finally { recoveredRuntime.restore(); }
+
+  let exhaustedCalls = 0;
+  const exhaustedRuntime = await harness(async () => {
+    exhaustedCalls++;
+    return childResult({ stopReason: "error", error: "503 service unavailable" });
+  });
+  try {
+    const result = await exhaustedRuntime.tools.get("repo_scout").execute(
+      "exhausted", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
+    );
+    assert.equal(exhaustedCalls, 3);
+    assert.equal(result.details.retryAttempts, 2);
+    assert.equal(result.details.failureCode, "retryable");
+    assert.equal(result.details.failureMessage, "503 service unavailable");
+    assert.match(result.content[0].text, /503 service unavailable/);
+  } finally { exhaustedRuntime.restore(); }
+
+  let abortedCalls = 0;
+  const abortController = new AbortController();
+  const abortedRuntime = await harness(async () => {
+    abortedCalls++;
+    return childResult({ stopReason: "error", error: "Codex servers are overloaded" });
+  });
+  try {
+    const result = await abortedRuntime.tools.get("repo_scout").execute(
+      "aborted", { task: "inspect" }, abortController.signal,
+      (update: any) => { if (update.details?.retryAttempts) abortController.abort(); },
+      context({ hasUI: false }),
+    );
+    assert.equal(abortedCalls, 1);
+    assert.equal(result.details.stopReason, "aborted");
+    assert.equal(result.details.failureCode, "child_error");
+    assert.equal(result.details.failureMessage, "Scout aborted.");
+  } finally { abortedRuntime.restore(); }
 });
 
 test("steering preserves the current repo Scout call sequence", () => {

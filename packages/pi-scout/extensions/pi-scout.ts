@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRetryableAssistantError, retryAssistantCall } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -33,6 +34,7 @@ import {
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const scoutChildToolsExtension = join(packageDir, "src", "scout-child-tools.ts");
 const HEARTBEAT_MS = 1_000;
+const SCOUT_RETRY_POLICY = { enabled: true, maxRetries: 2, baseDelayMs: 1_000 } as const;
 const WEB_SCOUT_TIMEOUT_MS = 5 * 60 * 1000;
 const WEB_SCOUT_GRANT_ENV = "PI_HELIOS_WEB_SCOUT_GRANT";
 
@@ -114,6 +116,46 @@ function delegatedName(pi: ExtensionAPI, kind: "repo_scout" | "web_scout", callI
 }
 export function startsNewRepoSequence(event: { source: string; streamingBehavior?: string }): boolean {
   return event.source !== "extension" && event.streamingBehavior !== "steer";
+}
+function scoutAssistantResult(run: ScoutRun) {
+  const providerError = run.failure === undefined && run.stopReason === "error";
+  return {
+    role: "assistant" as const,
+    api: "scout-child" as any,
+    provider: "scout-child",
+    model: run.model ?? "unknown",
+    content: [],
+    stopReason: providerError ? "error" as const : "stop" as const,
+    errorMessage: providerError ? run.error : undefined,
+    usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    timestamp: Date.now(),
+  };
+}
+function retryableScoutFailure(run: ScoutRun): boolean {
+  return isRetryableAssistantError(scoutAssistantResult(run));
+}
+async function runRepoScoutWithRetry(
+  produce: () => Promise<ScoutRun>,
+  signal: AbortSignal | undefined,
+  onRetry: (attempt: number, maxRetries: number, delayMs: number) => void,
+): Promise<{ run: ScoutRun; retryAttempts: number }> {
+  let run: ScoutRun | undefined;
+  let retryAttempts = 0;
+  const response = await retryAssistantCall(async () => {
+    run = await produce();
+    return scoutAssistantResult(run);
+  }, SCOUT_RETRY_POLICY, signal, {
+    onRetryScheduled: (attempt, maxRetries, delayMs) => {
+      retryAttempts = attempt;
+      onRetry(attempt, maxRetries, delayMs);
+    },
+  });
+  if (response.stopReason === "aborted" && run)
+    run = { ...run, text: "", stopReason: "aborted", error: "Scout aborted." };
+  return { run: run!, retryAttempts };
 }
 export function usageText(run: ScoutRun): string {
   const u = run.usage;
@@ -362,7 +404,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     name: "repo_scout",
     label: "Repo Scout",
     description:
-      "Read-only isolated repository reconnaissance with exact line-range citations. Every call starts a fresh child session; the main model owns evaluation and conclusions.",
+      "Read-only isolated repository reconnaissance with exact line-range citations. Every call starts a fresh child session and retries exhausted transient provider failures up to twice; the main model owns evaluation and conclusions.",
     promptSnippet:
       "Map concrete repository paths, symbols, patterns, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty",
     promptGuidelines: [
@@ -484,35 +526,50 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           "--system-prompt",
           REPO_SCOUT_PROMPT,
         ];
-        const run = await runChild(args, {
-          cwd: ctx.cwd,
-          prompt,
-          signal,
-          timeoutMs: repoTimeoutMs(),
-          maxCostUsd: scoutMaxCostUsd(),
-          // Failure wrapping happens here; cap once afterward so retrieval notices survive.
-          resultMaxBytes: false,
-          env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
-          onActivity: (_item, all) => {
-            lastUpdateAt = Date.now();
-            activity = all;
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `Scout child activity:\n${activityText(all)}`,
+        const { run, retryAttempts } = await runRepoScoutWithRetry(() => {
+          activity = [];
+          return runChild(args, {
+            cwd: ctx.cwd,
+            prompt,
+            signal,
+            timeoutMs: repoTimeoutMs(),
+            maxCostUsd: scoutMaxCostUsd(),
+            // Failure wrapping happens here; cap once afterward so retrieval notices survive.
+            resultMaxBytes: false,
+            env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
+            onActivity: (_item, all) => {
+              lastUpdateAt = Date.now();
+              activity = all;
+              onUpdate?.({
+                content: [
+                  {
+                    type: "text",
+                    text: `Scout child activity:\n${activityText(all)}`,
+                  },
+                ],
+                details: {
+                  ...agent,
+                  model: modelName(model),
+                  thinking,
+                  state: "running",
+                  durationMs: lastUpdateAt - started,
+                  activity: all,
                 },
-              ],
-              details: {
-                ...agent,
-                model: modelName(model),
-                thinking,
-                state: "running",
-                durationMs: lastUpdateAt - started,
-                activity: all,
-              },
-            });
-          },
+              });
+            },
+          });
+        }, signal, (attempt, maxRetries, delayMs) => {
+          onUpdate?.({
+            content: [{ type: "text", text: `Transient Scout provider failure; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(0)}s…` }],
+            details: {
+              ...agent,
+              model: modelName(model),
+              thinking,
+              state: "running",
+              durationMs: Date.now() - started,
+              retryAttempts: attempt,
+            },
+          });
         });
         // Include any failure wrapper in the same hard report budget as child output.
         const failureMessage = run.error
@@ -533,7 +590,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
             thinking,
-            durationMs: run.durationMs,
+            durationMs: Date.now() - started,
+            retryAttempts,
             usage: run.usage,
             turns: run.turns,
             activity: run.activity,
@@ -550,7 +608,9 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
             budgetExceeded: run.budgetExceeded,
             finalizationAttempted: run.finalizationAttempted,
             finalizationSucceeded: run.finalizationSucceeded,
-            failureCode: run.failure === "budget_exceeded" ? "budget_exceeded" : run.error ? "child_error" : undefined,
+            failureCode: run.failure === "budget_exceeded"
+              ? "budget_exceeded"
+              : run.error ? retryableScoutFailure(run) ? "retryable" : "child_error" : undefined,
             ...(failureMessage ? { failureMessage } : {}),
           },
         };

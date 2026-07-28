@@ -23,6 +23,43 @@ test("remote UI correlates every RPC dialog and validates responses", async () =
   bridge.answer({ requestId: requests.at(-1)!.requestId, sessionGeneration: 3, method: "editor", value: "after" });
   assert.equal(await edited, "after");
 
+  const questionnaire = (ui as any).questionnaire([
+    { question: "Scope?", options: [{ label: "API" }, { label: "All" }] },
+    { question: "Ship?", options: [{ label: "Now" }, { label: "Later" }] },
+  ]);
+  const questionnaireRequest = requests.at(-1)!;
+  assert.equal(questionnaireRequest.method, "questionnaire");
+  assert.deepEqual(questionnaireRequest.payload.questions, [
+    { question: "Scope?", options: ["API", "All"] },
+    { question: "Ship?", options: ["Now", "Later"] },
+  ]);
+  bridge.answer({
+    requestId: questionnaireRequest.requestId,
+    sessionGeneration: 3,
+    method: "questionnaire",
+    answers: ["API", "Custom date"],
+  });
+  assert.deepEqual(await questionnaire, ["API", "Custom date"]);
+
+  const invalidQuestionnaire = (ui as any).questionnaire([
+    { question: "Scope?", options: [{ label: "API" }, { label: "All" }] },
+    { question: "Ship?", options: [{ label: "Now" }, { label: "Later" }] },
+  ]);
+  const invalidRequest = requests.at(-1)!;
+  assert.throws(() => bridge.answer({
+    requestId: invalidRequest.requestId,
+    sessionGeneration: 3,
+    method: "questionnaire",
+    answers: ["API"],
+  }), /one bounded answer per question/);
+  bridge.answer({
+    requestId: invalidRequest.requestId,
+    sessionGeneration: 3,
+    method: "questionnaire",
+    cancelled: true,
+  });
+  assert.equal(await invalidQuestionnaire, undefined);
+
   assert.throws(() => bridge.answer({
     requestId: "missing",
     sessionGeneration: 3,

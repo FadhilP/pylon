@@ -45,7 +45,8 @@ import {
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext, shortlistFacts, type MemoryNotice } from "../src/context.ts";
-import { validateQuestion } from "../src/questions.ts";
+import { validateQuestion, validateQuestions } from "../src/questions.ts";
+import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidence, classifyProjectFacts, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
 import {
   loadConfig,
@@ -100,7 +101,24 @@ const Kind = StringEnum([
     "state",
   ] as const),
   MemAction = StringEnum(["list", "add", "replace", "remove"] as const),
-  ScopeName = StringEnum(["user", "project"] as const);
+  ScopeName = StringEnum(["user", "project"] as const),
+  QuestionOption = Type.Object({
+    label: Type.String({
+      maxLength: 120,
+      description: "Short, distinct answer label. Put the recommended option first.",
+    }),
+    description: Type.Optional(Type.String({
+      maxLength: 240,
+      description: "Practical outcome or tradeoff; for the recommended option, include why it is recommended.",
+    })),
+  }),
+  ClarificationQuestion = Type.Object({
+    question: Type.String({
+      maxLength: 500,
+      description: "One concrete decision in plain language.",
+    }),
+    options: Type.Array(QuestionOption, { minItems: 2, maxItems: 4 }),
+  });
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
   pi.events.emit("pi-continuity:instance-claim", {
@@ -881,7 +899,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     promptGuidelines: [
       "Use set_plan for explicit /plan, risky or multi-phase work, handoffs/background jobs, or likely blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. During explicit planning, Continuity owns plan presentation; otherwise it maintains an internal task list.",
-      "Clarify only a blocking user decision: ask one plain-language question with the recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
+      "Clarify only blocking user decisions: ask one plain-language question, or batch up to six related independent questions, with the recommended option first. Clarification must be the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
       "Keep verification out of new todo lists and finish implementation todos before Verify; a sole verification-only todo completes automatically when Verify passes. Make nonterminal continuity updates before final text without progress narration.",
     ],
     renderShell: "self",
@@ -891,6 +909,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const text = item?.type === "text" ? item.text : undefined;
       const details = result.details as any;
       const clarification = details?.clarification;
+      const clarifications = details?.clarifications;
       const plan = details?.plan;
       if (clarification)
         return new Text(
@@ -898,6 +917,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
           0,
           0,
         );
+      if (Array.isArray(clarifications))
+        return new Text(clarifications.map((item: any) =>
+          `${theme.fg("muted", `? ${item.question}`)}\n${theme.fg("accent", item.answer)}`).join("\n"), 0, 0);
       if (plan) return new Text(plan, 0, 0);
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
@@ -912,20 +934,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           maxLength: 500,
           description: "One concrete decision in plain language. Include one short sentence of decision-relevant context only when needed.",
         })),
-        options: Type.Optional(
-          Type.Array(
-            Type.Object({
-              label: Type.String({
-                maxLength: 120,
-                description: "Short, distinct answer label. Put the recommended option first.",
-              }),
-              description: Type.Optional(Type.String({
-                maxLength: 240,
-                description: "Practical outcome or tradeoff; for the recommended option, include why it is recommended.",
-              })),
-            }),
-          ),
-        ),
+        options: Type.Optional(Type.Array(QuestionOption, { minItems: 2, maxItems: 4 })),
+        questions: Type.Optional(Type.Array(ClarificationQuestion, {
+          minItems: 2,
+          maxItems: 6,
+          description: "Related blocking decisions to ask together. Do not combine with question/options.",
+        })),
         goal: Type.Optional(Type.String({ maxLength: 2000 })),
         constraints: Type.Optional(
           Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 }),
@@ -981,28 +995,53 @@ export default function continuityExtension(pi: ExtensionAPI) {
               },
             ],
           };
-        validateQuestion(p.question || "", p.options || []);
+        if (p.questions !== undefined && (p.question !== undefined || p.options !== undefined))
+          throw Error("Use either questions or question/options, not both.");
+        if (p.questions !== undefined && p.questions.length < 2)
+          throw Error("Bulk clarification requires 2-6 questions.");
+        const questions = p.questions ?? [{ question: p.question || "", options: p.options || [] }];
+        validateQuestions(questions);
         if (!ctx.hasUI) {
           if (executing) awaitingClarificationProse = true;
-          const options = (p.options || []).map((o, index) =>
-            `${index + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`,
-          );
+          const prose = questions.map((item, questionIndex) => {
+            const options = item.options.map((option, optionIndex) =>
+              `${optionIndex + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`,
+            );
+            return questions.length === 1
+              ? `${item.question}\n${options.join("\n")}`
+              : `Question ${questionIndex + 1}: ${item.question}\n${options.join("\n")}`;
+          }).join("\n\n");
           return {
-            content: [
-              {
-                type: "text",
-                text: `Ask user in prose and wait: ${p.question}\n${options.join("\n")}`,
-              },
-            ],
+            content: [{ type: "text", text: `Ask user in prose and wait: ${prose}` }],
           };
         }
+        if (questions.length > 1) {
+          const answers = await askQuestionnaire(ctx.ui, ctx.mode, questions);
+          if (!answers) {
+            if (executing) {
+              ctx.abort();
+              return {
+                content: [{ type: "text", text: "No answers submitted. Execution stopped." }],
+                terminate: true,
+              };
+            }
+            return { content: [{ type: "text", text: "No answers submitted." }] };
+          }
+          return {
+            content: [{ type: "text", text: answers.map((answer, index) =>
+              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n") }],
+            details: { clarifications: answers },
+          };
+        }
+        const item = questions[0];
+        validateQuestion(item.question, item.options);
         const labels = [
-          ...(p.options || []).map((o) =>
-            o.description ? `${o.label} — ${o.description}` : o.label,
+          ...item.options.map((option) =>
+            option.description ? `${option.label} — ${option.description}` : option.label,
           ),
           "Write a different answer…",
         ];
-        const choice = await ctx.ui.select(p.question!, labels);
+        const choice = await ctx.ui.select(item.question, labels);
         if (!choice) {
           if (executing) {
             ctx.abort();
@@ -1025,12 +1064,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           const selected = answer || "No answer selected.";
           return {
             content: [{ type: "text", text: selected }],
-            details: { clarification: { question: p.question, answer: selected } },
+            details: { clarification: { question: item.question, answer: selected } },
           };
         }
         return {
           content: [{ type: "text", text: choice }],
-          details: { clarification: { question: p.question, answer: choice } },
+          details: { clarification: { question: item.question, answer: choice } },
         };
       }
       if (p.action === "set_plan") {

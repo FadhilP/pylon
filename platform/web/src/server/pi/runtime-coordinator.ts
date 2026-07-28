@@ -1396,7 +1396,7 @@ export class RuntimeCoordinator implements PiDriver {
     }
     if (event.type === "ui.event") {
       const request = event.payload as UiRequest;
-      if (["select", "confirm", "input", "editor"].includes(request.method)) slot.pendingUi = request;
+      if (["select", "confirm", "input", "editor", "questionnaire"].includes(request.method)) slot.pendingUi = request;
     }
     if (event.type === "ui.closed" && slot.pendingUi?.requestId === event.requestId) slot.pendingUi = undefined;
     if (slot.id === this.selectedId) {

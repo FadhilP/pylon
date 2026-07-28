@@ -4,6 +4,13 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapshot["pendingUi"]> }) {
   const payload = request.payload;
   const options = Array.isArray(payload.options) ? payload.options : [];
+  const questions = Array.isArray(payload.questions) ? payload.questions.map((raw) => {
+    const item = typeof raw === "object" && raw ? raw as Record<string, unknown> : {};
+    return {
+      question: typeof item.question === "string" ? item.question : "Question",
+      options: Array.isArray(item.options) ? item.options.filter((option): option is string => typeof option === "string") : [],
+    };
+  }) : [];
   const optionValue = (option: unknown, index: number) => {
     const item = typeof option === "object" && option ? option as Record<string, unknown> : {};
     return typeof option === "string" ? option : typeof item.value === "string" ? item.value : String(index);
@@ -18,6 +25,7 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     typeof payload.prefill === "string"
       ? payload.prefill
       : allowOnce >= 0 ? optionValue(options[allowOnce], allowOnce) : "");
+  const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [remaining, setRemaining] = useState(() => request.expiresAt ? Math.max(0, Date.parse(request.expiresAt) - Date.now()) : undefined);
@@ -58,7 +66,9 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     catch (cause) { setError(cause instanceof Error ? cause.message : "Ownership change was rejected"); }
     finally { actionLock.current = false; setBusy(false); }
   };
-  const submit = () => request.method === "confirm" ? respond({ confirmed: true }) : respond({ value });
+  const submit = () => request.method === "confirm"
+    ? respond({ confirmed: true })
+    : request.method === "questionnaire" ? respond({ answers }) : respond({ value });
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!busy && !expired) void respond({ cancelled: true }); return; }
@@ -90,11 +100,35 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
           >{label}</button>;
         })}
       </div>}
+      {request.method === "questionnaire" && <div className="ui-questionnaire">
+        {questions.map((question, questionIndex) => <fieldset key={questionIndex}>
+          <legend>{questionIndex + 1}. {question.question}</legend>
+          <div className="ui-request-options" role="radiogroup" aria-label={question.question}>
+            {question.options.map((option, optionIndex) => <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={answers[questionIndex] === option}
+              className={answers[questionIndex] === option ? "is-selected" : ""}
+              data-autofocus={questionIndex === 0 && optionIndex === 0 ? "" : undefined}
+              disabled={busy || expired}
+              onClick={() => setAnswers((current) => current.map((answer, index) => index === questionIndex ? option : answer))}
+            >{option}</button>)}
+          </div>
+          <input
+            value={question.options.includes(answers[questionIndex]) ? "" : answers[questionIndex] ?? ""}
+            placeholder="Write a different answer"
+            aria-label={`Custom answer for question ${questionIndex + 1}`}
+            disabled={busy || expired}
+            onChange={(event) => setAnswers((current) => current.map((answer, index) => index === questionIndex ? event.target.value : answer))}
+          />
+        </fieldset>)}
+      </div>}
       {(request.method === "input" || request.method === "editor") && (request.method === "editor" ? <textarea data-autofocus value={value} onChange={(event) => setValue(event.target.value)} disabled={busy || expired} /> : <input data-autofocus value={value} placeholder={typeof payload.placeholder === "string" ? payload.placeholder : undefined} onChange={(event) => setValue(event.target.value)} disabled={busy || expired} />)}
       {remaining !== undefined && <p className="ui-request-expiry" aria-live="polite">{expired ? "Request expired. Waiting for runtime closure." : `Expires in ${Math.ceil(remaining / 1_000)} seconds.`}</p>}
       {error && <p className="ui-request-error" role="alert">{error}</p>}
       <div className="ui-request-actions">
-        {request.method === "confirm" ? <button data-autofocus className="primary-button" type="button" disabled={busy || expired} onClick={() => void submit()}>Confirm</button> : <button className="primary-button" type="button" disabled={busy || expired || (request.method === "select" && !value)} onClick={() => void submit()}>Submit</button>}
+        {request.method === "confirm" ? <button data-autofocus className="primary-button" type="button" disabled={busy || expired} onClick={() => void submit()}>Confirm</button> : <button className="primary-button" type="button" disabled={busy || expired || (request.method === "select" && !value) || (request.method === "questionnaire" && (questions.length === 0 || answers.some((answer) => !answer.trim())))} onClick={() => void submit()}>Submit</button>}
         <button className="secondary-button" type="button" disabled={busy || expired} onClick={() => void respond({ cancelled: true })}>Cancel</button>
         <button className="text-button ui-transfer" type="button" disabled={busy || expired} onClick={() => void ownership("release")}>Let another tab respond</button>
       </div>

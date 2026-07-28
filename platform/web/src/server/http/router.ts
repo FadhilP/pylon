@@ -388,7 +388,7 @@ export class ServerTransport {
     const value = body as Record<string, unknown>;
     if (value.requestId !== undefined && value.requestId !== requestId) throw httpError(400, "requestId does not match path");
     if (value.sessionGeneration !== this.journal.sessionGeneration || value.method !== pending.method) throw httpError(409, "UI response does not match pending request");
-    const responseValue = { requestId, sessionGeneration: value.sessionGeneration, method: value.method, cancelled: value.cancelled === true, value: value.value, confirmed: value.confirmed } as Parameters<PiDriver["answerUiRequest"]>[0];
+    const responseValue = { requestId, sessionGeneration: value.sessionGeneration, method: value.method, cancelled: value.cancelled === true, value: value.value, confirmed: value.confirmed, answers: value.answers } as Parameters<PiDriver["answerUiRequest"]>[0];
     try { await this.driver.answerUiRequest(responseValue); }
     catch (error) { throw httpError(400, error instanceof Error ? error.message : "invalid UI response"); }
     this.renew(tabId);
@@ -518,7 +518,7 @@ export class ServerTransport {
     // UI event is personalized correctly for every connected tab.
     if (event.type === "ui.event") {
       const raw = event.payload && typeof event.payload === "object" ? event.payload as { requestId?: unknown; method?: unknown } : {};
-      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor"].includes(String(raw.method))) {
+      if (typeof raw.requestId === "string" && ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))) {
         this.openDialog(raw.requestId, event.sessionGeneration, this.lastCommandOwner);
       }
     }

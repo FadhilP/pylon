@@ -10,7 +10,8 @@ import type {
   WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
 
-export type DialogMethod = "select" | "confirm" | "input" | "editor";
+export type DialogMethod = "select" | "confirm" | "input" | "editor" | "questionnaire";
+export interface QuestionnaireQuestion { question: string; options: string[]; }
 export type UiMethod = DialogMethod | "notify" | "setStatus" | "setWidget" | "setTitle" | "setEditorText";
 
 export interface UiRequest {
@@ -31,12 +32,14 @@ export interface UiResponse {
   cancelled?: boolean;
   value?: string;
   confirmed?: boolean;
+  answers?: string[];
 }
 
 interface PendingDialog {
   request: UiRequest;
   neutral: unknown;
   options?: string[];
+  questions?: QuestionnaireQuestion[];
   resolve(value: unknown): void;
   timer?: NodeJS.Timeout;
   signal?: AbortSignal;
@@ -135,6 +138,7 @@ export class RemoteUiBridge {
     payload: Record<string, unknown>;
     neutral: T;
     options?: string[];
+    questions?: QuestionnaireQuestion[];
     dialogOptions?: ExtensionUIDialogOptions;
   }): Promise<T> {
     const { dialogOptions } = input;
@@ -162,6 +166,7 @@ export class RemoteUiBridge {
         request,
         neutral: input.neutral,
         options: input.options,
+        questions: input.questions,
         resolve: finish,
       };
       pending.timer = setTimeout(() => finish(input.neutral), timeoutMs);
@@ -205,6 +210,13 @@ export class RemoteUiBridge {
           throw new Error("text response is invalid or too large");
         }
         pending.resolve(response.value);
+        return;
+      case "questionnaire":
+        if (!Array.isArray(response.answers) || response.answers.length !== pending.questions?.length ||
+            response.answers.some((answer) => typeof answer !== "string" || !answer.trim() || answer.length > 4_000)) {
+          throw new Error("questionnaire response requires one bounded answer per question");
+        }
+        pending.resolve(response.answers.map((answer) => answer.trim()));
     }
   }
 
@@ -270,6 +282,24 @@ class GenerationUiContext implements ExtensionUIContext {
       neutral: undefined,
       options: offered,
       dialogOptions: opts,
+    });
+  }
+
+  questionnaire(questions: Array<{ question: string; options: Array<{ label: string; description?: string }> }>): Promise<string[] | undefined> {
+    const offered = questions.slice(0, 6).map((item) => ({
+      question: bounded(item.question),
+      options: item.options.slice(0, 4).map((option) => bounded(
+        option.description ? `${option.label} — ${option.description}` : option.label,
+        500,
+      )),
+    }));
+    return this.bridge.dialog({
+      sessionId: this.sessionId,
+      sessionGeneration: this.generation,
+      method: "questionnaire",
+      payload: { title: "Clarification", questions: offered },
+      neutral: undefined,
+      questions: offered,
     });
   }
 

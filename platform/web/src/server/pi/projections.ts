@@ -457,7 +457,7 @@ export class RuntimeProjection {
       const raw = object(event.payload);
       const method = String(raw.method);
       const payload = object(raw.payload);
-      if (raw.kind === "request" && ["select", "confirm", "input", "editor"].includes(method)) {
+      if (raw.kind === "request" && ["select", "confirm", "input", "editor", "questionnaire"].includes(method)) {
         this.pendingUi = {
           requestId: id(raw.requestId, "invalid"),
           method: method as UiRequestReadModel["method"],

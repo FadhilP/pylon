@@ -300,6 +300,9 @@
   .ui-request-options button { min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text-soft); font-size: 12px; }
   .ui-request-options button:hover { background: var(--surface-hover); }
   .ui-request-options button.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+  .ui-questionnaire { display: grid; gap: 12px; }
+  .ui-questionnaire fieldset { display: grid; gap: 7px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; }
+  .ui-questionnaire legend { padding: 0 4px; color: var(--text); font-size: 12px; font-weight: 600; }
   .ui-request .ui-request-expiry { margin-top: 8px; }
   .ui-request .ui-request-error { color: var(--red); }
 

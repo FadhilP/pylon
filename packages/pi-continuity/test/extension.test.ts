@@ -585,6 +585,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
   let aborts = 0;
   let selection: string | undefined;
   let customAnswer = "";
+  let questionnaireAnswers: string[] | undefined;
   const ctx: any = {
     cwd, hasUI: false, mode: "json",
     abort: () => { aborts++; },
@@ -602,6 +603,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       setWidget: () => {},
       select: async () => selection,
       editor: async () => customAnswer,
+      questionnaire: async () => questionnaireAnswers,
     },
   };
   try {
@@ -691,6 +693,27 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     assert.deepEqual(custom.details.clarification, {
       question: "Any constraints?", answer: "Only API changes",
     });
+
+    ctx.mode = "rpc";
+    questionnaireAnswers = ["API only", "Ship now"];
+    const bulk = await tool.execute("bulk-answer", {
+      action: "clarify",
+      questions: [
+        { question: "Which scope?", options: [{ label: "API only" }, { label: "Full stack" }] },
+        { question: "When ship?", options: [{ label: "Ship now" }, { label: "Later" }] },
+      ],
+    }, undefined, undefined, ctx);
+    assert.match(bulk.content[0].text, /1\. Which scope\?\nAnswer: API only/);
+    assert.deepEqual(bulk.details.clarifications, [
+      { question: "Which scope?", answer: "API only" },
+      { question: "When ship?", answer: "Ship now" },
+    ]);
+    await assert.rejects(() => tool.execute("mixed-answer", {
+      action: "clarify",
+      question: "Legacy?",
+      options: [{ label: "Yes" }, { label: "No" }],
+      questions: [{ question: "Bulk?", options: [{ label: "Yes" }, { label: "No" }] }],
+    }, undefined, undefined, ctx), /either questions or question\/options/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
