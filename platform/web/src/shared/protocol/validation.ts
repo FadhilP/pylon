@@ -215,6 +215,10 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
       || value.scope === "project" && value.timeline === "inherit") {
       return { ok: false, error: "invalid Timeline policy" };
     }
+    if (!["inherit", "automatic", "checkout", "worktree", "local"].includes(String(value.workspace))
+      || value.scope === "project" && value.workspace === "inherit") {
+      return { ok: false, error: "invalid workspace policy" };
+    }
   }
   if (value.type === "handoffSession"
     && value.destination !== "checkout" && value.destination !== "worktree") {
@@ -445,24 +449,28 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (value.workspace !== undefined) {
     if (!record(value.workspace)
       || typeof value.workspace.gitAvailable !== "boolean"
-      || !["worktree", "checkout", "non-git"].includes(String(value.workspace.mode))
+      || !["worktree", "checkout", "local", "non-git"].includes(String(value.workspace.mode))
       || !Number.isSafeInteger(value.workspace.changedCount) || (value.workspace.changedCount as number) < 0
       || typeof value.workspace.canMoveToCheckout !== "boolean"
       || typeof value.workspace.canMoveToWorktree !== "boolean"
       || (value.workspace.revision !== undefined && !boundedString(value.workspace.revision, 128))
       || (value.workspace.setupState !== undefined && !["idle", "running", "failed"].includes(String(value.workspace.setupState)))
       || (value.workspace.setupError !== undefined && !boundedString(value.workspace.setupError, 500))
-      || (value.workspace.checkoutOwner !== undefined && !identifier(value.workspace.checkoutOwner))) return false;
+      || (value.workspace.checkoutOwner !== undefined && !identifier(value.workspace.checkoutOwner))
+      || (value.workspace.handoffUnavailableReason !== undefined && !boundedString(value.workspace.handoffUnavailableReason, 500))) return false;
   }
   const policy = value.runtimePolicy;
   if (!record(policy) || !Number.isSafeInteger(policy.revision) || (policy.revision as number) < 0
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
     || typeof policy.project.timelineEnabled !== "boolean"
+    || !["automatic", "checkout", "worktree", "local"].includes(String(policy.project.workspace))
     || !record(policy.session)
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
+    || (policy.session.workspace !== undefined && !["automatic", "checkout", "worktree", "local"].includes(String(policy.session.workspace)))
     || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
     || typeof policy.effective.timelineEnabled !== "boolean"
+    || !["automatic", "checkout", "worktree", "local"].includes(String(policy.effective.workspace))
     || !Array.isArray(policy.availableVerifyChecks) || policy.availableVerifyChecks.length > 100
     || !policy.availableVerifyChecks.every((check) => record(check)
       && boundedString(check.id, 100)
@@ -569,7 +577,8 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   }
   const operational = value.operational;
   if (!record(operational) || !record(operational.verification) || !record(operational.jobs) || !record(operational.guard)
-    || !record(operational.continuity) || !record(operational.timeline) || !record(operational.tools) || !record(operational.health)) return false;
+    || !record(operational.continuity) || !record(operational.timeline) || !record(operational.tools)
+    || !record(operational.sieve) || !record(operational.health)) return false;
   const available = (feature: Record<string, unknown>) => feature.availability === "available" || feature.availability === "unavailable";
   if (!available(operational.verification) || !Array.isArray(operational.verification.checks) || operational.verification.checks.length > 20
     || !available(operational.jobs) || !Array.isArray(operational.jobs.items) || operational.jobs.items.length > 50
@@ -577,7 +586,31 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !available(operational.continuity) || !Number.isSafeInteger(operational.continuity.revision)
     || !available(operational.timeline) || !Number.isSafeInteger(operational.timeline.revision) || !Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100
     || !available(operational.tools) || !Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100
+    || !available(operational.sieve)
     || !["healthy", "degraded", "unavailable"].includes(String(operational.health.status)) || !Array.isArray(operational.health.issues) || operational.health.issues.length > 20) return false;
+  if (operational.sieve.availability === "available") {
+    const stats = (value: unknown) => {
+      if (!record(value) || !record(value.transformedBy)) return false;
+      const transformedBy = value.transformedBy;
+      return ["scanned", "transformed", "omittedChars", "netCharsSaved"].every((key) =>
+        typeof value[key] === "number" && Number.isFinite(value[key] as number) && (value[key] as number) >= 0)
+        && ["ageThreshold", "budget", "giantError", "activeThreshold"].every((key) =>
+          typeof transformedBy[key] === "number"
+          && Number.isFinite(transformedBy[key] as number)
+          && (transformedBy[key] as number) >= 0);
+    };
+    if (!["enabled", "observe", "disabled"].includes(String(operational.sieve.mode))
+      || !Number.isSafeInteger(operational.sieve.threshold) || (operational.sieve.threshold as number) < 1_000
+      || typeof operational.sieve.activePruning !== "boolean"
+      || !["enabled", "observe"].includes(String(operational.sieve.latestMode))
+      || !stats(operational.sieve.latest)
+      || !stats(operational.sieve.cumulativeActual)
+      || !stats(operational.sieve.cumulativeProjected)
+      || !Number.isSafeInteger(operational.sieve.recalls) || (operational.sieve.recalls as number) < 0
+      || !Number.isSafeInteger(operational.sieve.recalledChars) || (operational.sieve.recalledChars as number) < 0
+      || typeof operational.sieve.updatedAt !== "string" || Number.isNaN(Date.parse(operational.sieve.updatedAt))
+      || (operational.sieve.error !== undefined && !boundedString(operational.sieve.error, 500))) return false;
+  }
   if (operational.continuity.memory !== undefined
     && (!Array.isArray(operational.continuity.memory) || operational.continuity.memory.length > 30
       || !operational.continuity.memory.every((fact) => record(fact)
@@ -629,9 +662,9 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["runtime policy", {
         runtimePolicy: {
           revision: 0,
-          project: { verify: { mode: "auto" }, timelineEnabled: true },
+          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
           session: {},
-          effective: { verify: { mode: "auto" }, timelineEnabled: true },
+          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
           availableVerifyChecks: [],
         },
       }],
@@ -659,6 +692,7 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
           continuity: { availability: "unavailable", revision: 0 },
           timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
           tools: { availability: "unavailable", policies: [] },
+          sieve: { availability: "unavailable" },
           health: { status: "unavailable", issues: [] },
         },
       }],

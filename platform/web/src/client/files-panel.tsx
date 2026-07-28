@@ -124,10 +124,18 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
         ? "This session is working in its own isolated Git worktree."
         : workspace?.mode === "checkout"
           ? "This session is working directly in the registered project folder."
+          : workspace?.mode === "local"
+            ? "This session uses the project folder without Pylon worktree or branch isolation."
           : "This folder is available without Git history."}>
-        {workspace?.mode === "worktree" ? "Session worktree" : workspace?.mode === "checkout" ? "Project folder" : "Files only"}
+        {workspace?.mode === "worktree"
+          ? "Session worktree"
+          : workspace?.mode === "checkout"
+            ? "Project folder"
+            : workspace?.mode === "local"
+              ? "Local (unmanaged)"
+              : "Files only"}
       </span>
-      {workspace?.mode === "worktree" && <button type="button" disabled={!workspace.canMoveToCheckout} onClick={() =>
+      {workspace?.mode === "worktree" && <button type="button" disabled={!workspace.canMoveToCheckout} title={workspace.handoffUnavailableReason} onClick={() =>
         void runtimeStore.handoffSession("checkout").catch((error) => onError(error, "Unable to move session"))}>
         Move to project checkout
       </button>}

@@ -35,26 +35,31 @@ export type VerifyPolicyReadModel =
   | { mode: "auto" }
   | { mode: "selected"; checks: string[] };
 
+export type WorkspacePolicyMode = "automatic" | "checkout" | "worktree" | "local";
+
 export interface RuntimePolicyReadModel {
   revision: number;
   project: {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
+    workspace: WorkspacePolicyMode;
   };
   session: {
     verify?: VerifyPolicyReadModel;
     timelineEnabled?: boolean;
+    workspace?: WorkspacePolicyMode;
   };
   effective: {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
+    workspace: WorkspacePolicyMode;
   };
   availableVerifyChecks: VerifyOptionReadModel[];
 }
 
 export interface WorkspaceReadModel {
   gitAvailable: boolean;
-  mode: "worktree" | "checkout" | "non-git";
+  mode: "worktree" | "checkout" | "local" | "non-git";
   revision?: string;
   changedCount: number;
   setupState?: "idle" | "running" | "failed";
@@ -62,6 +67,7 @@ export interface WorkspaceReadModel {
   checkoutOwner?: string;
   canMoveToCheckout: boolean;
   canMoveToWorktree: boolean;
+  handoffUnavailableReason?: string;
 }
 
 export interface WorkspaceFileReadModel {

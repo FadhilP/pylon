@@ -90,6 +90,27 @@ function messageText(value: unknown): string {
     return typeof item.text === "string" ? [item.text] : [];
   }).join("").slice(0, MAX_TEXT);
 }
+
+function latestMessages(messages: MessageReadModel[]): MessageReadModel[] {
+  if (messages.length <= MAX_MESSAGES) return messages;
+  const tail = messages.slice(-(MAX_MESSAGES - 1));
+  const latestUser = [...messages].reverse().find((message) => message.role === "user");
+  if (!latestUser || tail.includes(latestUser)) return messages.slice(-MAX_MESSAGES);
+  const userIndex = messages.indexOf(latestUser);
+  const insertion = tail.findIndex((message) => messages.indexOf(message) > userIndex);
+  tail.splice(insertion < 0 ? tail.length : insertion, 0, latestUser);
+  return tail;
+}
+
+function trimMessages(messages: Map<string, MessageReadModel>): void {
+  if (messages.size <= MAX_MESSAGES) return;
+  const latestUser = [...messages.values()].reverse().find((message) => message.role === "user");
+  for (const [key, message] of messages) {
+    if (messages.size <= MAX_MESSAGES) break;
+    if (message === latestUser) continue;
+    messages.delete(key);
+  }
+}
 function boundedLines(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result: string[] = [];
@@ -226,6 +247,13 @@ export function projectConversation(
   const start = Math.min(messages.length, Math.max(0, Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES))));
   const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
   const includeDelegated = options.includeDelegated !== false;
+  let pinnedUserIndex = -1;
+  for (let index = end - 1; index >= 0; index--) {
+    if (role(object(messages[index]).role) === "user" && !promptFileCount(object(messages[index]))) {
+      pinnedUserIndex = index;
+      break;
+    }
+  }
   const toolCalls = new Map<string, { name: string; rawInput?: unknown; turn: number }>();
   const delegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
   const projectedMessages: MessageReadModel[] = [];
@@ -275,7 +303,7 @@ export function projectConversation(
         ));
         trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
       }
-      if (index < start) continue;
+      if (index < start && index !== pinnedUserIndex) continue;
       projectedMessages.push({
         id: fallbackId,
         ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, fallbackId) } : {}),
@@ -292,7 +320,7 @@ export function projectConversation(
       });
       continue;
     }
-    if (index < start) continue;
+    if (index < start && index !== pinnedUserIndex) continue;
     const images = attachmentCount(raw);
     const result: MessageReadModel = {
       id: `history-${index}`,
@@ -309,7 +337,7 @@ export function projectConversation(
     if (messageRole === "user") latestProjectedUser = result;
   }
   return {
-    messages: projectedMessages,
+    messages: latestMessages(projectedMessages),
     delegatedRuns: [...delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS),
   };
 }
@@ -359,7 +387,7 @@ export class RuntimeProjection {
       ...this.runtime,
       conversation: {
         ...this.runtime.conversation,
-        messages: [...this.messages.values()].slice(-MAX_MESSAGES).map((message) => ({ ...message })),
+        messages: latestMessages([...this.messages.values()]).map((message) => ({ ...message })),
         tools: [...this.tools.values()].slice(-MAX_TOOLS).map((tool) => ({ ...tool })),
         delegatedRuns: [...this.delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS).map((run) => structuredClone(run)),
       },
@@ -673,7 +701,7 @@ export class RuntimeProjection {
       };
     }
     this.messages.set(messageId, item);
-    trimMap(this.messages, MAX_MESSAGES);
+    trimMessages(this.messages);
     this.runtime.conversation.streaming = true;
     this.publish("message.start", item);
   }

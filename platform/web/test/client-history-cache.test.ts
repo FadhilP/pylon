@@ -37,7 +37,7 @@ function runtime(history: MessageReadModel[], cursor?: string, remaining?: numbe
       compaction: { active: false },
     },
     sessionControls: { models: [], thinkingLevels: [], commands: [] },
-    runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true }, availableVerifyChecks: [] },
+    runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" }, availableVerifyChecks: [] },
     metrics: {
       model: "none", provider: "none", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
       contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0,

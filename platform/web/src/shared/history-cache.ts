@@ -25,16 +25,22 @@ export function mergeHistoryMessages(previous: MessageReadModel[], fresh: Messag
   const order = new Map<string, number>();
   const messages = [...previous, ...fresh];
   messages.forEach((message, index) => {
-    if (!order.has(message.id)) order.set(message.id, index);
+    const key = message.entryId ? `entry:${message.entryId}` : `message:${message.id}`;
+    if (!order.has(key)) order.set(key, index);
   });
-  return [...new Map(messages.map((message) => [message.id, message])).values()]
+  return [...new Map(messages.map((message) => [
+    message.entryId ? `entry:${message.entryId}` : `message:${message.id}`,
+    message,
+  ])).values()]
     .sort((left, right) => {
       const leftIndex = historyIndex(left);
       const rightIndex = historyIndex(right);
       if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex;
       if (leftIndex !== undefined) return -1;
       if (rightIndex !== undefined) return 1;
-      return order.get(left.id)! - order.get(right.id)!;
+      const leftKey = left.entryId ? `entry:${left.entryId}` : `message:${left.id}`;
+      const rightKey = right.entryId ? `entry:${right.entryId}` : `message:${right.id}`;
+      return order.get(leftKey)! - order.get(rightKey)!;
     });
 }
 

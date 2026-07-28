@@ -1,4 +1,4 @@
-import type { PackageSettingsReadModel, VerifyPolicyReadModel } from "./snapshots.ts";
+import type { PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
@@ -105,6 +105,7 @@ export type WebCommand =
       scope: "project" | "session";
       verify: VerifyPolicyReadModel | { mode: "inherit" };
       timeline: "inherit" | "enabled" | "disabled";
+      workspace: WorkspacePolicyMode | "inherit";
       expectedRevision: number;
     } & CommandBase);
 

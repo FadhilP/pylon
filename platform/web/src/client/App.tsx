@@ -207,6 +207,11 @@ export function App() {
   }, [live.errorRevision]);
 
   useEffect(() => {
+    if (!live.notificationRevision || !live.notification?.message) return;
+    setToast({ id: ++toastId.current, message: live.notification.message });
+  }, [live.notificationRevision]);
+
+  useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
     let active = true;
     const generation = live.runtime.sessionGeneration;

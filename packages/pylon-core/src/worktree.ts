@@ -145,6 +145,10 @@ export interface SessionWorktree {
   baselineTree: string;
 }
 
+export interface SessionCheckout extends SessionWorktree {
+  parked: CheckoutState;
+}
+
 export interface WorkspaceFile {
   path: string;
   status?: "added" | "modified" | "deleted";
@@ -369,6 +373,27 @@ export function sessionWorktreeBranch(opaqueId: string): string {
   return `refs/heads/pylon-session-${opaqueId}`;
 }
 
+async function createSessionBaseline(
+  repositoryCwd: string,
+  source: CheckoutState,
+  opaqueId: string,
+): Promise<{ repository: GitWorkspace; branch: string; baseline: string }> {
+  if (!objectId.test(source.indexTree) || !objectId.test(source.worktreeTree)
+    || (source.head && !objectId.test(source.head))) throw Error("Invalid checkout state.");
+  const repository = await inspectGitWorkspace(repositoryCwd);
+  if (!repository || canonical(repository.commonDir) !== canonical(source.commonDir)) {
+    throw Error("Session baseline belongs to a different repository.");
+  }
+  await assertSafeCheckout(repository);
+  const branch = sessionWorktreeBranch(opaqueId);
+  const baseline = await git(repository.root, [
+    "commit-tree", source.worktreeTree, ...(source.head ? ["-p", source.head] : []), "-m", "Pylon session baseline",
+  ], ident);
+  if (!objectId.test(baseline)) throw Error("Git returned an invalid baseline commit.");
+  await git(repository.root, ["update-ref", branch, baseline, ""]);
+  return { repository, branch, baseline };
+}
+
 export async function captureCheckoutState(cwd: string, validateForMutation = false): Promise<CheckoutState> {
   const workspace = await inspectGitWorkspace(cwd);
   if (!workspace) throw Error("Workspace is not a Git checkout.");
@@ -384,21 +409,25 @@ export async function createSessionWorktree(
   ownedRoot: string,
   opaqueId = randomBytes(12).toString("base64url"),
 ): Promise<SessionWorktree> {
-  const branch = sessionWorktreeBranch(opaqueId);
   const source = await captureCheckoutState(sourceCwd, true);
+  return createSessionWorktreeFromState(sourceCwd, source, targetPath, ownedRoot, opaqueId);
+}
+
+export async function createSessionWorktreeFromState(
+  repositoryCwd: string,
+  source: CheckoutState,
+  targetPath: string,
+  ownedRoot: string,
+  opaqueId = randomBytes(12).toString("base64url"),
+): Promise<SessionWorktree> {
+  const { repository, branch, baseline } = await createSessionBaseline(repositoryCwd, source, opaqueId);
   const target = resolve(targetPath);
   const root = resolve(ownedRoot);
   if (outside(root, target) || canonical(root) === canonical(target)) throw Error("Unsafe Pylon worktree path.");
-  if (!outside(source.root, target)) throw Error("Pylon worktrees must be stored outside the project checkout.");
+  if (!outside(repository.root, target)) throw Error("Pylon worktrees must be stored outside the project checkout.");
   await mkdir(dirname(target), { recursive: true });
-  const parents = source.head ? ["-p", source.head] : [];
-  const baseline = await git(source.root, [
-    "commit-tree", source.worktreeTree, ...parents, "-m", "Pylon session baseline",
-  ], ident);
-  if (!objectId.test(baseline)) throw Error("Git returned an invalid baseline commit.");
-  await git(source.root, ["update-ref", branch, baseline, ""]);
   try {
-    await git(source.root, ["worktree", "add", "--detach", target, baseline]);
+    await git(repository.root, ["worktree", "add", "--detach", target, baseline]);
     await git(target, ["symbolic-ref", "HEAD", branch]);
     await git(target, ["reset", "--mixed", baseline]);
     return {
@@ -409,9 +438,37 @@ export async function createSessionWorktree(
       baselineTree: source.worktreeTree,
     };
   } catch (error) {
-    await git(source.root, ["worktree", "remove", "--force", target]).catch(() => {});
-    await git(source.root, ["update-ref", "-d", branch, baseline]).catch(() => {});
+    await git(repository.root, ["worktree", "remove", "--force", target]).catch(() => {});
+    await git(repository.root, ["update-ref", "-d", branch, baseline]).catch(() => {});
     await rm(target, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function claimSessionCheckout(
+  cwd: string,
+  opaqueId = randomBytes(12).toString("base64url"),
+): Promise<SessionCheckout> {
+  const parked = await captureCheckoutState(cwd, true);
+  const { repository, branch, baseline } = await createSessionBaseline(cwd, parked, opaqueId);
+  try {
+    await restoreCheckoutState(repository.root, {
+      ...parked,
+      head: baseline,
+      headRef: branch,
+      indexTree: parked.worktreeTree,
+    });
+    return {
+      root: repository.root,
+      commonDir: repository.commonDir,
+      branch,
+      baseline,
+      baselineTree: parked.worktreeTree,
+      parked,
+    };
+  } catch (error) {
+    await restoreCheckoutState(repository.root, parked).catch(() => {});
+    await git(repository.root, ["update-ref", "-d", branch, baseline]).catch(() => {});
     throw error;
   }
 }
@@ -456,6 +513,13 @@ export async function recreateSessionWorktree(
   const root = resolve(ownedRoot);
   if (outside(root, target) || canonical(root) === canonical(target)) throw Error("Unsafe Pylon worktree path.");
   await mkdir(dirname(target), { recursive: true });
+  const listed = await git(repository.root, ["worktree", "list", "--porcelain"]);
+  const registered = listed.split(/\r?\n\r?\n/).some((record) => {
+    const line = record.split(/\r?\n/).find((value) => value.startsWith("worktree "));
+    return line && canonical(line.slice("worktree ".length)) === canonical(target);
+  });
+  if (registered) await git(repository.root, ["worktree", "remove", "--force", target]);
+  else await rm(target, { recursive: true, force: true });
   await git(repository.root, ["worktree", "add", target, branch]);
   return realpath(target);
 }

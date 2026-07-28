@@ -22,7 +22,7 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type { JobReadModel } from "../shared/protocol/events";
-import type { TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../shared/protocol/snapshots";
+import type { TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -146,6 +146,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const [scope, setScope] = useState<"project" | "session">("project");
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
+  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("automatic");
   const [busy, setBusy] = useState(false);
 
   const resetDraft = () => {
@@ -156,6 +157,9 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       : policy.session.timelineEnabled === undefined
         ? "inherit"
         : policy.session.timelineEnabled ? "enabled" : "disabled");
+    setWorkspace(scope === "project"
+      ? policy.project.workspace
+      : policy.session.workspace ?? "inherit");
   };
   useEffect(() => {
     resetDraft();
@@ -173,15 +177,18 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const save = async (
     nextVerify: VerifyPolicyReadModel | "inherit",
     nextTimeline: "inherit" | "enabled" | "disabled",
+    nextWorkspace: WorkspacePolicyMode | "inherit" = workspace,
   ) => {
     setVerify(nextVerify);
     setTimeline(nextTimeline);
+    setWorkspace(nextWorkspace);
     setBusy(true);
     try {
       await runtimeStore.updateRuntimePolicy(
         scope,
         nextVerify,
         nextTimeline === "inherit" ? "inherit" : nextTimeline === "enabled",
+        nextWorkspace,
         policy.revision,
       );
     } catch (error) {
@@ -196,7 +203,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       ? checks.filter((item) => item !== id)
       : checks.length < 6 ? [...checks, id] : checks;
     if (next === checks) return;
-    void save({ mode: "selected", checks: next }, timeline).catch(() => undefined);
+    void save({ mode: "selected", checks: next }, timeline, workspace).catch(() => undefined);
   };
   const canResetVerify = scope === "project"
     ? verify !== "inherit" && verify.mode !== "auto"
@@ -213,7 +220,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         className="text-button"
         type="button"
         disabled={!idle}
-        onClick={() => void save(scope === "project" ? { mode: "auto" } : "inherit", timeline).catch(() => undefined)}
+        onClick={() => void save(scope === "project" ? { mode: "auto" } : "inherit", timeline, workspace).catch(() => undefined)}
       >{scope === "project" ? "Use automatic detection" : "Use project defaults"}</button>}
     </div>
     <div className="policy-checks">
@@ -234,12 +241,28 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       <select
         value={timeline}
         disabled={!idle}
-        onChange={(event) => void save(verify, event.target.value as typeof timeline).catch(() => undefined)}
+        onChange={(event) => void save(verify, event.target.value as typeof timeline, workspace).catch(() => undefined)}
       >
         {scope === "session" && <option value="inherit">Inherit project</option>}
         <option value="enabled">Enabled</option>
         <option value="disabled">Disabled</option>
       </select>
+    </label>
+    <label>Workspace
+      <select
+        value={workspace}
+        disabled={!idle}
+        onChange={(event) => void save(verify, timeline, event.target.value as typeof workspace).catch(() => undefined)}
+      >
+        {scope === "session" && <option value="inherit">Inherit project</option>}
+        <option value="automatic">Automatic</option>
+        <option value="checkout">Project folder</option>
+        <option value="worktree">Session worktree</option>
+        <option value="local">Local (unmanaged)</option>
+      </select>
+      <small>{scope === "project"
+        ? "Applies to new sessions. Automatic gives the first session the project folder and isolates concurrent sessions."
+        : "Changing this session moves it immediately when possible. Local does not create a branch or worktree."}</small>
     </label>
     {busy && <small className="policy-saving" role="status">Saving…</small>}
   </InspectorSection>;
@@ -463,8 +486,36 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
           {policies.length === 0 && <div className="empty-state"><IconTool size={20} /><strong>No package policies</strong><span>No policy owners registered for this session.</span></div>}
         </div>}
       </InspectorSection>}
+      <SieveStatus live={live} />
     </div>
   );
+}
+
+function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
+  const sieve = live.runtime?.operational.sieve;
+  if (!sieve || sieve.availability !== "available" || !sieve.latest
+    || !sieve.cumulativeActual || !sieve.cumulativeProjected) {
+    return <InspectorSection title="Context pruning">
+      <FeatureUnavailable name="Pi Sieve" />
+    </InspectorSection>;
+  }
+  const saved = sieve.cumulativeActual.netCharsSaved;
+  const projected = sieve.cumulativeProjected.netCharsSaved;
+  return <InspectorSection title="Context pruning" meta={sieve.mode}>
+    <div className="sieve-summary">
+      <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
+      <div><small>Saved</small><strong>{formatCompactNumber(saved)}</strong><span>characters</span></div>
+      <div><small>Projected</small><strong>{formatCompactNumber(projected)}</strong><span>characters</span></div>
+      <div><small>Recalls</small><strong>{formatCompactNumber(sieve.recalls ?? 0)}</strong><span>{formatCompactNumber(sieve.recalledChars ?? 0)} restored</span></div>
+    </div>
+    <dl className="sieve-details">
+      <div><dt>Latest scan</dt><dd>{formatCompactNumber(sieve.latest.scanned)} results</dd></div>
+      <div><dt>Pruned</dt><dd>{formatCompactNumber(sieve.latest.transformed)} results</dd></div>
+      <div><dt>Active pruning</dt><dd>{sieve.activePruning ? "Enabled" : "Disabled"}</dd></div>
+      <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "—"}</dd></div>
+    </dl>
+    {sieve.error && <p className="inline-alert" role="alert">{sieve.error}</p>}
+  </InspectorSection>;
 }
 
 function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {

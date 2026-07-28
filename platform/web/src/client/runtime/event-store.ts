@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from "react";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
-import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiRequestReadModel } from "../../shared/protocol/events";
+import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
@@ -21,6 +21,8 @@ export interface RuntimeStoreSnapshot {
   sessionStatuses?: Record<string, SessionRuntimeState>;
   error?: string;
   errorRevision?: number;
+  notification?: UiNotificationReadModel;
+  notificationRevision?: number;
   recovery?: { message: string; action: "retry" | "reload" };
   historyWindow?: TranscriptWindowReadModel;
   treeChanging?: boolean;
@@ -35,7 +37,7 @@ export interface TranscriptWindowReadModel {
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change"];
+const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
 const MAX_CACHED_SESSIONS = 10;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
@@ -277,6 +279,7 @@ export class RuntimeEventStore {
     scope: "project" | "session",
     verify: VerifyPolicyReadModel | "inherit",
     timeline: boolean | "inherit",
+    workspace: WorkspacePolicyMode | "inherit",
     expectedRevision: number,
   ): Promise<void> {
     const runtime = this.requireReadyRuntime();
@@ -285,6 +288,7 @@ export class RuntimeEventStore {
       scope,
       verify: verify === "inherit" ? { mode: "inherit" } : verify,
       timeline: timeline === "inherit" ? "inherit" : timeline ? "enabled" : "disabled",
+      workspace,
       expectedRevision,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
@@ -910,6 +914,9 @@ export class RuntimeEventStore {
       return;
     }
     if (event.type === "workspace.revision") this.workspaceInventories.delete(event.sessionId);
+    const notification = event.type === "ui.notify"
+      ? event.payload as UiNotificationReadModel
+      : current.notification;
 
     let runtime = current.runtime;
     let pendingUi = current.pendingUi;
@@ -937,6 +944,8 @@ export class RuntimeEventStore {
       sessionRevision: (current.sessionRevision ?? 0) + (sessionChanged ? 1 : 0),
       connection: "connected",
       error: undefined,
+      notification,
+      notificationRevision: (current.notificationRevision ?? 0) + (event.type === "ui.notify" ? 1 : 0),
     }, true);
   }
 

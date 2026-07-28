@@ -89,9 +89,9 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
-    project: { verify: { mode: "auto" }, timelineEnabled: true },
+    project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
     session: {},
-    effective: { verify: { mode: "auto" }, timelineEnabled: true },
+    effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "automatic" },
     availableVerifyChecks: [],
   };
 }
@@ -447,6 +447,9 @@ export class SessionRuntime implements PiDriver {
 
   private acceptPrompt(session: AgentSession, input: PromptInput): Promise<AcceptedCommand> {
     const files = input.files ?? [];
+    const commandName = /^\s*\/([^\s]+)/.exec(input.message)?.[1];
+    const knownCommand = Boolean(commandName && this.requireRuntime().services.resourceLoader
+      .getExtensions().runtime.getCommands().some((command) => command.name === commandName));
     if (files.length) this.promptAttachments.stage(input.commandId, files);
     return new Promise<AcceptedCommand>((resolve, reject) => {
       let decided = false;
@@ -455,7 +458,9 @@ export class SessionRuntime implements PiDriver {
         decided = true;
         const filesConsumed = !files.length || this.promptAttachments.consumed(input.commandId);
         this.promptAttachments.clear(input.commandId);
-        if (!accepted) reject(new Error("prompt was rejected before acceptance"));
+        if (!accepted && knownCommand && !files.length && !input.images?.length) resolve(this.accepted(input.commandId));
+        else if (!accepted && knownCommand) reject(new Error("files and images require a command that starts a model turn"));
+        else if (!accepted) reject(new Error("prompt was rejected before acceptance"));
         else if (!filesConsumed) reject(new Error("text files require a prompt that starts a model turn"));
         else resolve(this.accepted(input.commandId));
       };
@@ -526,6 +531,7 @@ export class SessionRuntime implements PiDriver {
       session: {
         ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
         ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
+        ...(policy.session.workspace ? { workspace: policy.session.workspace } : {}),
       },
       effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify) },
       availableVerifyChecks: policy.availableVerifyChecks.map((check) => ({ ...check })),
@@ -735,7 +741,7 @@ export class SessionRuntime implements PiDriver {
         ? (target as { parentId: string }).parentId
         : branch[targetIndex - 1]?.id;
       const oldLeaf = session.sessionManager.getLeafId();
-      if (!parentId || !oldLeaf || oldLeaf === target.id) throw new Error("the selected turn has not completed");
+      if (!parentId || !oldLeaf) throw new Error("the selected prompt cannot be edited");
 
       const timeline = await this.prepareTimelineEdit(session, target.id, input.rollbackFiles);
       let navigated = false;
@@ -1216,6 +1222,13 @@ export class SessionRuntime implements PiDriver {
           thinkingLevel: this.workThinkingLevel,
           metrics: this.lastSnapshot?.metrics,
         };
+      } else if (kind === "message_end" || kind === "message_complete") {
+        const message = raw.message && typeof raw.message === "object" && !Array.isArray(raw.message)
+          ? raw.message as Record<string, unknown>
+          : {};
+        if (String(raw.role ?? message.role) === "user" && typeof raw.entryId !== "string" && typeof message.entryId !== "string") {
+          forwarded = { ...raw, entryId: this.latestUserEntryId(session) };
+        }
       } else if (kind === "agent_end") {
         const duration = Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
         const messages = this.transcriptMessages(session);
@@ -1586,6 +1599,7 @@ export class SessionRuntime implements PiDriver {
         session: {
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
           ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
+          ...(this.runtimePolicy.session.workspace ? { workspace: this.runtimePolicy.session.workspace } : {}),
         },
         effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify) },
         availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check })),
@@ -1691,7 +1705,7 @@ export class SessionRuntime implements PiDriver {
       if (!this.gate.accepts(generation)) return;
       this.captureVerifyCatalog(payload);
     }));
-    for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change"]) {
+    for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change", "pi-sieve:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {
         const active = this.gate.accepts(generation);
         const replacing = this.replacementInvalidated && this.replacementGeneration === generation;
@@ -1833,11 +1847,11 @@ export class SessionRuntime implements PiDriver {
   }
 
   private requestPackageStates(sessionId: string): void {
-    for (const channel of ["pi-continuity:state-request", "pi-timeline:state-request"]) {
+    for (const channel of ["pi-continuity:state-request", "pi-timeline:state-request", "pi-sieve:state-request"]) {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel === "pi-timeline:state-request" ? 4 : 2,
+          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 2,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;

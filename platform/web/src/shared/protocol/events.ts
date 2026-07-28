@@ -310,6 +310,35 @@ export interface ToolPolicyReadModel {
 }
 
 export interface ToolsReadModel { availability: FeatureState; policies: ToolPolicyReadModel[]; }
+
+export interface SieveTransformStatsReadModel {
+  scanned: number;
+  transformed: number;
+  omittedChars: number;
+  netCharsSaved: number;
+  transformedBy: {
+    ageThreshold: number;
+    budget: number;
+    giantError: number;
+    activeThreshold: number;
+  };
+}
+
+export interface SieveReadModel {
+  availability: FeatureState;
+  mode?: "enabled" | "observe" | "disabled";
+  threshold?: number;
+  activePruning?: boolean;
+  latestMode?: "enabled" | "observe";
+  latest?: SieveTransformStatsReadModel;
+  cumulativeActual?: SieveTransformStatsReadModel;
+  cumulativeProjected?: SieveTransformStatsReadModel;
+  recalls?: number;
+  recalledChars?: number;
+  updatedAt?: string;
+  error?: string;
+}
+
 export interface RuntimeHealthReadModel { status: "healthy" | "degraded" | "unavailable"; issues: string[]; }
 
 export interface OperationalReadModel {
@@ -319,6 +348,7 @@ export interface OperationalReadModel {
   continuity: ContinuityReadModel;
   timeline: TimelineReadModel;
   tools: ToolsReadModel;
+  sieve: SieveReadModel;
   health: RuntimeHealthReadModel;
 }
 

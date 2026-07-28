@@ -193,8 +193,11 @@ test("session state moves to the project checkout and back without merging", asy
 
     const moved = await captureCheckoutState(root);
     await restoreCheckoutState(root, parked);
+    await mkdir(target);
+    await writeFile(join(target, "orphan.txt"), "stale recovery directory\n");
     const recreated = await recreateSessionWorktree(root, target, owned, worktree.branch, worktree.commonDir);
     await restoreCheckoutState(recreated, moved);
+    await assert.rejects(stat(join(recreated, "orphan.txt")));
     assert.equal((await readFile(join(root, "file.txt"), "utf8")).trim(), "project");
     assert.equal((await readFile(join(recreated, "file.txt"), "utf8")).trim(), "session");
     await removeSessionWorktree(root, worktree, owned);

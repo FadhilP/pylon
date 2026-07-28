@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import type { RuntimePolicyReadModel, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 5;
+const VERSION = 6;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 
@@ -17,6 +17,7 @@ export interface RegisteredProject {
   setupCommand?: string;
   verifyPolicy?: VerifyPolicyReadModel;
   timelineEnabled?: boolean;
+  workspacePolicy?: WorkspacePolicyMode;
 }
 
 interface SessionPolicyRecord {
@@ -24,6 +25,7 @@ interface SessionPolicyRecord {
   projectId: string;
   verify?: VerifyPolicyReadModel;
   timelineEnabled?: boolean;
+  workspace?: WorkspacePolicyMode;
 }
 
 export interface RuntimePolicyUpdate {
@@ -32,13 +34,14 @@ export interface RuntimePolicyUpdate {
   sessionId: string;
   verify: VerifyPolicyReadModel | { mode: "inherit" };
   timeline: "inherit" | "enabled" | "disabled";
+  workspace: WorkspacePolicyMode | "inherit";
   expectedRevision: number;
 }
 
 export interface SessionWorkspaceRecord {
   sessionId: string;
   projectId: string;
-  mode: "checkout" | "worktree";
+  mode: "checkout" | "worktree" | "local";
   worktreePath?: string;
   commonDir?: string;
   branch?: string;
@@ -130,23 +133,25 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown };
+        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown };
         if (typeof record.directory !== "string" || !record.directory || record.directory.length > 4_096) return [];
         if (record.archivedAt !== undefined && (typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt)))) return [];
         if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
         if (record.verifyPolicy !== undefined && !validVerifyPolicy(record.verifyPolicy)) return [];
         if (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean") return [];
+        if (record.workspacePolicy !== undefined && !validWorkspacePolicy(record.workspacePolicy)) return [];
         return [{
           directory: record.directory,
           ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
           ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
           ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+          ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
         }];
       });
       this.projects = await this.resolveProjects(projects);
@@ -208,7 +213,7 @@ export class ProjectRegistry {
     if (existing?.archivedAt) throw new Error("project is archived; restore it from Archived");
     if (existing) return { ...existing };
     if (this.projects.length >= MAX_PROJECTS) throw new Error("project registry is full");
-    const project = { id, cwd, label: basename(cwd) || cwd };
+    const project = { id, cwd, label: basename(cwd) || cwd, workspacePolicy: "automatic" as const };
     this.projects.push(project);
     await this.save();
     return { ...project };
@@ -387,19 +392,23 @@ export class ProjectRegistry {
     const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
     const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
     const projectTimeline = project.timelineEnabled ?? true;
+    const projectWorkspace = project.workspacePolicy ?? "automatic";
     return {
       revision: this.policyRevision,
       project: {
         verify: projectVerify,
         timelineEnabled: projectTimeline,
+        workspace: projectWorkspace,
       },
       session: {
         ...(session?.verify ? { verify: cloneVerifyPolicy(session.verify) } : {}),
         ...(session?.timelineEnabled !== undefined ? { timelineEnabled: session.timelineEnabled } : {}),
+        ...(session?.workspace ? { workspace: session.workspace } : {}),
       },
       effective: {
         verify: cloneVerifyPolicy(session?.verify ?? projectVerify),
         timelineEnabled: session?.timelineEnabled ?? projectTimeline,
+        workspace: session?.workspace ?? projectWorkspace,
       },
       availableVerifyChecks: [],
     };
@@ -409,9 +418,12 @@ export class ProjectRegistry {
     if (input.expectedRevision !== this.policyRevision) throw new Error("runtime policy changed; refresh and try again");
     const project = this.requireProject(input.projectId);
     if (input.scope === "project") {
-      if (input.verify.mode === "inherit" || input.timeline === "inherit") throw new Error("project policy cannot inherit");
+      if (input.verify.mode === "inherit" || input.timeline === "inherit" || input.workspace === "inherit") {
+        throw new Error("project policy cannot inherit");
+      }
       project.verifyPolicy = cloneVerifyPolicy(input.verify);
       project.timelineEnabled = input.timeline === "enabled";
+      project.workspacePolicy = input.workspace;
     } else {
       let session = this.sessionPolicies.find((item) => item.sessionId === input.sessionId);
       if (!session) {
@@ -423,7 +435,9 @@ export class ProjectRegistry {
       else session.verify = cloneVerifyPolicy(input.verify);
       if (input.timeline === "inherit") delete session.timelineEnabled;
       else session.timelineEnabled = input.timeline === "enabled";
-      if (!session.verify && session.timelineEnabled === undefined) {
+      if (input.workspace === "inherit") delete session.workspace;
+      else session.workspace = input.workspace;
+      if (!session.verify && session.timelineEnabled === undefined && !session.workspace) {
         this.sessionPolicies = this.sessionPolicies.filter((item) => item !== session);
       }
     }
@@ -497,7 +511,7 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
   }
 
-  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean }>): Promise<RegisteredProject[]> {
+  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
@@ -512,6 +526,7 @@ export class ProjectRegistry {
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
             ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
             ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+            workspacePolicy: record.workspacePolicy ?? "automatic",
           });
         }
       } catch {
@@ -538,6 +553,7 @@ export class ProjectRegistry {
         ...(project.setupCommand ? { setupCommand: project.setupCommand } : {}),
         ...(project.verifyPolicy ? { verifyPolicy: project.verifyPolicy } : {}),
         ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
+        ...(project.workspacePolicy ? { workspacePolicy: project.workspacePolicy } : {}),
       })),
       archivedSessions: this.archivedSessions,
       sessionWorkspaces: this.sessionWorkspaces,
@@ -564,7 +580,7 @@ export class ProjectRegistry {
     const record = value as Record<string, unknown>;
     if (typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 128
       || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
-      || !["checkout", "worktree"].includes(String(record.mode))) return [];
+      || !["checkout", "worktree", "local"].includes(String(record.mode))) return [];
     const optional = [
       "worktreePath", "commonDir", "branch", "baseline", "baselineTree",
       "parkedRoot", "parkedCommonDir", "parkedHead", "parkedHeadRef",
@@ -575,7 +591,7 @@ export class ProjectRegistry {
     return [{
       sessionId: record.sessionId,
       projectId: record.projectId,
-      mode: record.mode as "checkout" | "worktree",
+      mode: record.mode as "checkout" | "worktree" | "local",
       ...Object.fromEntries(optional.flatMap((key) => record[key] ? [[key, record[key]]] : [])),
     } as SessionWorkspaceRecord];
   }
@@ -586,12 +602,14 @@ export class ProjectRegistry {
     if (typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 128
       || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
       || (record.verify !== undefined && !validVerifyPolicy(record.verify))
-      || (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean")) return [];
+      || (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean")
+      || (record.workspace !== undefined && !validWorkspacePolicy(record.workspace))) return [];
     return [{
       sessionId: record.sessionId,
       projectId: record.projectId,
       ...(record.verify ? { verify: cloneVerifyPolicy(record.verify) } : {}),
       ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+      ...(record.workspace ? { workspace: record.workspace } : {}),
     }];
   }
 }
@@ -609,6 +627,10 @@ function validVerifyPolicy(value: unknown): value is VerifyPolicyReadModel {
 
 function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel {
   return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
+}
+
+function validWorkspacePolicy(value: unknown): value is WorkspacePolicyMode {
+  return value === "automatic" || value === "checkout" || value === "worktree" || value === "local";
 }
 
 export interface ProjectPickerCommand {

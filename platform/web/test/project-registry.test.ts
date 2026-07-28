@@ -20,7 +20,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 5);
+    assert.equal(stored.version, 6);
     assert.equal(stored.projects.length, 2);
 
     let seeded = false;
@@ -163,6 +163,7 @@ test("runtime policy persists project defaults and session overrides", async () 
       sessionId: "session-one",
       verify: { mode: "selected", checks: ["npm:test"] },
       timeline: "disabled",
+      workspace: "worktree",
       expectedRevision: 0,
     });
     await registry.updateRuntimePolicy({
@@ -171,15 +172,18 @@ test("runtime policy persists project defaults and session overrides", async () 
       sessionId: "session-one",
       verify: { mode: "auto" },
       timeline: "enabled",
+      workspace: "local",
       expectedRevision: 1,
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
       verify: { mode: "auto" },
       timelineEnabled: true,
+      workspace: "local",
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-two").effective, {
       verify: { mode: "selected", checks: ["npm:test"] },
       timelineEnabled: false,
+      workspace: "worktree",
     });
 
     const reloaded = new ProjectRegistry(config);

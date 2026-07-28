@@ -3,6 +3,8 @@ import type {
   GuardReadModel,
   JobsReadModel,
   OperationalReadModel,
+  SieveReadModel,
+  SieveTransformStatsReadModel,
   TimelineReadModel,
   ToolPolicyReadModel,
   ToolsReadModel,
@@ -52,6 +54,7 @@ export function initialOperational(availableTools: Iterable<string>, loadedExten
     continuity: { availability: "unavailable", revision: 0, memory: [] },
     timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
     tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
+    sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
     health: { status: "healthy", issues: [] },
   };
   return withHealth(operational, diagnostics);
@@ -66,6 +69,7 @@ export function withOperationalCapabilities(current: OperationalReadModel, avail
     continuity: current.continuity.revision ? current.continuity : fresh.continuity,
     timeline: current.timeline.revision ? current.timeline : fresh.timeline,
     tools: current.tools.policies.length ? { ...current.tools, availability: fresh.tools.availability } : fresh.tools,
+    sieve: current.sieve.mode ? { ...current.sieve, availability: fresh.sieve.availability } : fresh.sieve,
     health: fresh.health,
   };
   return withHealth(next, diagnostics);
@@ -86,6 +90,12 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
     },
     timeline: { ...value.timeline, checkpoints: value.timeline.checkpoints.map((item) => ({ ...item })) },
     tools: { ...value.tools, policies: value.tools.policies.map((item) => ({ ...item, managedTools: [...item.managedTools], enabledTools: [...item.enabledTools], deferredTools: [...item.deferredTools], allowOnly: item.allowOnly ? [...item.allowOnly] : undefined })) },
+    sieve: {
+      ...value.sieve,
+      latest: value.sieve.latest ? cloneSieveStats(value.sieve.latest) : undefined,
+      cumulativeActual: value.sieve.cumulativeActual ? cloneSieveStats(value.sieve.cumulativeActual) : undefined,
+      cumulativeProjected: value.sieve.cumulativeProjected ? cloneSieveStats(value.sieve.cumulativeProjected) : undefined,
+    },
     health: { ...value.health, issues: [...value.health.issues] },
   };
 }
@@ -105,8 +115,67 @@ export function applyOperationalEvent(
   else if (channel === "pi-continuity:state-change") next.continuity = continuity(current.continuity, value, expectedSessionId);
   else if (channel === "pi-timeline:state-change") next.timeline = timeline(current.timeline, value, expectedSessionId);
   else if (channel === "pylon:tool-policy") next.tools = toolPolicy(current.tools, value);
+  else if (channel === "pi-sieve:state-change") next.sieve = sieve(current.sieve, value);
   else return current;
   return withHealth(next, diagnostics);
+}
+
+function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
+  const input = record(value);
+  const transformedBy = record(input?.transformedBy);
+  if (!input || !transformedBy) return undefined;
+  const keys = ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const;
+  const reasons = ["ageThreshold", "budget", "giantError", "activeThreshold"] as const;
+  if (!keys.every((key) => Number.isFinite(input[key]) && Number(input[key]) >= 0)
+    || !reasons.every((key) => Number.isFinite(transformedBy[key]) && Number(transformedBy[key]) >= 0)) return undefined;
+  return {
+    scanned: number(input.scanned),
+    transformed: number(input.transformed),
+    omittedChars: number(input.omittedChars),
+    netCharsSaved: number(input.netCharsSaved),
+    transformedBy: {
+      ageThreshold: number(transformedBy.ageThreshold),
+      budget: number(transformedBy.budget),
+      giantError: number(transformedBy.giantError),
+      activeThreshold: number(transformedBy.activeThreshold),
+    },
+  };
+}
+
+function cloneSieveStats(value: SieveTransformStatsReadModel): SieveTransformStatsReadModel {
+  return { ...value, transformedBy: { ...value.transformedBy } };
+}
+
+function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
+  const input = record(value);
+  if (!input || input.version !== 1) return old;
+  if (input.available === false) return { availability: "unavailable" };
+  const latest = sieveStats(input.latest);
+  const cumulativeActual = sieveStats(input.cumulativeActual);
+  const cumulativeProjected = sieveStats(input.cumulativeProjected);
+  const updatedAt = timestamp(input.updatedAt);
+  if (input.available !== true
+    || !["enabled", "observe", "disabled"].includes(String(input.mode))
+    || !["enabled", "observe"].includes(String(input.latestMode))
+    || !Number.isSafeInteger(input.threshold) || Number(input.threshold) < 1_000
+    || typeof input.activePruning !== "boolean"
+    || !latest || !cumulativeActual || !cumulativeProjected || !updatedAt) {
+    return { availability: "unavailable", error: "Pi Sieve returned invalid state." };
+  }
+  return {
+    availability: "available",
+    mode: input.mode as NonNullable<SieveReadModel["mode"]>,
+    threshold: input.threshold as number,
+    activePruning: input.activePruning,
+    latestMode: input.latestMode as NonNullable<SieveReadModel["latestMode"]>,
+    latest,
+    cumulativeActual,
+    cumulativeProjected,
+    recalls: Math.max(0, number(input.recalls)),
+    recalledChars: Math.max(0, number(input.recalledChars)),
+    updatedAt,
+    ...(string(input.error, 500) ? { error: string(input.error, 500) } : {}),
+  };
 }
 
 function verification(value: unknown, redact: (value: string) => string): VerificationReadModel {
