@@ -1067,9 +1067,11 @@ export class RuntimeCoordinator implements PiDriver {
     const selected = this.selected();
     const projectId = this.projectIdForSlot(selected);
     if (!projectId) throw new Error("runtime policy requires a registered project");
-    const affected = input.scope === "project"
-      ? [...this.slots.values()].filter((slot) => this.projectIdForSlot(slot) === projectId)
-      : [selected];
+    const affected = input.scope === "global"
+      ? [...this.slots.values()].filter((slot) => Boolean(this.projectIdForSlot(slot)))
+      : input.scope === "project"
+        ? [...this.slots.values()].filter((slot) => this.projectIdForSlot(slot) === projectId)
+        : [selected];
     if (affected.some((slot) => !this.slotCanSleep(slot))) {
       throw new Error("runtime policy can only change while affected sessions are idle");
     }
@@ -1107,7 +1109,9 @@ export class RuntimeCoordinator implements PiDriver {
     }
     for (const slot of affected) {
       const current = await slot.driver.snapshot();
-      const policy = this.registry().runtimePolicy(projectId, slot.id);
+      const slotProjectId = this.projectIdForSlot(slot);
+      if (!slotProjectId) continue;
+      const policy = this.registry().runtimePolicy(slotProjectId, slot.id);
       policy.availableVerifyChecks = current.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check }));
       slot.driver.applyRuntimePolicy(policy);
     }
@@ -1205,10 +1209,16 @@ export class RuntimeCoordinator implements PiDriver {
     await slot.driver.answerUiRequest({ ...input, sessionGeneration: slot.innerGeneration });
   }
 
-  keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined {
     this.assertGeneration(sessionGeneration);
     const slot = this.selected();
-    slot.driver.keepUiRequestAlive(requestId, slot.innerGeneration);
+    return slot.driver.keepUiRequestAlive(requestId, slot.innerGeneration);
+  }
+
+  dismissCommandResult(resultId: string, sessionGeneration: number): void {
+    this.assertGeneration(sessionGeneration);
+    const slot = this.selected();
+    slot.driver.dismissCommandResult(resultId, slot.innerGeneration);
   }
 
   subscribe(listener: DriverEventListener): () => void {

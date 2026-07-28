@@ -1,5 +1,5 @@
 import type { PROTOCOL_VERSION } from "./envelope.ts";
-import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
+import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, SlashCommandResultReadModel, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -29,6 +29,7 @@ export interface RuntimeSnapshot {
   extensionUi: ExtensionUiReadModel;
   workspace?: WorkspaceReadModel;
   runtimePolicy: RuntimePolicyReadModel;
+  commandResult?: SlashCommandResultReadModel;
 }
 
 export type VerifyPolicyReadModel =
@@ -40,12 +41,18 @@ export type DialogTimeoutSeconds = number | null;
 
 export interface RuntimePolicyReadModel {
   revision: number;
-  project: {
-    verify: VerifyPolicyReadModel;
+  global: {
     timelineEnabled: boolean;
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
+  };
+  project: {
+    verify: VerifyPolicyReadModel;
+    timelineEnabled?: boolean;
+    workspace?: WorkspacePolicyMode;
+    guardTimeoutSeconds?: DialogTimeoutSeconds;
+    clarifyTimeoutSeconds?: DialogTimeoutSeconds;
   };
   session: {
     verify?: VerifyPolicyReadModel;

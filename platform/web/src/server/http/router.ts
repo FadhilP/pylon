@@ -445,10 +445,14 @@ export class ServerTransport {
     if (generation !== owner.sessionGeneration || owner.sessionGeneration !== this.journal.sessionGeneration) {
       throw httpError(409, "stale session generation");
     }
-    try { this.driver.keepUiRequestAlive(requestId, generation); }
+    let expiresAt: string | undefined;
+    try {
+      const renewed = this.driver.keepUiRequestAlive(requestId, generation);
+      expiresAt = typeof renewed === "string" ? renewed : undefined;
+    }
     catch (error) { throw httpError(409, error instanceof Error ? error.message : "UI request is unavailable"); }
     this.renew(tabId);
-    this.send(response, 200, { accepted: true, requestId });
+    this.send(response, 200, { accepted: true, requestId, ...(expiresAt ? { expiresAt } : {}) });
   }
 
   private execute(command: WebCommand): Promise<AcceptedCommand> {
@@ -537,6 +541,10 @@ export class ServerTransport {
           this.projection.refresh(await this.driver.snapshot());
           return accepted(command.expectedGeneration);
         });
+      case "dismissCommandResult":
+        if (!this.driver.dismissCommandResult) return Promise.reject(httpError(409, "command results are unavailable"));
+        this.driver.dismissCommandResult(command.resultId, command.expectedGeneration);
+        return Promise.resolve(accepted(command.expectedGeneration));
     }
   }
 

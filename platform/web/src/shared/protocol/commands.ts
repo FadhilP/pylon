@@ -37,6 +37,7 @@ export const COMMAND_NAMES = [
   "applySessionChanges",
   "updateProjectWorktreeSettings",
   "updateRuntimePolicy",
+  "dismissCommandResult",
 ] as const;
 
 interface CommandBase {
@@ -104,14 +105,15 @@ export type WebCommand =
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
   | ({
       type: "updateRuntimePolicy";
-      scope: "project" | "session";
+      scope: "global" | "project" | "session";
       verify: VerifyPolicyReadModel | { mode: "inherit" };
       timeline: "inherit" | "enabled" | "disabled";
       workspace: WorkspacePolicyMode | "inherit";
       guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       expectedRevision: number;
-    } & CommandBase);
+    } & CommandBase)
+  | ({ type: "dismissCommandResult"; resultId: string } & CommandBase);
 
 export interface AcceptedCommand {
   commandId: string;

@@ -37,7 +37,7 @@ export interface TranscriptWindowReadModel {
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
+const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
 const MAX_CACHED_SESSIONS = 10;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
@@ -276,7 +276,7 @@ export class RuntimeEventStore {
   }
 
   async updateRuntimePolicy(
-    scope: "project" | "session",
+    scope: "global" | "project" | "session",
     verify: VerifyPolicyReadModel | "inherit",
     timeline: boolean | "inherit",
     workspace: WorkspacePolicyMode | "inherit",
@@ -720,10 +720,24 @@ export class RuntimeEventStore {
     await this.api.uiOwnership(request.requestId, runtime.sessionGeneration, action);
   }
 
-  async keepUiRequestAlive(request: UiRequestReadModel): Promise<void> {
+  async keepUiRequestAlive(request: UiRequestReadModel): Promise<string | undefined> {
     const runtime = this.requireReadyRuntime();
-    if (!request.owned) return;
-    await this.api.uiKeepAlive(request.requestId, runtime.sessionGeneration);
+    if (!request.owned) return undefined;
+    const result = await this.api.uiKeepAlive(request.requestId, runtime.sessionGeneration);
+    if (result.expiresAt && this.snapshot.pendingUi?.requestId === request.requestId) {
+      this.set({ ...this.snapshot, pendingUi: { ...this.snapshot.pendingUi, expiresAt: result.expiresAt } });
+    }
+    return result.expiresAt;
+  }
+
+  async dismissCommandResult(resultId: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "dismissCommandResult",
+      resultId,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
   }
 
   private async sendCommand(command: WebCommand): Promise<AcceptedCommand> {
@@ -1163,6 +1177,15 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
               }
             : undefined,
         },
+      };
+    }
+    case "command.result": {
+      const item = asRecord(payload);
+      return {
+        ...runtime,
+        commandResult: typeof item.id === "string"
+          ? item as unknown as NonNullable<RuntimeSnapshot["commandResult"]>
+          : undefined,
       };
     }
     case "ui.notify": return { ...runtime, extensionUi: { ...runtime.extensionUi, notifications: [...runtime.extensionUi.notifications.filter((item) => item.id !== (payload as { id?: string }).id), payload as RuntimeSnapshot["extensionUi"]["notifications"][number]].slice(-10) } };

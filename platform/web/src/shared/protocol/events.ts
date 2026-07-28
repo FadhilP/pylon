@@ -170,6 +170,16 @@ export interface UiRequestReadModel {
   payload: Record<string, unknown>;
   owned: boolean;
   ownershipAvailable: boolean;
+  timeoutSeconds?: number;
+  expiresAt?: string;
+}
+
+export interface SlashCommandResultReadModel {
+  id: string;
+  command: string;
+  output: string;
+  severity: "info" | "warning" | "error";
+  occurredAt: string;
 }
 
 export interface UiNotificationReadModel {

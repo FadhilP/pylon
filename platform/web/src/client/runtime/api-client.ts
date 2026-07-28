@@ -187,8 +187,8 @@ export class ApiClient {
     }));
   }
 
-  async uiKeepAlive(requestId: string, sessionGeneration: number): Promise<void> {
-    await json(await fetch(`/api/v1/ui-keepalive/${encodeURIComponent(requestId)}`, {
+  async uiKeepAlive(requestId: string, sessionGeneration: number): Promise<{ expiresAt?: string }> {
+    return json(await fetch(`/api/v1/ui-keepalive/${encodeURIComponent(requestId)}`, {
       method: "POST",
       credentials: "same-origin",
       headers: this.headers(),

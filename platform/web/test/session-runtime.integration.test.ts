@@ -46,6 +46,7 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     starts: 0,
     shutdowns: 0,
     unavailable: 0,
+    notifications: 0,
   };
   let cancelNextReplacement = true;
   let cancelRecoverySwitch = false;
@@ -88,6 +89,12 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
       pi.registerCommand("phase4-implicit-replace", {
         handler: async (_args, ctx) => { await ctx.waitForIdle(); await ctx.newSession(); },
       });
+      pi.registerCommand("phase0-notify", {
+        handler: async (_args, ctx) => { ctx.ui.notify("Command result", "info"); },
+      });
+      pi.registerCommand("phase0-wait", {
+        handler: async (_args, ctx) => { await ctx.ui.input("Wait for cancellation"); },
+      });
     },
   };
 
@@ -99,7 +106,9 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     if (event.type === "session.unavailable") observations.unavailable++;
     if (event.type !== "ui.event") return;
     const request = event.payload as UiRequest;
+    if (request.method === "notify") observations.notifications++;
     if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
+    if (request.payload.title === "Wait for cancellation") return;
     const method = request.method as DialogMethod;
     queueMicrotask(() => {
       const base = {
@@ -151,6 +160,24 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     ]);
 
     await driver.abort();
+
+    await driver.prompt({ commandId: "notify-command", expectedGeneration: 1, message: "/phase0-notify" });
+    assert.equal((await driver.snapshot()).commandResult?.output, "Command result");
+    assert.equal(observations.notifications, 0);
+    driver.dismissCommandResult("notify-command", 1);
+    assert.equal((await driver.snapshot()).commandResult, undefined);
+
+    let resolvePending!: () => void;
+    const pendingUi = new Promise<void>((resolve) => { resolvePending = resolve; });
+    const stopPending = driver.subscribe((event) => {
+      if (event.type === "ui.event" && (event.payload as UiRequest).payload.title === "Wait for cancellation") resolvePending();
+    });
+    const waiting = driver.prompt({ commandId: "wait-command", expectedGeneration: 1, message: "/phase0-wait" });
+    await pendingUi;
+    await driver.abort();
+    await waiting;
+    stopPending();
+    assert.equal(driver.runtimeState(), "idle");
 
     const cancelled = await driver.newSession({ parentSessionId: foreignParent.getSessionId() });
     assert.equal(cancelled.cancelled, true);

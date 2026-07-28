@@ -737,9 +737,9 @@ test("standalone and bulk clarification use the effective timeout without creati
         return "Small";
       },
       input: async () => "Custom",
-      questionnaire: async (_questions: unknown[], options?: { timeout?: number }) => {
+      questionnaire: async (questions: unknown[], options?: { timeout?: number }) => {
         questionnaireOptions.push(options);
-        return ["Small", "Later"];
+        return questions.length === 1 ? ["Small"] : ["Small", "Later"];
       },
     },
   };
@@ -756,7 +756,7 @@ test("standalone and bulk clarification use the effective timeout without creati
       options: [{ label: "Small" }, { label: "Large" }],
     }, undefined, undefined, ctx);
     assert.equal(single.content[0].text, "Small");
-    assert.deepEqual(selectionOptions, [{ timeout: 120_000 }]);
+    assert.deepEqual(selectionOptions, []);
 
     const bulk = await tool.execute("bulk", {
       action: "clarify",
@@ -766,7 +766,7 @@ test("standalone and bulk clarification use the effective timeout without creati
       ],
     }, undefined, undefined, ctx);
     assert.match(bulk.content[0].text, /1\. Scope\?/);
-    assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }]);
+    assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }, { timeout: 120_000 }]);
     assert.equal(app.appended.some((entry) => entry.customType.includes("run")), false);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

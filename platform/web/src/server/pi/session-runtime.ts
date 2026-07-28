@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
@@ -90,12 +90,14 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
-    project: {
-      verify: { mode: "auto" },
+    global: {
       timelineEnabled: true,
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
+    },
+    project: {
+      verify: { mode: "auto" },
     },
     session: {},
     effective: {
@@ -221,6 +223,8 @@ export class SessionRuntime implements PiDriver {
   private undoPromptEntryIds = new Set<string>();
   private forkPromptEntryIds = new Set<string>();
   private forkPromptCheckpoints = new Map<string, string>();
+  private commandResult?: SlashCommandResultReadModel;
+  private commandCapture?: { id: string; name: string; notifications: UiRequest[] };
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -464,26 +468,66 @@ export class SessionRuntime implements PiDriver {
     const commandName = /^\s*\/([^\s]+)/.exec(input.message)?.[1];
     const knownCommand = Boolean(commandName && this.requireRuntime().services.resourceLoader
       .getExtensions().runtime.getCommands().some((command) => command.name === commandName));
+    const capture = knownCommand && commandName
+      ? { id: input.commandId, name: commandName.slice(0, 120), notifications: [] as UiRequest[] }
+      : undefined;
+    const turnAtStart = this.nextTurnId;
+    if (capture) this.commandCapture = capture;
     if (files.length) this.promptAttachments.stage(input.commandId, files);
     return new Promise<AcceptedCommand>((resolve, reject) => {
       let decided = false;
-      const finish = (accepted: boolean) => {
+      let commandPending = false;
+      const complete = (accepted: boolean) => {
         if (decided) return;
         decided = true;
         const filesConsumed = !files.length || this.promptAttachments.consumed(input.commandId);
         this.promptAttachments.clear(input.commandId);
+        if (this.commandCapture === capture) this.commandCapture = undefined;
+        if (accepted) {
+          for (const notification of capture?.notifications ?? []) this.emitUi(notification);
+        } else if (capture) {
+          const output = capture.notifications
+            .map((notification) => String(notification.payload.message ?? "").trim())
+            .filter(Boolean)
+            .join("\n")
+            .slice(0, 8_000);
+          const severity = capture.notifications.some((notification) => notification.payload.type === "error")
+            ? "error"
+            : capture.notifications.some((notification) => notification.payload.type === "warning")
+              ? "warning"
+              : "info";
+          this.commandResult = {
+            id: capture.id.slice(0, 128),
+            command: capture.name,
+            output,
+            severity,
+            occurredAt: new Date().toISOString(),
+          };
+          this.emitCommandResult();
+        }
         if (!accepted && knownCommand && !files.length && !input.images?.length) resolve(this.accepted(input.commandId));
         else if (!accepted && knownCommand) reject(new Error("files and images require a command that starts a model turn"));
         else if (!accepted) reject(new Error("prompt was rejected before acceptance"));
         else if (!filesConsumed) reject(new Error("text files require a prompt that starts a model turn"));
         else resolve(this.accepted(input.commandId));
       };
+      const finish = (accepted: boolean) => {
+        if (knownCommand) {
+          commandPending = true;
+          return;
+        }
+        complete(accepted);
+      };
       void session.prompt(input.message, {
         source: "rpc",
         images: input.images?.map((image) => ({ type: "image", ...image })),
         preflightResult: finish,
+      }).then(() => {
+        if (commandPending) complete(this.nextTurnId > turnAtStart);
       }).catch((error) => {
         this.promptAttachments.clear(input.commandId);
+        if (this.commandCapture === capture) this.commandCapture = undefined;
+        for (const notification of capture?.notifications ?? []) this.emitUi(notification);
         this.failImplicitReplacement(error);
         reject(error);
       });
@@ -526,11 +570,20 @@ export class SessionRuntime implements PiDriver {
 
   async abort(): Promise<void> {
     if (!this.runtime || !this.gate.ready) throw new Error("runtime is not ready");
-    if (this.stopping) return;
-    this.stopping = true;
-    this.refreshSnapshot();
+    const hadPendingUi = this.ui.hasPendingDialog;
+    if (hadPendingUi) this.ui.cancelGeneration(this.gate.generation);
+    if (this.stopping && !hadPendingUi) return;
+    const hadActiveRun = Boolean(this.workStartedAt || this.runtime.session.isStreaming);
+    if (!this.stopping) {
+      this.stopping = true;
+      this.refreshSnapshot();
+    }
     try {
       await this.runtime.session.abort();
+      if (!hadActiveRun) {
+        this.stopping = false;
+        this.refreshSnapshot();
+      }
     } catch (error) {
       this.stopping = false;
       this.refreshSnapshot();
@@ -541,6 +594,7 @@ export class SessionRuntime implements PiDriver {
   applyRuntimePolicy(policy: RuntimePolicyReadModel): void {
     this.runtimePolicy = {
       ...policy,
+      global: { ...policy.global },
       project: { ...policy.project, verify: cloneVerifyPolicy(policy.project.verify) },
       session: {
         ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
@@ -1097,9 +1151,17 @@ export class SessionRuntime implements PiDriver {
     this.ui.answer(input);
   }
 
-  keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined {
     this.gate.assert(sessionGeneration);
-    this.ui.keepAlive(requestId, sessionGeneration);
+    return this.ui.keepAlive(requestId, sessionGeneration);
+  }
+
+  dismissCommandResult(resultId: string, sessionGeneration: number): void {
+    this.gate.assert(sessionGeneration);
+    if (this.commandResult?.id !== resultId) return;
+    this.commandResult = undefined;
+    this.emitCommandResult();
+    this.refreshSnapshot();
   }
 
   subscribe(listener: DriverEventListener): () => void {
@@ -1216,6 +1278,8 @@ export class SessionRuntime implements PiDriver {
       this.discoverIndex = undefined;
       this.workModelName = undefined;
       this.workThinkingLevel = undefined;
+      this.commandResult = undefined;
+      this.commandCapture = undefined;
       this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
     }
     await session.bindExtensions({
@@ -1633,8 +1697,10 @@ export class SessionRuntime implements PiDriver {
       },
       ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
+      ...(this.commandResult ? { commandResult: { ...this.commandResult } } : {}),
       runtimePolicy: {
         ...this.runtimePolicy,
+        global: { ...this.runtimePolicy.global },
         project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify) },
         session: {
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
@@ -1977,11 +2043,29 @@ export class SessionRuntime implements PiDriver {
 
   private publishUi(request: UiRequest): void {
     if (!this.gate.acceptsUi(request.sessionGeneration)) return;
+    if (request.method === "notify" && this.commandCapture) {
+      this.commandCapture.notifications.push(request);
+      return;
+    }
+    this.emitUi(request);
+  }
+
+  private emitUi(request: UiRequest): void {
     this.emit({
       type: "ui.event",
       sessionId: request.sessionId,
       sessionGeneration: request.sessionGeneration,
       payload: request,
+    });
+  }
+
+  private emitCommandResult(): void {
+    const runtime = this.requireRuntime();
+    this.emit({
+      type: "command.result",
+      sessionId: runtime.session.sessionId,
+      sessionGeneration: this.gate.generation,
+      ...(this.commandResult ? { result: { ...this.commandResult } } : {}),
     });
   }
 

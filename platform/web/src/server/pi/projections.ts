@@ -492,6 +492,8 @@ export class RuntimeProjection {
           payload: browserValue(payload) as Record<string, unknown>,
           owned: false,
           ownershipAvailable: false,
+          ...(typeof raw.timeoutSeconds === "number" ? { timeoutSeconds: Math.min(86_400, Math.max(1, Math.round(raw.timeoutSeconds))) } : {}),
+          ...(typeof raw.expiresAt === "string" && !Number.isNaN(Date.parse(raw.expiresAt)) ? { expiresAt: raw.expiresAt } : {}),
         };
         this.publish("ui.request", this.pendingUi);
       } else if (method === "notify") {
@@ -537,6 +539,11 @@ export class RuntimeProjection {
       this.runtime.sessionGeneration = event.sessionGeneration;
       this.runtime.ready = event.type === "session.replaced";
       this.publish(event.type, { sessionId, sessionGeneration: event.sessionGeneration });
+      return;
+    }
+    if (event.type === "command.result") {
+      this.runtime.commandResult = event.result ? structuredClone(event.result) : undefined;
+      this.publish("command.result", event.result ?? {});
       return;
     }
     if (event.type !== "session.event") return;

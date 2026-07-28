@@ -208,27 +208,31 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     return { ok: false, error: "invalid worktree setup command" };
   }
   if (value.type === "updateRuntimePolicy") {
-    if (value.scope !== "project" && value.scope !== "session") {
+    if (value.scope !== "global" && value.scope !== "project" && value.scope !== "session") {
       return { ok: false, error: "invalid runtime policy scope" };
     }
     if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
       return { ok: false, error: "invalid runtime policy revision" };
     }
-    if (!validVerifyPolicy(value.verify, value.scope === "session")) {
+    if (!validVerifyPolicy(value.verify, value.scope === "global" || value.scope === "session")
+      || value.scope === "global" && (!record(value.verify) || value.verify.mode !== "inherit")) {
       return { ok: false, error: "invalid Verify policy" };
     }
     if (!["inherit", "enabled", "disabled"].includes(String(value.timeline))
-      || value.scope === "project" && value.timeline === "inherit") {
+      || value.scope === "global" && value.timeline === "inherit") {
       return { ok: false, error: "invalid Timeline policy" };
     }
     if (!["inherit", "checkout", "worktree", "local"].includes(String(value.workspace))
-      || value.scope === "project" && value.workspace === "inherit") {
+      || value.scope === "global" && value.workspace === "inherit") {
       return { ok: false, error: "invalid workspace policy" };
     }
-    if (!validDialogTimeout(value.guardTimeoutSeconds, value.scope === "session")
-      || !validDialogTimeout(value.clarifyTimeoutSeconds, value.scope === "session")) {
+    if (!validDialogTimeout(value.guardTimeoutSeconds, value.scope !== "global")
+      || !validDialogTimeout(value.clarifyTimeoutSeconds, value.scope !== "global")) {
       return { ok: false, error: "invalid dialog timeout policy" };
     }
+  }
+  if (value.type === "dismissCommandResult" && !identifier(value.resultId)) {
+    return { ok: false, error: "invalid command result" };
   }
   if (value.type === "handoffSession"
     && value.destination !== "checkout" && value.destination !== "worktree") {
@@ -487,11 +491,16 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   }
   const policy = value.runtimePolicy;
   if (!record(policy) || !Number.isSafeInteger(policy.revision) || (policy.revision as number) < 0
+    || !record(policy.global)
+    || typeof policy.global.timelineEnabled !== "boolean"
+    || !["checkout", "worktree", "local"].includes(String(policy.global.workspace))
+    || !validDialogTimeout(policy.global.guardTimeoutSeconds)
+    || !validDialogTimeout(policy.global.clarifyTimeoutSeconds)
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
-    || typeof policy.project.timelineEnabled !== "boolean"
-    || !["checkout", "worktree", "local"].includes(String(policy.project.workspace))
-    || !validDialogTimeout(policy.project.guardTimeoutSeconds)
-    || !validDialogTimeout(policy.project.clarifyTimeoutSeconds)
+    || (policy.project.timelineEnabled !== undefined && typeof policy.project.timelineEnabled !== "boolean")
+    || (policy.project.workspace !== undefined && !["checkout", "worktree", "local"].includes(String(policy.project.workspace)))
+    || (policy.project.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.guardTimeoutSeconds))
+    || (policy.project.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.clarifyTimeoutSeconds))
     || !record(policy.session)
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
@@ -508,6 +517,12 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       && boundedString(check.id, 100)
       && boundedString(check.label, 200)
       && boundedString(check.command, 500))) return false;
+  if (value.commandResult !== undefined && (!record(value.commandResult)
+    || !identifier(value.commandResult.id)
+    || !boundedString(value.commandResult.command, 120)
+    || typeof value.commandResult.output !== "string" || value.commandResult.output.length > 8_000
+    || !["info", "warning", "error"].includes(String(value.commandResult.severity))
+    || typeof value.commandResult.occurredAt !== "string" || Number.isNaN(Date.parse(value.commandResult.occurredAt)))) return false;
   if (!value.activeTools.every((item) => typeof item === "string") || !value.availableTools.every((item) => typeof item === "string")) return false;
   if (!record(value.optionalCapabilities) || !Object.values(value.optionalCapabilities).every((item) => item === "available" || item === "unavailable")) return false;
   if (!Array.isArray(value.diagnostics) || !value.diagnostics.every((item) => record(item)
@@ -694,7 +709,8 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["runtime policy", {
         runtimePolicy: {
           revision: 0,
-          project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          global: { timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          project: { verify: { mode: "auto" } },
           session: {},
           effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           availableVerifyChecks: [],

@@ -73,6 +73,7 @@ export function ConversationPanel({
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
   const [fileSuggestions, setFileSuggestions] = useState<string[]>([]);
+  const suggestionListRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -239,6 +240,10 @@ export function ConversationPanel({
     };
   }, [connected, fileMention?.query, runtime?.sessionId]);
   useEffect(() => { setSuggestionIndex(0); }, [message, controls?.commands, fileSuggestions.join("\0")]);
+  useEffect(() => {
+    suggestionListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [suggestionIndex]);
   const chooseSuggestion = (index: number) => {
     const suggestion = suggestions[index];
     if (!suggestion) return;
@@ -632,9 +637,44 @@ export function ConversationPanel({
       {runtime?.conversation.retry.active && <p className="conversation-note">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
       {runtime?.conversation.compaction.active && <p className="conversation-note">Compacting context…</p>}
       {runtime && <ExtensionUiSurface runtime={runtime} />}
+      {runtime?.commandResult && <div className={`composer-surface command-result is-${runtime.commandResult.severity}`} role="status">
+        <div><strong>/{runtime.commandResult.command}</strong><span>{runtime.commandResult.output || "Command completed with no output."}</span></div>
+        <button type="button" aria-label="Close command result" onClick={() => void runtimeStore.dismissCommandResult(runtime.commandResult!.id).catch(() => undefined)}><IconX size={15} /></button>
+      </div>}
+      {(suggestions.length > 0 || fileSuggestions.length > 0) && <div
+        ref={suggestionListRef}
+        className="composer-surface slash-suggestions"
+        id={suggestions.length ? "slash-command-suggestions" : "file-mention-suggestions"}
+        role="listbox"
+        aria-label={suggestions.length ? "Slash commands" : "Project files"}
+      >
+        {suggestions.map((command, index) => <button
+          className={index === suggestionIndex ? "is-selected" : ""}
+          type="button"
+          role="option"
+          aria-selected={index === suggestionIndex}
+          key={`${command.source}-${command.name}`}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => chooseSuggestion(index)}
+        ><strong>/{command.name}</strong>{command.description && <span>{command.description}</span>}</button>)}
+        {suggestions.length === 0 && fileSuggestions.map((path, index) => {
+          const separator = path.lastIndexOf("/");
+          const name = separator >= 0 ? path.slice(separator + 1) : path;
+          const directory = separator >= 0 ? path.slice(0, separator) : "";
+          return <button
+            className={index === suggestionIndex ? "is-selected" : ""}
+            type="button"
+            role="option"
+            aria-selected={index === suggestionIndex}
+            key={path}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => chooseFileSuggestion(index)}
+          ><strong><IconFileText size={13} />{name}</strong>{directory && <span>{directory}</span>}</button>;
+        })}
+      </div>}
       <RetainedUiDialog request={live.pendingUi} />
       <form
-        className={`prompt-form${dropActive ? " is-drop-active" : ""}`}
+        className={`prompt-form${dropActive ? " is-drop-active" : ""}${live.pendingUi || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
         onDragEnter={(event) => { event.preventDefault(); setDropActive(true); }}
         onDragOver={(event) => event.preventDefault()}
@@ -652,39 +692,6 @@ export function ConversationPanel({
         {files.length > 0 && <FileStrip files={files} onRemove={(id) => setFiles((current) => current.filter((item) => item.id !== id))} />}
         <label className="sr-only" htmlFor="runtime-prompt">Message</label>
         <div className="prompt-input-wrap">
-          {suggestions.length > 0 && <div className="slash-suggestions" id="slash-command-suggestions" role="listbox" aria-label="Slash commands">
-            {suggestions.map((command, index) => <button
-              className={index === suggestionIndex ? "is-selected" : ""}
-              type="button"
-              role="option"
-              aria-selected={index === suggestionIndex}
-              key={`${command.source}-${command.name}`}
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={() => chooseSuggestion(index)}
-            >
-              <strong>/{command.name}</strong>
-              {command.description && <span>{command.description}</span>}
-            </button>)}
-          </div>}
-          {suggestions.length === 0 && fileSuggestions.length > 0 && <div className="slash-suggestions file-suggestions" id="file-mention-suggestions" role="listbox" aria-label="Project files">
-            {fileSuggestions.map((path, index) => {
-              const separator = path.lastIndexOf("/");
-              const name = separator >= 0 ? path.slice(separator + 1) : path;
-              const directory = separator >= 0 ? path.slice(0, separator) : "";
-              return <button
-                className={index === suggestionIndex ? "is-selected" : ""}
-                type="button"
-                role="option"
-                aria-selected={index === suggestionIndex}
-                key={path}
-                onPointerDown={(event) => event.preventDefault()}
-                onClick={() => chooseFileSuggestion(index)}
-              >
-                <strong><IconFileText size={13} />{name}</strong>
-                {directory && <span>{directory}</span>}
-              </button>;
-            })}
-          </div>}
           <textarea
             ref={promptRef}
             id="runtime-prompt"
@@ -1029,16 +1036,46 @@ function HistoryRail({
   onPage: (direction: "earlier" | "later", cursor?: string) => void;
   onSelect: (turn: ConversationTurnIndexItem) => void;
 }) {
+  const [tooltip, setTooltip] = useState<{
+    top: number;
+    preview: string;
+    label: string;
+    createdAt?: string;
+  }>();
   if (!page || page.totalCount < 3) return null;
   const turns = [...page.turns].reverse();
-  return <nav className="history-rail" aria-label="Conversation turns">
+  const showTooltip = (
+    element: HTMLButtonElement,
+    preview: string,
+    label: string,
+    createdAt?: string,
+  ) => {
+    const container = element.closest(".conversation-panel");
+    if (!container) return;
+    const buttonRect = element.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const middle = buttonRect.top + buttonRect.height / 2 - containerRect.top;
+    setTooltip({
+      top: Math.max(52, Math.min(containerRect.height - 52, middle)),
+      preview,
+      label,
+      createdAt,
+    });
+  };
+  const hideTooltip = () => setTooltip(undefined);
+  return <>
+    <nav className="history-rail" aria-label="Conversation turns">
     {page.earlierCursor && <button
       className="history-tick is-loader"
       type="button"
       disabled={loading}
       onClick={() => onPage("earlier", page.earlierCursor)}
+      onMouseEnter={(event) => showTooltip(event.currentTarget, loading ? "Loading earlier turns…" : "Show earlier turns", "Earlier conversation turns")}
+      onFocus={(event) => showTooltip(event.currentTarget, loading ? "Loading earlier turns…" : "Show earlier turns", "Earlier conversation turns")}
+      onMouseLeave={hideTooltip}
+      onBlur={hideTooltip}
       aria-label="Show earlier conversation turns"
-    ><i /><span>{loading ? "Loading earlier turns…" : "Show earlier turns"}</span></button>}
+    ><i /></button>}
     {turns.map((turn) => {
       const timestamp = formatMessageTime(turn.createdAt);
       return <button
@@ -1046,17 +1083,35 @@ function HistoryRail({
         type="button"
         key={turn.promptId}
         onClick={() => onSelect(turn)}
+        onMouseEnter={(event) => showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)}
+        onFocus={(event) => showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)}
+        onMouseLeave={hideTooltip}
+        onBlur={hideTooltip}
         aria-label={`Jump to prompt: ${turn.preview}${timestamp ? `, ${timestamp}` : ""}`}
-      ><i /><span><strong>{turn.preview}</strong>{timestamp && <time dateTime={turn.createdAt}>{timestamp}</time>}</span></button>;
+      ><i /></button>;
     })}
     {page.laterCursor && <button
       className="history-tick is-loader"
       type="button"
       disabled={loading}
       onClick={() => onPage("later", page.laterCursor)}
+      onMouseEnter={(event) => showTooltip(event.currentTarget, loading ? "Loading later turns…" : "Show later turns", "Later conversation turns")}
+      onFocus={(event) => showTooltip(event.currentTarget, loading ? "Loading later turns…" : "Show later turns", "Later conversation turns")}
+      onMouseLeave={hideTooltip}
+      onBlur={hideTooltip}
       aria-label="Show later conversation turns"
-    ><i /><span>{loading ? "Loading later turns…" : "Show later turns"}</span></button>}
-  </nav>;
+    ><i /></button>}
+    </nav>
+    {tooltip && <div
+      className="history-rail-tooltip"
+      role="tooltip"
+      aria-label={tooltip.label}
+      style={{ top: `${tooltip.top}px` }}
+    >
+      <strong>{tooltip.preview}</strong>
+      {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageTime(tooltip.createdAt)}</time>}
+    </div>}
+  </>;
 }
 
 function PromptEditor({

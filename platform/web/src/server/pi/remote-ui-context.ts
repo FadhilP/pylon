@@ -22,6 +22,7 @@ export interface UiRequest {
   method: UiMethod;
   payload: Record<string, unknown>;
   createdAt: string;
+  timeoutSeconds?: number;
   expiresAt?: string;
 }
 
@@ -158,6 +159,7 @@ export class RemoteUiBridge {
       method: input.method,
       payload: input.payload,
       createdAt: new Date().toISOString(),
+      ...(timeoutMs ? { timeoutSeconds: Math.ceil(timeoutMs / 1_000) } : {}),
       ...(timeoutMs ? { expiresAt: new Date(Date.now() + timeoutMs).toISOString() } : {}),
     };
 
@@ -226,12 +228,13 @@ export class RemoteUiBridge {
     }
   }
 
-  keepAlive(requestId: string, sessionGeneration: number): void {
+  keepAlive(requestId: string, sessionGeneration: number): string | undefined {
     const pending = this.pending.get(requestId);
     if (!pending) throw new Error("unknown or expired UI request");
     if (pending.request.sessionGeneration !== sessionGeneration) throw new Error("stale UI request generation");
-    if (!pending.timeoutMs) return;
+    if (!pending.timeoutMs) return undefined;
     this.scheduleTimeout(pending);
+    return pending.request.expiresAt;
   }
 
   private retain(request: UiRequest): void {

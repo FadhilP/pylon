@@ -5,7 +5,7 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/
 import { basename, dirname, resolve } from "node:path";
 import type { DialogTimeoutSeconds, RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 8;
+const VERSION = 9;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
@@ -34,7 +34,7 @@ interface SessionPolicyRecord {
 }
 
 export interface RuntimePolicyUpdate {
-  scope: "project" | "session";
+  scope: "global" | "project" | "session";
   projectId: string;
   sessionId: string;
   verify: VerifyPolicyReadModel | { mode: "inherit" };
@@ -127,6 +127,12 @@ export class ProjectRegistry {
   private sessionWorkspaces: SessionWorkspaceRecord[] = [];
   private activeSessionOrder: string[] = [];
   private sessionPolicies: SessionPolicyRecord[] = [];
+  private globalPolicy = {
+    timelineEnabled: true,
+    workspace: "local" as WorkspacePolicyMode,
+    guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
+    clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
+  };
   private policyRevision = 0;
   private loaded = false;
   private saveQueue = Promise.resolve();
@@ -142,7 +148,7 @@ export class ProjectRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("invalid project registry");
-      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown; sessionPolicies?: unknown; policyRevision?: unknown };
+      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown; sessionPolicies?: unknown; policyRevision?: unknown; globalPolicy?: unknown };
       if (value.version === 1 && Array.isArray(value.directories)) {
         const directories = value.directories.filter((item): item is string =>
           typeof item === "string" && item.length > 0 && item.length <= 4_096);
@@ -151,9 +157,27 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, 5, 6, 7, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, 6, 7, 8, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
+      const persistedGlobal = value.globalPolicy && typeof value.globalPolicy === "object" && !Array.isArray(value.globalPolicy)
+        ? value.globalPolicy as Record<string, unknown>
+        : {};
+      if (Number(value.version) === VERSION) {
+        if (typeof persistedGlobal.timelineEnabled !== "boolean"
+          || !validWorkspacePolicy(persistedGlobal.workspace)
+          || !validDialogTimeout(persistedGlobal.guardTimeoutSeconds)
+          || !validDialogTimeout(persistedGlobal.clarifyTimeoutSeconds)) {
+          throw new Error("invalid global runtime policy");
+        }
+        this.globalPolicy = {
+          timelineEnabled: persistedGlobal.timelineEnabled,
+          workspace: persistedGlobal.workspace,
+          guardTimeoutSeconds: persistedGlobal.guardTimeoutSeconds,
+          clarifyTimeoutSeconds: persistedGlobal.clarifyTimeoutSeconds,
+        };
+      }
+      const legacyPolicy = Number(value.version) < VERSION;
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
         const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
@@ -173,10 +197,10 @@ export class ProjectRegistry {
           ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
           ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
-          ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-          ...(workspacePolicy ? { workspacePolicy } : {}),
-          ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
-          ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
+          ...(record.timelineEnabled !== undefined && (!legacyPolicy || record.timelineEnabled !== true) ? { timelineEnabled: record.timelineEnabled } : {}),
+          ...(workspacePolicy && (!legacyPolicy || workspacePolicy !== "local") ? { workspacePolicy } : {}),
+          ...(record.guardTimeoutSeconds !== undefined && (!legacyPolicy || record.guardTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
+          ...(record.clarifyTimeoutSeconds !== undefined && (!legacyPolicy || record.clarifyTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
         }];
       });
       this.projects = await this.resolveProjects(projects);
@@ -242,9 +266,6 @@ export class ProjectRegistry {
       id,
       cwd,
       label: basename(cwd) || cwd,
-      workspacePolicy: "local" as const,
-      guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS,
-      clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS,
     };
     this.projects.push(project);
     await this.save();
@@ -436,18 +457,19 @@ export class ProjectRegistry {
     const project = this.requireProject(projectId);
     const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
     const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
-    const projectTimeline = project.timelineEnabled ?? true;
-    const projectWorkspace = project.workspacePolicy ?? "local";
-    const projectGuardTimeout = project.guardTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : project.guardTimeoutSeconds;
-    const projectClarifyTimeout = project.clarifyTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : project.clarifyTimeoutSeconds;
+    const projectTimeline = project.timelineEnabled ?? this.globalPolicy.timelineEnabled;
+    const projectWorkspace = project.workspacePolicy ?? this.globalPolicy.workspace;
+    const projectGuardTimeout = project.guardTimeoutSeconds === undefined ? this.globalPolicy.guardTimeoutSeconds : project.guardTimeoutSeconds;
+    const projectClarifyTimeout = project.clarifyTimeoutSeconds === undefined ? this.globalPolicy.clarifyTimeoutSeconds : project.clarifyTimeoutSeconds;
     return {
       revision: this.policyRevision,
+      global: { ...this.globalPolicy },
       project: {
         verify: projectVerify,
-        timelineEnabled: projectTimeline,
-        workspace: projectWorkspace,
-        guardTimeoutSeconds: projectGuardTimeout,
-        clarifyTimeoutSeconds: projectClarifyTimeout,
+        ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
+        ...(project.workspacePolicy !== undefined ? { workspace: project.workspacePolicy } : {}),
+        ...(project.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: project.guardTimeoutSeconds } : {}),
+        ...(project.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds } : {}),
       },
       session: {
         ...(session?.verify ? { verify: cloneVerifyPolicy(session.verify) } : {}),
@@ -474,19 +496,33 @@ export class ProjectRegistry {
       throw new Error("invalid dialog timeout policy");
     }
     const project = this.requireProject(input.projectId);
-    if (input.scope === "project") {
-      if (input.verify.mode === "inherit" || input.timeline === "inherit" || input.workspace === "inherit"
-        || input.guardTimeoutSeconds === "inherit" || input.clarifyTimeoutSeconds === "inherit") {
-        throw new Error("project policy cannot inherit");
+    if (input.scope === "global") {
+      if (input.verify.mode !== "inherit" || input.timeline === "inherit" || input.workspace === "inherit"
+        || input.guardTimeoutSeconds === "inherit" || input.clarifyTimeoutSeconds === "inherit"
+        || !validDialogTimeout(input.guardTimeoutSeconds) || !validDialogTimeout(input.clarifyTimeoutSeconds)) {
+        throw new Error("invalid global runtime policy");
       }
-      if (!validDialogTimeout(input.guardTimeoutSeconds) || !validDialogTimeout(input.clarifyTimeoutSeconds)) {
+      this.globalPolicy = {
+        timelineEnabled: input.timeline === "enabled",
+        workspace: input.workspace,
+        guardTimeoutSeconds: input.guardTimeoutSeconds,
+        clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
+      };
+    } else if (input.scope === "project") {
+      if (input.verify.mode === "inherit") throw new Error("project Verify policy cannot inherit");
+      if (input.guardTimeoutSeconds !== "inherit" && !validDialogTimeout(input.guardTimeoutSeconds)
+        || input.clarifyTimeoutSeconds !== "inherit" && !validDialogTimeout(input.clarifyTimeoutSeconds)) {
         throw new Error("invalid dialog timeout policy");
       }
       project.verifyPolicy = cloneVerifyPolicy(input.verify);
-      project.timelineEnabled = input.timeline === "enabled";
-      project.workspacePolicy = input.workspace;
-      project.guardTimeoutSeconds = input.guardTimeoutSeconds;
-      project.clarifyTimeoutSeconds = input.clarifyTimeoutSeconds;
+      if (input.timeline === "inherit") delete project.timelineEnabled;
+      else project.timelineEnabled = input.timeline === "enabled";
+      if (input.workspace === "inherit") delete project.workspacePolicy;
+      else project.workspacePolicy = input.workspace;
+      if (input.guardTimeoutSeconds === "inherit") delete project.guardTimeoutSeconds;
+      else project.guardTimeoutSeconds = input.guardTimeoutSeconds;
+      if (input.clarifyTimeoutSeconds === "inherit") delete project.clarifyTimeoutSeconds;
+      else project.clarifyTimeoutSeconds = input.clarifyTimeoutSeconds;
     } else {
       let session = this.sessionPolicies.find((item) => item.sessionId === input.sessionId);
       if (!session) {
@@ -624,9 +660,9 @@ export class ProjectRegistry {
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
             ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
             ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-            workspacePolicy: record.workspacePolicy ?? "local",
-            guardTimeoutSeconds: record.guardTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : record.guardTimeoutSeconds,
-            clarifyTimeoutSeconds: record.clarifyTimeoutSeconds === undefined ? DEFAULT_DIALOG_TIMEOUT_SECONDS : record.clarifyTimeoutSeconds,
+            ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
+            ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
+            ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
           });
         }
       } catch {
@@ -647,6 +683,7 @@ export class ProjectRegistry {
     const temporary = `${this.configPath}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify({
       version: VERSION,
+      globalPolicy: this.globalPolicy,
       projects: this.projects.map((project) => ({
         directory: project.cwd,
         ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),

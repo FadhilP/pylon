@@ -8,10 +8,12 @@ import {
   IconDatabase,
   IconFile,
   IconGitBranch,
+  IconGitFork,
   IconLayoutDashboard,
   IconListCheck,
+  IconLoader2,
   IconSearch,
-  IconShieldCheck,
+  IconRestore,
   IconTimeline,
   IconTool,
   IconTrash,
@@ -143,7 +145,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
 function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime!;
   const policy = runtime.runtimePolicy;
-  const [scope, setScope] = useState<"project" | "session">("project");
+  const [scope, setScope] = useState<"global" | "project" | "session">("project");
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
   const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("local");
@@ -152,21 +154,29 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const [busy, setBusy] = useState(false);
 
   const resetDraft = () => {
-    const value = scope === "project" ? policy.project.verify : policy.session.verify;
+    const value = scope === "global" ? undefined : scope === "project" ? policy.project.verify : policy.session.verify;
     setVerify(value ?? "inherit");
-    setTimeline(scope === "project"
-      ? policy.project.timelineEnabled ? "enabled" : "disabled"
+    setTimeline(scope === "global"
+      ? policy.global.timelineEnabled ? "enabled" : "disabled"
+      : scope === "project"
+        ? policy.project.timelineEnabled === undefined ? "inherit" : policy.project.timelineEnabled ? "enabled" : "disabled"
       : policy.session.timelineEnabled === undefined
         ? "inherit"
         : policy.session.timelineEnabled ? "enabled" : "disabled");
-    setWorkspace(scope === "project"
-      ? policy.project.workspace
+    setWorkspace(scope === "global"
+      ? policy.global.workspace
+      : scope === "project"
+        ? policy.project.workspace ?? "inherit"
       : policy.session.workspace ?? "inherit");
-    setGuardTimeout(scope === "project"
-      ? policy.project.guardTimeoutSeconds
+    setGuardTimeout(scope === "global"
+      ? policy.global.guardTimeoutSeconds
+      : scope === "project"
+        ? policy.project.guardTimeoutSeconds === undefined ? "inherit" : policy.project.guardTimeoutSeconds
       : policy.session.guardTimeoutSeconds === undefined ? "inherit" : policy.session.guardTimeoutSeconds);
-    setClarifyTimeout(scope === "project"
-      ? policy.project.clarifyTimeoutSeconds
+    setClarifyTimeout(scope === "global"
+      ? policy.global.clarifyTimeoutSeconds
+      : scope === "project"
+        ? policy.project.clarifyTimeoutSeconds === undefined ? "inherit" : policy.project.clarifyTimeoutSeconds
       : policy.session.clarifyTimeoutSeconds === undefined ? "inherit" : policy.session.clarifyTimeoutSeconds);
   };
   useEffect(() => {
@@ -221,14 +231,15 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   };
   const canResetVerify = scope === "project"
     ? verify !== "inherit" && verify.mode !== "auto"
-    : verify !== "inherit";
+    : scope === "session" && verify !== "inherit";
 
   return <InspectorSection title="Runtime policy" className="runtime-policy">
     <div className="policy-scope" role="group" aria-label="Policy scope">
+      <button type="button" disabled={busy} className={scope === "global" ? "is-active" : ""} onClick={() => setScope("global")}>Global</button>
       <button type="button" disabled={busy} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
       <button type="button" disabled={busy} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
     </div>
-    <div className="policy-label-row">
+    {scope !== "global" && <><div className="policy-label-row">
       <span>Verify</span>
       {canResetVerify && <button
         className="text-button"
@@ -250,14 +261,14 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
         .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
       {policy.availableVerifyChecks.length === 0 && checks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
-    </div>
+    </div></>}
     <label>Timeline
       <select
         value={timeline}
         disabled={!idle}
         onChange={(event) => void save(verify, event.target.value as typeof timeline, workspace).catch(() => undefined)}
       >
-        {scope === "session" && <option value="inherit">Inherit project</option>}
+        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
         <option value="enabled">Enabled</option>
         <option value="disabled">Disabled</option>
       </select>
@@ -268,12 +279,12 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         disabled={!idle}
         onChange={(event) => void save(verify, timeline, event.target.value as typeof workspace).catch(() => undefined)}
       >
-        {scope === "session" && <option value="inherit">Inherit project</option>}
+        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
         <option value="local">Local</option>
         <option value="checkout">Project folder</option>
         <option value="worktree">Session worktree</option>
       </select>
-      <small>{scope === "project"
+      <small>{scope !== "session"
         ? "Applies to new sessions. Local does not create a branch or worktree."
         : "Changing this session moves it immediately when possible."}</small>
     </label>
@@ -283,7 +294,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       inherited={guardTimeout === "inherit"}
       disabled={!idle}
       onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
-      onReset={scope === "session" && guardTimeout !== "inherit"
+      onReset={scope !== "global" && guardTimeout !== "inherit"
         ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined)
         : undefined}
     />
@@ -293,7 +304,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       inherited={clarifyTimeout === "inherit"}
       disabled={!idle}
       onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
-      onReset={scope === "session" && clarifyTimeout !== "inherit"
+      onReset={scope !== "global" && clarifyTimeout !== "inherit"
         ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined)
         : undefined}
     />
@@ -477,11 +488,12 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
   const [files, setFiles] = useState<TimelineCheckpointFiles>();
   const [selectedPath, setSelectedPath] = useState<string>();
   const [diff, setDiff] = useState<TimelineCheckpointDiff>();
-  const active = checkpoints.find((checkpoint) => checkpoint.id === selected) ?? checkpoints[0];
+  const active = checkpoints.find((checkpoint) => checkpoint.id === selected);
   const enabled = live.connection === "connected" && live.runtime?.ready === true && !busy;
   const act = async (action: "restore" | "fork" | "clear", checkpointId?: string) => {
     if (!enabled) return;
-    setBusy(action); setError("");
+    const operation = checkpointId ? `${action}:${checkpointId}` : action;
+    setBusy(operation); setError("");
     try { await runtimeStore.timeline(action, checkpointId); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline action failed"); }
     finally { setBusy(""); }
@@ -514,46 +526,59 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
       <InspectorSection title="Checkpoints" meta={`${checkpoints.length}`} className="timeline-list">
         <div className="timeline-toolbar"><span>{checkpoints.length} checkpoints</span><button className="text-button danger" type="button" disabled={!enabled || checkpoints.length === 0} onClick={() => void act("clear")}><IconTrash size={13} />{busy === "clear" ? "Clearing…" : "Clear timeline"}</button></div>
         {checkpoints.map((checkpoint) => (
-          <button
-            className={`checkpoint-row ${active?.id === checkpoint.id ? "is-selected" : ""}`}
+          <div
+            className={`checkpoint-item ${active?.id === checkpoint.id ? "is-expanded" : ""}`}
             key={checkpoint.id}
-            aria-pressed={active?.id === checkpoint.id}
-            onClick={() => setSelected(checkpoint.id)}
           >
-            <span className="checkpoint-copy">
+            <div className="checkpoint-row">
+            <button className="checkpoint-copy" type="button" aria-expanded={active?.id === checkpoint.id} onClick={() => setSelected((current) => current === checkpoint.id ? undefined : checkpoint.id)}>
               <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong><time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
               <span className="checkpoint-meta">{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}{checkpoint.changes && <span>{checkpoint.changes.fileCount} files</span>}{checkpoint.changes && <span className="checkpoint-diff-count"><ins>+{checkpoint.changes.additions}</ins><del>−{checkpoint.changes.deletions}</del></span>}</span>
+            </button>
+            <span className="checkpoint-row-actions">
+              <button type="button" title="Fork from checkpoint" aria-label="Fork from checkpoint" aria-busy={busy === `fork:${checkpoint.id}`} disabled={!enabled} onClick={() => void act("fork", checkpoint.id)}>
+                {busy === `fork:${checkpoint.id}` ? <IconLoader2 className="spin" size={15} /> : <IconGitFork size={15} />}
+              </button>
+              <button type="button" title="Restore checkpoint" aria-label="Restore checkpoint" aria-busy={busy === `restore:${checkpoint.id}`} disabled={!enabled} onClick={() => void act("restore", checkpoint.id)}>
+                {busy === `restore:${checkpoint.id}` ? <IconLoader2 className="spin" size={15} /> : <IconRestore size={15} />}
+              </button>
             </span>
-          </button>
+            </div>
+            {active?.id === checkpoint.id && <CheckpointDetail files={files} selectedPath={selectedPath} diff={diff} error={error} onOpenDiff={openDiff} />}
+          </div>
         ))}
         {checkpoints.length === 0 && <div className="empty-state"><IconTimeline size={20} /><strong>No checkpoints</strong><span>Timeline has not captured this run.</span></div>}
       </InspectorSection>
-      {active && <InspectorSection title="Selected checkpoint" className="checkpoint-detail">
-        <h2 title={active.title}>{active.title}</h2>
-        <dl className="checkpoint-summary">
-          <div><dt>Branch</dt><dd>{active.branch || "Detached or unavailable"}</dd></div>
-          <div><dt>Verification</dt><dd>{active.verified ? "Passed" : "Not attached"}</dd></div>
-          <div><dt>Changes</dt><dd>{active.changes ? `${active.changes.fileCount} files · +${active.changes.additions} −${active.changes.deletions}` : "Calculating…"}</dd></div>
-        </dl>
-        <div className="checkpoint-actions">
-          <button className="primary-button" type="button" disabled={!enabled} onClick={() => void act("fork", active.id)}>{busy === "fork" ? "Forking…" : "Fork & continue"}</button>
-          <button className="secondary-button" type="button" disabled={!enabled} onClick={() => void act("restore", active.id)}>{busy === "restore" ? "Restoring…" : "Restore checkpoint"}</button>
-        </div>
-        <div className="checkpoint-files" aria-label="Checkpoint changed files">
-          {files?.files.map((file) => <button type="button" className={selectedPath === file.path ? "is-active" : ""} key={file.path} onClick={() => void openDiff(file.path)}>
-            <IconFile size={13} />
-            <span title={file.path}>{file.path}</span>
-            {file.binary ? <small>binary</small> : <small><ins>+{file.additions}</ins><del>−{file.deletions}</del></small>}
-          </button>)}
-          {!files && <span className="settings-note">Loading changes…</span>}
-          {files && files.files.length === 0 && <span className="settings-note">No file changes</span>}
-        </div>
-        {selectedPath && <TimelineDiff value={diff} />}
-        <div className="runtime-note"><IconShieldCheck size={15} /><span>Timeline confirms every restore, fork, and clear through its remote safety dialog.</span></div>
-        {error && <p className="ui-request-error" role="alert">{error}</p>}
-      </InspectorSection>}
     </div>
   );
+}
+
+function CheckpointDetail({
+  files,
+  selectedPath,
+  diff,
+  error,
+  onOpenDiff,
+}: {
+  files?: TimelineCheckpointFiles;
+  selectedPath?: string;
+  diff?: TimelineCheckpointDiff;
+  error: string;
+  onOpenDiff(path: string): void;
+}) {
+  return <div className="checkpoint-inline-detail">
+    <div className="checkpoint-files" aria-label="Checkpoint changed files">
+      {files?.files.map((file) => <button type="button" className={selectedPath === file.path ? "is-active" : ""} key={file.path} onClick={() => onOpenDiff(file.path)}>
+        <IconFile size={13} />
+        <span title={file.path}>{file.path}</span>
+        {file.binary ? <small>binary</small> : <small><ins>+{file.additions}</ins><del>−{file.deletions}</del></small>}
+      </button>)}
+      {!files && <span className="settings-note">Loading changes…</span>}
+      {files && files.files.length === 0 && <span className="settings-note">No file changes</span>}
+    </div>
+    {selectedPath && <TimelineDiff value={diff} />}
+    {error && <p className="ui-request-error" role="alert">{error}</p>}
+  </div>;
 }
 
 function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
@@ -581,6 +606,7 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
   }, [query, runtime?.activeTools, tools]);
   return (
     <div className="tools-page">
+      <SieveStatus live={live} />
       <InspectorSection title="Available tools" meta={`${visibleTools.length}`} className="tool-table-panel">
         <div className="table-toolbar">
           <div><p>Effective state for this session.</p></div>
@@ -611,7 +637,6 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
           {policies.length === 0 && <div className="empty-state"><IconTool size={20} /><strong>No package policies</strong><span>No policy owners registered for this session.</span></div>}
         </div>}
       </InspectorSection>}
-      <SieveStatus live={live} />
     </div>
   );
 }

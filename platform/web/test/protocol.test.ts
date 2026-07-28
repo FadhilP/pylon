@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v21 commands and attachments", () => {
+test("command validation allowlists bounded v22 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -75,12 +75,15 @@ test("command validation allowlists bounded v21 commands and attachments", () =>
   assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "x".repeat(2_001), commandId: "setup", expectedGeneration: 1 }).ok, false);
   const dialogTimeouts = { guardTimeoutSeconds: 60, clarifyTimeoutSeconds: null };
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "inherit" }, timeline: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "global-policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "auto" }, timeline: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "bad-global-policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", workspace: "automatic", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: ["npm:test"] }, timeline: "inherit", workspace: "local", guardTimeoutSeconds: "inherit", clarifyTimeoutSeconds: 15, expectedRevision: 1, commandId: "policy", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "inherit" }, timeline: "inherit", workspace: "inherit", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: Array(7).fill("check") }, timeline: "enabled", workspace: "worktree", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", workspace: "local", guardTimeoutSeconds: 14, clarifyTimeoutSeconds: 60, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 86_401, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "dismissCommandResult", resultId: "result-1", commandId: "dismiss", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "timeline", name: "Investigate fix", commandId: "fork", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: " ", commandId: "fork", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: "x".repeat(201), commandId: "fork", expectedGeneration: 1 }).ok, false);
@@ -136,6 +139,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     },
     runtimePolicy: {
       revision: 1,
+      global: { timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
       project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
       session: {},
       effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },

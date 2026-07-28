@@ -58,8 +58,12 @@ test("remote UI renews owned deadlines and supports Never", async () => {
 
   const renewed = ui.select("Choose", ["A"]);
   const renewedRequest = requests.at(-1)!;
+  assert.equal(renewedRequest.timeoutSeconds, 1);
+  const firstExpiry = renewedRequest.expiresAt;
   await new Promise((resolve) => setTimeout(resolve, 30));
-  bridge.keepAlive(renewedRequest.requestId, 7);
+  const renewedExpiry = bridge.keepAlive(renewedRequest.requestId, 7);
+  assert.equal(renewedExpiry, renewedRequest.expiresAt);
+  assert.notEqual(renewedExpiry, firstExpiry);
   await new Promise((resolve) => setTimeout(resolve, 30));
   bridge.answer({
     requestId: renewedRequest.requestId,
@@ -72,6 +76,7 @@ test("remote UI renews owned deadlines and supports Never", async () => {
 
   const never = ui.confirm("Confirm", "Proceed?", { timeout: 0 });
   const neverRequest = requests.at(-1)!;
+  assert.equal(neverRequest.timeoutSeconds, undefined);
   await new Promise((resolve) => setTimeout(resolve, 120));
   bridge.keepAlive(neverRequest.requestId, 7);
   bridge.answer({

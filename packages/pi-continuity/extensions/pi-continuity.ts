@@ -45,7 +45,7 @@ import {
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext, shortlistFacts, type MemoryNotice } from "../src/context.ts";
-import { validateQuestion, validateQuestions } from "../src/questions.ts";
+import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidence, classifyProjectFacts, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
 import {
@@ -1009,69 +1009,36 @@ export default function continuityExtension(pi: ExtensionAPI) {
             content: [{ type: "text", text: `Ask user in prose and wait: ${prose}` }],
           };
         }
-        if (questions.length > 1) {
-          const answers = await askQuestionnaire(
-            ctx.ui,
-            ctx.mode,
-            questions,
-            clarifyDialogOptions(),
-          );
-          if (!answers) {
-            if (executing) {
-              ctx.abort();
-              return {
-                content: [{ type: "text", text: "No answers submitted. Execution stopped." }],
-                terminate: true,
-              };
-            }
-            return { content: [{ type: "text", text: "No answers submitted." }] };
-          }
-          return {
-            content: [{
-              type: "text",
-              text: answers.map((answer, index) =>
-                `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n"),
-            }],
-            details: { clarifications: answers },
-          };
-        }
-        const item = questions[0];
-        validateQuestion(item.question, item.options);
-        const labels = [
-          ...item.options.map((o) =>
-            o.description ? `${o.label} — ${o.description}` : o.label,
-          ),
-          "Write a different answer…",
-        ];
-        const choice = await ctx.ui.select(item.question, labels, clarifyDialogOptions());
-        if (!choice) {
+        const answers = await askQuestionnaire(
+          ctx.ui,
+          ctx.mode,
+          questions,
+          clarifyDialogOptions(),
+        );
+        if (!answers) {
           if (executing) {
             ctx.abort();
             return {
-              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
+              content: [{ type: "text", text: "No answers submitted. Execution stopped." }],
               terminate: true,
             };
           }
-          return { content: [{ type: "text", text: "No answer selected." }] };
+          return { content: [{ type: "text", text: "No answers submitted." }] };
         }
-        if (choice === "Write a different answer…") {
-          const answer = (await ctx.ui.input("Custom answer", undefined, clarifyDialogOptions()))?.trim();
-          if (!answer && executing) {
-            ctx.abort();
-            return {
-              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
-              terminate: true,
-            };
-          }
-          const selected = answer || "No answer selected.";
+        if (questions.length === 1) {
+          const [answer] = answers;
           return {
-            content: [{ type: "text", text: selected }],
-            details: { clarification: { question: item.question, answer: selected } },
+            content: [{ type: "text", text: answer.answer }],
+            details: { clarification: answer },
           };
         }
         return {
-          content: [{ type: "text", text: choice }],
-          details: { clarification: { question: item.question, answer: choice } },
+          content: [{
+            type: "text",
+            text: answers.map((answer, index) =>
+              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n"),
+          }],
+          details: { clarifications: answers },
         };
       }
       if (p.action === "set_plan") {

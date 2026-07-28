@@ -66,6 +66,10 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.match(inspector, /Paused while the response tab is visible and focused/);
   assert.doesNotMatch(inspector, /<option value="automatic">/);
   assert.match(inspector, /<option value="local">Local<\/option>/);
+  assert.doesNotMatch(inspector, /Selected checkpoint/);
+  assert.ok(inspector.indexOf("<SieveStatus live={live} />") < inspector.indexOf('title="Available tools"'));
+  assert.match(inspector, /aria-label="Fork from checkpoint"/);
+  assert.match(inspector, /aria-label="Restore checkpoint"/);
   assert.match(conversation, /<IconPaperclip size=\{16\}/);
   assert.match(conversation, /<IconBulb size=\{16\}/);
   assert.match(conversation, /<IconLoader2 className="prompt-send-spinner"/);
@@ -74,20 +78,50 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.match(conversation, /aria-busy=\{stopping\}/);
   assert.doesNotMatch(conversation, />Stopping…<\/span>/);
   assert.match(css, /\.prompt-send-spinner\s*\{\s*animation:\s*spin/);
-  assert.match(css, /\.conversation-panel > \.ui-request-motion\s*\{/);
+  assert.match(css, /\.conversation-panel > \.composer-surface\s*\{/);
   assert.match(css, /\.ui-request-motion \+ \.prompt-form\s*\{\s*border-radius:/);
+  assert.match(css, /\.prompt-form\.is-joined\s*\{\s*border-radius:/);
   assert.doesNotMatch(eventStore, /Unsupported runtime protocol/);
   assert.match(eventStore, /scheduleBootstrapRetry/);
   assert.match(app, /<RecoveryToast recovery=\{live\.recovery\}/);
 });
 
-test("inline runtime requests hide timers and manual ownership release", async () => {
+test("inline runtime requests show focus-aware timers without manual ownership release", async () => {
   const [dialog, css] = await Promise.all([
     readFile(new URL("../src/client/ui-dialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
   ]);
-  assert.doesNotMatch(dialog, /Let another tab respond|expiresAt|countdown/);
+  assert.doesNotMatch(dialog, /Let another tab respond/);
+  assert.match(dialog, /request\.expiresAt/);
+  assert.match(dialog, /Paused ·/);
+  assert.match(dialog, /formatCountdown/);
+  assert.match(dialog, /aria-label="Previous question"/);
+  assert.match(dialog, /aria-label="Next question"/);
+  assert.match(dialog, /onClick=\{previousQuestion\}/);
+  assert.match(dialog, /onClick=\{nextQuestion\}/);
+  assert.match(dialog, /onClick=\{skipQuestion\}/);
+  assert.match(dialog, /const SKIPPED_ANSWER = "Skipped by user"/);
+  assert.match(dialog, /questions\.length === 1 \? " is-single" : ""/);
+  assert.match(dialog, /questions\.length === 1 \|\| advance && questionIndex === questions\.length - 1/);
+  assert.match(dialog, /answers: answers\.map\(\(value\) => value \|\| SKIPPED_ANSWER\)/);
+  assert.match(dialog, /questionIndex === questions\.length - 1 && !answers\[questionIndex\]/);
+  assert.match(dialog, /index === questionIndex \? answer\.trim\(\) : value/);
+  assert.match(css, /\.ui-questionnaire-answer\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/s);
+  assert.match(css, /\.ui-questionnaire-skip\[aria-pressed="true"\]/);
+  assert.match(css, /\.ui-questionnaire-nav\s*\{[^}]*bottom:\s*-16px;[^}]*left:\s*50%/s);
+  assert.match(css, /\.ui-questionnaire-nav\.is-single\s*\{\s*opacity:\s*\.45/);
   assert.doesNotMatch(css, /ui-request-expiry|ui-transfer/);
   assert.match(dialog, /setInterval\(renew,\s*5_000\)/);
-  assert.match(dialog, /document\.visibilityState !== "visible" \|\| !document\.hasFocus\(\)/);
+  assert.match(dialog, /document\.visibilityState === "visible" && document\.hasFocus\(\)/);
+});
+
+test("history rail tooltip is outside the scrolling rail", async () => {
+  const [conversation, css] = await Promise.all([
+    readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(conversation, /<\/nav>\s*\{tooltip && <div/);
+  assert.match(conversation, /className="history-rail-tooltip"/);
+  assert.doesNotMatch(conversation, /<i \/><span><strong>\{turn\.preview\}/);
+  assert.match(css, /\.history-rail-tooltip\s*\{/);
 });

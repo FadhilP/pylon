@@ -1,6 +1,6 @@
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
+import type { QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
@@ -244,6 +244,12 @@ export type DriverEvent =
       sessionId: string;
       sessionGeneration: number;
       workspace: NonNullable<RuntimeSnapshot["workspace"]>;
+    }
+  | {
+      type: "command.result";
+      sessionId: string;
+      sessionGeneration: number;
+      result?: SlashCommandResultReadModel;
     };
 
 export type DriverEventListener = (event: DriverEvent) => void;
@@ -299,7 +305,8 @@ export interface PiDriver {
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
-  keepUiRequestAlive(requestId: string, sessionGeneration: number): void;
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined | void;
+  dismissCommandResult?(resultId: string, sessionGeneration: number): void;
   subscribe(listener: DriverEventListener): () => void;
   dispose(): Promise<void>;
 }

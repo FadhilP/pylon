@@ -11,7 +11,7 @@ function runtime(): RuntimeSnapshot {
     activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [],
     conversation: { messages: [], tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
     sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
-  runtimePolicy: { revision: 1, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
+  runtimePolicy: { revision: 1, global: { timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, project: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
     metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
     operational: initialOperational([], []),
     extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
@@ -524,6 +524,25 @@ test("projection retains bounded extension UI state and publishes mutation event
   state = projection.snapshot().extensionUi;
   assert.deepEqual(state.statuses, []);
   assert.deepEqual(state.widgets, []);
+});
+
+test("projection synchronizes slash-command results and dismissal", () => {
+  const published: unknown[] = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => {
+    if (type === "command.result") published.push(payload);
+  });
+  const result = {
+    id: "command-1",
+    command: "sieve",
+    output: "Pi Sieve enabled.",
+    severity: "info" as const,
+    occurredAt: new Date().toISOString(),
+  };
+  projection.apply({ type: "command.result", sessionId: "session", sessionGeneration: 1, result });
+  assert.deepEqual(projection.snapshot().commandResult, result);
+  projection.apply({ type: "command.result", sessionId: "session", sessionGeneration: 1 });
+  assert.equal(projection.snapshot().commandResult, undefined);
+  assert.equal(published.length, 2);
 });
 
 test("projection disposal cancels delayed stream publication", async () => {
