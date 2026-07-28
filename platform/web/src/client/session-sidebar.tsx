@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconDots, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconStack2, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
@@ -207,8 +207,9 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
       <nav className="project-list">
         <section className="active-session-group" aria-labelledby="active-sessions-heading">
           <h2 className="nav-label" id="active-sessions-heading"><button type="button" aria-expanded={activeSessionsOpen} onClick={() => setActiveSessionsOpen((open) => !open)}>
+            <span>Active sessions</span>
             <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
-            Active sessions <small>{activeSessions.length}</small>
+            <small>{activeSessions.length}</small>
           </button></h2>
           {activeSessionsOpen && (visibleActiveSessions.length > 0
             ? <div className="active-session-list">{visibleActiveSessions.map((session) => <SessionRow
@@ -236,8 +237,8 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
         </section>
         <div className="project-heading">
           <h2 className="nav-label"><button type="button" aria-expanded={projectsOpen || Boolean(query.trim())} onClick={() => setProjectsOpen((open) => !open)}>
+            <span>Projects</span>
             <IconChevronRight className={projectsOpen || query.trim() ? "is-expanded" : ""} size={13} />
-            Projects
           </button></h2>
           <div>
             <button className="project-add" type="button" onClick={onOpenArchives} disabled={Boolean(projectBusy || busy || deleting)}><IconArchive size={13} />Archived</button>
@@ -259,8 +260,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 aria-expanded={expanded}
                 aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
               >
-                <IconChevronRight className={expanded ? "is-expanded" : ""} size={13} />
-                <IconStack2 size={14} />
+                {expanded ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
                 <span>{project.label}</span>
                 <small>{page?.totalCount ?? project.sessions.length}</small>
               </button>
@@ -350,11 +350,9 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
   const relativeTime = formatRelativeTime(session.modifiedAt, now);
-  const activity = relativeTime === "now"
-    ? "Active now"
-    : relativeTime === "Unknown"
-      ? "Activity unknown"
-      : `Active ${relativeTime} ago`;
+  const activity = relativeTime === "Unknown"
+    ? "Unknown"
+    : `${relativeTime} ago`;
 
   return <div className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`} data-reorder-kind={reorderKind} data-reorder-id={reorderKind ? session.id : undefined}>
     <button

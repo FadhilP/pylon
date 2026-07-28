@@ -14,7 +14,7 @@ export function formatRelativeTime(value: string, now = Date.now()): string {
 
   const elapsed = Math.max(0, now - time);
   const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "now";
+  if (minutes < 1) return "<1m";
   if (minutes < 60) return `${minutes}m`;
 
   const hours = Math.floor(minutes / 60);

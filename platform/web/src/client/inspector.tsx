@@ -117,9 +117,13 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
       </div>
 
       <div className="overview-lower">
-        {operational?.verification.availability === "available" && <InspectorSection title="Verification" meta={operational?.verification.scope || "No run"} className="verification-panel">
-          <div className="check-list">
-            {operational?.verification.checks.map((check) => (
+        {operational && <InspectorSection title="Verification" meta={operational.verification.scope || "No run"} className="verification-panel">
+          {operational.verification.availability !== "available"
+            ? <div className="empty-state"><IconCheck size={20} /><strong>Verification unavailable</strong><span>Verify is unavailable for this runtime.</span></div>
+            : operational.verification.checks.length === 0
+              ? <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>
+              : <div className="check-list">
+            {operational.verification.checks.map((check) => (
               <div className="check-row" key={check.id}>
                 <span className={`check-icon ${check.status}`}>
                   {check.status === "passed" ? <IconCheck size={13} /> : <IconClock size={13} />}
@@ -128,7 +132,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
                 <span className="mono">{formatDuration(check.durationMs)}</span>
               </div>
             ))}
-          </div>
+          </div>}
         </InspectorSection>}
         {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
       </div>
@@ -220,7 +224,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
           disabled={!idle || !checks.includes(check.id) && checks.length >= 6}
           onChange={() => toggleCheck(check.id)}
         />
-        <span>{check.label}</span>
+        <span className="mono">{check.label}</span>
       </label>)}
       {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
         .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}

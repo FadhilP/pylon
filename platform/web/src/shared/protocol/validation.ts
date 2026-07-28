@@ -601,3 +601,86 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && typeof extensionUi.editorText === "string" && extensionUi.editorText.length <= MAX_MESSAGE_LENGTH
     && Number.isSafeInteger(extensionUi.editorRevision) && (extensionUi.editorRevision as number) >= 0;
 }
+
+export interface RuntimeSnapshotValidationIssue {
+  kind: "protocol" | "snapshot";
+  area: string;
+  detail: string;
+}
+
+export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotValidationIssue | undefined {
+  if (!record(value)) return { kind: "snapshot", area: "payload", detail: "the response is not an object" };
+  if (value.protocolVersion !== PROTOCOL_VERSION) {
+    return {
+      kind: "protocol",
+      area: "protocol",
+      detail: `expected ${PROTOCOL_VERSION}, received ${String(value.protocolVersion ?? "missing")}`,
+    };
+  }
+  if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean") {
+    return { kind: "snapshot", area: "identity", detail: "session ID, generation, or readiness is invalid" };
+  }
+  const requiredAreas = ["runtimePolicy", "conversation", "sessionControls", "metrics", "operational", "extensionUi"] as const;
+  const missing = requiredAreas.find((area) => !record(value[area]));
+  if (missing) return { kind: "snapshot", area: missing, detail: "required runtime data is missing" };
+  if (!isRuntimeSnapshot(value)) {
+    const validAreaReplacements: Array<[string, Record<string, unknown>]> = [
+      ["workspace", { workspace: undefined }],
+      ["runtime policy", {
+        runtimePolicy: {
+          revision: 0,
+          project: { verify: { mode: "auto" }, timelineEnabled: true },
+          session: {},
+          effective: { verify: { mode: "auto" }, timelineEnabled: true },
+          availableVerifyChecks: [],
+        },
+      }],
+      ["capabilities", { activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [] }],
+      ["conversation", {
+        conversation: {
+          messages: [], tools: [], delegatedRuns: [], streaming: false,
+          queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false },
+        },
+      }],
+      ["session controls", { sessionControls: { models: [], thinkingLevels: [] } }],
+      ["metrics", {
+        metrics: {
+          model: "", provider: "", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+          contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0,
+          userMessages: 0, assistantMessages: 0, toolCalls: 0,
+        },
+      }],
+      ["Discover index", { discoverIndex: undefined }],
+      ["operational data", {
+        operational: {
+          verification: { availability: "unavailable", checks: [] },
+          jobs: { availability: "unavailable", items: [] },
+          guard: { availability: "unavailable", blocked: 0, confirmed: 0 },
+          continuity: { availability: "unavailable", revision: 0 },
+          timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
+          tools: { availability: "unavailable", policies: [] },
+          health: { status: "unavailable", issues: [] },
+        },
+      }],
+      ["extension UI", {
+        extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
+      }],
+    ];
+    const area = validAreaReplacements.find(([, replacement]) => isRuntimeSnapshot({ ...value, ...replacement }))?.[0];
+    if (area) return { kind: "snapshot", area, detail: "a field is invalid, oversized, or incomplete" };
+    return { kind: "snapshot", area: "runtime data", detail: "a field is invalid, oversized, or incomplete" };
+  }
+  return undefined;
+}
+
+export function describeRuntimeSnapshotIssue(value: unknown, issue = runtimeSnapshotValidationIssue(value)): string | undefined {
+  if (!issue) return undefined;
+  const input = record(value) ? value : {};
+  const session = identifier(input.sessionId) ? input.sessionId : "unknown";
+  const generationValue = generation(input.sessionGeneration) ? input.sessionGeneration : "unknown";
+  const ready = typeof input.ready === "boolean" ? input.ready : "unknown";
+  if (issue.kind === "protocol") {
+    return `Runtime protocol mismatch: ${issue.detail} (session ${session}, generation ${generationValue}, ready ${ready}).`;
+  }
+  return `Invalid runtime snapshot in ${issue.area}: ${issue.detail} (session ${session}, generation ${generationValue}, ready ${ready}, protocol ${String(input.protocolVersion ?? "missing")}).`;
+}

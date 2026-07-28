@@ -156,6 +156,30 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal(starts, 2);
     assert.ok(Date.now() - warmStartedAt < 500);
 
+    const sessionIndex = (driver as any).sessionIndex as SessionIndex;
+    const originalList = sessionIndex.list.bind(sessionIndex);
+    let listEntered!: () => void;
+    let releaseList!: () => void;
+    const entered = new Promise<void>((resolve) => { listEntered = resolve; });
+    const held = new Promise<void>((resolve) => { releaseList = resolve; });
+    let holdFirstList = true;
+    sessionIndex.list = async (...args: Parameters<SessionIndex["list"]>) => {
+      const result = await originalList(...args);
+      if (holdFirstList) {
+        holdFirstList = false;
+        listEntered();
+        await held;
+      }
+      return result;
+    };
+    const listingDuringSwitch = driver.listSessions();
+    await entered;
+    const switchedDuringList = await driver.switchSession({ sessionId: other.getSessionId() });
+    releaseList();
+    assert.equal((await listingDuringSwitch).sessionGeneration, switchedDuringList.sessionGeneration);
+    sessionIndex.list = originalList;
+    await driver.switchSession({ sessionId: initial.sessionId });
+
     await waitFor(() => states.some(([id, state]) => id === other.getSessionId() && state === "sleeping"));
     await driver.setSessionActive({ sessionId: other.getSessionId(), active: true });
     assert.equal(starts, 3);
@@ -171,6 +195,52 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal((await driver.listArchived()).sessions[0]?.id, other.getSessionId());
     await driver.restoreSession({ sessionId: other.getSessionId(), expectedGeneration: archived.sessionGeneration });
     assert.equal((await driver.listArchived()).sessions.length, 0);
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fork translates the coordinator generation to the selected runtime generation", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-fork-generation-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const existing = SessionManager.create(cwd);
+  persistSession(existing, "Fork generation");
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    const selected = await driver.switchSession({ sessionId: existing.getSessionId() });
+    const slot = (driver as any).selected();
+    assert.notEqual(selected.sessionGeneration, slot.innerGeneration);
+
+    const prompt = (await driver.snapshot()).conversation.messages.find((message) =>
+      message.role === "user" && message.entryId);
+    assert.ok(prompt?.entryId);
+
+    const forked = await driver.fork({
+      expectedGeneration: selected.sessionGeneration,
+      entryId: prompt.entryId,
+      name: "Forked after switching",
+      mode: "conversation",
+      position: "at",
+    });
+    assert.equal(forked.cancelled, false);
+    assert.equal((await driver.snapshot()).sessionName, "Forked after switching");
+    const sessions = await driver.listSessions();
+    assert.equal(sessions.activeSessions[0]?.id, forked.sessionId);
+    assert.equal(sessions.projects[0]?.sessions[0]?.id, forked.sessionId);
+    assert.ok(Date.now() - Date.parse(sessions.activeSessions[0]!.modifiedAt) < 60_000);
+    await assert.rejects(driver.fork({
+      expectedGeneration: selected.sessionGeneration,
+      entryId: prompt.entryId,
+      name: "Stale fork",
+      mode: "conversation",
+    }), /stale session generation/);
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, validateCommand } from "../src/shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
 
 test("command validation allowlists bounded v17 commands and attachments", () => {
   const valid = validateCommand({
@@ -138,6 +138,15 @@ test("event and snapshot validators reject incompatible versions", () => {
     extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
+  assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
+  assert.deepEqual(runtimeSnapshotValidationIssue({ ...snapshot, protocolVersion: PROTOCOL_VERSION + 1 }), {
+    kind: "protocol",
+    area: "protocol",
+    detail: `expected ${PROTOCOL_VERSION}, received ${PROTOCOL_VERSION + 1}`,
+  });
+  const invalidConversation = { ...snapshot, conversation: { ...snapshot.conversation, messages: "invalid" } };
+  assert.equal(runtimeSnapshotValidationIssue(invalidConversation)?.area, "conversation");
+  assert.match(describeRuntimeSnapshotIssue(invalidConversation) ?? "", /session session-1, generation 1, ready true, protocol 17/);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
     sessionControls: {

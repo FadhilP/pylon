@@ -12,7 +12,7 @@ test("work duration uses compact Codex-style units", () => {
 
 test("session activity uses compact relative units", () => {
   const now = Date.parse("2026-07-26T12:00:00.000Z");
-  assert.equal(formatRelativeTime("2026-07-26T11:59:45.000Z", now), "now");
+  assert.equal(formatRelativeTime("2026-07-26T11:59:45.000Z", now), "<1m");
   assert.equal(formatRelativeTime("2026-07-26T11:45:00.000Z", now), "15m");
   assert.equal(formatRelativeTime("2026-07-26T08:00:00.000Z", now), "4h");
   assert.equal(formatRelativeTime("2026-07-21T12:00:00.000Z", now), "5d");

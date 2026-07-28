@@ -51,7 +51,7 @@ export class ApiClient {
     return new EventSource(`/api/v1/events?${query.toString()}`, { withCredentials: true });
   }
 
-  async sessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
+  async sessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
     const query = new URLSearchParams();
     if (input.projectId) query.set("projectId", input.projectId);
     if (input.cursor) query.set("cursor", input.cursor);
@@ -60,6 +60,7 @@ export class ApiClient {
     return json<SessionListSnapshot>(await fetch(`/api/v1/sessions${query.size ? `?${query}` : ""}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
+      signal,
     }));
   }
 

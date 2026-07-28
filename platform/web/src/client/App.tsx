@@ -186,9 +186,10 @@ export function App() {
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
     let active = true;
+    const controller = new AbortController();
     const request = ++sessionListRequest.current;
     setSessionsLoading(true);
-    const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 }).then((result) => {
+    const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 }, controller.signal).then((result) => {
       if (!active || request !== sessionListRequest.current) return;
       applySessionList(result);
     }).catch((cause) => {
@@ -196,7 +197,7 @@ export function App() {
     }).finally(() => {
       if (active && request === sessionListRequest.current) setSessionsLoading(false);
     }), query ? 200 : 0);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
   }, [live.connection, live.runtime?.ready, live.runtime?.sessionGeneration, live.runtime?.sessionName, live.sessionRevision, query]);
 
   useEffect(() => {
@@ -574,8 +575,12 @@ export function App() {
           onToggleAgents={() => toggleRightPanel("agents")}
           onToggleFiles={() => toggleRightPanel("files")}
         />
-        {(toast || live.connection === "disconnected") && <div className="app-toast-stack">
-          {live.connection === "disconnected" && <div className="app-connection-toast" role="status">Disconnected. Waiting to reconnect…</div>}
+        {(toast || live.connection === "disconnected" || live.recovery) && <div className="app-toast-stack">
+          {live.connection === "disconnected" && !live.recovery && <div className="app-connection-toast" role="status">Disconnected. Waiting to reconnect…</div>}
+          {live.recovery && <RecoveryToast recovery={live.recovery} onAction={() => {
+            if (live.recovery?.action === "reload") window.location.reload();
+            else runtimeStore.retryBootstrap();
+          }} />}
           {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
         </div>}
         <div
@@ -766,6 +771,18 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
   return <div className={`app-error-toast${exiting ? " is-exiting" : ""}`} role="alert">
     <span>{message}</span>
     <button type="button" onClick={close} aria-label="Dismiss error"><IconX size={15} /></button>
+  </div>;
+}
+
+function RecoveryToast({ recovery, onAction }: {
+  recovery: NonNullable<RuntimeStoreSnapshot["recovery"]>;
+  onAction: () => void;
+}) {
+  return <div className="app-error-toast app-recovery-toast" role="alert">
+    <span>{recovery.message}</span>
+    <button className="text-button" type="button" onClick={onAction}>
+      {recovery.action === "reload" ? "Reload" : "Retry"}
+    </button>
   </div>;
 }
 

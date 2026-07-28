@@ -5,7 +5,7 @@ import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadMo
 import type { SessionRuntimeState } from "../../shared/protocol/events";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -21,6 +21,7 @@ export interface RuntimeStoreSnapshot {
   sessionStatuses?: Record<string, SessionRuntimeState>;
   error?: string;
   errorRevision?: number;
+  recovery?: { message: string; action: "retry" | "reload" };
   historyWindow?: TranscriptWindowReadModel;
   treeChanging?: boolean;
 }
@@ -89,12 +90,26 @@ export class RuntimeEventStore {
   private started = false;
   private resetting = false;
   private bootstrapEpoch = 0;
+  private bootstrapAttempts = 0;
+  private bootstrapRetry?: number;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = (): RuntimeStoreSnapshot => this.snapshot;
 
   start(): void { if (this.started) return; this.started = true; void this.bootstrap(); }
-  dispose(): void { this.disposed = true; this.source?.close(); if (this.frame !== undefined) cancelAnimationFrame(this.frame); }
+  dispose(): void {
+    this.disposed = true;
+    this.source?.close();
+    if (this.frame !== undefined) cancelAnimationFrame(this.frame);
+    if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
+  }
+  retryBootstrap(): void {
+    if (this.disposed) return;
+    if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
+    this.bootstrapRetry = undefined;
+    this.resetting = false;
+    void this.bootstrap();
+  }
   reportError(message: string): void {
     this.set({ ...this.snapshot, error: message, errorRevision: (this.snapshot.errorRevision ?? 0) + 1 });
   }
@@ -251,9 +266,9 @@ export class RuntimeEventStore {
     }
   }
 
-  async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
+  async listSessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
     const runtime = this.requireReadyRuntime();
-    const sessions = await this.api.sessions(input);
+    const sessions = await this.api.sessions(input, signal);
     if (!isSessionListSnapshot(sessions) || sessions.sessionGeneration !== runtime.sessionGeneration) throw new Error("Session list is stale or invalid");
     return sessions;
   }
@@ -713,7 +728,12 @@ export class RuntimeEventStore {
     return new Promise((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         unsubscribe();
-        reject(new Error("Timed out while loading the selected session"));
+        const observed = this.snapshot.runtime;
+        reject(new Error(
+          `Timed out after 30 seconds while loading session ${sessionId} at generation ${generation}. `
+          + `Observed ${this.snapshot.connection}, session ${observed?.sessionId ?? "none"}, `
+          + `generation ${observed?.sessionGeneration ?? "none"}, ready ${observed?.ready ?? false}.`,
+        ));
       }, 30_000);
       const unsubscribe = this.subscribe(() => {
         if (!ready()) return;
@@ -779,29 +799,55 @@ export class RuntimeEventStore {
     const epoch = ++this.bootstrapEpoch;
     try {
       const boot = await this.api.bootstrap();
-      if (boot.protocolVersion !== PROTOCOL_VERSION
-        || !isRuntimeSnapshot(boot.runtime)
-        || !Number.isSafeInteger(boot.sequence)
-        || boot.sequence < 0) {
-        throw new Error("Unsupported runtime protocol");
+      const issue = runtimeSnapshotValidationIssue(boot.runtime);
+      if (issue) {
+        const error = new Error(describeRuntimeSnapshotIssue(boot.runtime, issue));
+        error.name = issue.kind === "protocol" ? "ProtocolMismatchError" : "RuntimeSnapshotError";
+        throw error;
+      }
+      if (boot.protocolVersion !== PROTOCOL_VERSION || !Number.isSafeInteger(boot.sequence) || boot.sequence < 0) {
+        const error = new Error(`Invalid bootstrap envelope: expected protocol ${PROTOCOL_VERSION}, received ${String(boot.protocolVersion)}.`);
+        error.name = boot.protocolVersion === PROTOCOL_VERSION ? "RuntimeSnapshotError" : "ProtocolMismatchError";
+        throw error;
       }
       if (this.disposed || epoch !== this.bootstrapEpoch) return;
       this.resetting = false;
+      this.bootstrapAttempts = 0;
+      if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
+      this.bootstrapRetry = undefined;
       const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));
-      this.set({ connection: "disconnected", runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration });
+      this.set({ connection: "disconnected", runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined });
       this.openEvents(`${boot.runtime.sessionGeneration}:${boot.sequence}`);
     } catch (error) {
       if (epoch !== this.bootstrapEpoch) return;
       this.resetting = false;
-      if (!this.disposed) this.set({ ...this.snapshot, connection: "error", error: error instanceof Error ? error.message : "Unable to connect" });
+      if (this.disposed) return;
+      const message = error instanceof Error ? error.message : "Unable to load the runtime";
+      const action = error instanceof Error && error.name === "ProtocolMismatchError" ? "reload" : "retry";
+      this.set({
+        ...this.snapshot,
+        connection: this.snapshot.runtime ? "disconnected" : "loading",
+        recovery: { message, action },
+      });
+      if (action === "retry") this.scheduleBootstrapRetry();
     }
+  }
+
+  private scheduleBootstrapRetry(): void {
+    if (this.bootstrapRetry !== undefined || this.disposed) return;
+    const delays = [1_000, 2_000, 5_000];
+    const delay = delays[Math.min(this.bootstrapAttempts++, delays.length - 1)];
+    this.bootstrapRetry = window.setTimeout(() => {
+      this.bootstrapRetry = undefined;
+      void this.bootstrap();
+    }, delay);
   }
 
   private openEvents(cursor: string): void {
     this.source?.close();
     const source = this.api.events(cursor);
     this.source = source;
-    source.onopen = () => { if (this.source === source) this.set({ ...this.snapshot, connection: "connected", error: undefined }); };
+    source.onopen = () => { if (this.source === source) this.set({ ...this.snapshot, connection: "connected", error: undefined, recovery: undefined }); };
     source.onerror = () => {
       if (this.source !== source || this.disposed) return;
       if (source.readyState === EventSource.CLOSED) {

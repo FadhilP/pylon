@@ -159,6 +159,9 @@ class FakeDriver implements PiDriver {
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
   subscribe(listener: DriverEventListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  emitRuntime(runtime: RuntimeSnapshot): void {
+    this.emit({ type: "session.replaced", sessionId: runtime.sessionId, sessionGeneration: runtime.sessionGeneration, runtime });
+  }
   dispose(): Promise<void> { return Promise.resolve(); }
   private replace(sessionId: string, cwdLabel: string): ReplacementResult {
     this.current = { ...structuredClone(snapshot), sessionId, cwdLabel, sessionGeneration: this.current.sessionGeneration + 1 };
@@ -212,6 +215,30 @@ test("server startup disposes a driver that fails to initialize", async () => {
 
   await assert.rejects(startPylonServer({ port: 0, development: false, driver }), /startup failed/);
   assert.equal(driver.disposed, true);
+});
+
+test("bootstrap rejects invalid runtime snapshots with a bounded diagnostic", async () => {
+  const driver = new FakeDriver();
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`] });
+  driver.emitRuntime({
+    ...snapshot,
+    sessionGeneration: 2,
+    conversation: { ...snapshot.conversation, messages: "invalid" },
+  } as unknown as RuntimeSnapshot);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/bootstrap`, {
+      headers: { "x-pylon-tab-id": "invalid-runtime-tab" },
+    });
+    assert.equal(response.status, 503);
+    assert.match(String((await body(response)).error), /Invalid runtime snapshot in conversation/);
+  } finally {
+    await transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("transport enforces origin, CSRF, size, generation, readiness, idempotency, and dialog ownership", { timeout: 10_000 }, async () => {

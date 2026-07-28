@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
-import { validateCommand } from "../../shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
@@ -107,6 +107,8 @@ export class ServerTransport {
     // Flush, snapshot, and cursor capture are one synchronous serialization boundary.
     this.projection.flush();
     const runtime = this.projection.snapshot();
+    const runtimeIssue = describeRuntimeSnapshotIssue(runtime);
+    if (runtimeIssue) throw httpError(503, runtimeIssue);
     const pending = this.pendingFor(tabId);
     const body: BootstrapSnapshot = { protocolVersion: runtime.protocolVersion, sequence: this.journal.sequence, csrfToken: session.csrfToken, runtime, ...(pending ? { pendingUi: pending } : {}) };
     this.send(response, 200, body);

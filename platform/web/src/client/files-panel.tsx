@@ -41,9 +41,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   const [viewerLoading, setViewerLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
-  const [refreshRevision, setRefreshRevision] = useState(0);
   const requestRevision = useRef(0);
-  const refreshRequested = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -52,11 +50,9 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     setTruncated(false);
     setInventoryProgress(undefined);
     setInventoryLoading(true);
-    const refresh = refreshRequested.current;
-    refreshRequested.current = false;
     void (async () => {
       const inventory = await runtimeStore.workspaceInventory(
-        refresh,
+        false,
         controller.signal,
         (next, wasTruncated) => {
           if (revision !== requestRevision.current) return;
@@ -80,7 +76,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       controller.abort();
       requestRevision.current++;
     };
-  }, [runtime?.sessionId, runtime?.workspace?.revision, refreshRevision]);
+  }, [runtime?.sessionId, runtime?.workspace?.revision]);
   useEffect(() => {
     if (!requestedPath) return;
     setSelectedPath(requestedPath);
@@ -124,7 +120,13 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       <button className="icon-button" type="button" onClick={onClose} aria-label="Close files"><IconX size={17} /></button>
     </header>
     <div className="files-workspace-bar">
-      <span>{workspace?.mode === "worktree" ? "Isolated worktree" : workspace?.mode === "checkout" ? "Project checkout" : "Files only"}</span>
+      <span title={workspace?.mode === "worktree"
+        ? "This session is working in its own isolated Git worktree."
+        : workspace?.mode === "checkout"
+          ? "This session is working directly in the registered project folder."
+          : "This folder is available without Git history."}>
+        {workspace?.mode === "worktree" ? "Session worktree" : workspace?.mode === "checkout" ? "Project folder" : "Files only"}
+      </span>
       {workspace?.mode === "worktree" && <button type="button" disabled={!workspace.canMoveToCheckout} onClick={() =>
         void runtimeStore.handoffSession("checkout").catch((error) => onError(error, "Unable to move session"))}>
         Move to project checkout
@@ -133,10 +135,6 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
         void runtimeStore.handoffSession("worktree").catch((error) => onError(error, "Unable to move session"))}>
         Move to worktree
       </button>}
-      <button className="icon-button" type="button" onClick={() => {
-        refreshRequested.current = true;
-        setRefreshRevision((current) => current + 1);
-      }} aria-label="Refresh files"><IconRefresh size={15} /></button>
     </div>
     {runtime?.discoverIndex && <DiscoverIndexBar live={live} />}
     <nav className="files-tabs" aria-label="File views">
@@ -174,9 +172,9 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
             <span>
               {workspace?.mode === "worktree" && <>
                 <button className={view === "diff" ? "is-active" : ""} onClick={() => setView("diff")}><IconGitCompare size={14} />Diff</button>
-                <button className={view === "base" ? "is-active" : ""} onClick={() => setView("base")}><IconArrowBackUp size={14} />Base</button>
+                <button className={view === "base" ? "is-active" : ""} title="Show the file from the session baseline" onClick={() => setView("base")}><IconArrowBackUp size={14} />Baseline</button>
               </>}
-              <button className={view === "current" ? "is-active" : ""} onClick={() => setView("current")}>Current</button>
+              <button className={view === "current" ? "is-active" : ""} title="Show the current file on disk" onClick={() => setView("current")}>Working copy</button>
               <button className="icon-button" onClick={() => void navigator.clipboard.writeText(selectedPath)} aria-label="Copy file path"><IconCopy size={14} /></button>
               <button className="icon-button" onClick={() => setSelectedPath(undefined)} aria-label="Close file"><IconX size={14} /></button>
             </span>
@@ -208,10 +206,10 @@ function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {
       <span>{index.symbols === undefined ? "—" : formatCompactNumber(index.symbols)} symbols</span>
       <span>{index.indexedAt ? displayTime(index.indexedAt) : "Not indexed"}</span>
     </div>
-    <button type="button" disabled={!idle} onClick={() => {
+    <button className="icon-button" type="button" disabled={!idle} aria-label="Rebuild Discover index" title="Rebuild Discover index" onClick={() => {
       setBusy(true);
       void runtimeStore.rebuildDiscoverIndex().catch(() => undefined).finally(() => setBusy(false));
-    }}>{busy || index.state === "indexing" ? "Rebuilding…" : "Rebuild index"}</button>
+    }}><IconRefresh size={15} /></button>
     {index.error && <p role="alert">{index.error}</p>}
   </section>;
 }

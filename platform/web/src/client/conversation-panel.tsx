@@ -1,4 +1,4 @@
-import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
@@ -121,6 +121,7 @@ export function ConversationPanel({
   const queued = runtime?.conversation.queue.pending;
   const composerBlocked = Boolean(live.pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
+  const sending = submitting && !edit && !undo && !fork;
   const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
   const activeHistoryWindow = live.historyWindow;
   const transcriptMessages = activeHistoryWindow
@@ -755,7 +756,14 @@ export function ConversationPanel({
             ? <button className="prompt-abort" type="button" onClick={() => void runtimeStore.abort().catch(() => undefined)} disabled={!connected || stopping} aria-label="Stop response">
                 <IconSquareFilled size={13} />{stopping && <span>Stopping…</span>}
               </button>
-            : <button className="prompt-send" disabled={!connected || composerBlocked || submitting || Boolean(queued) || !hasDraft || !controls?.model} type="submit" aria-label={running ? "Queue message" : "Send message"}><IconArrowUp size={16} /></button>}
+            : <button
+                className="prompt-send"
+                disabled={!connected || composerBlocked || submitting || Boolean(queued) || !hasDraft || !controls?.model}
+                type="submit"
+                aria-label={sending ? "Sending message" : running ? "Queue message" : "Send message"}
+              >
+                {sending ? <IconLoader2 className="prompt-send-spinner" size={16} /> : <IconArrowUp size={16} />}
+              </button>}
           </div>
         </div>
       </form>
@@ -838,10 +846,9 @@ function PlusMenu({
       onClick={onToggle}
     ><IconPlus size={17} /></button>
     {open && <div className="plus-menu composer-popover" role="menu">
-      <span>Add</span>
       <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
-        <strong>Files and images</strong>
-        <small>Select one or more attachments</small>
+        <IconPaperclip size={16} />
+        <span><strong>Files and images</strong><small>Select one or more attachments</small></span>
       </button>
       <button
         type="button"
@@ -849,8 +856,8 @@ function PlusMenu({
         disabled={!available}
         onClick={() => { onChange(!active); onClose(); triggerRef.current?.focus(); }}
       >
-        <strong>Plan mode</strong>
-        <small>{available ? "Plan the next prompt" : "Continuity /plan is unavailable"}</small>
+        <IconBulb size={16} />
+        <span><strong>Plan mode</strong><small>{available ? "Plan the next prompt" : "Continuity /plan is unavailable"}</small></span>
         {active && <IconCheck size={15} />}
       </button>
     </div>}

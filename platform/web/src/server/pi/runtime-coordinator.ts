@@ -23,6 +23,7 @@ import {
 } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import type {
@@ -222,31 +223,37 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
-    const selected = this.selected();
-    return this.sessionIndex.list(input, {
-      activeId: selected.id,
-      generation: this.generation,
-      stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
-      activeFor: (sessionId) => {
-        const slot = this.slots.get(sessionId);
-        return Boolean(slot && (slot.receivedInput || slot.pinned));
-      },
-      userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
-      fallbacks: [...this.slots.values()].map((slot) => {
-        const details = slot.driver.runtimeDetails();
-        return {
-          id: details.sessionId,
-          path: details.sessionPath ?? "",
-          cwd: details.cwd,
-          name: details.name,
-          created: new Date(slot.lastActivityAt),
-          modified: new Date(slot.lastActivityAt),
-          messageCount: details.userMessageCount,
-          firstMessage: "",
-          allMessagesText: "",
-        };
-      }),
-    });
+    let result: SessionListSnapshot | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const selectedId = this.selected().id;
+      const generation = this.generation;
+      result = await this.sessionIndex.list(input, {
+        activeId: selectedId,
+        generation,
+        stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
+        activeFor: (sessionId) => {
+          const slot = this.slots.get(sessionId);
+          return Boolean(slot && (slot.receivedInput || slot.pinned));
+        },
+        userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
+        fallbacks: [...this.slots.values()].map((slot) => {
+          const details = slot.driver.runtimeDetails();
+          return {
+            id: details.sessionId,
+            path: details.sessionPath ?? "",
+            cwd: details.cwd,
+            name: details.name,
+            created: new Date(slot.lastActivityAt),
+            modified: new Date(slot.lastActivityAt),
+            messageCount: details.userMessageCount,
+            firstMessage: "",
+            allMessagesText: "",
+          };
+        }),
+      });
+      if (selectedId === this.selectedId && generation === this.generation) return result;
+    }
+    return result!;
   }
 
   async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
@@ -881,7 +888,12 @@ export class RuntimeCoordinator implements PiDriver {
         sessionPath: session.path,
         projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
       });
-      return this.select(slot);
+      try {
+        return await this.select(slot);
+      } catch (error) {
+        await this.disposeSlot(slot).catch(() => undefined);
+        throw error;
+      }
     });
   }
 
@@ -991,8 +1003,18 @@ export class RuntimeCoordinator implements PiDriver {
   async fork(input: ForkInput): Promise<ReplacementResult> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
+    const previousId = slot.id;
     slot.lastActivityAt = Date.now();
-    await slot.driver.fork(input);
+    const forked = await slot.driver.fork({ ...input, expectedGeneration: slot.innerGeneration });
+    if (forked.cancelled) return this.replacement(true);
+    slot.lastActivityAt = Date.now();
+    slot.receivedInput = true;
+    if (slot.id !== previousId) {
+      await this.registry().deactivateSession(previousId);
+      await this.registry().activateSession(slot.id);
+    }
+    this.sessionIndex.invalidate();
+    this.emitProjectsChanged();
     return this.replacement(false);
   }
 
@@ -1315,10 +1337,12 @@ export class RuntimeCoordinator implements PiDriver {
 
   private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
     const previousId = this.selectedId;
-    this.selectedId = slot.id;
     slot.lastActivityAt = Date.now();
+    const runtime = await this.snapshotFor(slot);
+    const issue = describeRuntimeSnapshotIssue(runtime);
+    if (issue) throw new Error(issue);
+    this.selectedId = slot.id;
     this.generation++;
-    const runtime = await this.selectedSnapshot();
     this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });
     if (slot.pendingUi) this.emit({ type: "ui.event", sessionId: slot.id, sessionGeneration: this.generation, payload: slot.pendingUi });
     if (previousId) this.publishStatus(previousId);
@@ -1409,7 +1433,10 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async selectedSnapshot(): Promise<RuntimeSnapshot> {
-    const slot = this.selected();
+    return this.snapshotFor(this.selected());
+  }
+
+  private async snapshotFor(slot: RuntimeSlot): Promise<RuntimeSnapshot> {
     await this.refreshWorkspace(slot, false);
     return this.translateSnapshot(await slot.driver.snapshot(), slot);
   }
