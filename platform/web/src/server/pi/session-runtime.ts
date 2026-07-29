@@ -50,6 +50,7 @@ import type {
   SetModelInput,
   SetPackageEnabledInput,
   SetSessionActiveInput,
+  SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
   SessionArchiveInput,
@@ -61,7 +62,7 @@ import type {
   UpdateRuntimePolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
-import { createPylonRuntimeFactory } from "./runtime-factory.ts";
+import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
@@ -121,6 +122,29 @@ function agentWasAborted(value: Record<string, unknown>): boolean {
     if (item.role === "assistant") return item.stopReason === "aborted";
   }
   return false;
+}
+
+export function deferUserMessageEndEntryId(
+  payload: Record<string, unknown>,
+  isCurrent: () => boolean,
+  resolveEntryId: () => string | undefined,
+  publish: (payload: Record<string, unknown>) => void,
+): boolean {
+  const message = payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
+    ? payload.message as Record<string, unknown>
+    : {};
+  if (payload.type !== "message_end"
+    || String(payload.role ?? message.role) !== "user"
+    || typeof payload.entryId === "string"
+    || typeof message.entryId === "string") return false;
+  const previousEntryId = resolveEntryId();
+  // AgentSession persists the message immediately after its synchronous listeners return.
+  queueMicrotask(() => {
+    if (!isCurrent()) return;
+    const entryId = resolveEntryId();
+    publish(entryId && entryId !== previousEntryId ? { ...payload, entryId } : payload);
+  });
+  return true;
 }
 
 function moveToTrash(sessionPath: string): TrashAttempt {
@@ -249,7 +273,11 @@ export class SessionRuntime implements PiDriver {
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     this.gitBranch = this.readDisplayGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
-    this.packageState = await this.packageCatalog.scan();
+    const [packageState, modelRuntime] = await Promise.all([
+      this.packageCatalog.scan(),
+      createPylonModelRuntime(target.agentDir),
+    ]);
+    this.packageState = packageState;
     const generation = this.gate.start();
     this.installBusHooks(generation);
     const createRuntime = await createPylonRuntimeFactory({
@@ -257,6 +285,7 @@ export class SessionRuntime implements PiDriver {
       additionalExtensionPaths: this.packageState.extensionPaths,
       extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, ...(this.options.extensionFactories ?? [])],
       eventBus: this.eventBus,
+      modelRuntime,
     });
     this.createRuntime = createRuntime;
     let runtime: AgentSessionRuntime | undefined;
@@ -815,6 +844,10 @@ export class SessionRuntime implements PiDriver {
     return Promise.reject(new Error("manual session activation requires the runtime coordinator"));
   }
 
+  setSessionPinned(_input: SetSessionPinnedInput): Promise<void> {
+    return Promise.reject(new Error("session pinning requires the runtime coordinator"));
+  }
+
   reorderActiveSession(_input: ReorderActiveSessionInput): Promise<void> {
     return Promise.reject(new Error("session ordering requires the runtime coordinator"));
   }
@@ -1311,6 +1344,14 @@ export class SessionRuntime implements PiDriver {
         ? payload as Record<string, unknown>
         : {};
       const kind = String(raw.type ?? "");
+      if (deferUserMessageEndEntryId(raw, () => this.gate.accepts(generation), () => this.latestUserEntryId(session), (forwarded) => {
+        this.emit({
+          type: "session.event",
+          sessionId: session.sessionId,
+          sessionGeneration: generation,
+          payload: forwarded,
+        });
+      })) return;
       let forwarded: unknown = payload;
       if (kind === "agent_start") {
         this.workTurnId = `turn-${++this.nextTurnId}`;
@@ -1331,13 +1372,6 @@ export class SessionRuntime implements PiDriver {
           thinkingLevel: this.workThinkingLevel,
           metrics: this.lastSnapshot?.metrics,
         };
-      } else if (kind === "message_end" || kind === "message_complete") {
-        const message = raw.message && typeof raw.message === "object" && !Array.isArray(raw.message)
-          ? raw.message as Record<string, unknown>
-          : {};
-        if (String(raw.role ?? message.role) === "user" && typeof raw.entryId !== "string" && typeof message.entryId !== "string") {
-          forwarded = { ...raw, entryId: this.latestUserEntryId(session) };
-        }
       } else if (kind === "agent_end") {
         const duration = Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
         const messages = this.transcriptMessages(session);

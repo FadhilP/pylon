@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
@@ -39,6 +39,7 @@ interface SidebarProps {
   onDeleteSession: (session: SessionSummary) => void;
   onRenameSession: (session: SessionSummary) => void;
   onSetSessionActive: (session: SessionSummary, active: boolean) => void;
+  onSetSessionPinned: (session: SessionSummary, pinned: boolean) => void;
   onLoadMore: (project: SessionProject) => void;
   onAddProject: () => void;
   onOpenArchives: () => void;
@@ -56,7 +57,7 @@ interface SidebarProps {
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -233,6 +234,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onArchive={onArchiveSession}
                 onRename={onRenameSession}
                 onSetActive={onSetSessionActive}
+                onSetPinned={onSetSessionPinned}
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
                 reorderKind="active"
@@ -248,8 +250,8 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
             <IconChevronRight className={projectsOpen || query.trim() ? "is-expanded" : ""} size={13} />
           </button></h2>
           <div>
-            <button className="project-add" type="button" onClick={onOpenArchives} disabled={Boolean(projectBusy || busy || deleting)}><IconArchive size={13} />Archived</button>
-            <button className="project-add" type="button" onClick={onAddProject} disabled={Boolean(projectBusy || busy || deleting)} aria-label="Add project"><IconPlus size={14} />Add project</button>
+            <button className="project-add" type="button" onClick={onOpenArchives} disabled={Boolean(projectBusy || deleting)}><IconArchive size={13} />Archived</button>
+            <button className="project-add" type="button" onClick={onAddProject} disabled={Boolean(projectBusy || deleting)} aria-label="Add project"><IconPlus size={14} />Add project</button>
           </div>
         </div>
         {(projectsOpen || Boolean(query.trim())) && loading && projects.length === 0 && <div className="sidebar-state">Loading sessions...</div>}
@@ -318,6 +320,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onArchive={onArchiveSession}
                 onRename={onRenameSession}
                 onSetActive={onSetSessionActive}
+                onSetPinned={onSetSessionPinned}
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
               />)}
@@ -339,7 +342,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
   );
 }
 
-function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onToggleMenu, onCloseMenu }: {
+function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu }: {
   session: SessionSummary;
   menuId: string;
   menuOpen: boolean;
@@ -356,6 +359,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
   onArchive: (session: SessionSummary) => void;
   onRename: (session: SessionSummary) => void;
   onSetActive: (session: SessionSummary, active: boolean) => void;
+  onSetPinned: (session: SessionSummary, pinned: boolean) => void;
   onToggleMenu: (menuId: string, trigger: HTMLElement) => void;
   onCloseMenu: () => void;
 }) {
@@ -386,8 +390,9 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
           <time dateTime={session.modifiedAt} title={`Last active ${displayTime(session.modifiedAt)}`}>{activity}</time>
         </small>
       </span>
-      {!sleeping && <span className={`session-runtime-state is-${session.runtimeState}`} aria-label={session.runtimeState} title={session.runtimeState} />}
-      {(busy === session.id || deleting === session.id) && <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />}
+      {(busy === session.id || deleting === session.id)
+        ? <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
+        : !sleeping && <span className={`session-runtime-state is-${session.runtimeState}`} aria-label={session.runtimeState} title={session.runtimeState} />}
     </button>
     <details className="session-menu" data-menu-id={menuId} open={menuOpen}>
       <summary
@@ -401,11 +406,14 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
       ><IconDots size={15} /></summary>
       <div className="session-menu-popover">
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onRename(session); }}><IconPencil size={14} />Rename</button>
+        <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onSetPinned(session, !session.pinned); }}><IconPin size={14} />{session.pinned ? "Unpin" : "Pin"}</button>
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onArchive(session); }}><IconArchive size={14} />Archive</button>
         <button
           type="button"
-          disabled={unavailable || session.active}
-          title={session.active ? "The selected session must remain active" : undefined}
+          disabled={unavailable || session.active || session.pinned}
+          title={session.active
+            ? "The selected session must remain active"
+            : session.pinned ? "Unpin before deactivating" : undefined}
           onClick={() => { onCloseMenu(); onSetActive(session, sleeping); }}
         ><IconPower size={14} />{sleeping ? "Activate" : "Deactivate"}</button>
         <button

@@ -229,6 +229,7 @@ export interface SessionSummary {
   userMessageCount: number;
   preview: string;
   active: boolean;
+  pinned: boolean;
   runtimeState: SessionRuntimeState;
 }
 

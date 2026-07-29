@@ -22,7 +22,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.renameProject(projectIdForCwd(second), "Renamed project");
     await assert.rejects(registry.renameProject(projectIdForCwd(second), " "), /invalid project name/);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 9);
+    assert.equal(stored.version, 10);
     assert.equal(stored.projects.length, 2);
     assert.equal(stored.projects[1].label, "Renamed project");
     assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
@@ -112,12 +112,44 @@ test("project and active-session ordering persists and rejects stale members", a
     await registry.reorderActiveSession("session-two");
     await registry.deactivateSession("session-one");
     assert.deepEqual(registry.listActiveSessionOrder(), ["session-two"]);
+    await registry.pinSession("session-two");
+    await registry.pinSession("session-two");
+    assert.deepEqual(registry.listPinnedSessionIds(), ["session-two"]);
+    await registry.rekeySession("session-two", "session-rekeyed");
+    assert.equal(registry.isSessionPinned("session-rekeyed"), true);
+    await registry.archiveSession("session-rekeyed");
+    assert.equal(registry.isSessionPinned("session-rekeyed"), false);
     await assert.rejects(registry.reorderActiveSession("missing"), /unavailable/);
 
     const reloaded = new ProjectRegistry(config);
     await reloaded.load([]);
     assert.deepEqual(reloaded.list().map((project) => project.id), [two, one, three]);
-    assert.deepEqual(reloaded.listActiveSessionOrder(), ["session-two"]);
+    assert.deepEqual(reloaded.listActiveSessionOrder(), ["session-rekeyed"]);
+    assert.deepEqual(reloaded.listPinnedSessionIds(), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("version 9 active sessions migrate without becoming pinned", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-pin-migration-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load([project]);
+    await registry.activateSession("legacy-active");
+    const stored = JSON.parse(await readFile(config, "utf8"));
+    stored.version = 9;
+    delete stored.pinnedSessionIds;
+    await writeFile(config, JSON.stringify(stored));
+
+    const migrated = new ProjectRegistry(config);
+    await migrated.load();
+    assert.deepEqual(migrated.listActiveSessionOrder(), ["legacy-active"]);
+    assert.deepEqual(migrated.listPinnedSessionIds(), []);
+    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 10);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -191,7 +223,8 @@ test("version 7 Automatic policies migrate to Local without moving session works
     assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").session.workspace, "local");
     assert.deepEqual(registry.workspaceForSession("session-one"), workspace);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 9);
+    assert.equal(stored.version, 10);
+    assert.deepEqual(stored.pinnedSessionIds, []);
     assert.equal(stored.projects[0].workspacePolicy, undefined);
     assert.equal(stored.sessionPolicies[0].workspace, "local");
     assert.deepEqual(stored.sessionWorkspaces[0], workspace);

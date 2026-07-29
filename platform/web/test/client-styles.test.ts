@@ -108,6 +108,18 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.match(terminal, /useEffect\(\(\) => \{[\s\S]*if \(!open\) return;[\s\S]*terminalRef\.current\?\.focus\(\)/);
 });
 
+test("session changes keep sidebar transitions visually stable", async () => {
+  const [sidebar, css] = await Promise.all([
+    readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(sidebar, /\(busy === session\.id \|\| deleting === session\.id\)[\s\S]*?\? <span className="status-orb success"[\s\S]*?: !sleeping && <span className=\{`session-runtime-state/);
+  assert.match(sidebar, /onOpenArchives} disabled=\{Boolean\(projectBusy \|\| deleting\)}/);
+  assert.match(sidebar, /onAddProject} disabled=\{Boolean\(projectBusy \|\| deleting\)}/);
+  assert.match(css, /\.session-link\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) 7px/s);
+});
+
 test("inline runtime requests show focus-aware timers without manual ownership release", async () => {
   const [dialog, css] = await Promise.all([
     readFile(new URL("../src/client/ui-dialog.tsx", import.meta.url), "utf8"),

@@ -482,6 +482,19 @@ export function App() {
     }
   };
 
+  const setSessionPinned = async (session: SessionSummary, pinned: boolean) => {
+    if (sessionBusy || sessionDeleting) return;
+    setSessionBusy(session.id);
+    try {
+      await runtimeStore.setSessionPinned(session.id, pinned);
+      applySessionList(await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }));
+    } catch (cause) {
+      reportError(cause, `Unable to ${pinned ? "pin" : "unpin"} session`);
+    } finally {
+      setSessionBusy("");
+    }
+  };
+
   const loadMoreSessions = async (project: SessionProject) => {
     const current = sessionPages.find((page) => page.id === project.id);
     if (!current?.nextCursor || projectLoading) return;
@@ -620,6 +633,7 @@ export function App() {
           onConfirm: (value) => void renameSession(session, value),
         })}
         onSetSessionActive={(session, active) => void setSessionActive(session, active)}
+        onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
         onLoadMore={(project) => void loadMoreSessions(project)}
         onAddProject={() => void addProject()}
         onOpenArchives={() => {

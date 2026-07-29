@@ -138,6 +138,14 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
 
     const selectedSlot = (driver as any).selected();
     const originalFileSuggestions = selectedSlot.driver.fileSuggestions.bind(selectedSlot.driver);
+    const originalRefreshWorkspace = (driver as any).refreshWorkspace.bind(driver);
+    let releaseRefresh!: () => void;
+    let refreshStarted = false;
+    (driver as any).refreshWorkspace = async (...args: unknown[]) => {
+      refreshStarted = true;
+      await new Promise<void>((resolve) => { releaseRefresh = resolve; });
+      return originalRefreshWorkspace(...args);
+    };
     let releaseSuggestions!: () => void;
     selectedSlot.driver.fileSuggestions = () => new Promise((resolve) => {
       releaseSuggestions = () => resolve({
@@ -156,6 +164,9 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal(warm.sessionId, initial.sessionId);
     assert.equal(starts, 2);
     assert.ok(Date.now() - warmStartedAt < 500);
+    assert.equal(refreshStarted, true);
+    releaseRefresh();
+    (driver as any).refreshWorkspace = originalRefreshWorkspace;
 
     const sessionIndex = (driver as any).sessionIndex as SessionIndex;
     const originalList = sessionIndex.list.bind(sessionIndex);
@@ -183,10 +194,17 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
 
     await waitFor(() => states.some(([id, state]) => id === other.getSessionId() && state === "sleeping"));
     await driver.setSessionActive({ sessionId: other.getSessionId(), active: true });
+    await driver.setSessionPinned({ sessionId: other.getSessionId(), pinned: true });
     assert.equal(starts, 3);
     await driver.renameSession({ sessionId: other.getSessionId(), name: "Manually active" });
+    await new Promise((resolve) => setTimeout(resolve, 650));
     const active = await driver.listSessions();
     assert.equal(active.activeSessions.find((session) => session.id === other.getSessionId())?.name, "Manually active");
+    assert.equal(active.activeSessions.find((session) => session.id === other.getSessionId())?.pinned, true);
+    await assert.rejects(driver.setSessionActive({ sessionId: other.getSessionId(), active: false }), /unpin before deactivating/);
+    await driver.setSessionPinned({ sessionId: other.getSessionId(), pinned: false });
+    const unpinned = await driver.listSessions();
+    assert.equal(unpinned.projects.flatMap((project) => project.sessions).find((session) => session.id === other.getSessionId())?.pinned, false);
     await driver.setSessionActive({ sessionId: other.getSessionId(), active: false });
     assert.ok(states.some(([id, state]) => id === other.getSessionId() && state === "sleeping"));
     const selectedOther = await driver.switchSession({ sessionId: other.getSessionId() });
@@ -196,6 +214,35 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
     assert.equal((await driver.listArchived()).sessions[0]?.id, other.getSessionId());
     await driver.restoreSession({ sessionId: other.getSessionId(), expectedGeneration: archived.sessionGeneration });
     assert.equal((await driver.listArchived()).sessions.length, 0);
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pinned sessions persist, wake on restart, and never sleep", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-pinned-session-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const pinned = SessionManager.create(cwd);
+  persistSession(pinned, "Pinned session");
+  const registry = ProjectRegistry.forAgentDir(agentDir);
+  await registry.load([cwd]);
+  await registry.pinSession(pinned.getSessionId());
+  await registry.activateSession(pinned.getSessionId());
+  const driver = new RuntimeCoordinator({ sleepAfterMs: 20, viewOnlySleepAfterMs: 20, sleepCheckMs: 5 });
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const sessions = await driver.listSessions();
+    const summary = sessions.activeSessions.find((session) => session.id === pinned.getSessionId());
+    assert.equal(summary?.pinned, true);
+    assert.notEqual(summary?.runtimeState, "sleeping");
+    assert.equal((driver as any).slots.has(pinned.getSessionId()), true);
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
@@ -365,6 +412,7 @@ test("fork translates the coordinator generation to the selected runtime generat
   try {
     await driver.start({ cwd, agentDir, repositoryRoot: root });
     const selected = await driver.switchSession({ sessionId: existing.getSessionId() });
+    await driver.setSessionPinned({ sessionId: existing.getSessionId(), pinned: true });
     const slot = (driver as any).selected();
     assert.notEqual(selected.sessionGeneration, slot.innerGeneration);
 
@@ -383,7 +431,11 @@ test("fork translates the coordinator generation to the selected runtime generat
     assert.equal((await driver.snapshot()).sessionName, "Forked after switching");
     const sessions = await driver.listSessions();
     assert.equal(sessions.activeSessions[0]?.id, forked.sessionId);
+    assert.equal(sessions.activeSessions[0]?.pinned, true);
     assert.equal(sessions.projects[0]?.sessions[0]?.id, forked.sessionId);
+    const registry = (driver as any).registry() as ProjectRegistry;
+    assert.equal(registry.isSessionPinned(existing.getSessionId()), false);
+    assert.equal(registry.isSessionPinned(forked.sessionId), true);
     assert.ok(Date.now() - Date.parse(sessions.activeSessions[0]!.modifiedAt) < 60_000);
     await assert.rejects(driver.fork({
       expectedGeneration: selected.sessionGeneration,

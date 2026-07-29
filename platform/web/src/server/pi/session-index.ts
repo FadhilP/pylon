@@ -28,6 +28,7 @@ export interface SessionIndexOptions {
   generation: number;
   stateFor: (sessionId: string) => SessionRuntimeState;
   activeFor?: (sessionId: string) => boolean;
+  pinnedFor?: (sessionId: string) => boolean;
   activeFallback?: SessionInfo;
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
@@ -204,6 +205,7 @@ export class SessionIndex {
       userMessageCount,
       preview: session.firstMessage.slice(0, 500),
       active: session.id === options.activeId,
+      pinned: options.pinnedFor?.(session.id) ?? false,
       runtimeState: options.stateFor(session.id),
     };
   }

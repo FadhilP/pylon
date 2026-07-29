@@ -492,6 +492,7 @@ export class ServerTransport {
       case "restoreSession": return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
       case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
       case "setSessionActive": return this.driver.setSessionActive({ sessionId: command.sessionId, active: command.active }).then(() => accepted(command.expectedGeneration));
+      case "setSessionPinned": return this.driver.setSessionPinned({ sessionId: command.sessionId, pinned: command.pinned }).then(() => accepted(command.expectedGeneration));
       case "reorderActiveSession": return this.driver.reorderActiveSession(command).then(() => accepted(command.expectedGeneration));
       case "editPrompt": return this.driver.editPrompt(command);
       case "rewindPrompt": return this.driver.rewindPrompt(command);

@@ -146,7 +146,7 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "rewindPrompt" && !identifier(value.entryId)) {
     return { ok: false, error: "invalid prompt rewind" };
   }
-  if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive", "reorderActiveSession"].includes(value.type) && !identifier(value.sessionId)) {
+  if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive", "setSessionPinned", "reorderActiveSession"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
   }
   if (["removeProject", "renameProject", "reorderProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
@@ -160,6 +160,9 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (value.type === "setSessionActive" && typeof value.active !== "boolean") {
     return { ok: false, error: "invalid session active state" };
+  }
+  if (value.type === "setSessionPinned" && typeof value.pinned !== "boolean") {
+    return { ok: false, error: "invalid session pinned state" };
   }
   if (value.type === "reorderProject" && value.beforeProjectId !== undefined && !identifier(value.beforeProjectId)) {
     return { ok: false, error: "invalid project reorder target" };
@@ -366,6 +369,7 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     && Number.isSafeInteger(value.userMessageCount) && (value.userMessageCount as number) >= 0
     && typeof value.preview === "string" && value.preview.length <= 500
     && typeof value.active === "boolean"
+    && typeof value.pinned === "boolean"
     && runtimeStates.has(String(value.runtimeState));
 }
 

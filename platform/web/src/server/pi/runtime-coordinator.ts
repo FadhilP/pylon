@@ -60,6 +60,7 @@ import type {
   SetModelInput,
   SetPackageEnabledInput,
   SetSessionActiveInput,
+  SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
   SessionArchiveInput,
@@ -172,6 +173,7 @@ interface RuntimeSlot {
   applyState?: "pending" | "applying";
   lastApply?: NonNullable<WorkspaceReadModel["lastApply"]>;
   workspace?: WorkspaceReadModel;
+  workspaceRefresh?: Promise<void>;
   provisional?: {
     previous: RuntimeSlot;
     projectId: string;
@@ -228,6 +230,7 @@ export class RuntimeCoordinator implements PiDriver {
       : { ...target, inMemory: true });
     this.selectedId = slot.id;
     this.generation = 1;
+    await this.wakePinnedSessions(slot.id);
     this.sleepTimer = setInterval(() => void this.sleepIdleSlots(), this.options.sleepCheckMs ?? SLEEP_CHECK_MS);
     this.sleepTimer.unref?.();
     return { sessionId: slot.id, sessionGeneration: this.generation };
@@ -268,14 +271,13 @@ export class RuntimeCoordinator implements PiDriver {
     for (let attempt = 0; attempt < 3; attempt++) {
       const selectedId = this.selected().id;
       const generation = this.generation;
+      const activeIds = new Set(this.registry().listActiveSessionOrder());
       result = await this.sessionIndex.list(input, {
         activeId: selectedId,
         generation,
         stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
-        activeFor: (sessionId) => {
-          const slot = this.slots.get(sessionId);
-          return Boolean(slot && (slot.receivedInput || slot.pinned));
-        },
+        activeFor: (sessionId) => this.slots.has(sessionId) && activeIds.has(sessionId),
+        pinnedFor: (sessionId) => this.registry().isSessionPinned(sessionId),
         userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
         fallbacks: [...this.slots.values()].map((slot) => {
           const details = slot.driver.runtimeDetails();
@@ -303,6 +305,7 @@ export class RuntimeCoordinator implements PiDriver {
       activeId: selected.id,
       generation: this.generation,
       stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
+      pinnedFor: (sessionId) => this.registry().isSessionPinned(sessionId),
       userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
     });
   }
@@ -722,7 +725,7 @@ export class RuntimeCoordinator implements PiDriver {
       const projectSessionIds = (await SessionManager.listAll())
         .filter((session) => registry.projectForSession(session.id, session.cwd)?.id === project.id)
         .map((session) => session.id);
-      await registry.archiveProject(project.id);
+      await registry.archiveProject(project.id, projectSessionIds);
       await registry.deactivateSessions(projectSessionIds);
       for (const slot of projectSlots) {
         if (this.slots.has(slot.id)) await this.disposeSlot(slot);
@@ -1004,6 +1007,7 @@ export class RuntimeCoordinator implements PiDriver {
     }
     await this.registry().removeSessionWorkspace(input.sessionId);
     await this.registry().removeSessionPolicy(input.sessionId);
+    await this.registry().unpinSession(input.sessionId);
     await this.registry().deactivateSession(input.sessionId);
     this.sessionIndex.remove(input.sessionId);
     this.emitStatus(input.sessionId, "sleeping");
@@ -1024,7 +1028,7 @@ export class RuntimeCoordinator implements PiDriver {
       if (input.active) {
         if (awake) {
           await this.registry().activateSession(input.sessionId);
-          awake.pinned = true;
+          awake.receivedInput = true;
           awake.lastActivityAt = Date.now();
           this.sessionIndex.invalidate();
           this.emitProjectsChanged();
@@ -1038,7 +1042,7 @@ export class RuntimeCoordinator implements PiDriver {
           sessionPath: session.path,
           projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
         });
-        slot.pinned = true;
+        slot.receivedInput = true;
         await this.registry().activateSession(input.sessionId);
         this.sessionIndex.invalidate();
         this.emitStatus(slot.id, slot.driver.runtimeState());
@@ -1046,6 +1050,7 @@ export class RuntimeCoordinator implements PiDriver {
         return;
       }
       if (input.sessionId === this.selectedId) throw new Error("cannot deactivate the selected session");
+      if (this.registry().isSessionPinned(input.sessionId)) throw new Error("unpin before deactivating");
       if (!awake) {
         await this.registry().deactivateSession(input.sessionId);
         this.sessionIndex.invalidate();
@@ -1057,6 +1062,54 @@ export class RuntimeCoordinator implements PiDriver {
       await this.disposeSlot(awake);
       this.emitStatus(input.sessionId, "sleeping");
       this.sessionIndex.invalidate();
+      this.emitProjectsChanged();
+    });
+  }
+
+  async setSessionPinned(input: SetSessionPinnedInput): Promise<void> {
+    return this.withLifecycle(async () => {
+      const registry = this.registry();
+      if (!input.pinned) {
+        await registry.unpinSession(input.sessionId);
+        const slot = this.slots.get(input.sessionId);
+        if (slot) {
+          slot.pinned = false;
+          slot.lastActivityAt = Date.now();
+        }
+        this.sessionIndex.invalidate();
+        this.emitProjectsChanged();
+        return;
+      }
+      if (registry.isSessionArchived(input.sessionId)) throw new Error("restore the session before pinning it");
+      const awake = this.slots.get(input.sessionId);
+      const wasPinned = registry.isSessionPinned(input.sessionId);
+      let slot = awake;
+      let created = false;
+      try {
+        if (!slot) {
+          const session = await this.sessionIndex.resolve(input.sessionId);
+          if (!session) throw new Error("session is unavailable");
+          const project = registry.projectForSession(session.id, session.cwd);
+          if (!project || project.archivedAt) throw new Error("session project is unavailable");
+          slot = await this.createSlot({
+            ...this.baseTarget(),
+            cwd: registry.effectiveCwd(session.id, session.cwd),
+            sessionPath: session.path,
+            projectId: project.id,
+          });
+          created = true;
+        }
+        await registry.pinSession(slot.id);
+        slot.pinned = true;
+        slot.lastActivityAt = Date.now();
+        await registry.activateSession(slot.id);
+      } catch (error) {
+        if (!wasPinned) await registry.unpinSession(slot?.id ?? input.sessionId).catch(() => undefined);
+        if (created && slot && this.slots.has(slot.id)) await this.disposeSlot(slot).catch(() => undefined);
+        throw error;
+      }
+      this.sessionIndex.invalidate();
+      this.emitStatus(slot.id, slot.driver.runtimeState());
       this.emitProjectsChanged();
     });
   }
@@ -1280,7 +1333,7 @@ export class RuntimeCoordinator implements PiDriver {
       innerGeneration: handle.sessionGeneration,
       lastActivityAt: Date.now(),
       receivedInput: false,
-      pinned: false,
+      pinned: this.registry().isSessionPinned(handle.sessionId),
       lastState: driver.runtimeState(),
       nativeQueue: { steering: 0, followUp: 0 },
       unsubscribe: () => undefined,
@@ -1902,7 +1955,8 @@ export class RuntimeCoordinator implements PiDriver {
   private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
     const previousId = this.selectedId;
     slot.lastActivityAt = Date.now();
-    const runtime = await this.snapshotFor(slot);
+    const cachedWorkspace = Boolean(slot.workspace);
+    const runtime = await this.snapshotFor(slot, cachedWorkspace);
     const issue = describeRuntimeSnapshotIssue(runtime);
     if (issue) throw new Error(issue);
     this.selectedId = slot.id;
@@ -1911,6 +1965,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (slot.pendingUi) this.emit({ type: "ui.event", sessionId: slot.id, sessionGeneration: this.generation, payload: slot.pendingUi });
     if (previousId) this.publishStatus(previousId);
     this.publishStatus(slot.id);
+    if (cachedWorkspace) this.queueWorkspaceRefresh(slot);
     return this.replacement(false);
   }
 
@@ -1928,6 +1983,10 @@ export class RuntimeCoordinator implements PiDriver {
       const wasSelected = this.selectedId === oldId;
       slot.innerGeneration = event.sessionGeneration;
       slot.id = event.sessionId;
+      if (oldId !== slot.id && !slot.suppressEvents) {
+        if (this.slots.has(slot.id)) throw new Error("session replacement collided with an active runtime");
+        void this.registry().rekeySession(oldId, slot.id).catch(() => undefined);
+      }
       this.slots.delete(oldId);
       this.slots.set(slot.id, slot);
       if (wasSelected) this.selectedId = slot.id;
@@ -1973,11 +2032,11 @@ export class RuntimeCoordinator implements PiDriver {
         : {};
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
         this.invalidateWorkspaceInventory(slot);
-        queueMicrotask(() => void this.refreshWorkspace(slot, true));
+        queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
         queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true));
       } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
         this.invalidateWorkspaceInventory(slot);
-        queueMicrotask(() => void this.refreshWorkspace(slot, true));
+        queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
       }
     }
     this.publishStatus(slot.id);
@@ -2001,9 +2060,28 @@ export class RuntimeCoordinator implements PiDriver {
     return this.snapshotFor(this.selected());
   }
 
-  private async snapshotFor(slot: RuntimeSlot): Promise<RuntimeSnapshot> {
-    await this.refreshWorkspace(slot, false);
+  private async snapshotFor(slot: RuntimeSlot, useCachedWorkspace = false): Promise<RuntimeSnapshot> {
+    if (!useCachedWorkspace || !slot.workspace) {
+      await (slot.workspaceRefresh ?? this.refreshWorkspace(slot, false));
+    }
     return this.translateSnapshot(await slot.driver.snapshot(), slot);
+  }
+
+  private queueWorkspaceRefresh(slot: RuntimeSlot): void {
+    const sessionId = slot.id;
+    const generation = this.generation;
+    const publish = () => this.publishWorkspace(slot, sessionId, generation);
+    if (slot.workspaceRefresh) {
+      void slot.workspaceRefresh.then(publish).catch(() => undefined);
+      return;
+    }
+    const refresh = this.refreshWorkspace(slot, false)
+      .catch(() => undefined)
+      .finally(() => {
+        if (slot.workspaceRefresh === refresh) slot.workspaceRefresh = undefined;
+      });
+    slot.workspaceRefresh = refresh;
+    void refresh.then(publish).catch(() => undefined);
   }
 
   private translateSnapshot(snapshot: RuntimeSnapshot, slot: RuntimeSlot): RuntimeSnapshot {
@@ -2135,11 +2213,16 @@ export class RuntimeCoordinator implements PiDriver {
         ...(slot.lastApply ? { lastApply: slot.lastApply } : {}),
       };
     }
-    if (!publish || slot.id !== this.selectedId) return;
+    if (publish) this.publishWorkspace(slot, slot.id, this.generation);
+  }
+
+  private publishWorkspace(slot: RuntimeSlot, sessionId: string, generation: number): void {
+    if (slot.id !== sessionId || this.selectedId !== sessionId || this.generation !== generation
+      || this.slots.get(sessionId) !== slot || !slot.workspace) return;
     this.emit({
       type: "workspace.revision",
-      sessionId: slot.id,
-      sessionGeneration: this.generation,
+      sessionId,
+      sessionGeneration: generation,
       workspace: slot.workspace,
     });
   }
@@ -2393,6 +2476,37 @@ export class RuntimeCoordinator implements PiDriver {
       await removeSessionBranch(project.cwd, journal.branch, journal.commonDir);
     });
     await registry.clearProvisionJournal();
+  }
+
+  private async wakePinnedSessions(selectedId: string): Promise<void> {
+    const registry = this.registry();
+    for (const sessionId of registry.listPinnedSessionIds()) {
+      if (sessionId === selectedId || registry.isSessionArchived(sessionId)) continue;
+      const session = await this.sessionIndex.resolve(sessionId);
+      const project = session && registry.projectForSession(session.id, session.cwd);
+      if (!session || !project || project.archivedAt) {
+        await registry.unpinSession(sessionId);
+        continue;
+      }
+      let created: RuntimeSlot | undefined;
+      try {
+        if (!this.slots.has(sessionId)) {
+          created = await this.createSlot({
+            ...this.baseTarget(),
+            cwd: registry.effectiveCwd(session.id, session.cwd),
+            sessionPath: session.path,
+            projectId: project.id,
+          });
+        }
+        const slot = created ?? this.slots.get(sessionId);
+        if (!slot) throw new Error("pinned session failed to wake");
+        slot.pinned = true;
+        await registry.activateSession(slot.id);
+      } catch {
+        if (created && this.slots.has(created.id)) await this.disposeSlot(created).catch(() => undefined);
+        // Keep a valid persisted pin so the next startup can retry waking it.
+      }
+    }
   }
 
   private async slotForProject(projectId: string, cwd: string): Promise<RuntimeSlot> {

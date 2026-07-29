@@ -134,6 +134,11 @@ export interface SetSessionActiveInput {
   active: boolean;
 }
 
+export interface SetSessionPinnedInput {
+  sessionId: string;
+  pinned: boolean;
+}
+
 export interface ForkInput {
   expectedGeneration: number;
   entryId: string;
@@ -302,6 +307,7 @@ export interface PiDriver {
   restoreSession(input: SessionArchiveInput): Promise<void>;
   renameSession(input: RenameSessionInput): Promise<void>;
   setSessionActive(input: SetSessionActiveInput): Promise<void>;
+  setSessionPinned(input: SetSessionPinnedInput): Promise<void>;
   reorderActiveSession(input: ReorderActiveSessionInput): Promise<void>;
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand>;
   rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand>;

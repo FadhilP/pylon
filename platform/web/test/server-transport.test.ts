@@ -47,6 +47,7 @@ class FakeDriver implements PiDriver {
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
   renamedProjects: Array<{ projectId: string; name: string }> = [];
   activatedSessions: Array<{ sessionId: string; active: boolean }> = [];
+  pinnedSessions: Array<{ sessionId: string; pinned: boolean }> = [];
   selectedModels: Array<{ provider: string; modelId: string }> = [];
   selectedThinking: string[] = [];
   packageSettingsUpdates: unknown[] = [];
@@ -74,7 +75,7 @@ class FakeDriver implements PiDriver {
     });
   }
   listSessions(): Promise<SessionListSnapshot> {
-    const session = { id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, runtimeState: "idle" as const };
+    const session = { id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, pinned: false, runtimeState: "idle" as const };
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, activeSessions: [session], projects: [{ id: "project-workspace", label: "workspace", totalCount: 1, sessions: [session] }] });
   }
   listArchived(): Promise<ArchiveListSnapshot> {
@@ -140,6 +141,7 @@ class FakeDriver implements PiDriver {
   deleteSession(input: { sessionId: string }): Promise<void> { this.deletedSessions.push(input.sessionId); return Promise.resolve(); }
   renameSession(input: { sessionId: string; name: string }): Promise<void> { this.renamedSessions.push(input); return Promise.resolve(); }
   setSessionActive(input: { sessionId: string; active: boolean }): Promise<void> { this.activatedSessions.push(input); return Promise.resolve(); }
+  setSessionPinned(input: { sessionId: string; pinned: boolean }): Promise<void> { this.pinnedSessions.push(input); return Promise.resolve(); }
   fork(input: ForkInput): Promise<ReplacementResult> {
     this.forks.push(input);
     return Promise.resolve({ cancelled: true, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration });
@@ -513,6 +515,10 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(activeCommand) })).status, 200);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(activeCommand) })).status, 200);
     assert.deepEqual(driver.activatedSessions, [{ sessionId: "session-old", active: true }]);
+    const pinCommand = { type: "setSessionPinned", sessionId: "session-old", pinned: true, commandId: "pin-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(pinCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(pinCommand) })).status, 200);
+    assert.deepEqual(driver.pinnedSessions, [{ sessionId: "session-old", pinned: true }]);
 
     const deleteCommand = { type: "deleteSession", sessionId: "session-old", commandId: "delete-once", expectedGeneration: 1 };
     const deleted = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(deleteCommand) });

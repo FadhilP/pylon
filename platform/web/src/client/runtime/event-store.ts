@@ -691,6 +691,11 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "setSessionActive", sessionId, active, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "setSessionPinned", sessionId, pinned, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
   async reorderActiveSession(sessionId: string, beforeSessionId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
@@ -857,7 +862,8 @@ export class RuntimeEventStore {
       if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
       this.bootstrapRetry = undefined;
       const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));
-      this.set({ connection: "disconnected", runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined });
+      const connection = this.snapshot.connection === "loading" ? "loading" : "disconnected";
+      this.set({ connection, runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined });
       this.openEvents(`${boot.runtime.sessionGeneration}:${boot.sequence}`);
     } catch (error) {
       if (epoch !== this.bootstrapEpoch) return;
@@ -925,7 +931,11 @@ export class RuntimeEventStore {
       this.reset(); return;
     }
 
-    if (event.type === "session.replaced" || event.type === "session.unavailable") {
+    if (event.type === "session.replaced") {
+      this.reset("loading");
+      return;
+    }
+    if (event.type === "session.unavailable") {
       this.reset();
       return;
     }
@@ -986,14 +996,14 @@ export class RuntimeEventStore {
     }, true);
   }
 
-  private reset(): void {
+  private reset(connection: "loading" | "disconnected" = "disconnected"): void {
     if (this.resetting || this.disposed) return;
     this.resetting = true;
     this.source?.close();
     this.source = undefined;
     this.set({
       ...this.snapshot,
-      connection: "disconnected",
+      connection,
       runtime: this.snapshot.runtime ? { ...this.snapshot.runtime, ready: false } : undefined,
       pendingUi: undefined,
       agentActive: false,

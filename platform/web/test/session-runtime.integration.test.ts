@@ -6,12 +6,67 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
+import { deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
+import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+test("user completion resolves its entry ID after persistence", async () => {
+  const session = SessionManager.inMemory();
+  const firstEntryId = session.appendMessage({ role: "user", content: "Prompt A", timestamp: Date.now() });
+  const latestUserEntryId = () => [...session.getBranch()].reverse().find((entry) =>
+    entry.type === "message" && entry.message.role === "user")?.id;
+  const forwarded: Record<string, unknown>[] = [];
+  const deferred = deferUserMessageEndEntryId(
+    { type: "message_end", message: { role: "user", content: "Prompt B" } },
+    () => true,
+    latestUserEntryId,
+    (payload) => forwarded.push(payload),
+  );
+
+  assert.equal(deferred, true);
+  assert.equal(forwarded.length, 0);
+  const secondEntryId = session.appendMessage({ role: "user", content: "Prompt B", timestamp: Date.now() });
+  await Promise.resolve();
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0]?.entryId, secondEntryId);
+
+  const merged = mergeHistoryMessages([], [
+    { id: "history-0", entryId: firstEntryId, role: "user", text: "Prompt A", streaming: false },
+    { id: "message-1", entryId: String(forwarded[0]?.entryId), role: "user", text: "Prompt B", streaming: false },
+  ]);
+  assert.deepEqual(merged.map((message) => message.text), ["Prompt A", "Prompt B"]);
+
+  let resolveCalls = 0;
+  assert.equal(deferUserMessageEndEntryId(
+    { type: "message_end", message: { role: "user", content: "Stale prompt" } },
+    () => false,
+    () => { resolveCalls++; return secondEntryId; },
+    (payload) => forwarded.push(payload),
+  ), true);
+  await Promise.resolve();
+  assert.equal(resolveCalls, 1);
+  assert.equal(forwarded.length, 1);
+
+  const unresolved: Record<string, unknown>[] = [];
+  assert.equal(deferUserMessageEndEntryId(
+    { type: "message_end", message: { role: "user", content: "Unpersisted prompt" } },
+    () => true,
+    () => secondEntryId,
+    (payload) => unresolved.push(payload),
+  ), true);
+  await Promise.resolve();
+  assert.equal(unresolved[0]?.entryId, undefined);
+  assert.equal(deferUserMessageEndEntryId(
+    { type: "message_complete", message: { role: "user", content: "Compatibility event" } },
+    () => true,
+    latestUserEntryId,
+    (payload) => forwarded.push(payload),
+  ), false);
+});
 
 function persistSession(session: SessionManager, name: string): void {
   session.appendSessionInfo(name);

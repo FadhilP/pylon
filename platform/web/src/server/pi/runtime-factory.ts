@@ -10,18 +10,24 @@ import {
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 
+export function createPylonModelRuntime(agentDir: string): Promise<ModelRuntime> {
+  const fixedAgentDir = resolve(agentDir);
+  return ModelRuntime.create({
+    authPath: resolve(fixedAgentDir, "auth.json"),
+    modelsPath: resolve(fixedAgentDir, "models.json"),
+  });
+}
+
 export async function createPylonRuntimeFactory(options: {
   agentDir: string;
   additionalExtensionPaths?: string[];
   extensionFactories?: InlineExtension[];
   eventBus?: EventBus;
+  modelRuntime?: ModelRuntime;
 }): Promise<CreateAgentSessionRuntimeFactory> {
   const eventBus = options.eventBus ?? createEventBus();
   const fixedAgentDir = resolve(options.agentDir);
-  const modelRuntime = await ModelRuntime.create({
-    authPath: resolve(fixedAgentDir, "auth.json"),
-    modelsPath: resolve(fixedAgentDir, "models.json"),
-  });
+  const modelRuntime = options.modelRuntime ?? await createPylonModelRuntime(fixedAgentDir);
 
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     if (resolve(agentDir) !== fixedAgentDir) {

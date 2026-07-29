@@ -21,6 +21,7 @@ export const COMMAND_NAMES = [
   "restoreSession",
   "renameSession",
   "setSessionActive",
+  "setSessionPinned",
   "reorderActiveSession",
   "editPrompt",
   "rewindPrompt",
@@ -89,6 +90,7 @@ export type WebCommand =
   | ({ type: "restoreSession"; sessionId: string } & CommandBase)
   | ({ type: "renameSession"; sessionId: string; name: string } & CommandBase)
   | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
+  | ({ type: "setSessionPinned"; sessionId: string; pinned: boolean } & CommandBase)
   | ({ type: "reorderActiveSession"; sessionId: string; beforeSessionId?: string } & CommandBase)
   | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "rewindPrompt"; entryId: string } & CommandBase)

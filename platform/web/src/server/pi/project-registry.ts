@@ -5,9 +5,10 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/
 import { basename, dirname, resolve } from "node:path";
 import type { DialogTimeoutSeconds, RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 9;
+const VERSION = 10;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
+const MAX_PINNED_SESSIONS = 10_000;
 const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
 
 export interface RegisteredProject {
@@ -126,6 +127,7 @@ export class ProjectRegistry {
   private archivedSessions: ArchivedSessionRecord[] = [];
   private sessionWorkspaces: SessionWorkspaceRecord[] = [];
   private activeSessionOrder: string[] = [];
+  private pinnedSessionIds: string[] = [];
   private sessionPolicies: SessionPolicyRecord[] = [];
   private globalPolicy = {
     timelineEnabled: true,
@@ -148,7 +150,7 @@ export class ProjectRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("invalid project registry");
-      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown; sessionPolicies?: unknown; policyRevision?: unknown; globalPolicy?: unknown };
+      const value = parsed as { version?: unknown; directories?: unknown; projects?: unknown; archivedSessions?: unknown; sessionWorkspaces?: unknown; activeSessionOrder?: unknown; pinnedSessionIds?: unknown; sessionPolicies?: unknown; policyRevision?: unknown; globalPolicy?: unknown };
       if (value.version === 1 && Array.isArray(value.directories)) {
         const directories = value.directories.filter((item): item is string =>
           typeof item === "string" && item.length > 0 && item.length <= 4_096);
@@ -157,13 +159,13 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, 5, 6, 7, 8, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, 6, 7, 8, 9, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const persistedGlobal = value.globalPolicy && typeof value.globalPolicy === "object" && !Array.isArray(value.globalPolicy)
         ? value.globalPolicy as Record<string, unknown>
         : {};
-      if (Number(value.version) === VERSION) {
+      if (Number(value.version) >= 9) {
         if (typeof persistedGlobal.timelineEnabled !== "boolean"
           || !validWorkspacePolicy(persistedGlobal.workspace)
           || !validDialogTimeout(persistedGlobal.guardTimeoutSeconds)
@@ -177,7 +179,7 @@ export class ProjectRegistry {
           clarifyTimeoutSeconds: persistedGlobal.clarifyTimeoutSeconds,
         };
       }
-      const legacyPolicy = Number(value.version) < VERSION;
+      const legacyPolicy = Number(value.version) < 9;
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
         const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
@@ -220,6 +222,12 @@ export class ProjectRegistry {
         ? value.activeSessionOrder.filter((item): item is string =>
             typeof item === "string" && item.length > 0 && item.length <= 128)
             .slice(0, MAX_ARCHIVED_SESSIONS)
+        : [];
+      // v9 active order did not encode pin intent; do not infer pins during migration.
+      this.pinnedSessionIds = Number(value.version) >= VERSION && Array.isArray(value.pinnedSessionIds)
+        ? [...new Set(value.pinnedSessionIds.filter((item): item is string =>
+            typeof item === "string" && item.length > 0 && item.length <= 128))]
+            .slice(0, MAX_PINNED_SESSIONS)
         : [];
       this.sessionPolicies = Array.isArray(value.sessionPolicies)
         ? value.sessionPolicies.flatMap((item) => this.parseSessionPolicy(item)).slice(0, MAX_ARCHIVED_SESSIONS)
@@ -292,6 +300,7 @@ export class ProjectRegistry {
     const removedSessions = new Set(sessionIds);
     this.archivedSessions = this.archivedSessions.filter((session) => !removedSessions.has(session.id));
     this.activeSessionOrder = this.activeSessionOrder.filter((sessionId) => !removedSessions.has(sessionId));
+    this.pinnedSessionIds = this.pinnedSessionIds.filter((sessionId) => !removedSessions.has(sessionId));
     await this.save();
   }
 
@@ -341,6 +350,33 @@ export class ProjectRegistry {
     await this.save();
   }
 
+  listPinnedSessionIds(): string[] {
+    this.assertLoaded();
+    return [...this.pinnedSessionIds];
+  }
+
+  isSessionPinned(sessionId: string): boolean {
+    this.assertLoaded();
+    return this.pinnedSessionIds.includes(sessionId);
+  }
+
+  async pinSession(sessionId: string): Promise<void> {
+    this.assertLoaded();
+    if (!sessionId || sessionId.length > 128) throw new Error("invalid pinned session");
+    if (this.isSessionPinned(sessionId)) return;
+    if (this.pinnedSessionIds.length >= MAX_PINNED_SESSIONS) throw new Error("pinned session limit reached");
+    this.pinnedSessionIds.push(sessionId);
+    await this.save();
+  }
+
+  async unpinSession(sessionId: string): Promise<void> {
+    this.assertLoaded();
+    const next = this.pinnedSessionIds.filter((id) => id !== sessionId);
+    if (next.length === this.pinnedSessionIds.length) return;
+    this.pinnedSessionIds = next;
+    await this.save();
+  }
+
   async reorderActiveSession(sessionId: string, beforeSessionId?: string): Promise<void> {
     this.assertLoaded();
     const index = this.activeSessionOrder.indexOf(sessionId);
@@ -355,10 +391,12 @@ export class ProjectRegistry {
     await this.save();
   }
 
-  async archiveProject(projectId: string): Promise<void> {
+  async archiveProject(projectId: string, sessionIds: string[] = []): Promise<void> {
     const project = this.requireProject(projectId);
     if (project.archivedAt) return;
     project.archivedAt = new Date().toISOString();
+    const removed = new Set(sessionIds);
+    this.pinnedSessionIds = this.pinnedSessionIds.filter((sessionId) => !removed.has(sessionId));
     await this.save();
   }
 
@@ -384,6 +422,7 @@ export class ProjectRegistry {
     if (this.isSessionArchived(sessionId)) return;
     if (this.archivedSessions.length >= MAX_ARCHIVED_SESSIONS) throw new Error("session archive is full");
     this.archivedSessions.push({ id: sessionId, archivedAt: new Date().toISOString() });
+    this.pinnedSessionIds = this.pinnedSessionIds.filter((id) => id !== sessionId);
     await this.save();
   }
 
@@ -453,6 +492,7 @@ export class ProjectRegistry {
     const archived = this.archivedSessions.find((item) => item.id === previousId);
     if (archived) archived.id = sessionId;
     this.activeSessionOrder = this.activeSessionOrder.map((id) => id === previousId ? sessionId : id);
+    this.pinnedSessionIds = [...new Set(this.pinnedSessionIds.map((id) => id === previousId ? sessionId : id))];
     await this.save();
   }
 
@@ -709,6 +749,7 @@ export class ProjectRegistry {
       archivedSessions: this.archivedSessions,
       sessionWorkspaces: this.sessionWorkspaces,
       activeSessionOrder: this.activeSessionOrder,
+      pinnedSessionIds: this.pinnedSessionIds,
       sessionPolicies: this.sessionPolicies,
       policyRevision: this.policyRevision,
     }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });

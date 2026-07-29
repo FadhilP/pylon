@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
 
-test("command validation allowlists bounded v22 commands and attachments", () => {
+test("command validation allowlists bounded v23 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -52,6 +52,8 @@ test("command validation allowlists bounded v22 commands and attachments", () =>
   assert.equal(validateCommand({ type: "renameSession", sessionId: "session-1", name: " ", commandId: "rename", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "setSessionActive", sessionId: "session-1", active: true, commandId: "active", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "setSessionActive", sessionId: "session-1", active: "yes", commandId: "active", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "setSessionPinned", sessionId: "session-1", pinned: true, commandId: "pin", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "setSessionPinned", sessionId: "session-1", pinned: "yes", commandId: "pin", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "editPrompt", entryId: "entry-1", message: "Updated", rollbackFiles: false, commandId: "edit", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "editPrompt", entryId: "", message: "Updated", rollbackFiles: false, commandId: "edit", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "editPrompt", entryId: "entry-1", message: "Updated", rollbackFiles: "yes", commandId: "edit", expectedGeneration: 1 }).ok, false);
@@ -273,7 +275,7 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ kind: "result", tool: "read", text: "x".repeat(2_001) }] }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...snapshot, optionalCapabilities: { verify: "maybe" } }), false);
 
-  const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, runtimeState: "idle" };
+  const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, pinned: false, runtimeState: "idle" };
   const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", totalCount: 1, sessions: [session] }] };
   assert.equal(isSessionListSnapshot(sessions), true);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", totalCount: 0, sessions: [] }] }), true);
