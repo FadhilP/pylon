@@ -20,6 +20,10 @@ export interface RuntimeHandle {
   sessionGeneration: number;
 }
 
+export interface TerminalTarget extends RuntimeHandle {
+  cwd: string;
+}
+
 export interface PromptInput {
   commandId: string;
   expectedGeneration: number;
@@ -257,6 +261,7 @@ export type DriverEventListener = (event: DriverEvent) => void;
 export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
+  terminalTarget?(): TerminalTarget;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;

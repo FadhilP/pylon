@@ -39,6 +39,9 @@ interface SidebarProps {
   onLoadMore: (project: SessionProject) => void;
   onAddProject: () => void;
   onOpenArchives: () => void;
+  terminalOpen: boolean;
+  terminalAvailable: boolean;
+  onToggleTerminal: () => void;
   onOpenSettings: () => void;
   onArchiveProject: (project: SessionProject) => void;
   onRemoveProject: (project: SessionProject) => void;
@@ -49,7 +52,7 @@ interface SidebarProps {
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -320,7 +323,8 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
       </nav>
 
       <div className="sidebar-foot">
-        <button className="sidebar-settings" type="button" onClick={onOpenSettings}><IconSettings size={16} />Settings</button>
+        <button className="sidebar-action" type="button" onClick={onOpenSettings}><IconSettings size={16} />Settings</button>
+        <button className={`sidebar-action${terminalOpen ? " is-active" : ""}`} type="button" disabled={!terminalAvailable} aria-pressed={terminalOpen} onClick={onToggleTerminal}><IconTerminal2 size={16} />Terminal</button>
       </div>
       <div className="sr-only" aria-live="polite">{announcement}</div>
     </aside>

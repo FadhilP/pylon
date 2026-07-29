@@ -532,8 +532,8 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
           >
             <div className="checkpoint-row">
             <button className="checkpoint-copy" type="button" aria-expanded={active?.id === checkpoint.id} onClick={() => setSelected((current) => current === checkpoint.id ? undefined : checkpoint.id)}>
-              <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong><time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
-              <span className="checkpoint-meta">{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}{checkpoint.changes && <span>{checkpoint.changes.fileCount} files</span>}{checkpoint.changes && <span className="checkpoint-diff-count"><ins>+{checkpoint.changes.additions}</ins><del>−{checkpoint.changes.deletions}</del></span>}</span>
+              <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong></span>
+              <span className="checkpoint-meta">{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}{checkpoint.changes && <span>{checkpoint.changes.fileCount} files</span>}{checkpoint.changes && <span className="checkpoint-diff-count"><ins>+{checkpoint.changes.additions}</ins><del>−{checkpoint.changes.deletions}</del></span>}<time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
             </button>
             <span className="checkpoint-row-actions">
               <button type="button" title="Fork from checkpoint" aria-label="Fork from checkpoint" aria-busy={busy === `fork:${checkpoint.id}`} disabled={!enabled} onClick={() => void act("fork", checkpoint.id)}>

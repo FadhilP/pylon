@@ -9,6 +9,7 @@ import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-
 import { deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
+import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -449,7 +450,7 @@ test("existing long sessions keep the latest user turn and every tool result", {
     persistSession(session, `old-${index}`);
   }
   session.appendMessage({ role: "user", content: "Run every check", timestamp: Date.now() });
-  for (let index = 0; index < 60; index++) {
+  for (let index = 0; index < 120; index++) {
     session.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: `${index}.ts` } }],
@@ -483,12 +484,17 @@ test("existing long sessions keep the latest user turn and every tool result", {
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.conversation.messages[0]?.role, "user");
     assert.equal(snapshot.conversation.messages[0]?.text, "Run every check");
-    assert.equal(snapshot.conversation.messages.filter((message) => message.role === "tool").length, 60);
-    assert.equal(snapshot.conversation.messages.at(-1)?.text, "result 59");
+    assert.equal(snapshot.conversation.messages.length, 241);
+    assert.deepEqual(
+      snapshot.conversation.messages.filter((message) => message.role === "tool").map((message) => message.text),
+      Array.from({ length: 120 }, (_, index) => `result ${index}`),
+    );
     assert.equal(snapshot.conversation.historyRemaining, 30);
+    assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
     const earlier = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
-    assert.equal(earlier.messages.length, 30);
-    assert.equal(earlier.messages.at(-1)?.text, "old-29");
+    assert.deepEqual(earlier.messages.map((message) => message.text), Array.from({ length: 30 }, (_, index) => `old-${index}`));
+    const snapshotEntryIds = new Set(snapshot.conversation.messages.map((message) => message.entryId));
+    assert.equal(earlier.messages.some((message) => snapshotEntryIds.has(message.entryId)), false);
   } finally {
     await driver.dispose();
     await rm(session.getSessionFile()!, { force: true });

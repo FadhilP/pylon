@@ -14,6 +14,7 @@ import {
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import type { FileReference } from "../shared/file-reference";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type {
@@ -29,7 +30,7 @@ type FileView = "current" | "base" | "diff";
 
 export function FilesPanel({ live, requestedPath, onClose, onError }: {
   live: RuntimeStoreSnapshot;
-  requestedPath?: string;
+  requestedPath?: FileReference & { requestId: number; view?: "current" | "diff" };
   onClose: () => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
@@ -38,6 +39,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
   const [query, setQuery] = useState("");
   const [selectedPath, setSelectedPath] = useState<string>();
+  const [selectedLine, setSelectedLine] = useState<number>();
   const [view, setView] = useState<FileView>("diff");
   const [content, setContent] = useState<WorkspaceFileContent | WorkspaceFileDiff>();
   const [inventoryLoading, setInventoryLoading] = useState(false);
@@ -56,7 +58,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     setInventoryProgress(undefined);
     setInventoryLoading(true);
     void (async () => {
-      const inventory = await runtimeStore.workspaceInventory(
+      await runtimeStore.workspaceInventory(
         false,
         controller.signal,
         (next, wasTruncated) => {
@@ -68,10 +70,6 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
           if (revision === requestRevision.current) setInventoryProgress({ loaded, total });
         },
       );
-      const loaded = inventory.files;
-      if (requestedPath && loaded.some((file) => file.path === requestedPath)) {
-        setSelectedPath(requestedPath);
-      }
     })().catch((error) => {
       if (!controller.signal.aborted) onError(error, "Unable to list workspace files");
     }).finally(() => {
@@ -84,9 +82,10 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   }, [runtime?.sessionId, runtime?.workspace?.revision]);
   useEffect(() => {
     if (!requestedPath) return;
-    setSelectedPath(requestedPath);
-    setView(runtime?.workspace?.mode === "worktree" ? "diff" : "current");
-  }, [requestedPath, runtime?.workspace?.mode]);
+    setSelectedPath(requestedPath.path);
+    setSelectedLine(requestedPath.line);
+    setView(requestedPath.view ?? "current");
+  }, [requestedPath]);
   useEffect(() => {
     if (!selectedPath) {
       setContent(undefined);
@@ -179,15 +178,18 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
         {tab === "changes"
           ? visible.map((file) => <FileRow key={file.path} file={file} selectedPath={selectedPath} onSelect={(path) => {
               setSelectedPath(path);
+              setSelectedLine(undefined);
               setView("diff");
             }} />)
           : query.trim()
             ? visible.map((file) => <FileRow key={file.path} file={file} fullPath selectedPath={selectedPath} onSelect={(path) => {
                 setSelectedPath(path);
+                setSelectedLine(undefined);
                 setView("current");
               }} />)
             : <FileTree files={visible} selectedPath={selectedPath} onSelect={(path) => {
                 setSelectedPath(path);
+                setSelectedLine(undefined);
                 setView("current");
               }} />}
         {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
@@ -203,10 +205,10 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
               </>}
               <button className={view === "current" ? "is-active" : ""} title="Show the current file on disk" onClick={() => setView("current")}>Working copy</button>
               <button className="icon-button" onClick={() => void navigator.clipboard.writeText(selectedPath)} aria-label="Copy file path"><IconCopy size={14} /></button>
-              <button className="icon-button" onClick={() => setSelectedPath(undefined)} aria-label="Close file"><IconX size={14} /></button>
+              <button className="icon-button" onClick={() => { setSelectedPath(undefined); setSelectedLine(undefined); }} aria-label="Close file"><IconX size={14} /></button>
             </span>
           </div>
-          <FileContent value={viewerLoading ? undefined : content} view={view} />
+          <FileContent value={viewerLoading ? undefined : content} view={view} targetLine={selectedLine} />
         </>
       </div>}
     </div>
@@ -376,7 +378,13 @@ function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
   </button>;
 }
 
-function FileContent({ value, view }: { value?: WorkspaceFileContent | WorkspaceFileDiff; view: FileView }) {
+function FileContent({ value, view, targetLine }: { value?: WorkspaceFileContent | WorkspaceFileDiff; view: FileView; targetLine?: number }) {
+  const targetRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!value || !targetLine) return;
+    const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [targetLine, value]);
   if (!value) return <div className="files-empty large">Loading…</div>;
   if (value.state !== "available" && !value.text) {
     return <div className="files-empty large">{value.state === "deleted" ? "File deleted" : value.state === "binary" ? "Binary file" : "File is too large to display"}</div>;
@@ -384,7 +392,10 @@ function FileContent({ value, view }: { value?: WorkspaceFileContent | Workspace
   const lines = (value.text ?? "").split("\n");
   const highlighted = DOMPurify.sanitize(highlightSource(value.text ?? "", value.path, view === "diff"));
   return <pre className={`file-code${view === "diff" ? " is-diff" : ""}`}>
-    <span className="file-line-numbers" aria-hidden="true">{lines.map((_, index) => <i key={index}>{index + 1}</i>)}</span>
+    <span className="file-line-numbers" aria-hidden="true">{lines.map((_, index) => {
+      const line = index + 1;
+      return <i key={line} ref={line === targetLine ? targetRef : undefined} className={line === targetLine ? "is-target" : undefined}>{line}</i>;
+    })}</span>
     <code dangerouslySetInnerHTML={{ __html: highlighted }} />
     {value.truncated && <small>Output truncated</small>}
   </pre>;

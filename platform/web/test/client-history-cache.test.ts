@@ -64,6 +64,7 @@ test("cached session history survives replacement and preserves safe paging", ()
   assert.equal(restored.conversation.messages.length, 200);
   assert.equal(restored.conversation.messages.some((message) => message.id === "stream-1"), false);
   assert.equal(restored.conversation.historyCursor, undefined);
+  assert.equal(restored.conversation.historyRemaining, undefined);
 
   const gap = restoreCachedHistory(runtime(messages(300, 400), "fresh", 300), {
     messages: messages(0, 200),
@@ -78,6 +79,15 @@ test("cached session history survives replacement and preserves safe paging", ()
   assert.deepEqual(filled.slice(198, 202).map((message) => message.id), [
     "history-198", "history-199", "history-200", "history-201",
   ]);
+
+  const internalGap = restoreCachedHistory(runtime(messages(186, 286), "fresh", 186), {
+    messages: [...messages(0, 100), ...messages(200, 250)],
+    historyCursor: undefined,
+    historyRemaining: undefined,
+  });
+  assert.equal(hasCompleteHistory(internalGap.conversation.messages), false);
+  assert.equal(internalGap.conversation.historyCursor, "fresh");
+  assert.equal(internalGap.conversation.historyRemaining, 186);
 
   const rewound = restoreCachedHistory(runtime(messages(0, 50)), {
     messages: messages(0, 200),

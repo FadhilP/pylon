@@ -550,7 +550,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (conversation.historyRemaining !== undefined
     && (!Number.isSafeInteger(conversation.historyRemaining) || (conversation.historyRemaining as number) < 0)) return false;
   if ((conversation.historyCursor === undefined) !== (conversation.historyRemaining === undefined)) return false;
-  if (conversation.messages.length > 100 || conversation.tools.length > 100 || conversation.delegatedRuns.length > 100) return false;
+  if (conversation.tools.length > 100 || conversation.delegatedRuns.length > 100) return false;
   if (!conversation.messages.every((message) => record(message) && identifier(message.id)
     && (message.entryId === undefined || identifier(message.entryId))
     && ["user", "assistant", "system", "tool"].includes(message.role as string)

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
@@ -10,6 +11,7 @@ import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from ".
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
 import { applySecurityHeaders, httpError, MAX_JSON_BODY_BYTES, readJson, readJsonWithSize, requestAllowed, SessionStore, type BrowserSession, type SecurityOptions, validCsrf, validTabId } from "./security.ts";
+import { TerminalServer } from "./terminal.ts";
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -32,6 +34,7 @@ export class ServerTransport {
   private readonly clients = new Set<SseClient>();
   private readonly idempotency = new CommandIdempotency();
   private readonly unsubscribe: () => void;
+  private readonly terminal: TerminalServer;
   private lastCommandOwner?: string;
   private dialogOwner?: DialogOwner;
 
@@ -39,6 +42,7 @@ export class ServerTransport {
     this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
     this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
     this.unsubscribe = driver.subscribe((event) => this.onDriverEvent(event));
+    this.terminal = new TerminalServer(driver, this.sessions, options);
   }
 
   static async create(driver: PiDriver, options: ServerTransportOptions): Promise<ServerTransport> {
@@ -54,7 +58,12 @@ export class ServerTransport {
     }
     this.clients.clear();
     this.clearDialogOwner();
+    this.terminal.dispose();
   }
+
+  handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    void this.terminal.handleUpgrade(request, socket, head);
+  };
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     applySecurityHeaders(response);

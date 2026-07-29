@@ -10,6 +10,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import type { FileReference } from "../shared/file-reference";
 import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
@@ -19,13 +20,17 @@ import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
+import { TerminalPanel } from "./terminal-panel";
 
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | null;
+type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 const LEFT_PANEL_WIDTH_KEY = "pylon-left-panel-width";
 const DEFAULT_LEFT_PANEL_WIDTH = 280;
 const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
 const DEFAULT_RIGHT_PANEL_WIDTH = 380;
+const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
+const DEFAULT_TERMINAL_HEIGHT = 280;
 
 function leftPanelWidth(value: number): number {
   const maximum = Math.min(520, window.innerWidth * .45);
@@ -46,6 +51,15 @@ function initialPanelWidth(): number {
   try { stored = Number(localStorage.getItem(RIGHT_PANEL_WIDTH_KEY)); }
   catch { /* Storage can be unavailable in hardened browser contexts. */ }
   return panelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_RIGHT_PANEL_WIDTH);
+}
+function terminalHeight(value: number): number {
+  return Math.round(Math.max(160, Math.min(window.innerHeight * .7, value)));
+}
+function initialTerminalHeight(): number {
+  let stored = Number.NaN;
+  try { stored = Number(localStorage.getItem(TERMINAL_HEIGHT_KEY)); }
+  catch { /* Storage can be unavailable in hardened browser contexts. */ }
+  return terminalHeight(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_TERMINAL_HEIGHT);
 }
 
 function readInitialTheme(): Theme {
@@ -71,12 +85,15 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
-  const [requestedFile, setRequestedFile] = useState<string>();
+  const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalSessionKey, setTerminalSessionKey] = useState<string>();
+  const [terminalDrawerHeight, setTerminalDrawerHeight] = useState(initialTerminalHeight);
   const [toast, setToast] = useState<{ id: number; message: string }>();
   const [sessionBusy, setSessionBusy] = useState("");
   const [sessionDeleting, setSessionDeleting] = useState("");
@@ -102,6 +119,9 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
+  const terminalTargetKey = live.runtime?.ready
+    ? `${live.runtime.sessionId}:${live.runtime.sessionGeneration}`
+    : undefined;
   const projects = useMemo<SessionProject[]>(() => sessionPages.map((page) => ({
     id: page.id,
     label: page.label,
@@ -152,6 +172,11 @@ export function App() {
 
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
   useEffect(() => { setSelectedAgentId(undefined); }, [live.runtime?.sessionId]);
+  useEffect(() => {
+    if (!terminalSessionKey || terminalSessionKey === terminalTargetKey) return;
+    setTerminalOpen(false);
+    setTerminalSessionKey(undefined);
+  }, [terminalSessionKey, terminalTargetKey]);
 
   useEffect(() => {
     if (mobile && previousSidebarOpen.current && !sidebarOpen) navigationToggleRef.current?.focus();
@@ -174,9 +199,14 @@ export function App() {
 
   useEffect(() => {
     const open = (event: Event) => {
-      const path = (event as CustomEvent<unknown>).detail;
-      if (typeof path !== "string") return;
-      setRequestedFile(path);
+      const detail = (event as CustomEvent<unknown>).detail;
+      const reference = typeof detail === "string"
+        ? { path: detail }
+        : detail && typeof detail === "object" && typeof (detail as FileReference).path === "string"
+          ? detail as FileReference & { view?: "current" | "diff" }
+          : undefined;
+      if (!reference) return;
+      setRequestedFile({ ...reference, requestId: Date.now() });
       setRightPanel("files");
     };
     window.addEventListener("pylon:open-file", open);
@@ -494,7 +524,7 @@ export function App() {
     <div
       ref={appShellRef}
       className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
-      style={{ "--sidebar-width": `${leftPanelWidth}px` } as CSSProperties}
+      style={{ "--sidebar-width": `${leftPanelWidth}px`, "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px" } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">Skip to content</a>
       <SessionSidebar
@@ -527,6 +557,16 @@ export function App() {
         onAddProject={() => void addProject()}
         onOpenArchives={() => {
           setArchivesOpen(true);
+          if (mobile) setSidebarOpen(false);
+        }}
+        terminalOpen={terminalOpen}
+        terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
+        onToggleTerminal={() => {
+          if (terminalOpen) setTerminalOpen(false);
+          else if (terminalTargetKey) {
+            setTerminalSessionKey(terminalTargetKey);
+            setTerminalOpen(true);
+          }
           if (mobile) setSidebarOpen(false);
         }}
         onOpenSettings={() => {
@@ -638,6 +678,21 @@ export function App() {
             onError={reportError}
           />}
         </div>
+        {terminalOpen && !mobile && <TerminalResizer
+          container={appShellRef}
+          height={terminalDrawerHeight}
+          onCommit={(height) => {
+            setTerminalDrawerHeight(height);
+            try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height)); }
+            catch { /* Resizing still works for the current page. */ }
+          }}
+        />}
+        {terminalTargetKey && terminalSessionKey === terminalTargetKey && <TerminalPanel
+          key={`terminal:${terminalTargetKey}`}
+          open={terminalOpen}
+          cwdLabel={live.runtime?.cwdLabel}
+          onClose={() => setTerminalOpen(false)}
+        />}
         {(sessionBusy || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
       </main>
 
@@ -655,6 +710,55 @@ export function App() {
       />}
     </div>
   );
+}
+
+function TerminalResizer({ container, height, onCommit }: {
+  container: React.RefObject<HTMLDivElement | null>;
+  height: number;
+  onCommit: (height: number) => void;
+}) {
+  const resize = (clientY: number) => {
+    const next = terminalHeight(window.innerHeight - clientY - 7);
+    container.current?.style.setProperty("--terminal-height", `${next}px`);
+    return next;
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    let next = height;
+    const move = (moveEvent: PointerEvent) => { next = resize(moveEvent.clientY); };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    const up = () => { cleanup(); onCommit(next); };
+    const cancel = () => {
+      cleanup();
+      container.current?.style.setProperty("--terminal-height", `${height}px`);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
+  };
+  return <div
+    className="terminal-resizer"
+    role="separator"
+    aria-label="Resize terminal"
+    aria-orientation="horizontal"
+    aria-valuemin={160}
+    aria-valuemax={Math.floor(window.innerHeight * .7)}
+    aria-valuenow={height}
+    tabIndex={0}
+    onPointerDown={onPointerDown}
+    onKeyDown={(event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      const next = terminalHeight(height + (event.key === "ArrowUp" ? 16 : -16));
+      container.current?.style.setProperty("--terminal-height", `${next}px`);
+      onCommit(next);
+    }}
+  />;
 }
 
 function PanelResizer({ container, width, onCommit }: {

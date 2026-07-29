@@ -66,13 +66,14 @@ export function restoreCachedHistory(runtime: RuntimeSnapshot, cached?: CachedHi
 
   const merged = mergeHistoryMessages(cachedMessages, runtime.conversation.messages);
   const hasGap = freshStart !== undefined && cachedEnd !== undefined && cachedEnd + 1 < freshStart;
+  const useCachedPaging = !hasGap && (cached.historyCursor !== undefined || hasCompleteHistory(merged));
   return {
     ...runtime,
     conversation: {
       ...runtime.conversation,
       messages: merged,
-      historyCursor: hasGap ? runtime.conversation.historyCursor : cached.historyCursor,
-      historyRemaining: hasGap ? runtime.conversation.historyRemaining : cached.historyRemaining,
+      historyCursor: useCachedPaging ? cached.historyCursor : runtime.conversation.historyCursor,
+      historyRemaining: useCachedPaging ? cached.historyRemaining : runtime.conversation.historyRemaining,
     },
   };
 }

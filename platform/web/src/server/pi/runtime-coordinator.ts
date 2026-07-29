@@ -236,6 +236,15 @@ export class RuntimeCoordinator implements PiDriver {
     return this.selectedSnapshot();
   }
 
+  terminalTarget() {
+    const slot = this.selected();
+    return {
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      cwd: slot.driver.runtimeDetails().cwd,
+    };
+  }
+
   async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
     const slot = this.selected();
     const generation = this.generation;

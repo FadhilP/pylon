@@ -51,6 +51,14 @@ export class ApiClient {
     return new EventSource(`/api/v1/events?${query.toString()}`, { withCredentials: true });
   }
 
+  terminalUrl(generation: number): string {
+    if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
+    const url = new URL("/api/v1/terminal", window.location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.search = new URLSearchParams({ tabId: this.tabId, generation: String(generation), csrf: this.csrfToken }).toString();
+    return url.toString();
+  }
+
   async sessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
     const query = new URLSearchParams();
     if (input.projectId) query.set("projectId", input.projectId);

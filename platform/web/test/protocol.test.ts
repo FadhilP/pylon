@@ -160,6 +160,23 @@ test("event and snapshot validators reject incompatible versions", () => {
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
   assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
+  const expandedLatestTurn = [
+    { id: "latest-user", role: "user", text: "Run every check", streaming: false },
+    ...Array.from({ length: 100 }, (_, index) => ({
+      id: `latest-tool-${index}`,
+      role: "tool",
+      text: `result ${index}`,
+      streaming: false,
+    })),
+  ];
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    conversation: { ...snapshot.conversation, messages: expandedLatestTurn },
+  }), true);
+  assert.equal(runtimeSnapshotValidationIssue({
+    ...snapshot,
+    conversation: { ...snapshot.conversation, messages: expandedLatestTurn },
+  }), undefined);
   assert.deepEqual(runtimeSnapshotValidationIssue({ ...snapshot, protocolVersion: PROTOCOL_VERSION + 1 }), {
     kind: "protocol",
     area: "protocol",

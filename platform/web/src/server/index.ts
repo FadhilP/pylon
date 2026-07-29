@@ -83,12 +83,14 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   }
   if (!transport) throw new Error("transport did not initialize");
   const readyTransport = transport;
+  server.on("upgrade", readyTransport.handleUpgrade);
   let closePromise: Promise<void> | undefined;
   return {
     server,
     transport: readyTransport,
     close() {
       return closePromise ??= (async () => {
+        server.off("upgrade", readyTransport.handleUpgrade);
         readyTransport.dispose();
         await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
         await assets.close();

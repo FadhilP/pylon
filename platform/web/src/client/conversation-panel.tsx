@@ -3,6 +3,7 @@ import DOMPurify from "dompurify";
 import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
+import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
@@ -746,7 +747,7 @@ export function ConversationPanel({
           <div className="prompt-right">
           <div className="prompt-metrics" aria-label="Session usage">
             <span title={`${runtime?.metrics.contextTokens.toLocaleString() ?? 0} of ${runtime?.metrics.contextLimit.toLocaleString() ?? 0} tokens`}>
-              {runtime ? `${runtime.metrics.contextPercent.toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : "—"}
+              {runtime ? `${runtime.metrics.contextPercent.toFixed(2)}%` : "—"}
             </span>
             <span>{runtime ? `$${runtime.metrics.cost.toFixed(2)}` : "—"}</span>
           </div>
@@ -1348,7 +1349,17 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
     ALLOWED_TAGS: markdownTags,
   }), [text]);
 
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+  const onClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = (event.target as HTMLElement).closest("a");
+    if (!anchor || !event.currentTarget.contains(anchor)) return;
+    const reference = parseFileReference(anchor.getAttribute("href") ?? "");
+    if (!reference) return;
+    event.preventDefault();
+    window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: reference }));
+  };
+
+  return <div className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 function CopyMessageButton({ text, label }: { text: string; label: string }) {
@@ -1436,7 +1447,7 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
   const remaining = files.length - 3;
   return <section className="changed-files" aria-label="Files changed in this turn">
     {visible.map((file) => <button className="changed-file" type="button" key={file.path} onClick={() =>
-      window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: file.path }))}>
+      window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: { path: file.path, view: "diff" } }))}>
       <code>{file.path}</code>
       <span>{file.binary
         ? <small>binary</small>

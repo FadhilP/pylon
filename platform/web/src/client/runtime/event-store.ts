@@ -380,6 +380,10 @@ export class RuntimeEventStore {
     return inventory;
   }
 
+  terminalUrl(): string {
+    return this.api.terminalUrl(this.requireReadyRuntime().sessionGeneration);
+  }
+
   async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
     const runtime = this.requireReadyRuntime();
     const result = await this.api.workspaceFile(runtime.sessionGeneration, path, view);

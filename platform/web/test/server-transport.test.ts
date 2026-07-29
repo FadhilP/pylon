@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebSocket } from "ws";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
@@ -53,6 +54,7 @@ class FakeDriver implements PiDriver {
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
+  terminalTarget() { return { sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, cwd: process.cwd() }; }
   conversationHistory(): Promise<ConversationHistoryPage> {
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
@@ -203,6 +205,31 @@ test("local server rejects foreign Host before API and asset routing", async () 
     assert.equal(await rawStatus(`${origin}/api/v1/health`, { host: `127.0.0.1:${port}` }), 200);
     assert.equal(running.server.headersTimeout, 10_000);
     assert.equal(running.server.requestTimeout, 30_000);
+  } finally {
+    await running.close();
+  }
+});
+
+test("terminal upgrade rejects unauthenticated and stale sessions before spawning", async () => {
+  const running = await startPylonServer({ port: 0, development: false, driver: new FakeDriver() });
+  const port = (running.server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  const tab = "terminal-security-tab";
+  const upgradeStatus = (url: URL, cookie?: string) => new Promise<number>((resolve, reject) => {
+    const socket = new WebSocket(url, { headers: { ...(cookie ? { cookie } : {}), origin } });
+    socket.once("unexpected-response", (_request, response) => { response.resume(); resolve(response.statusCode ?? 0); });
+    socket.once("open", () => { socket.close(); reject(new Error("terminal upgrade unexpectedly succeeded")); });
+    socket.once("error", () => undefined);
+  });
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
+    const csrf = String((await body(bootstrap)).csrfToken);
+    const url = new URL(origin.replace("http:", "ws:") + "/api/v1/terminal");
+    url.search = new URLSearchParams({ tabId: tab, generation: "2", csrf }).toString();
+    assert.equal(await upgradeStatus(url, cookie), 409);
+    url.searchParams.set("generation", "1");
+    assert.equal(await upgradeStatus(url), 403);
   } finally {
     await running.close();
   }

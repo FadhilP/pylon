@@ -12,7 +12,7 @@ test("web typography never declares a font below 12px", async () => {
 });
 
 test("runtime policy, overview, and Files keep their compact native layout", async () => {
-  const [css, inspector, files, sidebar, conversation, app, eventStore] = await Promise.all([
+  const [css, inspector, files, sidebar, conversation, app, eventStore, terminal] = await Promise.all([
     readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
     readFile(new URL("../src/client/inspector.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/files-panel.tsx", import.meta.url), "utf8"),
@@ -20,6 +20,7 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
     readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/terminal-panel.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(css, /\.project-list\s*\{[^}]*scrollbar-width:\s*none/s);
@@ -84,6 +85,9 @@ test("runtime policy, overview, and Files keep their compact native layout", asy
   assert.doesNotMatch(eventStore, /Unsupported runtime protocol/);
   assert.match(eventStore, /scheduleBootstrapRetry/);
   assert.match(app, /<RecoveryToast recovery=\{live\.recovery\}/);
+  assert.match(app, /terminalSessionKey === terminalTargetKey && <TerminalPanel/);
+  assert.match(terminal, /hidden=\{!open\}/);
+  assert.match(terminal, /useEffect\(\(\) => \{[\s\S]*if \(!open\) return;[\s\S]*terminalRef\.current\?\.focus\(\)/);
 });
 
 test("inline runtime requests show focus-aware timers without manual ownership release", async () => {
