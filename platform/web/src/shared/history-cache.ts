@@ -44,6 +44,10 @@ export function mergeHistoryMessages(previous: MessageReadModel[], fresh: Messag
     });
 }
 
+export function mergeHistorySegments(segments: MessageReadModel[][]): MessageReadModel[] {
+  return segments.reduce<MessageReadModel[]>(mergeHistoryMessages, []);
+}
+
 export function hasCompleteHistory(messages: MessageReadModel[]): boolean {
   const indexes = new Set(messages.map(historyIndex).filter((value): value is number => value !== undefined));
   if (!indexes.has(0)) return false;

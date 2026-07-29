@@ -377,11 +377,10 @@ export class RuntimeCoordinator implements PiDriver {
     const slot = this.selected();
     const generation = this.generation;
     const record = this.registry().workspaceForSession(slot.id);
-    if (!record?.baselineTree) throw new Error("This session has no isolated Git baseline.");
     const diff = await diffWorkspaceFile({
       cwd: slot.driver.runtimeDetails().cwd,
       path: input.path,
-      baselineTree: record.baselineTree,
+      baselineTree: record?.baselineTree,
     });
     this.assertSelected(slot, generation, "loading a workspace diff");
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, ...diff };
@@ -563,7 +562,7 @@ export class RuntimeCoordinator implements PiDriver {
       const project = input.projectId ? this.registry().get(input.projectId) : undefined;
       if (input.projectId && (!project || project.archivedAt)) throw new Error("project is unavailable");
       const current = this.selected().driver.runtimeDetails();
-      const slot = await this.createSlot({
+      const draft = await this.createSlot({
         ...this.baseTarget(),
         cwd: project?.cwd ?? parent?.cwd ?? current.cwd,
         projectId: project?.id
@@ -572,8 +571,23 @@ export class RuntimeCoordinator implements PiDriver {
         parentSessionPath: parent?.path ?? current.sessionPath,
         parentSessionId: parent?.id ?? current.sessionId,
       });
-      this.sessionIndex.invalidate();
-      return this.select(slot);
+      let slot = draft;
+      try {
+        slot = await this.ensureDraftWorkspace(slot);
+        this.sessionIndex.invalidate();
+        const result = slot.provisional
+          ? await this.commitProvisional(slot).then(() => this.replacement(false))
+          : await this.select(slot);
+        slot.checkoutProvisional = undefined;
+        return result;
+      } catch (error) {
+        await this.rollbackProvisional(slot);
+        if (this.slots.has(draft.id) && draft.id !== this.selectedId) {
+          await this.registry().removeSessionWorkspace(draft.id).catch(() => {});
+          await this.disposeSlot(draft).catch(() => {});
+        }
+        throw error;
+      }
     });
   }
 
@@ -1415,8 +1429,8 @@ export class RuntimeCoordinator implements PiDriver {
   private async commitProvisional(slot: RuntimeSlot): Promise<void> {
     const provisional = slot.provisional;
     if (!provisional) return;
-    slot.provisional = undefined;
     await this.select(slot);
+    slot.provisional = undefined;
     await this.disposeSlot(provisional.previous);
     if (provisional.oldSessionPath) await unlink(provisional.oldSessionPath).catch(() => {});
     this.sessionIndex.invalidate();
@@ -2069,10 +2083,14 @@ export class RuntimeCoordinator implements PiDriver {
         };
       } else {
         const gitWorkspace = await inspectGitWorkspace(details.cwd);
+        const localChanges = gitWorkspace && record?.mode === "local"
+          ? await inspectWorkspaceChanges(details.cwd)
+          : undefined;
         slot.workspace = {
           gitAvailable: Boolean(gitWorkspace),
           mode: gitWorkspace ? record?.mode === "local" ? "local" : "checkout" : "non-git",
-          changedCount: 0,
+          ...(localChanges ? { revision: localChanges.revision } : {}),
+          changedCount: localChanges?.files.length ?? 0,
           setupState: slot.setupState ?? "idle",
           ...(slot.setupError ? { setupError: slot.setupError } : {}),
           ...(record?.mode === "checkout" ? { checkoutOwner: slot.id.slice(0, 128) } : {}),

@@ -803,7 +803,7 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
         <button ref={menuButtonRef} className="icon-button navigation-toggle" onClick={onToggleMenu} aria-label="Toggle project navigation" aria-controls="primary-navigation" aria-expanded={menuOpen}><IconMenu2 size={18} /></button>
         <div className="repo-crumb">
           <IconBrandGit size={16} stroke={1.7} />
-          <span>{live.runtime?.cwdLabel || "Pylon"} / <strong>{sessionName}</strong></span>
+          <span>{live.runtime?.cwdLabel || "Pylon"} / <strong>{sessionName.slice(0, 128)}</strong></span>
         </div>
         <span className="topbar-divider" />
         <div className="branch-label"><IconGitBranch size={14} /><span>{branch} · Turn {turn}</span></div>

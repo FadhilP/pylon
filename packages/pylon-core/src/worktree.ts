@@ -702,6 +702,19 @@ export async function snapshotSessionBranch(
   return snapshot;
 }
 
+async function workspaceBaseline(cwd: string, baselineTree?: string): Promise<string> {
+  if (baselineTree) return baselineTree;
+  try {
+    return await git(cwd, ["rev-parse", "--verify", "HEAD^{tree}"]);
+  } catch (error) {
+    if (!await headRef(cwd)) throw error;
+    return temporaryIndex(async (env) => {
+      await git(cwd, ["read-tree", "--empty"], env);
+      return git(cwd, ["write-tree"], env);
+    });
+  }
+}
+
 async function workspaceRevision(cwd: string, baselineTree: string) {
   if (!objectId.test(baselineTree)) throw Error("Invalid workspace baseline.");
   const current = await captureCheckoutState(cwd);
@@ -743,11 +756,12 @@ async function changesBetween(cwd: string, baselineTree: string, tree: string): 
   return files;
 }
 
-export async function inspectWorkspaceChanges(cwd: string, baselineTree: string): Promise<WorkspaceChangeList> {
-  const { current, revision } = await workspaceRevision(cwd, baselineTree);
+export async function inspectWorkspaceChanges(cwd: string, baselineTree?: string): Promise<WorkspaceChangeList> {
+  const baseline = await workspaceBaseline(cwd, baselineTree);
+  const { current, revision } = await workspaceRevision(cwd, baseline);
   return {
     revision,
-    files: (await changesBetween(current.root, baselineTree, current.worktreeTree)).slice(0, 5_000),
+    files: (await changesBetween(current.root, baseline, current.worktreeTree)).slice(0, 5_000),
   };
 }
 
@@ -762,15 +776,11 @@ export async function collectWorkspaceFiles(options: {
   query?: string;
 }): Promise<WorkspaceFileInventory> {
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
-  const baseline = options.baselineTree;
-  const { current, revision } = await workspaceRevision(options.cwd, baseline ?? (await git(options.cwd, ["write-tree"])));
+  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
+  const { current, revision } = await workspaceRevision(options.cwd, baseline);
   const present = splitNul(await git(current.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
-  const base = baseline
-    ? splitNul(await git(current.root, ["ls-tree", "-rz", "--name-only", baseline]))
-    : [];
-  const changed = baseline
-    ? new Map((await changesBetween(current.root, baseline, current.worktreeTree)).map((file) => [file.path, file]))
-    : new Map<string, WorkspaceFile>();
+  const base = splitNul(await git(current.root, ["ls-tree", "-rz", "--name-only", baseline]));
+  const changed = new Map((await changesBetween(current.root, baseline, current.worktreeTree)).map((file) => [file.path, file]));
   const allPaths = [...new Set([...present, ...base])]
     .map(safeRelativePath)
     .filter((path) => !query || path.toLocaleLowerCase().includes(query))
@@ -826,12 +836,11 @@ export async function readWorkspaceFile(options: {
   maxBytes?: number;
 }): Promise<WorkspaceFileContent> {
   const maxBytes = Math.min(1024 * 1024, Math.max(1, options.maxBytes ?? 1024 * 1024));
-  const baseline = options.baselineTree;
-  const { current, revision } = await workspaceRevision(options.cwd, baseline ?? (await git(options.cwd, ["write-tree"])));
+  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
+  const { current, revision } = await workspaceRevision(options.cwd, baseline);
   const path = safeRelativePath(options.path);
   let content: Buffer;
   if (options.view === "base") {
-    if (!baseline) return { revision, path, state: "deleted" };
     const object = `${baseline}:${path}`;
     const rawSize = await git(current.root, ["cat-file", "-s", object]).catch(() => undefined);
     if (rawSize === undefined) return { revision, path, state: "deleted" };
@@ -856,7 +865,7 @@ export async function readWorkspaceFile(options: {
 
 export async function diffWorkspaceFile(options: {
   cwd: string;
-  baselineTree: string;
+  baselineTree?: string;
   path: string;
   maxBytes?: number;
   maxLines?: number;
@@ -864,10 +873,11 @@ export async function diffWorkspaceFile(options: {
   const maxBytes = Math.min(2 * 1024 * 1024, Math.max(1, options.maxBytes ?? 2 * 1024 * 1024));
   const maxLines = Math.min(20_000, Math.max(1, options.maxLines ?? 20_000));
   const path = safeRelativePath(options.path);
-  const { current, revision } = await workspaceRevision(options.cwd, options.baselineTree);
+  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
+  const { current, revision } = await workspaceRevision(options.cwd, baseline);
   const output = await git(current.root, [
     "diff", "--no-ext-diff", "--no-renames", "--unified=3",
-    options.baselineTree, current.worktreeTree, "--", path,
+    baseline, current.worktreeTree, "--", path,
   ], {}, maxBytes + 1);
   if (output.includes("Binary files ") || output.includes("GIT binary patch")) {
     return { revision, path, state: "binary" };

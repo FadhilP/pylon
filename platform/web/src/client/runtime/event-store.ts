@@ -6,7 +6,7 @@ import type { SessionRuntimeState } from "../../shared/protocol/events";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
-import { mergeHistoryMessages, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
+import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
 
@@ -793,21 +793,18 @@ export class RuntimeEventStore {
     let segments = this.historyWindows.get(key);
     if (!segments?.length) {
       segments = [{
-        messages: runtime.conversation.messages.slice(-100),
+        messages: runtime.conversation.messages,
         earlierCursor: runtime.conversation.historyCursor,
       }];
       this.historyWindows.set(key, segments);
     } else {
       const latest = segments.at(-1)!;
       if (!latest.laterCursor) {
-        latest.messages = runtime.conversation.messages.slice(-100);
+        latest.messages = runtime.conversation.messages;
         latest.earlierCursor = runtime.conversation.historyCursor;
       }
     }
-    const messages = segments.reduce<MessageReadModel[]>(
-      (current, segment) => mergeHistoryMessages(current, segment.messages),
-      [],
-    ).slice(-300);
+    const messages = mergeHistorySegments(segments.map((segment) => segment.messages));
     return {
       sessionId: runtime.sessionId,
       sessionGeneration: runtime.sessionGeneration,
@@ -822,10 +819,6 @@ export class RuntimeEventStore {
     const segments = this.historyWindows.get(key) ?? [];
     if (direction === "before") segments.unshift(segment);
     else segments.push(segment);
-    while (segments.length > 3) {
-      if (direction === "before") segments.pop();
-      else segments.shift();
-    }
     this.historyWindows.delete(key);
     this.historyWindows.set(key, segments);
     while (this.historyWindows.size > MAX_CACHED_SESSIONS) {
@@ -1009,9 +1002,9 @@ export class RuntimeEventStore {
         this.invalidatedHistoryGenerations.delete(sessionId);
         this.historyCache.delete(sessionId);
         this.historyCache.set(sessionId, {
-          messages: runtime.conversation.messages.slice(-300),
-          historyCursor: runtime.conversation.historyCursor,
-          historyRemaining: runtime.conversation.historyRemaining,
+          messages: next.historyWindow?.messages ?? runtime.conversation.messages,
+          historyCursor: next.historyWindow?.earlierCursor ?? runtime.conversation.historyCursor,
+          historyRemaining: next.historyWindow?.earlierCursor ? runtime.conversation.historyRemaining : undefined,
         });
         while (this.historyCache.size > MAX_CACHED_SESSIONS) {
           this.historyCache.delete(this.historyCache.keys().next().value!);

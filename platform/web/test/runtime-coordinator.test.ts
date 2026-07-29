@@ -204,6 +204,54 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
   }
 });
 
+test("new sessions apply the effective workspace policy before the first prompt", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-new-session-workspace-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "local\n");
+  await run("git", ["init"], { cwd });
+  await run("git", ["config", "user.name", "Pylon Test"], { cwd });
+  await run("git", ["config", "user.email", "pylon@test.local"], { cwd });
+  await run("git", ["add", "README.md"], { cwd });
+  await run("git", ["commit", "-m", "Initial"], { cwd });
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const created = await driver.newSession({ expectedGeneration: 1 });
+    const snapshot = await driver.snapshot();
+    const registry = (driver as any).registry() as ProjectRegistry;
+    const projectId = projectIdForCwd(cwd);
+    assert.equal(snapshot.workspace?.mode, snapshot.runtimePolicy.effective.workspace);
+    assert.equal(snapshot.workspace?.mode, "local");
+    assert.equal(registry.workspaceForSession(created.sessionId)?.mode, "local");
+
+    const policy = registry.runtimePolicy(projectId, created.sessionId);
+    await registry.updateRuntimePolicy({
+      scope: "project",
+      projectId,
+      sessionId: created.sessionId,
+      verify: policy.project.verify,
+      timeline: "inherit",
+      workspace: "worktree",
+      guardTimeoutSeconds: "inherit",
+      clarifyTimeoutSeconds: "inherit",
+      expectedRevision: policy.revision,
+    });
+    const isolated = await driver.newSession({ expectedGeneration: created.sessionGeneration });
+    const isolatedSnapshot = await driver.snapshot();
+    assert.equal(isolatedSnapshot.workspace?.mode, isolatedSnapshot.runtimePolicy.effective.workspace);
+    assert.equal(isolatedSnapshot.workspace?.mode, "worktree");
+    assert.equal(registry.workspaceForSession(isolated.sessionId)?.mode, "worktree");
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Local draft provisioning leaves the project branch and worktree list unchanged", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-local-workspace-"));
   const cwd = join(root, "workspace");
@@ -286,7 +334,12 @@ test("session changes apply from a worktree and Project folder without committin
       expectedGeneration: moved.sessionGeneration,
       expectedRevision: checkoutSnapshot.workspace!.revision!,
     });
-    assert.equal((await driver.snapshot()).workspace?.mode, "local");
+    const localSnapshot = await driver.snapshot();
+    assert.equal(localSnapshot.workspace?.mode, "local");
+    assert.equal(localSnapshot.workspace?.changedCount, 2);
+    const localFiles = await driver.workspaceFiles({});
+    assert.deepEqual(localFiles.files.filter((file) => file.status).map((file) => file.path).sort(), ["README.md", "local.txt"]);
+    assert.match((await driver.workspaceDiff({ path: "README.md" })).text ?? "", /^\+project-folder$/m);
     assert.equal((await run("git", ["branch", "--show-current"], { cwd })).stdout.trim(), originalBranch);
     assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"),
       "base\nisolated\nproject-folder\n");

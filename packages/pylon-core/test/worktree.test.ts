@@ -142,6 +142,50 @@ test("session worktrees isolate a dirty baseline and expose bounded files", asyn
   }
 });
 
+test("local workspace files report all uncommitted changes against HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-local-files-"));
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "deleted.txt"), "delete me\n");
+    await writeFile(join(root, "staged.txt"), "base\n");
+    await writeFile(join(root, "unstaged.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+
+    await rm(join(root, "deleted.txt"));
+    await writeFile(join(root, "staged.txt"), "staged\n");
+    await git(root, ["add", "staged.txt"]);
+    await writeFile(join(root, "unstaged.txt"), "unstaged\n");
+    await writeFile(join(root, "untracked.txt"), "new\n");
+
+    const page = await listWorkspaceFiles({ cwd: root });
+    assert.deepEqual(page.files.filter((file) => file.status).map(({ path, status }) => ({ path, status })), [
+      { path: "deleted.txt", status: "deleted" },
+      { path: "staged.txt", status: "modified" },
+      { path: "unstaged.txt", status: "modified" },
+      { path: "untracked.txt", status: "added" },
+    ]);
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "staged.txt", view: "base" })).text, "base");
+    assert.match((await diffWorkspaceFile({ cwd: root, path: "unstaged.txt" })).text ?? "", /^-base$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("local workspace files use the empty tree before the first commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-unborn-files-"));
+  try {
+    await git(root, ["init", "-q"]);
+    await writeFile(join(root, "first.txt"), "first\n");
+    const page = await listWorkspaceFiles({ cwd: root });
+    assert.deepEqual(page.files, [{ path: "first.txt", status: "added", additions: 1, deletions: 0 }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("concurrent session worktrees never mix file changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-concurrent-worktrees-"));
   const owned = await mkdtemp(join(tmpdir(), "pylon-owned-worktrees-"));

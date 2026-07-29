@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasCompleteHistory, mergeHistoryMessages, restoreCachedHistory } from "../src/shared/history-cache.ts";
+import { hasCompleteHistory, mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory } from "../src/shared/history-cache.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
@@ -47,6 +47,13 @@ function runtime(history: MessageReadModel[], cursor?: string, remaining?: numbe
     extensionUi: { notifications: [], statuses: [], widgets: [], editorRevision: 0, editorText: "" },
   };
 }
+
+test("active history merge retains every loaded page", () => {
+  const merged = mergeHistorySegments([0, 100, 200, 300, 400].map((start) => messages(start, start + 100)));
+  assert.equal(merged.length, 500);
+  assert.equal(merged[0]?.id, "history-0");
+  assert.equal(merged.at(-1)?.id, "history-499");
+});
 
 test("cached session history survives replacement and preserves safe paging", () => {
   const restored = restoreCachedHistory(runtime(messages(100, 200), "fresh", 100), {
