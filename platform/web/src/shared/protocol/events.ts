@@ -117,6 +117,7 @@ export interface ConversationReadModel {
     modelName?: string;
     thinkingLevel?: ThinkingLevelReadModel;
   };
+  agentError?: string;
   queue: QueueReadModel;
   retry: RetryReadModel;
   compaction: CompactionReadModel;

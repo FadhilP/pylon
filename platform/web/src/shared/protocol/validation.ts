@@ -544,6 +544,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (conversation.workModelName !== undefined && (typeof conversation.workModelName !== "string" || conversation.workModelName.length > 200)) return false;
   if (conversation.workThinkingLevel !== undefined && !thinkingLevels.has(String(conversation.workThinkingLevel))) return false;
   if (conversation.stopping !== undefined && typeof conversation.stopping !== "boolean") return false;
+  if (conversation.agentError !== undefined && !boundedString(conversation.agentError, 1_000)) return false;
   if (conversation.stoppedRun !== undefined) {
     const stopped = conversation.stoppedRun;
     if (!record(stopped) || !identifier(stopped.turnId)

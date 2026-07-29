@@ -436,6 +436,7 @@ export class RuntimeProjection {
         stoppedRun: runtime.conversation.stoppedRun
           ? { ...runtime.conversation.stoppedRun }
           : undefined,
+        agentError: runtime.conversation.agentError,
       },
       operational: cloneOperational(runtime.operational),
     };
@@ -622,6 +623,7 @@ export class RuntimeProjection {
       this.runtime.conversation.workThinkingLevel = thinkingLevel(raw.thinkingLevel);
       this.runtime.conversation.stopping = false;
       this.runtime.conversation.stoppedRun = undefined;
+      this.runtime.conversation.agentError = undefined;
       this.publish("agent.start", {
         startedAt,
         turnId: id(raw.turnId, ""),
@@ -655,6 +657,8 @@ export class RuntimeProjection {
       this.runtime.conversation.workThinkingLevel = undefined;
       this.runtime.conversation.stopping = false;
       const stopped = raw.stopped === true;
+      const agentError = raw.willRetry === true ? undefined : text(raw.errorMessage, 1_000) || undefined;
+      this.runtime.conversation.agentError = agentError;
       this.runtime.conversation.stoppedRun = stopped && durationMs !== undefined
         ? {
             turnId,
@@ -666,7 +670,7 @@ export class RuntimeProjection {
         : undefined;
       this.publish(`agent.${kind.slice(6)}`, {
         willRetry: raw.willRetry === true,
-        message: text(raw.errorMessage, 1_000) || undefined,
+        message: agentError,
         durationMs,
         turnId,
         messageId: assistant?.id,

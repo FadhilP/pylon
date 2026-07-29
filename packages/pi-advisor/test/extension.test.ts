@@ -192,11 +192,15 @@ test("Advisor retries transient failures and only successful consultations consu
   } as any, (async () => {
     providerCalls++;
     if (mode === "retry" && providerCalls === 1)
-      return { content: [], stopReason: "error", errorMessage: "503 model at capacity" };
+      return {
+        content: [],
+        stopReason: "error",
+        errorMessage: "Codex error: An error occurred while processing your request. You can retry your request.",
+      };
     if (mode === "fail")
       return { content: [], stopReason: "error", errorMessage: "invalid request" };
     if (mode === "exhaust" || mode === "paid") return {
-      content: [], stopReason: "error", errorMessage: "503 model at capacity",
+      content: [], stopReason: "error", errorMessage: mode === "exhaust" ? "WebSocket error" : "503 model at capacity",
       usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: mode === "paid" ? 0.1 : 0 } },
     };
     return {

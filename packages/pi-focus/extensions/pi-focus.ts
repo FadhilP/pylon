@@ -54,7 +54,9 @@ class FocusEditor extends CustomEditor {
 
 const childTools = new Set(["repo_scout", "web_scout", "grunt", "advisor"]);
 
-export function usage(ctx: any): string {
+type UsageTotals = { input: number; output: number; cost: number };
+
+function usageTotals(ctx: any): UsageTotals {
   let input = 0,
     output = 0,
     cost = 0;
@@ -70,11 +72,19 @@ export function usage(ctx: any): string {
       if (typeof childCost === "number") cost += childCost;
     }
   }
+  return { input, output, cost };
+}
+
+function formatUsage(ctx: any, { input, output, cost }: UsageTotals): string {
   const compact = (value: number) =>
     value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`;
   const context = ctx.getContextUsage();
   const pressure = context ? ` · ctx ${Math.round(context.percent)}%` : "";
   return `in ${compact(input)} · out ${compact(output)} · $${cost.toFixed(3)}${pressure}`;
+}
+
+export function usage(ctx: any): string {
+  return formatUsage(ctx, usageTotals(ctx));
 }
 
 export default function focusExtension(pi: ExtensionAPI) {
@@ -113,7 +123,11 @@ export default function focusExtension(pi: ExtensionAPI) {
     }));
 
     ctx.ui.setFooter((tui: any, theme: Theme, footerData: any) => {
-      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+      let totals = usageTotals(ctx);
+      const unsubscribe = footerData.onBranchChange(() => {
+        totals = usageTotals(ctx);
+        tui.requestRender();
+      });
       return {
         dispose: unsubscribe,
         invalidate() {},
@@ -129,7 +143,7 @@ export default function focusExtension(pi: ExtensionAPI) {
             footerData.getGitBranch(),
             pi.getSessionName() ?? "unnamed session",
             currentState,
-            usage(ctx),
+            formatUsage(ctx, totals),
           ).map((line) => theme.fg("dim", line));
         },
       };

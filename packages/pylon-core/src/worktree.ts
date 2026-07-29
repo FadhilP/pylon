@@ -305,13 +305,14 @@ export function readPersistedWorktreeSummaries(
 export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | undefined> {
   try {
     const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
-    const [head, status] = await Promise.all([
-      git(root, ["rev-parse", "HEAD"]),
+    const [revision, status] = await Promise.all([
+      git(root, ["rev-parse", "HEAD", "HEAD^{tree}"]),
       git(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
     ]);
+    const [head, headTree] = revision.split(/\r?\n/, 2);
+    if (!head || !headTree) throw Error("Git returned an invalid HEAD revision.");
     if (!status) {
-      const tree = await git(root, ["rev-parse", "HEAD^{tree}"]);
-      return { root, tree, fingerprint: `${root}\n${head}\nclean` };
+      return { root, tree: headTree, fingerprint: `${root}\n${head}\nclean` };
     }
 
     const indexTree = await git(root, ["write-tree"]);

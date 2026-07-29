@@ -73,15 +73,6 @@ export function includeLatestLoadedTurn(
   };
 }
 
-export function latestTimedAssistant(messages: MessageReadModel[]): MessageReadModel | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index]!;
-    if (message.role === "user") return;
-    if (message.role === "assistant" && message.workDurationMs !== undefined) return message;
-  }
-  return undefined;
-}
-
 export function activeTurnAtMarker(turns: Array<{ id: string; top: number }>, marker: number): string {
   let active = turns[0]?.id ?? "";
   for (const turn of turns) {
@@ -89,4 +80,14 @@ export function activeTurnAtMarker(turns: Array<{ id: string; top: number }>, ma
     active = turn.id;
   }
   return active;
+}
+
+export function turnIdsInViewport(
+  turns: Array<{ id: string; top: number; bottom: number }>,
+  viewport: { top: number; bottom: number },
+): string[] {
+  const visible = turns.filter((turn) => turn.bottom > viewport.top && turn.top < viewport.bottom).map((turn) => turn.id);
+  if (visible.length) return visible;
+  const active = activeTurnAtMarker(turns, viewport.bottom - 1);
+  return active ? [active] : [];
 }

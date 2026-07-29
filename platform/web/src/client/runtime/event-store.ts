@@ -10,6 +10,7 @@ import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type 
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
 import { liveToolMessage, replaceConversationMessage, replaceToolActivity } from "../../shared/transcript";
+import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
 
 export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
@@ -27,6 +28,7 @@ export interface RuntimeStoreSnapshot {
   recovery?: { message: string; action: "retry" | "reload" };
   historyWindow?: TranscriptWindowReadModel;
   treeChanging?: boolean;
+  audioCues: WebAudioCue[];
 }
 
 export interface TranscriptWindowReadModel {
@@ -37,8 +39,8 @@ export interface TranscriptWindowReadModel {
   laterCursor?: string;
 }
 
-const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0 };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
+const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0, audioCues: [] };
+const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "agent.error", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
 const MAX_CACHED_SESSIONS = 10;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
@@ -115,6 +117,12 @@ export class RuntimeEventStore {
   }
   reportError(message: string): void {
     this.set({ ...this.snapshot, error: message, errorRevision: (this.snapshot.errorRevision ?? 0) + 1 });
+  }
+  consumeAudioCues(ids: readonly string[]): void {
+    if (!ids.length) return;
+    const consumed = new Set(ids);
+    const audioCues = this.snapshot.audioCues.filter((cue) => !consumed.has(cue.id));
+    if (audioCues.length !== this.snapshot.audioCues.length) this.set({ ...this.snapshot, audioCues });
   }
 
   async sendMessage(message: string, images?: PromptImage[], files?: PromptTextFile[], planMode = false): Promise<void> {
@@ -863,7 +871,7 @@ export class RuntimeEventStore {
       this.bootstrapRetry = undefined;
       const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));
       const connection = this.snapshot.connection === "loading" ? "loading" : "disconnected";
-      this.set({ connection, runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined });
+      this.set({ connection, runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined, audioCues: [] });
       this.openEvents(`${boot.runtime.sessionGeneration}:${boot.sequence}`);
     } catch (error) {
       if (epoch !== this.bootstrapEpoch) return;
@@ -980,19 +988,21 @@ export class RuntimeEventStore {
       }
       if (event.type === "ui.closed") pendingUi = undefined;
     }
-    const sessionChanged = event.type === "agent.start" || event.type === "agent.end" || event.type === "session.info" || event.type === "projects.changed";
+    const sessionChanged = event.type === "agent.start" || event.type === "agent.end" || event.type === "agent.error" || event.type === "session.info" || event.type === "projects.changed";
+    const audioCues = appendWebAudioCue(current.audioCues, event);
     this.set({
       ...current,
       runtime,
       pendingUi,
       generation: event.sessionGeneration,
       sequence: event.sequence,
-      agentActive: event.type === "agent.start" ? true : event.type === "agent.end" ? false : current.agentActive,
+      agentActive: event.type === "agent.start" ? true : event.type === "agent.end" || event.type === "agent.error" ? false : current.agentActive,
       sessionRevision: (current.sessionRevision ?? 0) + (sessionChanged ? 1 : 0),
       connection: "connected",
       error: undefined,
       notification,
       notificationRevision: (current.notificationRevision ?? 0) + (event.type === "ui.notify" ? 1 : 0),
+      audioCues,
     }, true);
   }
 
@@ -1007,6 +1017,7 @@ export class RuntimeEventStore {
       runtime: this.snapshot.runtime ? { ...this.snapshot.runtime, ready: false } : undefined,
       pendingUi: undefined,
       agentActive: false,
+      audioCues: [],
       error: undefined,
     });
     void this.bootstrap();
@@ -1181,6 +1192,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
           workThinkingLevel: typeof info.thinkingLevel === "string" ? info.thinkingLevel as ConversationReadModel["workThinkingLevel"] : undefined,
           stopping: false,
           stoppedRun: undefined,
+          agentError: undefined,
         },
       };
     }
@@ -1217,6 +1229,25 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
                   : undefined,
               }
             : undefined,
+          agentError: info.willRetry === true || typeof info.message !== "string"
+            ? undefined
+            : info.message.slice(0, 1_000) || undefined,
+        },
+      };
+    }
+    case "agent.error": {
+      const info = asRecord(payload);
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          workStartedAt: undefined,
+          workModelName: undefined,
+          workThinkingLevel: undefined,
+          stopping: false,
+          agentError: info.willRetry === true || typeof info.message !== "string"
+            ? undefined
+            : info.message.slice(0, 1_000) || undefined,
         },
       };
     }

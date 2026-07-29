@@ -2,10 +2,8 @@ import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, Ic
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
+import { SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { displayDate, displayTime } from "./format";
-
-export const SESSION_LIST_INITIAL_LIMIT = 3;
-export const SESSION_LIST_MORE_LIMIT = 5;
 
 export interface SessionProject {
   id: string;

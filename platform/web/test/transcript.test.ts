@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, latestTimedAssistant, liveToolMessage, replaceConversationMessage, replaceToolActivity } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceToolActivity, turnIdsInViewport } from "../src/shared/transcript.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 
@@ -73,20 +73,20 @@ test("the latest loaded prompt appears immediately in a stale latest rail page",
   assert.equal(includeLatestLoadedTurn(page, { promptId: "one", preview: "one" }, true), page);
 });
 
-test("the latest completed turn timer follows any trailing tool activity", () => {
-  const messages = [
-    { ...message("user-1", "user") },
-    { ...message("assistant-1", "assistant"), workDurationMs: 1_000 },
-    message("tool-1", "tool"),
-  ];
-
-  assert.equal(latestTimedAssistant(messages)?.id, "assistant-1");
-  assert.equal(latestTimedAssistant([...messages, message("user-2", "user")]), undefined);
-});
-
 test("history rail keeps a turn active until the next prompt crosses the viewport marker", () => {
   const turns = [{ id: "one", top: -100 }, { id: "two", top: 240 }, { id: "three", top: 700 }];
   assert.equal(activeTurnAtMarker(turns, 200), "one");
   assert.equal(activeTurnAtMarker(turns, 300), "two");
   assert.equal(activeTurnAtMarker(turns, -200), "one");
+});
+
+test("history rail highlights every visible prompt and falls back to the current turn", () => {
+  const turns = [
+    { id: "one", top: -200, bottom: -100 },
+    { id: "two", top: 20, bottom: 60 },
+    { id: "three", top: 80, bottom: 120 },
+    { id: "four", top: 140, bottom: 180 },
+  ];
+  assert.deepEqual(turnIdsInViewport(turns, { top: 0, bottom: 200 }), ["two", "three", "four"]);
+  assert.deepEqual(turnIdsInViewport(turns, { top: 300, bottom: 500 }), ["four"]);
 });

@@ -165,6 +165,14 @@ test("event and snapshot validators reject incompatible versions", () => {
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
   assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    conversation: { ...snapshot.conversation, agentError: "provider rejected request" },
+  }), true);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    conversation: { ...snapshot.conversation, agentError: "x".repeat(1_001) },
+  }), false);
   const expandedLatestTurn = [
     { id: "latest-user", role: "user", text: "Run every check", streaming: false },
     ...Array.from({ length: 100 }, (_, index) => ({

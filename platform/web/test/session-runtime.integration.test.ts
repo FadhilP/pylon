@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime } from "../src/server/pi/session-runtime.ts";
+import { appendWorkDuration } from "pylon-core/src/work-duration.ts";
+import { deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
 import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
@@ -68,9 +69,28 @@ test("user completion resolves its entry ID after persistence", async () => {
   ), false);
 });
 
-function persistSession(session: SessionManager, name: string): void {
+test("terminal agent errors come only from the latest assistant response", () => {
+  assert.equal(terminalAgentError([
+    { role: "assistant", stopReason: "error", errorMessage: " old failure " },
+    { role: "assistant", stopReason: "stop" },
+  ]), undefined);
+  assert.equal(terminalAgentError([
+    { role: "assistant", stopReason: "error", errorMessage: "old failure" },
+    { role: "user", content: "new prompt" },
+  ]), undefined);
+  assert.equal(terminalAgentError([
+    { role: "assistant", stopReason: "toolUse" },
+    { role: "toolResult" },
+    { role: "assistant", stopReason: "error", errorMessage: "  provider rejected request  " },
+  ]), "provider rejected request");
+  assert.equal(terminalAgentError([
+    { role: "assistant", stopReason: "error", errorMessage: "x".repeat(1_001) },
+  ])?.length, 1_000);
+});
+
+function persistSession(session: SessionManager, name: string): string {
   session.appendSessionInfo(name);
-  session.appendMessage({
+  return session.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: name }],
     api: "test",
@@ -88,6 +108,27 @@ function persistSession(session: SessionManager, name: string): void {
     timestamp: Date.now(),
   });
 }
+
+test("completed work duration survives runtime restart", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-duration-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
+  const session = SessionManager.create(cwd, sessionDir);
+  const assistantEntryId = persistSession(session, "Timed response");
+  appendWorkDuration(session, assistantEntryId, 12_345);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot, sessionPath: session.getSessionFile()! });
+    const message = (await driver.snapshot()).conversation.messages.find((item) => item.entryId === assistantEntryId);
+    assert.equal(message?.workDurationMs, 12_345);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-phase0-"));

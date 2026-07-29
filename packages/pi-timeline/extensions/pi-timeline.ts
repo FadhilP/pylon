@@ -375,7 +375,7 @@ export default function timelineExtension(
       };
     })());
   });
-  const nameSession = async (ctx: any, currentMessage?: any) => {
+  const nameSession = async (ctx: any) => {
     if (namingDecided || namingInFlight !== undefined) return;
     const generation = namingGeneration;
     namingInFlight = generation;
@@ -384,17 +384,20 @@ export default function timelineExtension(
         (entry: any) =>
           entry.type === "message" && entry.message.role === "user",
       ),
-      firstMessage = firstUser?.message ?? currentMessage,
-      fallback = firstMessage && promptTitle(firstMessage);
+      finalAssistant = branch.findLast(
+        (entry: any) =>
+          entry.type === "message" && entry.message.role === "assistant",
+      ),
+      fallback = firstUser && promptTitle(firstUser.message);
     let name = fallback;
     let modelCall: { eventId: string; started: number; request: string; result: string } | undefined;
     try {
       const model = ctx.model;
-      if (firstMessage && model) {
+      if (firstUser && model) {
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (auth.ok && auth.apiKey) {
-          const request = promptText(firstMessage);
-          const result = "";
+          const request = promptText(firstUser.message);
+          const result = finalAssistant ? promptText(finalAssistant.message) : "";
           const sessionId = ctx.sessionManager.getSessionId();
           modelCall = {
             eventId: createHash("sha256").update(`${sessionId}:${generation}`).digest("hex"),
@@ -404,7 +407,7 @@ export default function timelineExtension(
             role: "user",
             content: [{
               type: "text",
-              text: `<user-request>\n${request}\n</user-request>`,
+              text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
             }],
             timestamp: Date.now(),
           };
@@ -773,15 +776,8 @@ export default function timelineExtension(
       automaticMutation = true;
     }
   });
-  pi.on("before_agent_start", (event, ctx) => {
-    void nameSession(ctx, {
-      content: [
-        { type: "text", text: event.prompt },
-        ...(event.images ?? []),
-      ],
-    }).catch(() => {});
-  });
   pi.on("agent_settled", async (_e, ctx) => {
+    void nameSession(ctx).catch(() => {});
     if (enabled && automaticMutation && await checkpoint(ctx)) automaticMutation = false;
   });
   pi.on("session_tree", (_e, ctx) => {

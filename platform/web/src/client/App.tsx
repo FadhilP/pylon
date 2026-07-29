@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import { listSessionsPreservingPages, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
@@ -19,9 +20,10 @@ import { ConversationPanel } from "./conversation-panel";
 import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT, SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
+import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
+import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | null;
@@ -119,6 +121,7 @@ export function App() {
   const [toast, setToast] = useState<{ id: number; message: string }>();
   const [sidebarAction, setSidebarAction] = useState<SidebarAction>();
   const [sessionBusy, setSessionBusy] = useState("");
+  const [sessionTransition, setSessionTransition] = useState(false);
   const [sessionDeleting, setSessionDeleting] = useState("");
   const [projectLoading, setProjectLoading] = useState("");
   const [projectBusy, setProjectBusy] = useState("");
@@ -138,6 +141,8 @@ export function App() {
   const previousRightPanel = useRef(rightPanel);
   const sessionListRequest = useRef(0);
   const sessionListApplied = useRef(false);
+  const sessionPagesRef = useRef<SessionProjectPage[]>([]);
+  const sessionPagesQuery = useRef("");
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const mobile = useMediaQuery("(max-width: 900px)");
@@ -169,7 +174,16 @@ export function App() {
     ...(memoryEnabled ? ["memory" as const] : []),
     "tools",
   ]), [memoryEnabled, timelineEnabled]);
-  const applySessionList = (result: SessionListSnapshot) => {
+  const updateSessionPages = (update: (pages: SessionProjectPage[]) => SessionProjectPage[]) => {
+    setSessionPages((current) => {
+      const next = update(current);
+      sessionPagesRef.current = next;
+      return next;
+    });
+  };
+  const applySessionList = (result: SessionListSnapshot, appliedQuery = query.trim()) => {
+    sessionPagesRef.current = result.projects;
+    sessionPagesQuery.current = appliedQuery;
     setSessionPages(result.projects);
     setActiveSessions(result.activeSessions);
     const firstList = !query.trim() && !sessionListApplied.current;
@@ -188,6 +202,22 @@ export function App() {
   };
 
   useEffect(() => { runtimeStore.start(); }, []);
+
+  useEffect(() => {
+    const unlock = () => unlockWebAudio();
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!live.audioCues.length) return;
+    enqueueWebAudioCues(live.audioCues.map((cue) => cue.kind));
+    runtimeStore.consumeAudioCues(live.audioCues.map((cue) => cue.id));
+  }, [live.audioCues]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -246,11 +276,18 @@ export function App() {
     const request = ++sessionListRequest.current;
     const sessionId = live.runtime.sessionId;
     const sessionGeneration = live.runtime.sessionGeneration;
+    const requestQuery = query.trim();
+    const previousPages = sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
     setSessionsLoading(true);
-    const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }, controller.signal).then((result) => {
+    const timer = window.setTimeout(() => void listSessionsPreservingPages(
+      (input, signal) => runtimeStore.listSessions(input, signal),
+      previousPages,
+      requestQuery,
+      controller.signal,
+    ).then((result) => {
       if (!active || request !== sessionListRequest.current
         || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)) return;
-      applySessionList(result);
+      applySessionList(result, requestQuery);
     }).catch((cause) => {
       if (active && request === sessionListRequest.current
         && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)) {
@@ -297,7 +334,7 @@ export function App() {
 
   useEffect(() => {
     if (!live.sessionStatuses) return;
-    setSessionPages((pages) => pages.map((page) => ({
+    updateSessionPages((pages) => pages.map((page) => ({
       ...page,
       sessions: page.sessions.map((session) => ({
         ...session,
@@ -341,6 +378,7 @@ export function App() {
       return;
     }
     setSessionBusy(session.id);
+    setSessionTransition(true);
     try {
       await runtimeStore.switchSession(session.id);
       if (mobile) setSidebarOpen(false);
@@ -348,12 +386,14 @@ export function App() {
       reportError(cause, "Unable to switch session");
     } finally {
       setSessionBusy("");
+      setSessionTransition(false);
     }
   };
 
   const newSession = async (project: SessionProject) => {
     if (sessionBusy || sessionDeleting || projectBusy) return;
     setSessionBusy(project.id);
+    setSessionTransition(true);
     try {
       await runtimeStore.newSession(project.id);
       if (mobile) setSidebarOpen(false);
@@ -361,6 +401,7 @@ export function App() {
       reportError(cause, "Unable to create session");
     } finally {
       setSessionBusy("");
+      setSessionTransition(false);
     }
   };
 
@@ -371,15 +412,21 @@ export function App() {
     try {
       await runtimeStore.deleteSession(session.id);
       setActiveSessions((current) => current.filter((candidate) => candidate.id !== session.id));
-      setSessionPages((current) => current.map((page) => ({
+      updateSessionPages((current) => current.map((page) => ({
         ...page,
         totalCount: page.id === session.projectId ? Math.max(0, page.totalCount - 1) : page.totalCount,
         sessions: page.sessions.filter((candidate) => candidate.id !== session.id),
       })).filter((page) => page.totalCount > 0));
       const request = ++sessionListRequest.current;
       try {
-        const result = await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT });
-        if (request === sessionListRequest.current) applySessionList(result);
+        const requestQuery = query.trim();
+        const previousPages = sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
+        const result = await listSessionsPreservingPages(
+          (input, signal) => runtimeStore.listSessions(input, signal),
+          previousPages,
+          requestQuery,
+        );
+        if (request === sessionListRequest.current) applySessionList(result, requestQuery);
       } catch (cause) {
         reportError(cause instanceof Error ? new Error(`Session deleted, but refresh failed: ${cause.message}`) : cause, "Session deleted, but refresh failed");
       }
@@ -440,7 +487,7 @@ export function App() {
       await runtimeStore.renameSession(session.id, name);
       const rename = (candidate: SessionSummary) => candidate.id === session.id ? { ...candidate, name } : candidate;
       setActiveSessions((current) => current.map(rename));
-      setSessionPages((current) => current.map((page) => ({ ...page, sessions: page.sessions.map(rename) })));
+      updateSessionPages((current) => current.map((page) => ({ ...page, sessions: page.sessions.map(rename) })));
       setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to rename session");
@@ -459,7 +506,7 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.renameProject(project.id, name);
-      setSessionPages((current) => current.map((page) => page.id === project.id ? { ...page, label: name } : page));
+      updateSessionPages((current) => current.map((page) => page.id === project.id ? { ...page, label: name } : page));
       setActiveSessions((current) => current.map((session) => session.projectId === project.id ? { ...session, cwdLabel: name } : session));
       setSidebarAction(undefined);
     } catch (cause) {
@@ -474,7 +521,6 @@ export function App() {
     setSessionBusy(session.id);
     try {
       await runtimeStore.setSessionActive(session.id, active);
-      applySessionList(await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }));
     } catch (cause) {
       reportError(cause, `Unable to ${active ? "activate" : "deactivate"} session`);
     } finally {
@@ -487,7 +533,6 @@ export function App() {
     setSessionBusy(session.id);
     try {
       await runtimeStore.setSessionPinned(session.id, pinned);
-      applySessionList(await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }));
     } catch (cause) {
       reportError(cause, `Unable to ${pinned ? "pin" : "unpin"} session`);
     } finally {
@@ -498,18 +543,23 @@ export function App() {
   const loadMoreSessions = async (project: SessionProject) => {
     const current = sessionPages.find((page) => page.id === project.id);
     if (!current?.nextCursor || projectLoading) return;
+    const request = sessionListRequest.current;
+    const requestQuery = query.trim();
+    const runtime = live.runtime;
     setProjectLoading(project.id);
     try {
       const result = await runtimeStore.listSessions({
         projectId: project.id,
         cursor: current.nextCursor,
-        query: query.trim() || undefined,
+        query: requestQuery || undefined,
         limit: SESSION_LIST_MORE_LIMIT,
       });
+      if (request !== sessionListRequest.current || query.trim() !== requestQuery || !runtime
+        || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)) return;
       setActiveSessions(result.activeSessions);
       const next = result.projects[0];
       if (!next) return;
-      setSessionPages((pages) => pages.map((page) => page.id === project.id ? {
+      updateSessionPages((pages) => pages.map((page) => page.id === project.id ? {
         ...page,
         sessions: [...page.sessions, ...next.sessions.filter((session) => !page.sessions.some((old) => old.id === session.id))],
         nextCursor: next.nextCursor,
@@ -806,7 +856,7 @@ export function App() {
           cwdLabel={live.runtime?.cwdLabel}
           onClose={() => setTerminalOpen(false)}
         />}
-        {(sessionBusy || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
+        {(sessionTransition || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
       </main>
 
       {sidebarAction && <ActionDialog
@@ -1042,22 +1092,21 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
         <div className="branch-label"><IconGitBranch size={14} /><span>{branch} · Turn {turn}</span></div>
       </div>
       <div className="topbar-actions">
-        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
-          <IconFiles size={16} />
-          <span>Files</span>
-          {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
-        </button>
+        <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
         <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>
           <small>{delegatedRuns.length}</small>
           {activeAgents > 0 && <i aria-hidden="true" />}
         </button>
-        <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
+        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
+          <IconFiles size={16} />
+          <span>Files</span>
+          {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
+        </button>
         <button className="icon-button" onClick={onToggleTheme} aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
           {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
         </button>
-        <span className="avatar-button" aria-label="Current user">FP</span>
       </div>
     </header>
   );

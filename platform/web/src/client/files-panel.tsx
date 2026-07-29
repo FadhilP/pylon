@@ -51,6 +51,10 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   const requestRevision = useRef(0);
 
   useEffect(() => {
+    if (live.connection !== "connected" || !runtime?.ready) {
+      setInventoryLoading(false);
+      return;
+    }
     const controller = new AbortController();
     const revision = ++requestRevision.current;
     setFiles([]);
@@ -79,7 +83,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       controller.abort();
       requestRevision.current++;
     };
-  }, [runtime?.sessionId, runtime?.workspace?.revision]);
+  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.workspace?.revision]);
   useEffect(() => {
     if (!requestedPath) return;
     setSelectedPath(requestedPath.path);

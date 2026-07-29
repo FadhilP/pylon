@@ -363,13 +363,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
     name: "repo_scout",
     label: "Repo Scout",
     description:
-      "Read-only isolated repository reconnaissance with exact line-range citations. Transient provider failures retry in fresh child sessions up to three total attempts; the main model owns evaluation and conclusions.",
+      "Read-only isolated repository reconnaissance with exact line-range citations. It gathers observable evidence; the main model owns evaluation, recommendations, decisions, and conclusions. Transient provider failures retry in fresh child sessions up to three total attempts.",
     promptSnippet:
-      "Map concrete repository paths, symbols, patterns, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty",
+      "Gather cited repository evidence about paths, symbols, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty without making decisions",
     promptGuidelines: [
-      "Default to repo_scout for non-local, architecture, data-flow, cross-file, or unfamiliar-code plans, diagnoses, reviews, and edits. Before calling, do 1–3 targeted searches with currently visible orientation tools to find exact anchors and sharpen the task. Skip orientation when exact anchors already exist. Leave non-local tracing to Scout. Skip repo_scout only for known-file self-contained work.",
-      "Give repo_scout an observable action, concrete scope anchors, required evidence, and a finite stopping boundary that permits directly relevant callers, config, registries, and tests. Scout reports cited facts and uncertainty; the main model evaluates them.",
-      "Treat repo_scout citations as the working set. Reread only for an exact edit, evidence gap/conflict, or changed state. For follow-ups, pass relevant prior facts and the unresolved gap because each child session starts fresh.",
+      "Default to repo_scout for non-local, architecture-mapping, data-flow, cross-file, or unfamiliar-code work. Before calling, use 1–3 visible orientation searches to find exact anchors and sharpen the task. Skip orientation with exact anchors. Leave non-local tracing to repo_scout; skip it only for known-file self-contained work.",
+      "Ask repo_scout only to search, map, or trace observable evidence. Convert normative or mixed questions into factual tasks covering contracts, callers, transformations, divergences, constraints, and tests; never ask repo_scout to design, recommend, prioritize, choose architecture, or decide whether something should be canonical. Include an observable action, concrete scope anchors, required evidence, and a finite stopping boundary. Main model evaluates and decides.",
+      "Treat repo_scout citations as working set. Reread only for exact edit, evidence gap/conflict, or changed state. Follow-ups include prior facts and unresolved gap; each repo_scout child starts fresh.",
     ],
     parameters: Type.Object(
       {
@@ -377,13 +377,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           minLength: 1,
           maxLength: 1000,
           description:
-            "Self-contained repository search, mapping, or tracing task with relevant scope/constraints and observable paths, symbols, patterns, boundaries, inputs, sinks, or flows",
+            "Evidence-only repository search, mapping, or tracing task with observable scope, paths, symbols, boundaries, inputs, sinks, or flows; exclude design, recommendation, prioritization, and architecture-choice requests",
         }),
         retryReason: Type.Optional(
           Type.String({
             minLength: 1,
             maxLength: 500,
-            description: "Gap or follow-up context for a later Scout call",
+            description: "Factual evidence gap or follow-up context for a later Scout call; not a decision or recommendation request",
           }),
         ),
       },

@@ -524,6 +524,32 @@ test("projection publishes live session names and agent timing metadata", () => 
   assert.ok(published.some((event) => event.type === "turn.changes"));
 });
 
+test("projection persists terminal agent errors and clears them for retries and new runs", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+
+  projection.apply(session({ type: "agent_start", turnId: "turn-error" }));
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-error",
+    errorMessage: "provider rejected request",
+    willRetry: false,
+  }));
+
+  assert.equal(projection.snapshot().conversation.agentError, "provider rejected request");
+  assert.equal(([...published].reverse().find((event) => event.type === "agent.end")?.payload as { message?: string }).message, "provider rejected request");
+
+  projection.apply(session({ type: "agent_start", turnId: "turn-retry" }));
+  assert.equal(projection.snapshot().conversation.agentError, undefined);
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-retry",
+    errorMessage: "temporary failure",
+    willRetry: true,
+  }));
+  assert.equal(projection.snapshot().conversation.agentError, undefined);
+});
+
 test("projection retains stopped tool-only run metadata without an assistant message", () => {
   const projection = new RuntimeProjection(runtime(), () => undefined);
   projection.apply(session({

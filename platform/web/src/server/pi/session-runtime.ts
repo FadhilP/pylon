@@ -3,6 +3,11 @@ import { unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  appendWorkDuration,
+  MAX_WORK_DURATION_MS,
+  readPersistedWorkDurations,
+} from "pylon-core/src/work-duration.ts";
+import {
   parseWorktreeSummary,
   readPersistedWorktreeSummaries,
 } from "pylon-core/src/worktree.ts";
@@ -124,6 +129,20 @@ function agentWasAborted(value: Record<string, unknown>): boolean {
   return false;
 }
 
+export function terminalAgentError(messages: unknown): string | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const item = message as Record<string, unknown>;
+    if (item.role === "user") return undefined;
+    if (item.role !== "assistant") continue;
+    if (item.stopReason !== "error" || typeof item.errorMessage !== "string") return undefined;
+    return item.errorMessage.trim().slice(0, 1_000) || undefined;
+  }
+  return undefined;
+}
+
 export function deferUserMessageEndEntryId(
   payload: Record<string, unknown>,
   isCurrent: () => boolean,
@@ -227,6 +246,7 @@ export class SessionRuntime implements PiDriver {
   private readonly workspaceApplyTool = new WorkspaceApplyTool();
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
+  private workDurationsLeafId: string | null | undefined;
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
   private readonly turnChanges = new Map<string, ChangedFileReadModel[]>();
   private turnChangesLeafId: string | null | undefined;
@@ -237,8 +257,10 @@ export class SessionRuntime implements PiDriver {
   private workThinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"];
   private workTurnId?: string;
   private workUserEntryId?: string;
+  private workAssistantEntryIdAtStart?: string;
   private stopping = false;
   private stoppedRun?: RuntimeSnapshot["conversation"]["stoppedRun"];
+  private agentError?: string;
   private nextTurnId = 0;
   private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string; assistantEntryId?: string }> = [];
   private discoverIndex?: DiscoverIndexReadModel;
@@ -1304,6 +1326,7 @@ export class SessionRuntime implements PiDriver {
       this.workStartedAt = undefined;
       this.workStartedAtMs = undefined;
       this.workDurations.clear();
+      this.workDurationsLeafId = undefined;
       this.turnControls.clear();
       this.turnChanges.clear();
       this.turnChangesLeafId = undefined;
@@ -1311,8 +1334,10 @@ export class SessionRuntime implements PiDriver {
       this.nextTurnId = 0;
       this.workTurnId = undefined;
       this.workUserEntryId = undefined;
+      this.workAssistantEntryIdAtStart = undefined;
       this.stopping = false;
       this.stoppedRun = undefined;
+      this.agentError = terminalAgentError(this.transcriptMessages(session));
       this.discoverIndex = undefined;
       this.workModelName = undefined;
       this.workThinkingLevel = undefined;
@@ -1360,8 +1385,10 @@ export class SessionRuntime implements PiDriver {
         this.workModelName = session.model?.name;
         this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;
         this.workUserEntryId = this.latestUserEntryId(session);
+        this.workAssistantEntryIdAtStart = this.latestAssistantEntryId(session);
         this.stopping = false;
         this.stoppedRun = undefined;
+        this.agentError = undefined;
         this.sessionIndex.invalidate();
         this.refreshSnapshot();
         forwarded = {
@@ -1373,7 +1400,8 @@ export class SessionRuntime implements PiDriver {
           metrics: this.lastSnapshot?.metrics,
         };
       } else if (kind === "agent_end") {
-        const duration = Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
+        const duration = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
+        this.agentError = raw.willRetry === true ? undefined : terminalAgentError(raw.messages);
         const messages = this.transcriptMessages(session);
         let assistantIndex = -1;
         for (let index = messages.length - 1; index >= 0; index--) {
@@ -1382,13 +1410,27 @@ export class SessionRuntime implements PiDriver {
             break;
           }
         }
-        const messageId = assistantIndex >= 0 ? `history-${assistantIndex}` : undefined;
-        const assistantEntryId = assistantIndex >= 0
+        const latestAssistantEntryId = assistantIndex >= 0
           && typeof (messages[assistantIndex] as { entryId?: unknown }).entryId === "string"
           ? (messages[assistantIndex] as { entryId: string }).entryId
           : undefined;
+        const assistantEntryId = this.workStartedAtMs !== undefined
+          && latestAssistantEntryId !== this.workAssistantEntryIdAtStart
+          ? latestAssistantEntryId
+          : undefined;
+        const messageId = assistantEntryId ? `history-${assistantIndex}` : undefined;
+        if (assistantEntryId) {
+          this.workDurations.set(assistantEntryId, duration);
+          try {
+            if (!appendWorkDuration(session.sessionManager, assistantEntryId, duration)) {
+              this.recordError(new Error("could not persist completed work duration"));
+            }
+          } catch (error) {
+            this.recordError(error);
+          }
+          this.workDurationsLeafId = session.sessionManager.getLeafId();
+        }
         if (messageId) {
-          this.workDurations.set(messageId, duration);
           this.turnControls.set(messageId, {
             modelName: this.workModelName,
             thinkingLevel: this.workThinkingLevel,
@@ -1416,6 +1458,7 @@ export class SessionRuntime implements PiDriver {
         this.workThinkingLevel = undefined;
         this.workTurnId = undefined;
         this.workUserEntryId = undefined;
+        this.workAssistantEntryIdAtStart = undefined;
         this.stopping = false;
         this.sessionIndex.invalidate();
         invalidateFileSuggestions(session.sessionManager.getCwd());
@@ -1431,6 +1474,7 @@ export class SessionRuntime implements PiDriver {
           metrics: this.lastSnapshot?.metrics,
           stopped,
           userEntryId,
+          errorMessage: this.agentError,
         };
       } else if (kind === "session_info_changed") {
         this.sessionIndex.invalidate();
@@ -1640,6 +1684,7 @@ export class SessionRuntime implements PiDriver {
       message: this.sanitizeDiagnostic(diagnostic.message),
     }));
     const session = runtime.session;
+    this.hydrateWorkDurations(session);
     this.hydrateTurnChanges(session);
     this.requestPackageStates(session.sessionId);
     const stats = session.getSessionStats();
@@ -1649,7 +1694,7 @@ export class SessionRuntime implements PiDriver {
     const historyStart = Math.min(tailStart, latestVisibleUserIndex(messages) ?? tailStart);
     const projectedConversation = projectConversation(messages, { start: historyStart, limitMessages: false });
     const projectedMessages = projectedConversation.messages.map((message) => {
-      const workDurationMs = this.workDurations.get(message.id);
+      const workDurationMs = message.entryId ? this.workDurations.get(message.entryId) : undefined;
       const controls = this.turnControls.get(message.id);
       const changedFiles = message.entryId ? this.turnChanges.get(message.entryId) : undefined;
       return workDurationMs === undefined && !controls && !changedFiles
@@ -1709,6 +1754,7 @@ export class SessionRuntime implements PiDriver {
         workThinkingLevel: this.workThinkingLevel,
         ...(this.stopping ? { stopping: true } : {}),
         ...(this.stoppedRun ? { stoppedRun: { ...this.stoppedRun } } : {}),
+        ...(this.agentError ? { agentError: this.agentError } : {}),
         queue: { steering: 0, followUp: 0 },
         retry: { active: false },
         compaction: { active: false },
@@ -1915,6 +1961,16 @@ export class SessionRuntime implements PiDriver {
     }));
   }
 
+  private hydrateWorkDurations(session: AgentSession): void {
+    const leafId = session.sessionManager.getLeafId();
+    if (this.workDurationsLeafId === leafId) return;
+    this.workDurations.clear();
+    for (const [entryId, durationMs] of readPersistedWorkDurations(session.sessionManager)) {
+      this.workDurations.set(entryId, durationMs);
+    }
+    this.workDurationsLeafId = leafId;
+  }
+
   private hydrateTurnChanges(session: AgentSession): void {
     const leafId = session.sessionManager.getLeafId();
     if (this.turnChangesLeafId === leafId) return;
@@ -1943,6 +1999,15 @@ export class SessionRuntime implements PiDriver {
         })));
     this.transcriptCache = { sessionId, leafId, messages };
     return messages;
+  }
+
+  private latestAssistantEntryId(session: AgentSession): string | undefined {
+    const branch = session.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index--) {
+      const entry = branch[index] as { id?: unknown; type?: unknown; message?: { role?: unknown } } | undefined;
+      if (entry?.type === "message" && entry.message?.role === "assistant" && typeof entry.id === "string") return entry.id;
+    }
+    return undefined;
   }
 
   private latestUserEntryId(session: AgentSession): string | undefined {

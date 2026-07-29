@@ -4,6 +4,7 @@ import type { ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ModelOptionReadModel } from "../shared/protocol/events";
 import type { PackageSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
+import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 interface SettingsDialogProps {
   packages: PackageSummary[];
@@ -24,6 +25,11 @@ export function SettingsDialog({ packages, loading, busy, disabled, models, sess
     dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
+
+  const playSound = (kind: "turn-complete" | "attention") => {
+    unlockWebAudio();
+    enqueueWebAudioCues([kind]);
+  };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
@@ -55,6 +61,16 @@ export function SettingsDialog({ packages, loading, busy, disabled, models, sess
       </header>
       <div className="settings-content">
         <p className="settings-intro">Package settings apply globally and reload the selected session.</p>
+        <section className="settings-sounds" aria-labelledby="settings-sounds-title">
+          <div>
+            <strong id="settings-sounds-title">Notification sounds</strong>
+            <small>Preview cues played when a turn completes or needs your attention.</small>
+          </div>
+          <div className="settings-sound-actions">
+            <button type="button" onClick={() => playSound("turn-complete")}>Play turn complete</button>
+            <button type="button" onClick={() => playSound("attention")}>Play attention</button>
+          </div>
+        </section>
         {loading && packages.length === 0 && <div className="settings-empty">Detecting packages…</div>}
         {!loading && packages.length === 0 && <div className="settings-empty"><IconStack2 size={22} /><strong>No local Pi packages</strong></div>}
         {packages.map((item) => {

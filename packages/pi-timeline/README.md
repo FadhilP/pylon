@@ -32,7 +32,7 @@ Checkpoint format v4 records the Git common-directory identity separately from e
 
 Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs. Timeline catalogs each session-owned Git root and protects active sessions with process leases. On session startup it removes refs whose owning Pi session was deleted and has no live lease; failed session discovery or repository access fails closed. Ephemeral-session refs are removed on clean shutdown.
 
-At the start of the first turn, Timeline launches one bounded title-only model request using a short excerpt from the first prompt. It runs alongside the main turn instead of extending turn completion. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
+After the first settled turn, Timeline launches one bounded title-only model request using short excerpts from the first prompt and final response. The request runs in the background, so it does not extend turn completion. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
 
 ## Integrations
 

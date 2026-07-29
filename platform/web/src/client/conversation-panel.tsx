@@ -1,7 +1,7 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, latestTimedAssistant } from "../shared/transcript";
+import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
@@ -184,15 +184,16 @@ export function ConversationPanel({
     let frame = 0;
     const update = () => {
       frame = 0;
-      const marker = root.getBoundingClientRect().bottom - 1;
+      const rootRect = root.getBoundingClientRect();
       const turns = userTurns.flatMap((turn) => {
         const id = turn.entryId ?? turn.id;
         const element = turnRefs.current.get(id);
-        return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
+        if (!element) return [];
+        const rect = element.getBoundingClientRect();
+        return [{ id, top: rect.top, bottom: rect.bottom }];
       });
-      const activeId = activeTurnAtMarker(turns, marker);
-      const active = new Set(activeId ? [activeId] : []);
-      setVisibleTurnIds((current) => sameStringSet(current, active) ? current : active);
+      const visible = new Set(turnIdsInViewport(turns, rootRect));
+      setVisibleTurnIds((current) => sameStringSet(current, visible) ? current : visible);
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(update);
@@ -228,7 +229,6 @@ export function ConversationPanel({
     });
     return () => { active = false; };
   }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.metrics.userMessages]);
-  const latestTurnTimer = latestTimedAssistant(visibleMessages);
   const activeAgents = useMemo(
     () => runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [],
     [runtime?.conversation.delegatedRuns],
@@ -600,9 +600,9 @@ export function ConversationPanel({
                 </>}
             </article>
             {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
-            {!editing && (block.role === "user" || copyableAssistants.has(block.id)) && <MessageFooter
+            {!editing && (block.role === "user" || copyableAssistants.has(block.id) || (block.role === "assistant" && block.workDurationMs !== undefined)) && <MessageFooter
               message={block}
-              canCopy={Boolean(block.text)}
+              canCopy={Boolean(block.text) && (block.role === "user" || copyableAssistants.has(block.id))}
               disabled={!connected || streaming || submitting || Boolean(edit)}
               onEdit={block.role === "user" && block.entryId ? () => startEdit(block) : undefined}
               onUndo={block.role === "user" && block.entryId ? () => setUndo({
@@ -612,27 +612,22 @@ export function ConversationPanel({
               }) : undefined}
               onFork={block.role === "user" && block.entryId ? () => startFork(block) : undefined}
             />}
-            {block.role === "assistant" && block.id !== latestTurnTimer?.id && block.workDurationMs !== undefined && <WorkTimer
-              durationMs={block.workDurationMs}
-              modelName={block.modelName}
-              thinkingLevel={block.thinkingLevel}
-            />}
           </div>;
         })}
         {runtime.conversation.workStartedAt ? <WorkTimer
           startedAt={runtime.conversation.workStartedAt}
           modelName={runtime.conversation.workModelName}
           thinkingLevel={runtime.conversation.workThinkingLevel}
-        /> : runtime.conversation.stoppedRun ? <WorkTimer
+        /> : runtime.conversation.stoppedRun && <WorkTimer
           durationMs={runtime.conversation.stoppedRun.durationMs}
           modelName={runtime.conversation.stoppedRun.modelName}
           thinkingLevel={runtime.conversation.stoppedRun.thinkingLevel}
           stopped
-        /> : latestTurnTimer && <WorkTimer
-          durationMs={latestTurnTimer.workDurationMs}
-          modelName={latestTurnTimer.modelName}
-          thinkingLevel={latestTurnTimer.thinkingLevel}
         />}
+        {runtime.conversation.agentError && <div className="agent-error" role="alert">
+          <strong>Model request failed</strong>
+          <span>{runtime.conversation.agentError}</span>
+        </div>}
         {live.historyWindow?.laterCursor && <div className="history-loader is-later">
           <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadNewerHistory()}>
             {historyLoading === "newer" ? "Loading…" : "Load 100 newer"}
@@ -1422,6 +1417,7 @@ function MessageFooter({
   return <footer className="message-footer">
     {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
     {canCopy && <CopyMessageButton text={message.text} label={`Copy ${message.role === "user" ? "prompt" : "response"}`} />}
+    {message.role === "assistant" && message.workDurationMs !== undefined && <WorkTimer durationMs={message.workDurationMs} modelName={message.modelName} thinkingLevel={message.thinkingLevel} />}
     {onEdit && <button type="button" disabled={disabled} onClick={onEdit} aria-label="Edit prompt" title="Edit prompt"><IconPencil size={14} /></button>}
     {onUndo && <button
       type="button"
@@ -1495,11 +1491,11 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   }, [startedAt]);
   const started = startedAt ? Date.parse(startedAt) : Number.NaN;
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
-  return <div className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
-    {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
+  return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
+    {stopped ? "Stopped after" : startedAt ? "Working for" : "· Worked for"} {formatWorkDuration(elapsed)}
     {modelName && <> · {modelName}</>}
     {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
-  </div>;
+  </span>;
 }
 
 function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; onSelect?: (id: string) => void }) {
