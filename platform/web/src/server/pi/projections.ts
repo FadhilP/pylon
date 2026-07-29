@@ -240,20 +240,26 @@ export function browserJson(value: unknown): string | undefined {
   catch { return "[unserializable input]"; }
 }
 
+export function latestVisibleUserIndex(messages: unknown[], end = messages.length): number | undefined {
+  for (let index = Math.min(messages.length, Math.max(0, Math.floor(end))) - 1; index >= 0; index--) {
+    const raw = object(messages[index]);
+    if (role(raw.role) === "user" && !promptFileCount(raw)) return index;
+  }
+  return undefined;
+}
+
 export function projectConversation(
   messages: unknown[],
-  options: { start?: number; end?: number; includeDelegated?: boolean } = {},
+  options: { start?: number; end?: number; includeDelegated?: boolean; limitMessages?: boolean } = {},
 ): Pick<ConversationReadModel, "messages" | "delegatedRuns"> {
   const start = Math.min(messages.length, Math.max(0, Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES))));
   const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
   const includeDelegated = options.includeDelegated !== false;
-  let pinnedUserIndex = -1;
-  for (let index = end - 1; index >= 0; index--) {
-    if (role(object(messages[index]).role) === "user" && !promptFileCount(object(messages[index]))) {
-      pinnedUserIndex = index;
-      break;
-    }
-  }
+  const pinnedUserIndex = latestVisibleUserIndex(messages, end) ?? -1;
+  const completedToolIds = new Set(messages.slice(0, end).flatMap((message) => {
+    const raw = object(message);
+    return role(raw.role) === "tool" && typeof raw.toolCallId === "string" ? [raw.toolCallId] : [];
+  }));
   const toolCalls = new Map<string, { name: string; rawInput?: unknown; turn: number }>();
   const delegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
   const projectedMessages: MessageReadModel[] = [];
@@ -269,8 +275,9 @@ export function projectConversation(
       if (latestProjectedUser) latestProjectedUser.fileAttachmentCount = fileCount;
       continue;
     }
+    const unmatchedCalls: MessageReadModel[] = [];
     if (messageRole === "assistant" && Array.isArray(raw.content)) {
-      for (const part of raw.content) {
+      for (const [partIndex, part] of raw.content.entries()) {
         const item = object(part);
         if (item.type !== "toolCall" || typeof item.id !== "string") continue;
         const name = text(item.name, 200) || "Tool";
@@ -280,6 +287,18 @@ export function projectConversation(
           delegatedRuns.set(item.id, updateDelegatedRun(undefined, kind, item.id, userTurn, item.arguments, undefined, "running"));
           trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
         }
+        if (index >= start && !completedToolIds.has(item.id)) unmatchedCalls.push({
+          id: `history-${index}-tool-${partIndex}`,
+          role: "tool",
+          text: "",
+          streaming: false,
+          tool: {
+            id: id(item.id, `history-${index}-tool-${partIndex}`),
+            name,
+            input: browserJson(item.arguments),
+            status: "running",
+          },
+        });
       }
     }
     if (messageRole === "tool") {
@@ -333,11 +352,11 @@ export function projectConversation(
       ...(images ? { attachmentCount: images } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string" ? { systemSource: text(raw.customType, 200) } : {}),
     };
-    projectedMessages.push(result);
+    projectedMessages.push(result, ...unmatchedCalls);
     if (messageRole === "user") latestProjectedUser = result;
   }
   return {
-    messages: latestMessages(projectedMessages),
+    messages: options.limitMessages === false ? projectedMessages : latestMessages(projectedMessages),
     delegatedRuns: [...delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS),
   };
 }

@@ -439,6 +439,63 @@ test("driver starts without a root manifest and still loads required core", { ti
   }
 });
 
+test("existing long sessions keep the latest user turn and every tool result", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-latest-turn-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const session = SessionManager.create(cwd);
+  for (let index = 0; index < 30; index++) {
+    persistSession(session, `old-${index}`);
+  }
+  session.appendMessage({ role: "user", content: "Run every check", timestamp: Date.now() });
+  for (let index = 0; index < 60; index++) {
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: `${index}.ts` } }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    });
+    session.appendMessage({
+      role: "toolResult",
+      toolCallId: `call-${index}`,
+      toolName: "read",
+      content: [{ type: "text", text: `result ${index}` }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+  }
+
+  const driver = new SessionRuntime();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
+    const snapshot = await driver.snapshot();
+    assert.equal(snapshot.conversation.messages[0]?.role, "user");
+    assert.equal(snapshot.conversation.messages[0]?.text, "Run every check");
+    assert.equal(snapshot.conversation.messages.filter((message) => message.role === "tool").length, 60);
+    assert.equal(snapshot.conversation.messages.at(-1)?.text, "result 59");
+    assert.equal(snapshot.conversation.historyRemaining, 30);
+    const earlier = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
+    assert.equal(earlier.messages.length, 30);
+    assert.equal(earlier.messages.at(-1)?.text, "old-29");
+  } finally {
+    await driver.dispose();
+    await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("driver pages the complete visible branch after compaction", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-history-"));
   const cwd = join(root, "workspace");

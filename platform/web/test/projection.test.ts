@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
-import { decodeHistoryCursor, encodeHistoryCursor, projectConversation, projectConversationTurnIndex, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
+import { decodeHistoryCursor, encodeHistoryCursor, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 
 function runtime(): RuntimeSnapshot {
@@ -131,6 +131,39 @@ test("history projection keeps stable global IDs and skips old non-delegate payl
   assert.equal(page.messages.at(-1)?.id, "history-11");
   assert.equal(decodeHistoryCursor(encodeHistoryCursor(52)), 52);
   assert.equal(decodeHistoryCursor("not-a-cursor"), undefined);
+});
+
+test("existing-session projection keeps the complete latest user turn", () => {
+  const history = [
+    ...Array.from({ length: 30 }, (_, index) => ({ role: "assistant", content: `old ${index}` })),
+    { role: "user", content: "Run every check" },
+    ...Array.from({ length: 60 }, (_, index) => ([
+      { role: "assistant", content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: `${index}.ts` } }] },
+      { role: "toolResult", toolCallId: `call-${index}`, toolName: "read", content: [{ type: "text", text: `result ${index}` }] },
+    ])).flat(),
+    { role: "assistant", content: [{ type: "toolCall", id: "call-running", name: "bash", arguments: { command: "npm test" } }] },
+  ];
+  const tailStart = history.length - 100;
+  const historyStart = Math.min(tailStart, latestVisibleUserIndex(history) ?? tailStart);
+  const projected = projectConversation(history, { start: historyStart, limitMessages: false });
+
+  assert.equal(historyStart, 30);
+  assert.equal(projected.messages[0]?.role, "user");
+  assert.equal(projected.messages[0]?.text, "Run every check");
+  const tools = projected.messages.filter((message) => message.role === "tool");
+  assert.equal(tools.length, 61);
+  assert.deepEqual(tools[0]?.tool, {
+    id: "call-0",
+    name: "read",
+    input: '{\n  "path": "0.ts"\n}',
+    status: "completed",
+  });
+  assert.deepEqual(tools.at(-1)?.tool, {
+    id: "call-running",
+    name: "bash",
+    input: '{\n  "command": "npm test"\n}',
+    status: "running",
+  });
 });
 
 test("history projection retains bounded Pi entry IDs for editable prompts", () => {

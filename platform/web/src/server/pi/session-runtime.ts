@@ -65,7 +65,7 @@ import { applyOperationalEvent, cloneOperational, initialOperational, withOperat
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
-import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, projectConversation, projectConversationTurnIndex } from "./projections.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
@@ -1606,8 +1606,9 @@ export class SessionRuntime implements PiDriver {
     const stats = session.getSessionStats();
     const context = session.getContextUsage();
     const messages = this.transcriptMessages(session);
-    const historyStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
-    const projectedConversation = projectConversation(messages, { start: historyStart });
+    const tailStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
+    const historyStart = Math.min(tailStart, latestVisibleUserIndex(messages) ?? tailStart);
+    const projectedConversation = projectConversation(messages, { start: historyStart, limitMessages: false });
     const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = this.workDurations.get(message.id);
       const controls = this.turnControls.get(message.id);
