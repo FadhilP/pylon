@@ -102,15 +102,6 @@ function latestMessages(messages: MessageReadModel[]): MessageReadModel[] {
   return tail;
 }
 
-function trimMessages(messages: Map<string, MessageReadModel>): void {
-  if (messages.size <= MAX_MESSAGES) return;
-  const latestUser = [...messages.values()].reverse().find((message) => message.role === "user");
-  for (const [key, message] of messages) {
-    if (messages.size <= MAX_MESSAGES) break;
-    if (message === latestUser) continue;
-    messages.delete(key);
-  }
-}
 function boundedLines(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result: string[] = [];
@@ -406,7 +397,7 @@ export class RuntimeProjection {
       ...this.runtime,
       conversation: {
         ...this.runtime.conversation,
-        messages: latestMessages([...this.messages.values()]).map((message) => ({ ...message })),
+        messages: [...this.messages.values()].map((message) => ({ ...message })),
         tools: [...this.tools.values()].slice(-MAX_TOOLS).map((tool) => ({ ...tool })),
         delegatedRuns: [...this.delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS).map((run) => structuredClone(run)),
       },
@@ -726,7 +717,6 @@ export class RuntimeProjection {
       };
     }
     this.messages.set(messageId, item);
-    trimMessages(this.messages);
     this.runtime.conversation.streaming = true;
     this.publish("message.start", item);
   }

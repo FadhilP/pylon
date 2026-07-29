@@ -42,7 +42,7 @@ function ui(method: string, payload: Record<string, unknown>, requestId = method
   return { type: "ui.event" as const, sessionId: "session", sessionGeneration: 1, payload: { kind: "request", requestId, method, payload, createdAt: new Date().toISOString() } };
 }
 
-test("projection maps SDK event names and bounds retained read models", () => {
+test("projection maps SDK event names and retains active messages", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
   projection.apply(session({ type: "queue_update", steering: ["one"], followUp: ["two", "three"] }));
@@ -65,7 +65,8 @@ test("projection maps SDK event names and bounds retained read models", () => {
   assert.equal(result.conversation.retry.active, true);
   assert.deepEqual(result.conversation.compaction, { active: true, reason: "threshold" });
   assert.equal(result.conversation.tools[0]?.status, "completed");
-  assert.equal(result.conversation.messages.length, 100);
+  assert.equal(result.conversation.messages.length, 106);
+  assert.equal(result.conversation.messages[0]?.role, "tool");
   assert.equal(result.conversation.messages.at(-1)?.text, "message 104");
   assert.ok(result.conversation.messages.at(-1)?.createdAt);
   assert.ok(published.some((event) => event.type === "tool.start"));
@@ -80,7 +81,40 @@ test("projection maps SDK event names and bounds retained read models", () => {
     sessionGeneration: replacement.sessionGeneration,
     runtime: replacement,
   });
-  assert.equal(projection.snapshot().conversation.messages[0]?.text, "Loaded history");
+  const replaced = projection.snapshot().conversation;
+  assert.equal(replaced.messages.length, 1);
+  assert.equal(replaced.messages[0]?.text, "Loaded history");
+  assert.equal(replaced.tools.length, 0);
+});
+
+test("next prompt keeps the expanded existing-session turn", () => {
+  const initial = runtime();
+  initial.conversation.historyCursor = "before-expanded-turn";
+  initial.conversation.historyRemaining = 25;
+  initial.conversation.messages = [
+    { id: "previous-user", role: "user", text: "Previous prompt", streaming: false },
+    ...Array.from({ length: 120 }, (_, index) => ({
+      id: `previous-tool-${index}`,
+      role: "tool" as const,
+      text: `result ${index}`,
+      streaming: false,
+      tool: { id: `call-${index}`, name: "read", status: "completed" as const },
+    })),
+  ];
+  const projection = new RuntimeProjection(initial, () => {});
+
+  projection.apply(session({
+    type: "message_start",
+    message: { id: "next-user", role: "user", content: "Next prompt" },
+  }));
+
+  const snapshot = projection.snapshot();
+  assert.equal(snapshot.conversation.messages.length, 122);
+  assert.equal(snapshot.conversation.messages[0]?.id, "previous-user");
+  assert.equal(snapshot.conversation.messages.filter((message) => message.role === "tool").length, 120);
+  assert.equal(snapshot.conversation.messages.at(-1)?.id, "next-user");
+  assert.equal(snapshot.conversation.historyCursor, "before-expanded-turn");
+  assert.equal(snapshot.conversation.historyRemaining, 25);
 });
 
 test("history projection pairs bounded redacted tool inputs with results", () => {
