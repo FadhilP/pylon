@@ -477,6 +477,7 @@ export class ServerTransport {
       case "abort": return this.driver.abort().then(() => accepted(command.expectedGeneration));
       case "addProject": return this.driver.addProject({ expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
       case "removeProject": return this.driver.removeProject({ projectId: command.projectId, expectedGeneration: command.expectedGeneration }).then((result) => accepted(result.sessionGeneration));
+      case "renameProject": return this.driver.renameProject(command).then(() => accepted(command.expectedGeneration));
       case "reorderProject": return this.driver.reorderProject(command).then(() => accepted(command.expectedGeneration));
       case "archiveProject": return this.driver.archiveProject(command).then((result) => accepted(result.sessionGeneration));
       case "restoreProject": return this.driver.restoreProject(command).then(() => accepted(command.expectedGeneration));

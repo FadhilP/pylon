@@ -180,11 +180,12 @@ export class ProjectRegistry {
       const legacyPolicy = Number(value.version) < VERSION;
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
+        const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
         const workspacePolicy = record.workspacePolicy === undefined
           ? undefined
           : migrateWorkspacePolicy(record.workspacePolicy);
         if (typeof record.directory !== "string" || !record.directory || record.directory.length > 4_096) return [];
+        if (record.label !== undefined && (typeof record.label !== "string" || !record.label.trim() || record.label.length > 200 || /[\u0000-\u001f\u007f]/.test(record.label))) return [];
         if (record.archivedAt !== undefined && (typeof record.archivedAt !== "string" || Number.isNaN(Date.parse(record.archivedAt)))) return [];
         if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
         if (record.verifyPolicy !== undefined && !validVerifyPolicy(record.verifyPolicy)) return [];
@@ -194,6 +195,7 @@ export class ProjectRegistry {
         if (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds)) return [];
         return [{
           directory: record.directory,
+          ...(typeof record.label === "string" ? { label: record.label.trim() } : {}),
           ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
           ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
@@ -270,6 +272,15 @@ export class ProjectRegistry {
     this.projects.push(project);
     await this.save();
     return { ...project };
+  }
+
+  async renameProject(projectId: string, name: string): Promise<void> {
+    const project = this.requireProject(projectId);
+    const label = name.trim();
+    if (!label || label.length > 200 || /[\u0000-\u001f\u007f]/.test(label)) throw new Error("invalid project name");
+    if (project.label === label) return;
+    project.label = label;
+    await this.save();
   }
 
   async remove(projectId: string, sessionIds: string[] = []): Promise<void> {
@@ -645,7 +656,7 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
   }
 
-  private async resolveProjects(records: Array<{ directory: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds }>): Promise<RegisteredProject[]> {
+  private async resolveProjects(records: Array<{ directory: string; label?: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
@@ -655,7 +666,7 @@ export class ProjectRegistry {
           projects.push({
             id,
             cwd,
-            label: basename(cwd) || cwd,
+            label: record.label?.trim() || basename(cwd) || cwd,
             ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
             ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
@@ -686,6 +697,7 @@ export class ProjectRegistry {
       globalPolicy: this.globalPolicy,
       projects: this.projects.map((project) => ({
         directory: project.cwd,
+        ...(project.label !== (basename(project.cwd) || project.cwd) ? { label: project.label } : {}),
         ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
         ...(project.setupCommand ? { setupCommand: project.setupCommand } : {}),
         ...(project.verifyPolicy ? { verifyPolicy: project.verifyPolicy } : {}),

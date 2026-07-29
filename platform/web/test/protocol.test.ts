@@ -59,6 +59,9 @@ test("command validation allowlists bounded v22 commands and attachments", () =>
   assert.equal(validateCommand({ type: "rewindPrompt", entryId: "", commandId: "rewind", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "addProject", commandId: "project", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "removeProject", projectId: "project-one", commandId: "project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "renameProject", projectId: "project-one", name: "Renamed", commandId: "rename-project", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "renameProject", projectId: "project-one", name: " ", commandId: "rename-project", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "renameProject", projectId: "project-one", name: "bad\nname", commandId: "rename-project", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "reorderProject", projectId: "project-one", beforeProjectId: "project-two", commandId: "project-order", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "reorderProject", projectId: "project-one", beforeProjectId: "", commandId: "project-order", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "archiveProject", projectId: "project-one", commandId: "archive-project", expectedGeneration: 1 }).ok, true);

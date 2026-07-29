@@ -537,6 +537,11 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "removeProject", projectId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async renameProject(projectId: string, name: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "renameProject", projectId, name, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
   async reorderProject(projectId: string, beforeProjectId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({

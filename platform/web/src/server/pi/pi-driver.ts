@@ -78,6 +78,11 @@ export interface RemoveProjectInput extends ProjectInput {
   projectId: string;
 }
 
+export interface RenameProjectInput extends ProjectInput {
+  projectId: string;
+  name: string;
+}
+
 export interface ProjectArchiveInput extends ProjectInput {
   projectId: string;
 }
@@ -284,6 +289,7 @@ export interface PiDriver {
   newSession(input?: NewSessionInput): Promise<ReplacementResult>;
   addProject(input: ProjectInput): Promise<ReplacementResult>;
   removeProject(input: RemoveProjectInput): Promise<ReplacementResult>;
+  renameProject(input: RenameProjectInput): Promise<void>;
   reorderProject(input: ReorderProjectInput): Promise<void>;
   archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult>;
   restoreProject(input: ProjectArchiveInput): Promise<void>;

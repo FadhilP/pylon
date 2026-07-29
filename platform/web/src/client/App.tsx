@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
@@ -25,6 +26,20 @@ import { TerminalPanel } from "./terminal-panel";
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
+type SidebarAction = {
+  key: string;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  busyLabel: string;
+  danger?: boolean;
+  inputLabel?: string;
+  initialValue?: string;
+  multiline?: boolean;
+  maxLength?: number;
+  allowEmpty?: boolean;
+  onConfirm: (value: string) => void;
+};
 const LEFT_PANEL_WIDTH_KEY = "pylon-left-panel-width";
 const DEFAULT_LEFT_PANEL_WIDTH = 280;
 const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
@@ -102,6 +117,7 @@ export function App() {
   const [terminalSessionKey, setTerminalSessionKey] = useState<string>();
   const [terminalDrawerHeight, setTerminalDrawerHeight] = useState(initialTerminalHeight);
   const [toast, setToast] = useState<{ id: number; message: string }>();
+  const [sidebarAction, setSidebarAction] = useState<SidebarAction>();
   const [sessionBusy, setSessionBusy] = useState("");
   const [sessionDeleting, setSessionDeleting] = useState("");
   const [projectLoading, setProjectLoading] = useState("");
@@ -350,8 +366,6 @@ export function App() {
 
   const deleteSession = async (session: SessionSummary) => {
     if (session.active || sessionBusy || sessionDeleting) return;
-    const title = sessionTitle(session);
-    if (!window.confirm(`Delete "${title}"?\n\nThis removes its saved history. If system trash is unavailable, deletion is permanent.`)) return;
     setSessionDeleting(session.id);
     sessionListRequest.current++;
     try {
@@ -369,6 +383,7 @@ export function App() {
       } catch (cause) {
         reportError(cause instanceof Error ? new Error(`Session deleted, but refresh failed: ${cause.message}`) : cause, "Session deleted, but refresh failed");
       }
+      setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to delete session");
     } finally {
@@ -390,12 +405,10 @@ export function App() {
 
   const removeProject = async (project: SessionProject) => {
     if (projectBusy || sessionBusy || sessionDeleting) return;
-    const page = sessionPages.find((candidate) => candidate.id === project.id);
-    const count = page?.totalCount ?? project.sessions.length;
-    if (!window.confirm(`Remove "${project.label}" and delete ${count} saved session${count === 1 ? "" : "s"}?\n\nProject files and Continuity memory are not deleted.`)) return;
     setProjectBusy(project.id);
     try {
       await runtimeStore.removeProject(project.id);
+      setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to remove project");
     } finally {
@@ -403,15 +416,11 @@ export function App() {
     }
   };
 
-  const updateWorktreeSetup = async (project: SessionProject) => {
-    const setupCommand = window.prompt(
-      `Worktree setup for ${project.label}\n\nRuns once after a new isolated worktree is created. Leave blank to disable.`,
-      "",
-    );
-    if (setupCommand === null) return;
+  const updateWorktreeSetup = async (project: SessionProject, setupCommand: string) => {
     setProjectBusy(project.id);
     try {
       await runtimeStore.updateProjectWorktreeSettings(project.id, setupCommand);
+      setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to save worktree setup");
     } finally {
@@ -419,20 +428,44 @@ export function App() {
     }
   };
 
-  const renameSession = async (session: SessionSummary) => {
+  const renameSession = async (session: SessionSummary, value: string) => {
     if (sessionBusy || sessionDeleting) return;
-    const name = window.prompt("Rename session", sessionTitle(session))?.trim();
-    if (!name || name === session.name) return;
+    const name = value.trim();
+    if (!name || name === session.name) {
+      setSidebarAction(undefined);
+      return;
+    }
     setSessionBusy(session.id);
     try {
       await runtimeStore.renameSession(session.id, name);
       const rename = (candidate: SessionSummary) => candidate.id === session.id ? { ...candidate, name } : candidate;
       setActiveSessions((current) => current.map(rename));
       setSessionPages((current) => current.map((page) => ({ ...page, sessions: page.sessions.map(rename) })));
+      setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to rename session");
     } finally {
       setSessionBusy("");
+    }
+  };
+
+  const renameProject = async (project: SessionProject, value: string) => {
+    if (projectBusy || sessionBusy || sessionDeleting) return;
+    const name = value.trim();
+    if (!name || name === project.label) {
+      setSidebarAction(undefined);
+      return;
+    }
+    setProjectBusy(project.id);
+    try {
+      await runtimeStore.renameProject(project.id, name);
+      setSessionPages((current) => current.map((page) => page.id === project.id ? { ...page, label: name } : page));
+      setActiveSessions((current) => current.map((session) => session.projectId === project.id ? { ...session, cwdLabel: name } : session));
+      setSidebarAction(undefined);
+    } catch (cause) {
+      reportError(cause, "Unable to rename project");
+    } finally {
+      setProjectBusy("");
     }
   };
 
@@ -567,8 +600,25 @@ export function App() {
           return next;
         })}
         onSelectSession={(session) => void switchSession(session)}
-        onDeleteSession={(session) => void deleteSession(session)}
-        onRenameSession={(session) => void renameSession(session)}
+        onDeleteSession={(session) => setSidebarAction({
+          key: `delete-session-${session.id}`,
+          title: `Delete “${sessionTitle(session)}”?`,
+          description: "This removes saved history. If system trash is unavailable, deletion is permanent.",
+          confirmLabel: "Delete session",
+          busyLabel: "Deleting…",
+          danger: true,
+          onConfirm: () => void deleteSession(session),
+        })}
+        onRenameSession={(session) => setSidebarAction({
+          key: `rename-session-${session.id}`,
+          title: "Rename session",
+          description: "Choose a name that makes this session easy to find.",
+          confirmLabel: "Save name",
+          busyLabel: "Saving…",
+          inputLabel: "Session name",
+          initialValue: sessionTitle(session),
+          onConfirm: (value) => void renameSession(session, value),
+        })}
         onSetSessionActive={(session, active) => void setSessionActive(session, active)}
         onLoadMore={(project) => void loadMoreSessions(project)}
         onAddProject={() => void addProject()}
@@ -591,13 +641,45 @@ export function App() {
           if (mobile) setSidebarOpen(false);
         }}
         onArchiveProject={(project) => void archiveProject(project)}
-        onRemoveProject={(project) => void removeProject(project)}
+        onRenameProject={(project) => setSidebarAction({
+          key: `rename-project-${project.id}`,
+          title: "Rename project",
+          description: "This changes only the project name shown in Pylon. Folder name and files stay unchanged.",
+          confirmLabel: "Save name",
+          busyLabel: "Saving…",
+          inputLabel: "Project name",
+          initialValue: project.label,
+          onConfirm: (value) => void renameProject(project, value),
+        })}
+        onRemoveProject={(project) => {
+          const count = sessionPages.find((candidate) => candidate.id === project.id)?.totalCount ?? project.sessions.length;
+          setSidebarAction({
+            key: `remove-project-${project.id}`,
+            title: `Remove “${project.label}”?`,
+            description: `This deletes ${count} saved session${count === 1 ? "" : "s"}. Project files and Continuity memory stay unchanged.`,
+            confirmLabel: "Remove project",
+            busyLabel: "Removing…",
+            danger: true,
+            onConfirm: () => void removeProject(project),
+          });
+        }}
         onArchiveSession={(session) => void archiveSession(session)}
         onNewSession={(project) => {
           const unfiltered = projects.find((candidate) => candidate.id === project.id);
           if (unfiltered) void newSession(unfiltered);
         }}
-        onWorktreeSetup={(project) => void updateWorktreeSetup(project)}
+        onWorktreeSetup={(project) => setSidebarAction({
+          key: `worktree-setup-${project.id}`,
+          title: `Worktree setup for ${project.label}`,
+          description: "This command runs once after Pylon creates a new isolated worktree.",
+          confirmLabel: "Save setup",
+          busyLabel: "Saving…",
+          inputLabel: "Setup command",
+          multiline: true,
+          maxLength: 2_000,
+          allowEmpty: true,
+          onConfirm: (value) => void updateWorktreeSetup(project, value),
+        })}
         onReorderProject={(projectId, beforeProjectId) =>
           runtimeStore.reorderProject(projectId, beforeProjectId).catch((cause) => {
             reportError(cause, "Unable to reorder project");
@@ -713,6 +795,22 @@ export function App() {
         {(sessionBusy || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
       </main>
 
+      {sidebarAction && <ActionDialog
+        key={sidebarAction.key}
+        title={sidebarAction.title}
+        description={sidebarAction.description}
+        confirmLabel={sidebarAction.confirmLabel}
+        busyLabel={sidebarAction.busyLabel}
+        busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
+        danger={sidebarAction.danger}
+        inputLabel={sidebarAction.inputLabel}
+        initialValue={sidebarAction.initialValue}
+        multiline={sidebarAction.multiline}
+        maxLength={sidebarAction.maxLength}
+        allowEmpty={sidebarAction.allowEmpty}
+        onCancel={() => setSidebarAction(undefined)}
+        onConfirm={sidebarAction.onConfirm}
+      />}
       {archivesOpen && <ArchiveDialog revision={live.sessionRevision ?? 0} onClose={() => setArchivesOpen(false)} onError={reportError} />}
       {settingsOpen && <SettingsDialog
         packages={packages}

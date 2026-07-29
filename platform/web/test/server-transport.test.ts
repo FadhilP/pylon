@@ -45,6 +45,7 @@ class FakeDriver implements PiDriver {
   keepAlives: Array<{ requestId: string; sessionGeneration: number }> = [];
   deletedSessions: string[] = [];
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
+  renamedProjects: Array<{ projectId: string; name: string }> = [];
   activatedSessions: Array<{ sessionId: string; active: boolean }> = [];
   selectedModels: Array<{ provider: string; modelId: string }> = [];
   selectedThinking: string[] = [];
@@ -121,6 +122,10 @@ class FakeDriver implements PiDriver {
   abort(): Promise<void> { return Promise.resolve(); }
   addProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project", "project-workspace")); }
   removeProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-removed", "workspace")); }
+  renameProject(input: { projectId: string; name: string }): Promise<void> {
+    this.renamedProjects.push({ projectId: input.projectId, name: input.name });
+    return Promise.resolve();
+  }
   reorderProject(): Promise<void> { return Promise.resolve(); }
   archiveProject(): Promise<ReplacementResult> { return Promise.resolve(this.replace("session-project-archived", "workspace")); }
   restoreProject(): Promise<void> { return Promise.resolve(); }
@@ -494,6 +499,11 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const restoreCommand = { type: "restoreQueuedPrompt", queueId: "queue-1", commandId: "restore-once", expectedGeneration: 1 };
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(restoreCommand) })).status, 200);
     assert.equal((await fetch(`${origin}/api/v1/queued-prompt?queueId=queue-1&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
+
+    const renameProjectCommand = { type: "renameProject", projectId: "project-workspace", name: "Renamed project", commandId: "rename-project-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameProjectCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameProjectCommand) })).status, 200);
+    assert.deepEqual(driver.renamedProjects, [{ projectId: "project-workspace", name: "Renamed project" }]);
 
     const renameCommand = { type: "renameSession", sessionId: "session-old", name: "Renamed", commandId: "rename-once", expectedGeneration: 1 };
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(renameCommand) })).status, 200);

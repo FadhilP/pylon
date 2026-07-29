@@ -19,9 +19,12 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(first);
     await registry.add(second);
     assert.equal(registry.list().length, 2);
+    await registry.renameProject(projectIdForCwd(second), "Renamed project");
+    await assert.rejects(registry.renameProject(projectIdForCwd(second), " "), /invalid project name/);
     const stored = JSON.parse(await readFile(config, "utf8"));
     assert.equal(stored.version, 9);
     assert.equal(stored.projects.length, 2);
+    assert.equal(stored.projects[1].label, "Renamed project");
     assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
 
     let seeded = false;
@@ -31,6 +34,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       return [first];
     });
     assert.equal(seeded, false);
+    assert.equal(reloaded.get(projectIdForCwd(second))?.label, "Renamed project");
 
     const project = registry.get(projectIdForCwd(second))!;
     await registry.updateWorktreeSettings(project.id, "npm install");

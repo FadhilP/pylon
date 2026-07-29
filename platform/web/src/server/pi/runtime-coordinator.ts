@@ -52,6 +52,7 @@ import type {
   ReorderActiveSessionInput,
   ReorderProjectInput,
   RemoveProjectInput,
+  RenameProjectInput,
   ReplacementResult,
   RuntimeHandle,
   RuntimeTarget,
@@ -680,6 +681,13 @@ export class RuntimeCoordinator implements PiDriver {
       this.emitProjectsChanged();
       return this.replacement(false);
     });
+  }
+
+  async renameProject(input: RenameProjectInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    await this.registry().renameProject(input.projectId, input.name);
+    this.sessionIndex.invalidate();
+    this.emitProjectsChanged();
   }
 
   async reorderProject(input: ReorderProjectInput): Promise<void> {

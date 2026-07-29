@@ -149,8 +149,11 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (["switchSession", "deleteSession", "archiveSession", "restoreSession", "renameSession", "setSessionActive", "reorderActiveSession"].includes(value.type) && !identifier(value.sessionId)) {
     return { ok: false, error: "invalid sessionId" };
   }
-  if (["removeProject", "reorderProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
+  if (["removeProject", "renameProject", "reorderProject", "archiveProject", "restoreProject", "updateProjectWorktreeSettings"].includes(value.type) && !identifier(value.projectId)) {
     return { ok: false, error: "invalid projectId" };
+  }
+  if (value.type === "renameProject" && (!boundedString(value.name) || !value.name.trim() || /[\u0000-\u001f\u007f]/.test(value.name))) {
+    return { ok: false, error: "invalid project name" };
   }
   if (value.type === "renameSession" && (!boundedString(value.name) || !value.name.trim())) {
     return { ok: false, error: "invalid session name" };

@@ -42,6 +42,7 @@ import type {
   ReorderActiveSessionInput,
   ReorderProjectInput,
   RemoveProjectInput,
+  RenameProjectInput,
   ReplacementResult,
   RuntimeHandle,
   RuntimeTarget,
@@ -619,6 +620,10 @@ export class SessionRuntime implements PiDriver {
   }
 
   removeProject(_input: RemoveProjectInput): Promise<ReplacementResult> {
+    return Promise.reject(new Error("project management requires the runtime coordinator"));
+  }
+
+  renameProject(_input: RenameProjectInput): Promise<void> {
     return Promise.reject(new Error("project management requires the runtime coordinator"));
   }
 

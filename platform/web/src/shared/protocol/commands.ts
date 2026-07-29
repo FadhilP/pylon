@@ -10,6 +10,7 @@ export const COMMAND_NAMES = [
   "abort",
   "addProject",
   "removeProject",
+  "renameProject",
   "reorderProject",
   "archiveProject",
   "restoreProject",
@@ -77,6 +78,7 @@ export type WebCommand =
   | ({ type: "abort" } & CommandBase)
   | ({ type: "addProject" } & CommandBase)
   | ({ type: "removeProject"; projectId: string } & CommandBase)
+  | ({ type: "renameProject"; projectId: string; name: string } & CommandBase)
   | ({ type: "reorderProject"; projectId: string; beforeProjectId?: string } & CommandBase)
   | ({ type: "archiveProject"; projectId: string } & CommandBase)
   | ({ type: "restoreProject"; projectId: string } & CommandBase)

@@ -1168,6 +1168,8 @@
   .edit-confirm-dialog footer .primary-button { background: var(--accent); color: var(--accent-contrast); }
   .prompt-editor-actions .primary-button:hover:not(:disabled),
   .edit-confirm-dialog footer .primary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); color: var(--accent-contrast); }
+  .edit-confirm-dialog footer .danger-button { background: var(--red-soft); color: var(--red); }
+  .edit-confirm-dialog footer .danger-button:hover:not(:disabled) { background: color-mix(in srgb, var(--red-soft) 78%, var(--red)); color: var(--text); }
   .prompt-editor-actions button:disabled,
   .edit-confirm-dialog button:disabled { cursor: not-allowed; opacity: .55; }
 
@@ -1211,6 +1213,14 @@
   .fork-timeline input { accent-color: var(--accent); }
   .fork-timeline.is-disabled { color: var(--text-muted); }
   .fork-dialog .fork-timeline-reason { margin: -5px 0 0 24px; color: var(--text-muted); }
+  .action-dialog > div > p { color: var(--text-muted); line-height: 1.5; }
+  .action-dialog-field { display: grid; gap: 6px; color: var(--text-soft); font-weight: 600; }
+  .action-dialog-field input,
+  .action-dialog-field textarea { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 7px; outline: 0; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; }
+  .action-dialog-field textarea { min-height: 104px; resize: vertical; }
+  .action-dialog-field input:focus,
+  .action-dialog-field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .action-dialog-field small { font-weight: 400; }
   .work-timer {
     width: min(760px, 88%);
     align-self: flex-start;

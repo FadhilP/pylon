@@ -47,6 +47,7 @@ interface SidebarProps {
   onToggleTerminal: () => void;
   onOpenSettings: () => void;
   onArchiveProject: (project: SessionProject) => void;
+  onRenameProject: (project: SessionProject) => void;
   onRemoveProject: (project: SessionProject) => void;
   onArchiveSession: (session: SessionSummary) => void;
   onNewSession: (project: SessionProject) => void;
@@ -55,7 +56,7 @@ interface SidebarProps {
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -284,6 +285,10 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                   }}
                 ><IconDots size={15} /></summary>
                 <div className="session-menu-popover">
+                  <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
+                    closeMenu(true);
+                    onRenameProject(project);
+                  }}><IconPencil size={14} />Rename</button>
                   <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
                     closeMenu(true);
                     onWorktreeSetup(project);
