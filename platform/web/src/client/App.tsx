@@ -18,7 +18,7 @@ import { ConversationPanel } from "./conversation-panel";
 import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
+import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT, SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
 
@@ -231,7 +231,7 @@ export function App() {
     const sessionId = live.runtime.sessionId;
     const sessionGeneration = live.runtime.sessionGeneration;
     setSessionsLoading(true);
-    const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 }, controller.signal).then((result) => {
+    const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }, controller.signal).then((result) => {
       if (!active || request !== sessionListRequest.current
         || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)) return;
       applySessionList(result);
@@ -364,7 +364,7 @@ export function App() {
       })).filter((page) => page.totalCount > 0));
       const request = ++sessionListRequest.current;
       try {
-        const result = await runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 });
+        const result = await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT });
         if (request === sessionListRequest.current) applySessionList(result);
       } catch (cause) {
         reportError(cause instanceof Error ? new Error(`Session deleted, but refresh failed: ${cause.message}`) : cause, "Session deleted, but refresh failed");
@@ -441,7 +441,7 @@ export function App() {
     setSessionBusy(session.id);
     try {
       await runtimeStore.setSessionActive(session.id, active);
-      applySessionList(await runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 }));
+      applySessionList(await runtimeStore.listSessions({ query: query.trim() || undefined, limit: SESSION_LIST_INITIAL_LIMIT }));
     } catch (cause) {
       reportError(cause, `Unable to ${active ? "activate" : "deactivate"} session`);
     } finally {
@@ -458,7 +458,7 @@ export function App() {
         projectId: project.id,
         cursor: current.nextCursor,
         query: query.trim() || undefined,
-        limit: 10,
+        limit: SESSION_LIST_MORE_LIMIT,
       });
       setActiveSessions(result.activeSessions);
       const next = result.projects[0];

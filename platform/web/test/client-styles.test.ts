@@ -11,6 +11,24 @@ test("web typography never declares a font below 12px", async () => {
   assert.deepEqual(sizes.filter((size) => size < 12), []);
 });
 
+test("microinteractions stay short, targeted, and reduced-motion safe", async () => {
+  const css = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
+
+  assert.match(css, /--motion-fast:\s*120ms/);
+  assert.match(css, /--motion-standard:\s*160ms/);
+  assert.match(css, /\.session-menu-popover\s*\{[^}]*animation:\s*request-in var\(--motion-fast\)/s);
+  assert.match(css, /\.composer-popover\s*\{[^}]*animation:\s*request-in var\(--motion-fast\)/s);
+  assert.match(css, /\.prompt-image\s*\{[^}]*animation:\s*reveal-row var\(--motion-fast\)/s);
+  assert.match(css, /\.composer-drop-overlay\s*\{[^}]*animation:\s*drop-target-in var\(--motion-fast\)/s);
+  assert.match(css, /\.inspector\s*\{[^}]*animation:\s*inspector-in var\(--motion-standard\)/s);
+  assert.match(css, /\.terminal-drawer\s*\{[^}]*animation:\s*terminal-in var\(--motion-standard\)/s);
+  assert.match(css, /@keyframes terminal-in\s*\{\s*from\s*\{\s*opacity:\s*0;\s*}\s*}/);
+  assert.match(css, /\.settings-dialog\s*\{[^}]*animation:\s*modal-in var\(--motion-standard\)/s);
+  assert.match(css, /\.secondary-button:active:not\(:disabled\),\s*\.primary-button:active:not\(:disabled\)/);
+  assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*animation-duration:\s*\.01ms !important/);
+  assert.doesNotMatch(css, /transition:\s*all\b/);
+});
+
 test("runtime policy, overview, and Files keep their compact native layout", async () => {
   const [css, inspector, files, sidebar, conversation, app, eventStore, terminal] = await Promise.all([
     readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),

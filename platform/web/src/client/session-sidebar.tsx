@@ -4,6 +4,9 @@ import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snap
 import { formatRelativeTime } from "../shared/format";
 import { displayDate, displayTime } from "./format";
 
+export const SESSION_LIST_INITIAL_LIMIT = 3;
+export const SESSION_LIST_MORE_LIMIT = 5;
+
 export interface SessionProject {
   id: string;
   label: string;
@@ -209,7 +212,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
 
       <nav className="project-list">
         <section className="active-session-group" aria-labelledby="active-sessions-heading">
-          <h2 className="nav-label" id="active-sessions-heading"><button type="button" aria-expanded={activeSessionsOpen} onClick={() => setActiveSessionsOpen((open) => !open)}>
+          <h2 style={{marginBottom: 4}} className="nav-label" id="active-sessions-heading"><button type="button" aria-expanded={activeSessionsOpen} onClick={() => setActiveSessionsOpen((open) => !open)}>
             <span>Active sessions</span>
             <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
             <small>{activeSessions.length}</small>
@@ -314,7 +317,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onCloseMenu={() => closeMenu(true)}
               />)}
               {page?.nextCursor && <button className="session-show-more" type="button" onClick={() => onLoadMore(project)} disabled={projectLoading === project.id}>
-                {projectLoading === project.id ? "Loading…" : `Show ${Math.min(10, page.totalCount - page.sessions.length)} more`}
+                {projectLoading === project.id ? "Loading…" : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
               </button>}
             </div>}
           </section>;
