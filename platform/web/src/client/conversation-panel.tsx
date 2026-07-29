@@ -1492,7 +1492,7 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   const started = startedAt ? Date.parse(startedAt) : Number.NaN;
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
   return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
-    {stopped ? "Stopped after" : startedAt ? "Working for" : "· Worked for"} {formatWorkDuration(elapsed)}
+    {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
     {modelName && <> · {modelName}</>}
     {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
   </span>;

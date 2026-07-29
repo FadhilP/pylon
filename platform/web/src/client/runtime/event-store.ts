@@ -940,7 +940,7 @@ export class RuntimeEventStore {
     }
 
     if (event.type === "session.replaced") {
-      this.reset("loading");
+      this.reset("loading", true);
       return;
     }
     if (event.type === "session.unavailable") {
@@ -1006,7 +1006,7 @@ export class RuntimeEventStore {
     }, true);
   }
 
-  private reset(connection: "loading" | "disconnected" = "disconnected"): void {
+  private reset(connection: "loading" | "disconnected" = "disconnected", clearRuntime = false): void {
     if (this.resetting || this.disposed) return;
     this.resetting = true;
     this.source?.close();
@@ -1014,7 +1014,8 @@ export class RuntimeEventStore {
     this.set({
       ...this.snapshot,
       connection,
-      runtime: this.snapshot.runtime ? { ...this.snapshot.runtime, ready: false } : undefined,
+      runtime: clearRuntime || !this.snapshot.runtime ? undefined : { ...this.snapshot.runtime, ready: false },
+      historyWindow: clearRuntime ? undefined : this.snapshot.historyWindow,
       pendingUi: undefined,
       agentActive: false,
       audioCues: [],
