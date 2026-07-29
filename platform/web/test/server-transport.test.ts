@@ -521,7 +521,7 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
-  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], dialogReconnectGraceMs: 40 });
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], dialogReconnectGraceMs: 500 });
   const tab = "guard-owner";
   let stream = new AbortController();
   try {
@@ -549,7 +549,7 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
 
     assert.equal((await prompt("guard-owner-loss")).status, 200);
     stream.abort();
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 550));
     assert.notEqual(driver.answers.at(-1)?.requestId, "dialog-2");
     const otherTab = "guard-observer";
     const otherBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, {

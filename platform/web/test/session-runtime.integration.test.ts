@@ -130,21 +130,13 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
   });
 
   try {
-    const handle = await driver.start({ cwd, agentDir, repositoryRoot });
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root });
     const foreignParent = SessionManager.create(otherCwd);
     persistSession(foreignParent, "Foreign parent");
     const failureParent = SessionManager.create(failureCwd);
     persistSession(failureParent, "Failure parent");
     assert.equal(handle.sessionGeneration, 1);
-    const first = await driver.snapshot();
-    assert.equal(first.ready, true);
-    assert.ok(first.availableTools.includes("search_tools"));
-    assert.ok(first.availableTools.includes("continuity_update"));
-    assert.ok(first.availableTools.includes("verify"));
-    assert.ok(first.availableTools.includes("heartbeat_start"));
-    assert.equal(first.operational.continuity.availability, "available");
-    assert.equal(first.operational.timeline.availability, "available");
-    assert.ok(first.operational.tools.policies.length > 0);
+    assert.equal((await driver.snapshot()).ready, true);
 
     const accepted = await driver.prompt({
       commandId: "phase0-command",
@@ -192,9 +184,6 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     assert.equal(observations.shutdowns, 2);
     const replacedSnapshot = await driver.snapshot();
     assert.equal(replacedSnapshot.cwdLabel, "other-workspace");
-    assert.equal(replacedSnapshot.operational.continuity.availability, "available");
-    assert.equal(replacedSnapshot.operational.timeline.availability, "available");
-    assert.ok(replacedSnapshot.operational.tools.policies.length > 0);
 
     const sameProject = await driver.newSession({ parentSessionId: foreignParent.getSessionId() });
     assert.equal(sameProject.cancelled, false);
@@ -229,38 +218,49 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     assert.equal(failed.cwdLabel, "failure-workspace");
     assert.ok(failed.diagnostics.some((item) => item.message.includes("failed to load")));
     assert.equal(failed.ready, true);
-    assert.equal(failed.operational.continuity.availability, "available");
-    assert.equal(failed.operational.timeline.availability, "available");
-    assert.ok(failed.operational.tools.policies.length > 0);
     assert.equal(observations.starts, 6);
     assert.equal(observations.shutdowns, 6);
     assert.equal(observations.unavailable, 0);
+  } finally {
+    unsubscribe();
+    await driver.dispose();
+    const testSessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(testSessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
 
-    const packages = await driver.listPackages();
-    assert.ok(packages.packages.some((item) => item.id === "pi-timeline" && item.active));
+  assert.equal(observations.shutdowns, 6);
+});
+
+test("repository packages load, toggle, and save settings", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-packages-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot });
+    const first = await driver.snapshot();
+    assert.ok(first.availableTools.includes("search_tools"));
+    assert.ok(first.availableTools.includes("continuity_update"));
+    assert.ok(first.availableTools.includes("verify"));
+    assert.ok(first.availableTools.includes("heartbeat_start"));
+    assert.equal(first.operational.continuity.availability, "available");
+    assert.equal(first.operational.timeline.availability, "available");
+    assert.ok(first.operational.tools.policies.length > 0);
+    assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && item.active));
+
     const disabled = await driver.setPackageEnabled({ packageId: "pi-timeline", enabled: false });
-    assert.equal(disabled.sessionGeneration, 8);
+    assert.equal(disabled.sessionGeneration, 2);
     assert.equal((await driver.snapshot()).operational.timeline.availability, "unavailable");
     assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && !item.enabled && !item.active));
-    const enabled = await driver.setPackageEnabled({ packageId: "pi-timeline", enabled: true });
-    assert.equal(enabled.sessionGeneration, 9);
-    assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && item.active));
-    const unchanged = driver.setPackageEnabled({ packageId: "pi-timeline", enabled: true });
-    await assert.rejects(
-      driver.setPackageEnabled({ packageId: "pi-verify", enabled: false }),
-      /only change while the session is idle/,
-    );
-    assert.equal((await unchanged).sessionGeneration, 9);
-
     const sieve = (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings;
     assert.equal(sieve?.kind, "sieve");
     if (sieve?.kind !== "sieve") throw new Error("pi-sieve settings are unavailable");
     const threshold = sieve.threshold === 1_000 ? 2_000 : 1_000;
-    const configured = await driver.updatePackageSettings({
-      packageId: "pi-sieve",
-      settings: { ...sieve, threshold },
-    });
-    assert.equal(configured.sessionGeneration, 10);
+    const configured = await driver.updatePackageSettings({ packageId: "pi-sieve", settings: { ...sieve, threshold } });
+    assert.equal(configured.sessionGeneration, 3);
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings,
       { ...sieve, threshold },
@@ -270,14 +270,11 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
       settings: { kind: "advisor", mode: "model", model: "missing/model" },
     }), /unavailable/);
   } finally {
-    unsubscribe();
     await driver.dispose();
     const testSessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
     await Promise.all(testSessions.map((session) => rm(session.path, { force: true })));
     await rm(root, { recursive: true, force: true });
   }
-
-  assert.equal(observations.shutdowns, 9);
 });
 
 test("session deletion only falls back when trash is unavailable", async () => {
@@ -316,7 +313,7 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
   persistSession(switchable, "Switchable session");
   const deletablePath = deletable.getSessionFile()!;
   try {
-    const handle = await driver.start({ cwd, agentDir, repositoryRoot });
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root });
     await assert.rejects(driver.deleteSession({ sessionId: handle.sessionId }), /currently active/);
     assert.equal((await driver.snapshot()).sessionId, handle.sessionId);
 

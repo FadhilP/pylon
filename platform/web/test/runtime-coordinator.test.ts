@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
@@ -12,7 +11,6 @@ import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const run = promisify(execFile);
 
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
@@ -128,7 +126,7 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
   });
 
   try {
-    const initial = await driver.start({ cwd, agentDir, repositoryRoot });
+    const initial = await driver.start({ cwd, agentDir, repositoryRoot: root });
     assert.notEqual(initial.sessionId, existing.getSessionId());
     assert.equal((await driver.snapshot()).metrics.userMessages, 0);
     await driver.switchSession({ sessionId: other.getSessionId() });
@@ -222,7 +220,7 @@ test("Local draft provisioning leaves the project branch and worktree list uncha
   const driver = new RuntimeCoordinator();
 
   try {
-    await driver.start({ cwd, agentDir, repositoryRoot });
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
     const slot = (driver as any).selected();
     persistSession((slot.driver as any).runtime.session.sessionManager, "Apply session changes");
     await ((driver as any).registry() as ProjectRegistry).setSessionWorkspace({
@@ -258,7 +256,7 @@ test("session changes apply from a worktree and Project folder without committin
   const driver = new RuntimeCoordinator();
 
   try {
-    await driver.start({ cwd, agentDir, repositoryRoot });
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
     const slot = (driver as any).selected();
     await (driver as any).ensureDraftWorkspace(slot);
     await (driver as any).moveSelectedFromLocal(slot, projectIdForCwd(cwd), "worktree");
@@ -312,7 +310,7 @@ test("fork translates the coordinator generation to the selected runtime generat
   const driver = new RuntimeCoordinator();
 
   try {
-    await driver.start({ cwd, agentDir, repositoryRoot });
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
     const selected = await driver.switchSession({ sessionId: existing.getSessionId() });
     const slot = (driver as any).selected();
     assert.notEqual(selected.sessionGeneration, slot.innerGeneration);
@@ -358,7 +356,7 @@ test("empty project registry uses parking runtime and add/remove keeps the works
   const driver = new RuntimeCoordinator({ pickDirectory: async () => selectedDirectory });
 
   try {
-    await driver.start({ cwd, agentDir, repositoryRoot });
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
     assert.equal((await driver.snapshot()).projectAvailable, false);
     assert.deepEqual((await driver.listSessions()).projects, []);
 
@@ -399,7 +397,7 @@ test("disposing the coordinator aborts and clears an open directory picker", { t
     }, { once: true })),
   });
   try {
-    await driver.start({ cwd, agentDir, repositoryRoot });
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
     const pending = driver.addProject({ expectedGeneration: 1 });
     const rejected = assert.rejects(pending, /picker was closed/);
     await assert.rejects(driver.addProject({ expectedGeneration: 1 }), /already open/);
