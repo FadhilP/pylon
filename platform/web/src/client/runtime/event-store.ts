@@ -9,6 +9,7 @@ import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHist
 import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
+import { liveToolMessage, replaceConversationMessage, replaceToolActivity } from "../../shared/transcript";
 
 export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
@@ -1030,7 +1031,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
   switch (event.type) {
     case "message.start": {
       const item = payload as MessageReadModel;
-      return { ...runtime, conversation: { ...conversation, streaming: true, messages: [...conversation.messages.filter((message) => message.id !== item.id), item] } };
+      return { ...runtime, conversation: { ...conversation, streaming: true, messages: replaceConversationMessage(conversation.messages, item) } };
     }
     case "message.update": {
       const update = payload as { id?: string; text?: string; fileAttachmentCount?: number };
@@ -1076,8 +1077,36 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         },
       };
     }
-    case "tool.start": return { ...runtime, conversation: { ...conversation, tools: replaceTool(conversation.tools, payload as ToolActivityReadModel) } };
-    case "tool.end": return { ...runtime, conversation: { ...conversation, tools: replaceTool(conversation.tools, payload as ToolActivityReadModel) } };
+    case "tool.start": {
+      const tool = payload as ToolActivityReadModel;
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          tools: replaceToolActivity(conversation.tools, tool),
+          messages: replaceConversationMessage(conversation.messages, liveToolMessage(tool)),
+        },
+      };
+    }
+    case "tool.end": {
+      const tool = payload as ToolActivityReadModel;
+      const existing = conversation.messages.find((message) => message.tool?.id === tool.id);
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          tools: replaceToolActivity(conversation.tools, tool),
+          messages: replaceConversationMessage(conversation.messages, existing
+            ? {
+                ...existing,
+                text: tool.summary ?? existing.text,
+                streaming: false,
+                tool: { ...existing.tool!, name: tool.name || existing.tool!.name, input: tool.input ?? existing.tool!.input, status: tool.status },
+              }
+            : liveToolMessage(tool)),
+        },
+      };
+    }
     case "delegate.update": {
       const run = payload as DelegatedAgentRunReadModel;
       const previous = conversation.delegatedRuns.find((item) => item.id === run.id);
@@ -1209,7 +1238,5 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
     default: return runtime;
   }
 }
-function replaceTool(tools: ToolActivityReadModel[], tool: ToolActivityReadModel): ToolActivityReadModel[] { return [...tools.filter((item) => item.id !== tool.id), tool].slice(-100); }
-
 export const runtimeStore = new RuntimeEventStore();
 export function useRuntimeStore(): RuntimeStoreSnapshot { return useSyncExternalStore(runtimeStore.subscribe, runtimeStore.getSnapshot, runtimeStore.getSnapshot); }

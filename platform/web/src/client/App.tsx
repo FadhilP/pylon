@@ -32,6 +32,13 @@ const DEFAULT_RIGHT_PANEL_WIDTH = 380;
 const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
 const DEFAULT_TERMINAL_HEIGHT = 280;
 
+function runtimeRequestStillCurrent(snapshot: RuntimeStoreSnapshot, sessionId: string, sessionGeneration: number): boolean {
+  return snapshot.connection === "connected"
+    && snapshot.runtime?.ready === true
+    && snapshot.runtime.sessionId === sessionId
+    && snapshot.runtime.sessionGeneration === sessionGeneration;
+}
+
 function leftPanelWidth(value: number): number {
   const maximum = Math.min(520, window.innerWidth * .45);
   return Math.round(Math.max(220, Math.min(maximum, value)));
@@ -114,6 +121,7 @@ export function App() {
   const previousSidebarOpen = useRef(sidebarOpen);
   const previousRightPanel = useRef(rightPanel);
   const sessionListRequest = useRef(0);
+  const sessionListApplied = useRef(false);
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const mobile = useMediaQuery("(max-width: 900px)");
@@ -148,9 +156,11 @@ export function App() {
   const applySessionList = (result: SessionListSnapshot) => {
     setSessionPages(result.projects);
     setActiveSessions(result.activeSessions);
+    const firstList = !query.trim() && !sessionListApplied.current;
+    if (!query.trim()) sessionListApplied.current = true;
     const projectId = result.activeSessions.find((session) => session.active)?.projectId
       ?? result.projects.find((page) => page.sessions.some((session) => session.active))?.id;
-    if (projectId) setExpandedProjects((current) => new Set([...current, projectId]));
+    if (firstList && !query.trim() && projectId) setExpandedProjects((current) => new Set([...current, projectId]));
   };
   const reportError = (cause: unknown, fallback: string) => {
     const message = cause instanceof Error ? cause.message : fallback;
@@ -218,17 +228,23 @@ export function App() {
     let active = true;
     const controller = new AbortController();
     const request = ++sessionListRequest.current;
+    const sessionId = live.runtime.sessionId;
+    const sessionGeneration = live.runtime.sessionGeneration;
     setSessionsLoading(true);
     const timer = window.setTimeout(() => void runtimeStore.listSessions({ query: query.trim() || undefined, limit: 10 }, controller.signal).then((result) => {
-      if (!active || request !== sessionListRequest.current) return;
+      if (!active || request !== sessionListRequest.current
+        || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)) return;
       applySessionList(result);
     }).catch((cause) => {
-      if (active && request === sessionListRequest.current) reportError(cause, "Unable to list sessions");
+      if (active && request === sessionListRequest.current
+        && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)) {
+        reportError(cause, "Unable to list sessions");
+      }
     }).finally(() => {
       if (active && request === sessionListRequest.current) setSessionsLoading(false);
     }), query ? 200 : 0);
     return () => { active = false; controller.abort(); window.clearTimeout(timer); };
-  }, [live.connection, live.runtime?.ready, live.runtime?.sessionGeneration, live.runtime?.sessionName, live.sessionRevision, query]);
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, live.runtime?.sessionName, live.sessionRevision, query]);
 
   useEffect(() => {
     if (live.connection === "connected" && live.errorRevision && live.error) {
@@ -244,19 +260,20 @@ export function App() {
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
     let active = true;
+    const sessionId = live.runtime.sessionId;
     const generation = live.runtime.sessionGeneration;
     setPackagesLoading(true);
     void runtimeStore.listPackages().then((result) => {
-      if (active) setPackages(result.packages);
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) setPackages(result.packages);
     }).catch((cause) => {
       const message = cause instanceof Error ? cause.message : "Unable to list packages";
       if (/session changed while listing packages|package list is stale/i.test(message)) return;
-      if (active && runtimeStore.getSnapshot().runtime?.sessionGeneration === generation) reportError(cause, "Unable to list packages");
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) reportError(cause, "Unable to list packages");
     }).finally(() => {
       if (active) setPackagesLoading(false);
     });
     return () => { active = false; };
-  }, [live.connection, live.runtime?.ready, live.runtime?.sessionGeneration]);
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
 
   useEffect(() => {
     if (!availableViews.has(view)) setView("overview");

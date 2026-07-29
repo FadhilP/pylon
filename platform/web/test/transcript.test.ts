@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, groupConversationMessages, latestTimedAssistant } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, latestTimedAssistant, liveToolMessage, replaceConversationMessage, replaceToolActivity } from "../src/shared/transcript.ts";
+import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 
 const message = (id: string, role: MessageReadModel["role"]): MessageReadModel => ({
@@ -29,6 +30,47 @@ test("all turns group tools, including the active turn", () => {
     "user-2",
     ["tool-3"],
   ]);
+});
+
+test("live tools keep event position and reconcile without flicker", () => {
+  const before = [message("user", "user"), message("assistant-before", "assistant")];
+  const live = liveToolMessage({ id: "call", name: "read", status: "running" });
+  const withTool = replaceConversationMessage(before, live);
+  const duplicateStart = replaceConversationMessage(withTool, live);
+  const after = [...duplicateStart, message("assistant-after", "assistant")];
+  const completed = replaceConversationMessage(after, liveToolMessage({ id: "call", name: "read", status: "completed", summary: "Done" }));
+  const result = replaceConversationMessage(completed, {
+    ...message("tool-result", "tool"),
+    tool: { id: "call", name: "read", status: "completed" },
+  });
+
+  assert.deepEqual(after.map((item) => item.id), ["user", "assistant-before", "live-tool-call", "assistant-after"]);
+  assert.equal(completed[2]?.text, "Done");
+  assert.deepEqual(result.map((item) => item.id), ["user", "assistant-before", "tool-result", "assistant-after"]);
+  assert.equal(replaceConversationMessage(result, live), result);
+
+  const endedFirst = replaceConversationMessage(before, liveToolMessage({ id: "late", name: "bash", status: "completed" }));
+  assert.equal(endedFirst.at(-1)?.tool?.status, "completed");
+  const tools = replaceToolActivity(
+    [{ id: "call", name: "read", status: "completed" }, { id: "other", name: "bash", status: "running" }],
+    { id: "call", name: "read", status: "running" },
+  );
+  assert.deepEqual(tools.map((tool) => [tool.id, tool.status]), [["call", "completed"], ["other", "running"]]);
+});
+
+test("the latest loaded prompt appears immediately in a stale latest rail page", () => {
+  const page = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: "session",
+    sessionGeneration: 1,
+    turns: [{ promptId: "one", preview: "one", cursor: "one" }],
+    totalCount: 3,
+  };
+  const merged = includeLatestLoadedTurn(page, { promptId: "two", preview: "two" }, true);
+  assert.deepEqual(merged.turns.map((turn) => turn.promptId), ["two", "one"]);
+  assert.equal(merged.totalCount, 3);
+  assert.equal(includeLatestLoadedTurn(page, { promptId: "two", preview: "two" }, false), page);
+  assert.equal(includeLatestLoadedTurn(page, { promptId: "one", preview: "one" }, true), page);
 });
 
 test("the latest completed turn timer follows any trailing tool activity", () => {

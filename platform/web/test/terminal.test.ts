@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseTerminalMessage } from "../src/server/http/terminal.ts";
+import { parseTerminalMessage, terminalShell } from "../src/server/http/terminal.ts";
+
+test("terminal uses PowerShell on Windows for interactive syntax colors", () => {
+  assert.equal(terminalShell("win32", { COMSPEC: "C:\\Windows\\System32\\cmd.exe" }), "powershell.exe");
+  assert.equal(terminalShell("linux", { SHELL: "/bin/zsh" }), "/bin/zsh");
+});
 
 test("terminal protocol accepts bounded input and resize messages", () => {
   assert.deepEqual(parseTerminalMessage({ type: "input", data: "echo ok\r" }), { type: "input", data: "echo ok\r" });

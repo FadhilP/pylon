@@ -13,6 +13,10 @@ export type TerminalClientMessage =
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number };
 
+export function terminalShell(platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  return platform === "win32" ? "powershell.exe" : env.SHELL?.trim() || "/bin/sh";
+}
+
 export function parseTerminalMessage(value: unknown): TerminalClientMessage | undefined {
   if (!value || typeof value !== "object") return;
   const message = value as Record<string, unknown>;
@@ -90,8 +94,7 @@ export class TerminalServer {
   private connect(socket: WebSocket, owner: symbol, sessionId: string, generation: number, cwd: string): void {
     let terminal: pty.IPty;
     try {
-      const shell = process.platform === "win32" ? process.env.COMSPEC ?? "powershell.exe" : process.env.SHELL ?? "/bin/sh";
-      terminal = pty.spawn(shell, [], {
+      terminal = pty.spawn(terminalShell(), [], {
         name: "xterm-256color",
         cols: 80,
         rows: 24,

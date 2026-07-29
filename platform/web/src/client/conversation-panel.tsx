@@ -1,7 +1,7 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { groupConversationMessages, latestTimedAssistant } from "../shared/transcript";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, latestTimedAssistant } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
@@ -45,6 +45,13 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   (node as HTMLAnchorElement).rel = "noopener noreferrer";
 });
 
+function scrollTranscriptToBottom(stream: HTMLElement): void {
+  const scrollBehavior = stream.style.scrollBehavior;
+  stream.style.scrollBehavior = "auto";
+  stream.scrollTop = stream.scrollHeight;
+  stream.style.scrollBehavior = scrollBehavior;
+}
+
 export function ConversationPanel({
   live,
   projectAvailable = true,
@@ -84,12 +91,14 @@ export function ConversationPanel({
   const controls = runtime?.sessionControls;
   const editorRevision = runtime?.extensionUi.editorRevision ?? 0;
   const editorText = runtime?.extensionUi.editorText ?? "";
-  useEffect(() => { if (editorRevision > 0) setMessage(editorText); }, [editorRevision, editorText]);
-  useEffect(() => {
+  const forceTranscriptBottom = () => {
     followBottomRef.current = true;
-    const frame = requestAnimationFrame(() => {
-      if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight;
-    });
+    if (streamRef.current) scrollTranscriptToBottom(streamRef.current);
+  };
+  useEffect(() => { if (editorRevision > 0) setMessage(editorText); }, [editorRevision, editorText]);
+  useLayoutEffect(() => {
+    forceTranscriptBottom();
+    const frame = requestAnimationFrame(forceTranscriptBottom);
     return () => cancelAnimationFrame(frame);
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
   useEffect(() => {
@@ -102,11 +111,11 @@ export function ConversationPanel({
     const transcript = transcriptRef.current;
     if (!stream || !transcript || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (followBottomRef.current) stream.scrollTop = stream.scrollHeight;
+      if (followBottomRef.current) scrollTranscriptToBottom(stream);
     });
     observer.observe(transcript);
     return () => observer.disconnect();
-  }, [runtime?.sessionId]);
+  }, [runtime?.sessionId, runtime?.sessionGeneration]);
   useEffect(() => {
     setHistoryLoading(undefined);
     setEdit(undefined);
@@ -156,22 +165,34 @@ export function ConversationPanel({
     [transcriptMessages],
   );
   const userTurnKey = userTurns.map((item) => item.entryId ?? item.id).join("\0");
+  const latestUserTurn = userTurns.at(-1);
+  const displayedRailPage = useMemo(() => {
+    if (!railPage || !latestUserTurn?.entryId) return railPage;
+    const preview = latestUserTurn.text.replace(/\s+/g, " ").trim()
+      || (latestUserTurn.attachmentCount
+        ? `${latestUserTurn.attachmentCount} attached image${latestUserTurn.attachmentCount === 1 ? "" : "s"}`
+        : "Empty prompt");
+    return includeLatestLoadedTurn(railPage, {
+      promptId: latestUserTurn.entryId,
+      preview: preview.slice(0, 120),
+      ...(latestUserTurn.createdAt ? { createdAt: latestUserTurn.createdAt } : {}),
+    }, activeHistoryWindow?.laterCursor === undefined);
+  }, [activeHistoryWindow?.laterCursor, latestUserTurn?.attachmentCount, latestUserTurn?.createdAt, latestUserTurn?.entryId, latestUserTurn?.text, railPage]);
   useEffect(() => {
     const root = streamRef.current;
     if (!root || !userTurns.length) return;
     let frame = 0;
     const update = () => {
       frame = 0;
-      const viewport = root.getBoundingClientRect();
-      const visible = new Set<string>();
-      for (const turn of userTurns) {
+      const marker = root.getBoundingClientRect().bottom - 1;
+      const turns = userTurns.flatMap((turn) => {
         const id = turn.entryId ?? turn.id;
         const element = turnRefs.current.get(id);
-        if (!element) continue;
-        const bounds = element.getBoundingClientRect();
-        if (bounds.bottom > viewport.top && bounds.top < viewport.bottom) visible.add(id);
-      }
-      setVisibleTurnIds((current) => sameStringSet(current, visible) ? current : visible);
+        return element ? [{ id, top: element.getBoundingClientRect().top }] : [];
+      });
+      const activeId = activeTurnAtMarker(turns, marker);
+      const active = new Set(activeId ? [activeId] : []);
+      setVisibleTurnIds((current) => sameStringSet(current, active) ? current : active);
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(update);
@@ -398,6 +419,7 @@ export function ConversationPanel({
       loaded.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
+    if (turn.cursor.startsWith("loaded:")) return;
     setHistoryLoading("page");
     try {
       await runtimeStore.jumpToHistory(turn.cursor);
@@ -550,8 +572,11 @@ export function ConversationPanel({
           </div>
         </div>}
         {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
-        {conversationBlocks.map((block) => {
-          if ("tools" in block) return <ToolTurnGroup key={block.id} tools={block.tools} />;
+        {conversationBlocks.map((block, index) => {
+          if ("tools" in block) {
+            const laterPrompt = conversationBlocks.slice(index + 1).some((item) => !("tools" in item) && item.role === "user");
+            return <ToolTurnGroup key={block.id} tools={block.tools} onExpand={laterPrompt ? undefined : forceTranscriptBottom} />;
+          }
           if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
           const editing = edit?.messageId === block.id;
@@ -617,7 +642,7 @@ export function ConversationPanel({
         </div>
       </div>}
       {runtime && <HistoryRail
-        page={live.treeChanging ? undefined : railPage}
+        page={live.treeChanging ? undefined : displayedRailPage}
         visibleIds={visibleTurnIds}
         loading={railLoading}
         onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
@@ -1522,11 +1547,12 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 
-function ToolTurnGroup({ tools }: { tools: MessageReadModel[] }) {
+function ToolTurnGroup({ tools, onExpand }: { tools: MessageReadModel[]; onExpand?: () => void }) {
   const names = [...new Set(tools.map((tool) => tool.tool?.name || "Tool"))];
   return <AnimatedDetails
     className="tool-turn-group"
     summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(0, 3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
+    onExpand={onExpand}
   >
     <div className="tool-turn-items">
       {tools.map((tool) => <ToolDisclosure key={tool.id} name={tool.tool?.name || "Tool"} status={tool.tool?.status || "completed"} input={tool.tool?.input} output={tool.text} />)}

@@ -4,10 +4,12 @@ export function AnimatedDetails({
   className,
   summary,
   children,
+  onExpand,
 }: {
   className: string;
   summary: ReactNode;
   children: ReactNode;
+  onExpand?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -23,6 +25,7 @@ export function AnimatedDetails({
       closeTimer.current = window.setTimeout(() => setOpen(false), delay);
       return;
     }
+    onExpand?.();
     setOpen(true);
     requestAnimationFrame(() => setExpanded(true));
   };
