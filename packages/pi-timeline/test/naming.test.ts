@@ -36,6 +36,11 @@ function namingHarness(entries: any[], completeTitle: any = async () => ({
   return { handlers, names, telemetry, ctx, artifactRoot };
 }
 
+async function beginTurn(handlers: Map<string, Function[]>, ctx: any, prompt: string) {
+  handlers.get("before_agent_start")![0]({ prompt }, ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 test("same-session start keeps one continuous artifact lease", async () => {
   const { handlers, ctx, artifactRoot } = namingHarness([]);
   try {
@@ -49,18 +54,10 @@ test("same-session start keeps one continuous artifact lease", async () => {
   }
 });
 
-test("settled unnamed session gets a dedicated semantic title", async () => {
-  const calls: any[] = [], entries = [
-    {
-      type: "message", id: "user-1",
-      message: { role: "user", content: "Can we add session name to the TUI?" },
-    },
-    {
-      type: "message", id: "assistant-1",
-      message: { role: "assistant", content: [{ type: "text", text: "Implemented session naming." }] },
-    },
-  ];
-  const { handlers, names, telemetry, ctx } = namingHarness(entries, async (...args: any[]) => {
+test("first-turn start launches a dedicated semantic title call", async () => {
+  const calls: any[] = [];
+  const prompt = "Can we add session name to the TUI?";
+  const { handlers, names, telemetry, ctx } = namingHarness([], async (...args: any[]) => {
     calls.push(args);
     return {
       content: [{ type: "text", text: "Persistent TUI Session Names" }],
@@ -68,19 +65,20 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
     };
   });
   await handlers.get("session_start")![0]({}, ctx);
-  await handlers.get("agent_settled")![0]({}, ctx);
+  await beginTurn(handlers, ctx, prompt);
 
   assert.deepEqual(names, ["Persistent TUI Session Names"]);
   assert.equal(calls.length, 1);
   assert.match(calls[0][1].messages[0].content[0].text, /Can we add session name/);
-  assert.match(calls[0][1].messages[0].content[0].text, /Implemented session naming/);
+  assert.doesNotMatch(calls[0][1].messages[0].content[0].text, /<result>/);
   assert.equal(calls[0][2].maxTokens, 32);
   assert.equal(telemetry.length, 1);
   assert.deepEqual(telemetry[0].usage, { turns: 1, input: 12, output: 3, cacheRead: 4, cacheWrite: 0, cost: 0.002 });
   assert.equal(telemetry[0].context.request.characters, 35);
+  assert.equal(telemetry[0].context.result.characters, 0);
   assert.match(telemetry[0].context.request.hash, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(telemetry[0]).includes("Can we add session name"), false);
-  assert.equal(handlers.has("before_agent_start"), false);
+  assert.equal(handlers.has("before_agent_start"), true);
   assert.equal(handlers.has("message_end"), false);
 });
 
@@ -101,7 +99,7 @@ test("fresh Continuity executor kickoff triggers automatic session naming", asyn
   });
 
   await handlers.get("session_start")![0]({ reason: "new" }, ctx);
-  await handlers.get("agent_settled")![0]({}, ctx);
+  await beginTurn(handlers, ctx, kickoff);
 
   assert.deepEqual(names, ["Execute Approved Continuity Plan"]);
   assert.equal(calls.length, 1);
@@ -119,7 +117,7 @@ test("invalid or failed title generation falls back to first prompt", async () =
     }];
     const { handlers, names, ctx } = namingHarness(entries, completeTitle);
     await handlers.get("session_start")![0]({}, ctx);
-    await handlers.get("agent_settled")![0]({}, ctx);
+    await beginTurn(handlers, ctx, "Add session naming without noise");
     assert.deepEqual(names, ["Add session naming without noise"]);
   }
 });
@@ -138,13 +136,13 @@ test("pending title call is single-flight and manual rename wins", async () => {
     return pending;
   });
   await handlers.get("session_start")![0]({}, ctx);
-  const settling = handlers.get("agent_settled")![0]({}, ctx);
+  handlers.get("before_agent_start")![0]({ prompt: "First prompt for naming" }, ctx);
   await started;
-  await handlers.get("agent_settled")![0]({}, ctx);
+  handlers.get("before_agent_start")![0]({ prompt: "Second prompt" }, ctx);
   assert.equal(calls, 1);
   await handlers.get("session_info_changed")![0]({ name: "Manual title" }, ctx);
   finish({ content: [{ type: "text", text: "Generated Session Title" }] });
-  await settling;
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(names, []);
 });
 
@@ -161,7 +159,7 @@ test("pending title from an old session cannot rename a new session", async () =
     return pending;
   });
   await handlers.get("session_start")![0]({}, ctx);
-  const settling = handlers.get("agent_settled")![0]({}, ctx);
+  handlers.get("before_agent_start")![0]({ prompt: "Name the old session safely" }, ctx);
   await started;
   const nextCtx = {
     ...ctx,
@@ -173,7 +171,7 @@ test("pending title from an old session cannot rename a new session", async () =
   };
   await handlers.get("session_start")![0]({}, nextCtx);
   finish({ content: [{ type: "text", text: "Generated Old Session Title" }] });
-  await settling;
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(names, []);
 });
 
@@ -189,7 +187,7 @@ test("existing or manually cleared session names remain untouched", async () => 
       return { content: [{ type: "text", text: "Generated Session Title" }] };
     });
     await handlers.get("session_start")![0]({}, ctx);
-    await handlers.get("agent_settled")![0]({}, ctx);
+    await beginTurn(handlers, ctx, "Another prompt");
     assert.deepEqual(names, []);
     assert.equal(calls, 0);
   }

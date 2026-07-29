@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
+import { collectPlainWorkspaceFiles } from "pylon-core/src/worktree.ts";
 
 const CACHE_MS = 30_000;
 const MAX_BUFFER = 2 * 1024 * 1024;
@@ -60,7 +61,8 @@ async function inventory(cwd: string): Promise<string[] | undefined> {
   const existing = cache.get(cwd);
   if (existing && existing.expiresAt > Date.now()) return existing.paths;
 
-  const paths = await gitFiles(cwd);
+  const paths = await gitFiles(cwd)
+    ?? (await collectPlainWorkspaceFiles({ cwd })).files.map((file) => file.path);
   if (cache.size >= MAX_CACHES) cache.delete(cache.keys().next().value!);
   cache.set(cwd, { expiresAt: Date.now() + CACHE_MS, paths });
   return paths;

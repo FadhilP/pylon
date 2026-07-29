@@ -1936,7 +1936,8 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private assertCheckoutAvailable(slot: RuntimeSlot): void {
-    if (this.registry().workspaceForSession(slot.id)?.mode === "worktree") return;
+    const mode = this.registry().workspaceForSession(slot.id)?.mode;
+    if (mode === "worktree") return;
     const details = slot.driver.runtimeDetails();
     const projectId = slot.target.projectId
       ?? this.registry().projectForSession(slot.id, details.cwd)?.id;
@@ -1946,8 +1947,10 @@ export class RuntimeCoordinator implements PiDriver {
       const value = candidate.driver.runtimeDetails();
       const candidateProject = candidate.target.projectId
         ?? this.registry().projectForSession(candidate.id, value.cwd)?.id;
+      const candidateMode = this.registry().workspaceForSession(candidate.id)?.mode;
       return candidateProject === projectId
-        && this.registry().workspaceForSession(candidate.id)?.mode !== "worktree";
+        && candidateMode !== "worktree"
+        && (mode !== "local" || candidateMode !== "local");
     });
     if (conflict) throw new Error("another checkout-bound session is already running in this project");
   }

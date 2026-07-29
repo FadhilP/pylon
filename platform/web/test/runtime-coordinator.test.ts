@@ -336,6 +336,55 @@ test("Local draft provisioning leaves the project branch and worktree list uncha
   }
 });
 
+test("Local sessions can run concurrently in one project", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-local-concurrency-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const first = (driver as any).selected();
+    const registry = (driver as any).registry() as ProjectRegistry;
+    const projectId = projectIdForCwd(cwd);
+    await registry.setSessionWorkspace({ sessionId: first.id, projectId, mode: "local" });
+    await driver.newSession({ expectedGeneration: 1 });
+    const second = (driver as any).selected();
+    assert.equal(registry.workspaceForSession(second.id)?.mode, "local");
+
+    const runtimeState = first.driver.runtimeState;
+    first.driver.runtimeState = () => "running";
+    try {
+      assert.doesNotThrow(() => (driver as any).assertCheckoutAvailable(second));
+
+      await registry.setSessionWorkspace({ sessionId: first.id, projectId, mode: "checkout" });
+      assert.throws(
+        () => (driver as any).assertCheckoutAvailable(second),
+        /another checkout-bound session is already running in this project/,
+      );
+      await registry.removeSessionWorkspace(first.id);
+      assert.throws(
+        () => (driver as any).assertCheckoutAvailable(second),
+        /another checkout-bound session is already running in this project/,
+      );
+      await registry.setSessionWorkspace({ sessionId: first.id, projectId, mode: "local" });
+      await registry.setSessionWorkspace({ sessionId: second.id, projectId, mode: "checkout" });
+      assert.throws(
+        () => (driver as any).assertCheckoutAvailable(second),
+        /another checkout-bound session is already running in this project/,
+      );
+    } finally {
+      first.driver.runtimeState = runtimeState;
+    }
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("session changes apply from a worktree and Project folder without committing", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-apply-session-"));
   const cwd = join(root, "workspace");

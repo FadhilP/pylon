@@ -25,7 +25,11 @@ test("file suggestions include tracked and visible untracked files only", async 
     assert.equal(result.available, true);
     assert.deepEqual(result.paths, ["src/tracked.ts", "src/untracked.ts"]);
     assert.equal((await suggestGitFiles(root, "ignored")).paths.length, 0);
-    assert.equal((await suggestGitFiles(nonGit, "")).available, false);
+    await mkdir(join(nonGit, "docs"));
+    await writeFile(join(nonGit, "docs", "notes.md"), "notes\n", "utf8");
+    const plain = await suggestGitFiles(nonGit, "note");
+    assert.equal(plain.available, true);
+    assert.deepEqual(plain.paths, ["docs/notes.md"]);
   } finally {
     await Promise.all([root, nonGit].map((path) => rm(path, { recursive: true, force: true })));
   }
