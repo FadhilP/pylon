@@ -24,6 +24,7 @@ import { capReport, capText, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, struc
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "../src/redact.ts";
+import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
 import {
   collectSessionEvidence,
   parseSessionIntent,
@@ -166,7 +167,7 @@ export function repoScoutOrientationGuidance(selectedTools?: readonly string[]):
   return `Repo Scout orientation tools currently visible: ${uses.join("; ")}. Unless exact anchors already exist, use 1–3 targeted searches, then prompt repo_scout with concrete anchors; leave non-local tracing to Scout.`;
 }
 
-export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
+export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retryWait = waitForDelegateRetry) {
   let repoRuns = 0;
   let repoCallQueue = Promise.resolve();
   const seenRepoSearches = new Set<string>();
@@ -362,7 +363,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     name: "repo_scout",
     label: "Repo Scout",
     description:
-      "Read-only isolated repository reconnaissance with exact line-range citations. Every call starts a fresh child session; the main model owns evaluation and conclusions.",
+      "Read-only isolated repository reconnaissance with exact line-range citations. Transient provider failures retry in fresh child sessions up to three total attempts; the main model owns evaluation and conclusions.",
     promptSnippet:
       "Map concrete repository paths, symbols, patterns, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty",
     promptGuidelines: [
@@ -439,7 +440,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
-      let sessionDir: string | undefined;
+      const sessionDirs: string[] = [];
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
@@ -463,57 +464,61 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           ...(discoverTools?.toolNames ?? []),
           "grep", "find", "ls",
         ].join(",");
-        const args = [
-          "--mode",
-          "rpc",
-          "--session-dir",
-          (sessionDir = await repoSessionDir()),
-          "--no-extensions",
-          "-e",
-          scoutChildToolsExtension,
-          ...(discoverTools ? ["-e", discoverTools.childExtensionPath] : []),
-          "--no-skills",
-          "--no-prompt-templates",
-          "--no-context-files",
-          "--tools",
-          childToolNames,
-          "--model",
-          modelName(model),
-          "--thinking",
-          thinking,
-          "--system-prompt",
-          REPO_SCOUT_PROMPT,
-        ];
-        const run = await runChild(args, {
-          cwd: ctx.cwd,
-          prompt,
-          signal,
-          timeoutMs: repoTimeoutMs(),
-          maxCostUsd: scoutMaxCostUsd(),
-          // Failure wrapping happens here; cap once afterward so retrieval notices survive.
-          resultMaxBytes: false,
-          env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
-          onActivity: (_item, all) => {
-            lastUpdateAt = Date.now();
-            activity = all;
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `Scout child activity:\n${activityText(all)}`,
-                },
-              ],
-              details: {
-                ...agent,
-                model: modelName(model),
-                thinking,
-                state: "running",
-                durationMs: lastUpdateAt - started,
-                activity: all,
-              },
-            });
-          },
-        });
+        const timeoutMs = repoTimeoutMs();
+        const maxCostUsd = scoutMaxCostUsd();
+        const deadline = started + timeoutMs;
+        const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+        const turns: ScoutRun["turns"] = [];
+        let attempts = 0;
+        let run!: ScoutRun;
+        for (;;) {
+          attempts++;
+          const sessionDir = await repoSessionDir();
+          sessionDirs.push(sessionDir);
+          const args = [
+            "--mode", "rpc", "--session-dir", sessionDir,
+            "--no-extensions", "-e", scoutChildToolsExtension,
+            ...(discoverTools ? ["-e", discoverTools.childExtensionPath] : []),
+            "--no-skills", "--no-prompt-templates", "--no-context-files",
+            "--tools", childToolNames, "--model", modelName(model), "--thinking", thinking,
+            "--system-prompt", REPO_SCOUT_PROMPT,
+          ];
+          run = await runChild(args, {
+            cwd: ctx.cwd,
+            prompt,
+            signal,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            maxCostUsd: maxCostUsd === undefined ? undefined : Math.max(0, maxCostUsd - usage.cost),
+            // Failure wrapping happens here; cap once afterward so retrieval notices survive.
+            resultMaxBytes: false,
+            env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
+            onActivity: (_item, all) => {
+              lastUpdateAt = Date.now();
+              activity = all;
+              onUpdate?.({
+                content: [{ type: "text", text: `Scout child activity:\n${activityText(all)}` }],
+                details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, activity: all, attempts },
+              });
+            },
+          });
+          usage.input += run.usage.input;
+          usage.output += run.usage.output;
+          usage.cacheRead += run.usage.cacheRead;
+          usage.cacheWrite += run.usage.cacheWrite;
+          usage.cost += run.usage.cost;
+          turns.push(...run.turns);
+          const canRetry = attempts < DELEGATE_MAX_ATTEMPTS
+            && Date.now() < deadline
+            && (maxCostUsd === undefined || usage.cost < maxCostUsd)
+            && run.failure !== "budget_exceeded"
+            && isTransientProviderFailure(run.error);
+          if (!canRetry || !await retryWait(attempts, signal)) break;
+          if (signal?.aborted || Date.now() >= deadline || (maxCostUsd !== undefined && usage.cost >= maxCostUsd)) break;
+          onUpdate?.({
+            content: [{ type: "text", text: `Scout provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }],
+            details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: Date.now() - started, attempts },
+          });
+        }
         // Include any failure wrapper in the same hard report budget as child output.
         const failureMessage = run.error
           ? sanitizeFailureMessage(run.error, "Repo Scout child failed.")
@@ -533,9 +538,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
             thinking,
-            durationMs: run.durationMs,
-            usage: run.usage,
-            turns: run.turns,
+            durationMs: Date.now() - started,
+            usage,
+            turns,
+            attempts,
             activity: run.activity,
             stopReason: run.stopReason,
             truncated: run.truncated || report.truncated,
@@ -556,7 +562,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         };
       } finally {
         clearInterval(heartbeat);
-        if (sessionDir) {
+        for (const sessionDir of sessionDirs) {
           repoSessionDirs.delete(sessionDir);
           await rm(sessionDir, { recursive: true, force: true });
         }

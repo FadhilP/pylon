@@ -33,7 +33,7 @@ async function harness(runRepoScout?: Parameters<typeof scout>[1], enabled = tru
     getActiveTools: () => [...active], setActiveTools: (value: string[]) => { active = value; },
     getThinkingLevel: () => "low",
   };
-  scout(pi, runRepoScout);
+  scout(pi, runRepoScout, async () => true);
   return { events, tools, handlers, restore() { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; } };
 }
 
@@ -120,24 +120,60 @@ test("Repo Scout renders collapsed failures with reason", async () => {
 
 test("Repo Scout publishes sanitized bounded child failure details", async () => {
   const secret = `sk-${"x".repeat(40)}`;
-  const runtime = await harness(async (): Promise<ScoutRun> => ({
+  let calls = 0;
+  const runtime = await harness(async (): Promise<ScoutRun> => {
+    calls++;
+    return ({
     text: "", error: `bad\napi_key=${secret}\u2028${"z".repeat(600)}`,
     stderr: "", durationMs: 1,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
     turns: [], truncated: false, exitCode: 1, activity: [],
     budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
     contextTokens: 0, cacheReadTokens: 0,
-  }));
+  });
+  });
   try {
     const result = await runtime.tools.get("repo_scout").execute(
       "failure", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
     );
     assert.equal(result.details.failureCode, "child_error");
+    assert.equal(calls, 1);
     assert.ok(result.details.failureMessage.length <= 500);
     assert.doesNotMatch(result.details.failureMessage, new RegExp(secret));
     assert.doesNotMatch(result.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.match(result.content[0].text, /\[possible credential redacted\]/);
     assert.doesNotMatch(result.content[0].text, new RegExp(secret));
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout retries transient child failures in fresh sessions", async () => {
+  let calls = 0;
+  const sessionDirs: string[] = [];
+  const runtime = await harness(async (args): Promise<ScoutRun> => {
+    calls++;
+    sessionDirs.push(args[args.indexOf("--session-dir") + 1]);
+    if (calls === 1) return {
+      text: "", error: "503 model at capacity", stderr: "", durationMs: 1,
+      usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 1, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
+    };
+    return {
+      text: "## Findings\n\n- Recovered. `src/a.ts:1-2`", stderr: "", durationMs: 1,
+      usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 0, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 5, cacheReadTokens: 0,
+    };
+  });
+  try {
+    const result = await runtime.tools.get("repo_scout").execute(
+      "retry", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
+    );
+    assert.equal(calls, 2);
+    assert.equal(result.details.attempts, 2);
+    assert.equal(result.details.failureCode, undefined);
+    assert.equal(result.details.usage.input, 3);
+    assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally { runtime.restore(); }
 });
 
