@@ -1,5 +1,5 @@
 export const SIEVE_THRESHOLD = 8_192;
-export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as const;
+export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd", "heartbeat_status", "memory"] as const;
 export const RANKED_SEARCH_TOOL_NAMES = ["symbol_search", "code_search"] as const;
 export const RELATIONSHIP_GRAPH_TOOL_NAME = "relationship_graph";
 export const ELIGIBLE_TOOL_NAMES = [
@@ -10,7 +10,7 @@ export const ELIGIBLE_TOOL_NAMES = [
 export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
-  "Age 0 is preserved unless opt-in active pruning is enabled; successful eligible age-1 output is capped at the threshold with active pruning, or three times the threshold without it.";
+  "Age 0 is preserved when active pruning is disabled; successful eligible age-1 output is capped at the threshold with active pruning, or three times the threshold without it.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
 
 export type SieveOptions = {
@@ -190,6 +190,9 @@ function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource
   const fields = message as Record<string, unknown>;
   if (fields.role !== "toolResult" || typeof fields.toolName !== "string") return undefined;
   if (eligibleTools.has(fields.toolName)) {
+    const details = fields.details;
+    if (fields.toolName === "memory"
+      && (!details || typeof details !== "object" || Array.isArray(details) || (details as Record<string, unknown>).memoryList !== true)) return undefined;
     return { toolName: fields.toolName, isError: fields.isError === true, recalled: false, kind: sourceKind(fields.toolName) };
   }
   if (!allowRecall || fields.toolName !== RECALL_TOOL_NAME || fields.isError === true) return undefined;

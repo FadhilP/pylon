@@ -55,13 +55,17 @@ function scrollTranscriptToBottom(stream: HTMLElement): void {
 export function ConversationPanel({
   live,
   projectAvailable = true,
+  initialDraft = "",
+  onDraftChange,
   onSelectAgent,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
+  initialDraft?: string;
+  onDraftChange?: (draft: string) => void;
   onSelectAgent?: (id: string) => void;
 }) {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
   const [files, setFiles] = useState<DroppedTextFile[]>([]);
   const [dropActive, setDropActive] = useState(false);
@@ -89,13 +93,20 @@ export function ConversationPanel({
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const runtime = live.runtime;
   const controls = runtime?.sessionControls;
+  const updateMessage = (value: string) => {
+    setMessage(value);
+    onDraftChange?.(value);
+  };
   const editorRevision = runtime?.extensionUi.editorRevision ?? 0;
   const editorText = runtime?.extensionUi.editorText ?? "";
+  const initialEditorRevision = useRef(editorRevision);
   const forceTranscriptBottom = () => {
     followBottomRef.current = true;
     if (streamRef.current) scrollTranscriptToBottom(streamRef.current);
   };
-  useEffect(() => { if (editorRevision > 0) setMessage(editorText); }, [editorRevision, editorText]);
+  useEffect(() => {
+    if (editorRevision > 0 && (!initialDraft || editorRevision !== initialEditorRevision.current)) updateMessage(editorText);
+  }, [editorRevision, editorText]);
   useLayoutEffect(() => {
     forceTranscriptBottom();
     const frame = requestAnimationFrame(forceTranscriptBottom);
@@ -269,14 +280,14 @@ export function ConversationPanel({
   const chooseSuggestion = (index: number) => {
     const suggestion = suggestions[index];
     if (!suggestion) return;
-    setMessage(`/${suggestion.name} `);
+    updateMessage(`/${suggestion.name} `);
     setSuggestionIndex(0);
   };
   const chooseFileSuggestion = (index: number) => {
     const path = fileSuggestions[index];
     if (!path || !fileMention) return;
     const next = replaceFileMention(message, fileMention, path);
-    setMessage(next.value);
+    updateMessage(next.value);
     setCaretPosition(next.caret);
     setFileSuggestions([]);
     setSuggestionsDismissed(true);
@@ -297,7 +308,7 @@ export function ConversationPanel({
         files.map(({ name, text, size, mimeType }) => ({ name, text, size, ...(mimeType ? { mimeType } : {}) })),
         planMode,
       );
-      setMessage("");
+      updateMessage("");
       setImages([]);
       setFiles([]);
       setPlanMode(false);
@@ -348,7 +359,7 @@ export function ConversationPanel({
     setQueueBusy("edit");
     try {
       const restored = await runtimeStore.restoreQueuedPrompt(queued.id);
-      setMessage(restored.message);
+      updateMessage(restored.message);
       setImages((restored.images ?? []).map((image) => ({ ...image, id: crypto.randomUUID() })));
       setFiles((restored.files ?? []).map((file) => ({ ...file, id: crypto.randomUUID() })));
       setPlanMode(restored.planMode);
@@ -469,7 +480,7 @@ export function ConversationPanel({
     setSubmitting(true);
     try {
       await runtimeStore.rewindPrompt(undo.entryId);
-      setMessage(undo.text);
+      updateMessage(undo.text);
       setImages([]);
       setFiles([]);
       setPlanMode(false);
@@ -664,7 +675,7 @@ export function ConversationPanel({
       </div>}
       {(suggestions.length > 0 || fileSuggestions.length > 0) && <div
         ref={suggestionListRef}
-        className="composer-surface slash-suggestions"
+        className={`composer-surface slash-suggestions${suggestions.length ? "" : " file-suggestions"}`}
         id={suggestions.length ? "slash-command-suggestions" : "file-mention-suggestions"}
         role="listbox"
         aria-label={suggestions.length ? "Slash commands" : "Project files"}
@@ -719,7 +730,7 @@ export function ConversationPanel({
             rows={1}
             value={message}
             onChange={(event) => {
-              setMessage(event.target.value);
+              updateMessage(event.target.value);
               setCaretPosition(event.target.selectionStart);
               setSuggestionsDismissed(false);
             }}
@@ -1493,7 +1504,7 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
   return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
     {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
-    {modelName && <> · {modelName}</>}
+    {startedAt && modelName && <> · {modelName}</>}
     {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
   </span>;
 }

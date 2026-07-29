@@ -90,7 +90,7 @@ export class ApiClient {
     }));
   }
 
-  async fileSuggestions(queryValue: string, generation: number, limit = 8): Promise<FileSuggestionList> {
+  async fileSuggestions(queryValue: string, generation: number, limit = 15): Promise<FileSuggestionList> {
     const query = new URLSearchParams({ q: queryValue, generation: String(generation), limit: String(limit) });
     return json<FileSuggestionList>(await fetch(`/api/v1/file-suggestions?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },

@@ -21,9 +21,9 @@ import {
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
-import { formatCompactNumber } from "../shared/format";
+import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
-import type { JobReadModel } from "../shared/protocol/events";
+import type { JobReadModel, VerificationReadModel } from "../shared/protocol/events";
 import type { DialogTimeoutSeconds, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -70,7 +70,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, isOp
       <div className="inspector-tabs" role="tablist" aria-label="Session details">
         {items.map((item) => {
           const Icon = item.icon;
-          return <button type="button" role="tab" aria-label={item.label} aria-selected={current === item.id} className={current === item.id ? "is-active" : ""} key={item.id} onClick={() => onNavigate(item.id)}>
+          return <button type="button" role="tab" aria-label={item.label} aria-selected={current === item.id} className={current === item.id ? "is-active" : ""} data-view={item.id} key={item.id} onClick={() => onNavigate(item.id)}>
             <Icon size={14} /><span>{item.label}</span>
           </button>;
         })}
@@ -91,6 +91,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime;
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
+  const workTone: Tone = work?.mode === "executing" ? "active" : work?.mode === "completed" ? "success" : "neutral";
   return (
     <div className="page-grid">
       <InspectorSection title="Usage">
@@ -102,14 +103,14 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
         </div>
       </InspectorSection>
       <div className="overview-columns">
-        {operational?.continuity.availability === "available" && <InspectorSection title="Current run" meta={work ? displayTime(work.updatedAt) : undefined} className="run-panel">
+        {operational?.continuity.availability === "available" && <InspectorSection title="Task List" meta={work ? displayTime(work.updatedAt) : undefined} className="run-panel">
           {work ? <>
             <div className="run-title-row">
-              <div className="run-icon"><IconListCheck size={20} /></div>
+              <div className={`run-icon tone-${workTone}`}><IconListCheck size={20} /></div>
               <div><h2 className="run-goal" title={work.goal}>{oneLine(work.goal)}</h2><p className="mono">{work.runId || "Current session"}</p></div>
             </div>
             <div className="run-meta-row">
-              <Status tone={work.mode === "executing" ? "active" : work.mode === "completed" ? "success" : "neutral"}>{work.mode}</Status>
+              <Status tone={workTone}>{work.mode}</Status>
               <span>{work.todos.filter((todo) => todo.status === "done").length} of {work.todos.length} complete</span>
             </div>
             <TodoList work={work} />
@@ -119,27 +120,49 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
       </div>
 
       <div className="overview-lower">
-        {operational && <InspectorSection title="Verification" meta={operational.verification.scope || "No run"} className="verification-panel">
-          {operational.verification.availability !== "available"
-            ? <div className="empty-state"><IconCheck size={20} /><strong>Verification unavailable</strong><span>Verify is unavailable for this runtime.</span></div>
-            : operational.verification.checks.length === 0
-              ? <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>
-              : <div className="check-list">
-            {operational.verification.checks.map((check) => (
-              <div className="check-row" key={check.id}>
-                <span className={`check-icon ${check.status}`}>
-                  {check.status === "passed" ? <IconCheck size={13} /> : <IconClock size={13} />}
-                </span>
-                <div><strong>{check.label}</strong><small>{check.command || check.status}</small></div>
-                <span className="mono">{formatDuration(check.durationMs)}</span>
-              </div>
-            ))}
-          </div>}
+        {operational && <InspectorSection title="Verification" meta={operational.verification.state === "running" ? "Running" : operational.verification.scope || "No run"} className="verification-panel">
+          <Verification verification={operational.verification} />
         </InspectorSection>}
         {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
       </div>
     </div>
   );
+}
+
+function Verification({ verification }: { verification: VerificationReadModel }) {
+  const running = verification.state === "running";
+  const startedAt = verification.startedAt ? Date.parse(verification.startedAt) : Number.NaN;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (verification.availability !== "available" || !running || Number.isNaN(startedAt)) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [running, startedAt, verification.availability]);
+
+  if (verification.availability !== "available") {
+    return <div className="empty-state"><IconCheck size={20} /><strong>Verification unavailable</strong><span>Verify is unavailable for this runtime.</span></div>;
+  }
+
+  const elapsed = Number.isNaN(startedAt) ? verification.durationMs ?? 0 : Math.max(0, now - startedAt);
+  return <>
+    {running && <div className="verification-run">
+      <span className="verification-run-icon"><IconLoader2 size={16} /></span>
+      <div role="status"><strong>Verification running</strong><small>{verification.scope ? `${verification.scope} scope` : "Checking project"}</small></div>
+      <span className="mono">{formatWorkDuration(elapsed)}</span>
+    </div>}
+    {verification.checks.length > 0 ? <div className="check-list">
+      {verification.checks.map((check) => (
+        <div className="check-row" key={check.id}>
+          <span className={`check-icon ${check.status}`}>
+            {check.status === "passed" ? <IconCheck size={13} /> : <IconClock size={13} />}
+          </span>
+          <div><strong>{check.label}</strong><small>{check.command || check.status}</small></div>
+          <span className="mono">{formatDuration(check.durationMs)}</span>
+        </div>
+      ))}
+    </div> : !running && <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>}
+  </>;
 }
 
 function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
@@ -233,7 +256,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     ? verify !== "inherit" && verify.mode !== "auto"
     : scope === "session" && verify !== "inherit";
 
-  return <InspectorSection title="Runtime policy" className="runtime-policy">
+  return <InspectorSection title="Runtime Policy" className="runtime-policy">
     <div className="policy-scope" role="group" aria-label="Policy scope">
       <button type="button" disabled={busy} className={scope === "global" ? "is-active" : ""} onClick={() => setScope("global")}>Global</button>
       <button type="button" disabled={busy} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
@@ -450,7 +473,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   };
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
   return <div className="memory-page">
-    <InspectorSection title="Saved facts" meta={`${memory.length} project facts`} className="memory-panel">
+    <InspectorSection title="Saved Facts" meta={`${memory.length} project facts`} className="memory-panel">
       {memory.map((fact) => <article className="memory-fact" key={fact.key}>
         <header>
           <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
@@ -607,7 +630,7 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
   return (
     <div className="tools-page">
       <SieveStatus live={live} />
-      <InspectorSection title="Available tools" meta={`${visibleTools.length}`} className="tool-table-panel">
+      <InspectorSection title="Available Tools" meta={`${visibleTools.length}`} className="tool-table-panel">
         <div className="table-toolbar">
           <div><p>Effective state for this session.</p></div>
           <label className="table-search"><IconSearch size={15} /><span className="sr-only">Filter tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" /></label>
@@ -621,7 +644,7 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
           {visibleTools.length === 0 && <div className="empty-state"><IconSearch size={20} /><strong>{tools.length ? "No matching tools" : "No tools available"}</strong><span>{tools.length ? "Try another tool name." : "Enable a package or configure Pi tools for this workspace."}</span></div>}
         </div>
       </InspectorSection>
-      {pylonPolicies && <InspectorSection title="Package policies" meta={`${policies.length}`} className="tool-table-panel">
+      {pylonPolicies && <InspectorSection title="Package Policies" meta={`${policies.length}`} className="tool-table-panel">
         <div className="table-toolbar"><div><p>Pylon coordination state.</p></div></div>
         {runtime?.operational.tools.availability === "unavailable" ? <FeatureUnavailable name="Tool policy" /> : <div className="tool-table" role="table" aria-label="Pylon package policies">
           <div className="tool-table-head" role="row"><span role="columnheader">Package</span><span role="columnheader">Managed tools</span><span role="columnheader">State</span><span role="columnheader">Count</span></div>
@@ -645,14 +668,14 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   const sieve = live.runtime?.operational.sieve;
   if (!sieve || sieve.availability !== "available" || !sieve.latest
     || !sieve.cumulativeActual || !sieve.cumulativeProjected) {
-    return <InspectorSection title="Context pruning">
+    return <InspectorSection title="Context Pruning">
       <FeatureUnavailable name="Pi Sieve" />
     </InspectorSection>;
   }
   const saved = sieve.cumulativeActual.netCharsSaved;
   const projected = sieve.cumulativeProjected.netCharsSaved;
-  return <InspectorSection title="Context pruning" meta={sieve.mode}>
-    <div className="sieve-summary">
+  return <InspectorSection title="Context Pruning" meta={sieve.mode}>
+    <div className="usage-strip">
       <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
       <div><small>Saved</small><strong>{formatCompactNumber(saved)}</strong><span>characters</span></div>
       <div><small>Projected</small><strong>{formatCompactNumber(projected)}</strong><span>characters</span></div>
@@ -683,7 +706,7 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
     return () => window.clearInterval(timer);
   }, [active.length]);
   const visible = [...active, ...settled];
-  return <InspectorSection title="Heartbeat jobs" meta={`${active.length} running`} className="heartbeat-panel">
+  return <InspectorSection title="Heartbeat Jobs" meta={`${active.length} running`} className="heartbeat-panel">
     <div className="heartbeat-list">
       {visible.map((job) => {
         const startedAt = Date.parse(job.startedAt);

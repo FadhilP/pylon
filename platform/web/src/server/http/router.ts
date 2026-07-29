@@ -269,7 +269,7 @@ export class ServerTransport {
     const query = url.searchParams.get("q")?.trim() ?? "";
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
-    const limit = rawLimit === null ? 8 : Number(rawLimit);
+    const limit = rawLimit === null ? 15 : Number(rawLimit);
     if (query.length > 200) throw httpError(400, "query is too long");
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw httpError(400, "invalid limit");

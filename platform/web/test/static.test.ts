@@ -21,8 +21,11 @@ test("production asset host serves SPA safely and rejects missing assets", async
     const page = await fetch(`${origin}/workspace/overview`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /Pylon/);
-    assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
-    assert.match(page.headers.get("content-security-policy") ?? "", /img-src 'self' data:/);
+    const contentSecurityPolicy = page.headers.get("content-security-policy") ?? "";
+    assert.match(contentSecurityPolicy, /default-src 'self'/);
+    assert.match(contentSecurityPolicy, /style-src 'self' 'unsafe-inline'/);
+    assert.doesNotMatch(contentSecurityPolicy, /script-src[^;]*'unsafe-inline'/);
+    assert.match(contentSecurityPolicy, /img-src 'self' data:/);
     const script = await fetch(`${origin}/assets/app.js`);
     assert.equal(script.headers.get("content-type"), "text/javascript; charset=utf-8");
     assert.match(script.headers.get("cache-control") ?? "", /immutable/);

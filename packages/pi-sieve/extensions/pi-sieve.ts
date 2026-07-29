@@ -149,7 +149,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   pi.registerTool({
     name: RECALL_TOOL_NAME,
     label: "Sieve Recall",
-    description: "Recover one current-turn tool result omitted by opt-in pi-sieve active pruning.",
+    description: "Recover one current-turn tool result omitted by pi-sieve active pruning.",
     parameters: Type.Object({
       toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
@@ -210,7 +210,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   });
 
   pi.registerCommand("sieve", {
-    description: "Configure outbound bulky tool-output limiting, including opt-in active-result pruning and recall",
+    description: "Configure outbound bulky tool-output limiting, including active-result pruning and recall",
     handler: async (args, ctx) => {
       const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const [action = "status", value] = parts;

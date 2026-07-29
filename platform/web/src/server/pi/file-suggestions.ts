@@ -14,7 +14,7 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
-export async function suggestGitFiles(cwd: string, query: string, limit = 8): Promise<{ available: boolean; paths: string[] }> {
+export async function suggestGitFiles(cwd: string, query: string, limit = 15): Promise<{ available: boolean; paths: string[] }> {
   const paths = await inventory(cwd);
   if (!paths) return { available: false, paths: [] };
   return {

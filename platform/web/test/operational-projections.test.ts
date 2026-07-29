@@ -2,6 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { applyOperationalEvent, initialOperational } from "../src/server/pi/operational-projections.ts";
 
+test("Verify running lifecycle exposes timer metadata before checks finish", () => {
+  const startedAt = new Date(1_000).toISOString();
+  const state = applyOperationalEvent(initialOperational(["verify"], []), "pi-verify:lifecycle", {
+    version: 1,
+    state: "running",
+    runId: "run-1",
+    scope: "changed",
+    startedAt,
+    results: [],
+  });
+
+  assert.equal(state.verification.availability, "available");
+  assert.equal(state.verification.state, "running");
+  assert.equal(state.verification.startedAt, startedAt);
+  assert.equal(state.verification.scope, "changed");
+  assert.deepEqual(state.verification.checks, []);
+});
+
 test("operational projections bound package payloads and isolate malformed versions", () => {
   let state = initialOperational(["verify", "heartbeat_start", "continuity_update"], ["pi-guard.ts", "pi-timeline.ts", "pylon-core.ts"]);
   state = applyOperationalEvent(state, "pi-verify:result", {

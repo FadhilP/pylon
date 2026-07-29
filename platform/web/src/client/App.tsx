@@ -143,6 +143,7 @@ export function App() {
   const sessionListApplied = useRef(false);
   const sessionPagesRef = useRef<SessionProjectPage[]>([]);
   const sessionPagesQuery = useRef("");
+  const composerDrafts = useRef(new Map<string, string>());
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const mobile = useMediaQuery("(max-width: 900px)");
@@ -800,6 +801,13 @@ export function App() {
             key={`conversation:${live.runtime?.sessionId ?? "loading"}`}
             live={live}
             projectAvailable={live.runtime?.projectAvailable !== false}
+            initialDraft={live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId) : undefined}
+            onDraftChange={(draft) => {
+              const sessionId = live.runtime?.sessionId;
+              if (!sessionId) return;
+              if (draft) composerDrafts.current.set(sessionId, draft);
+              else composerDrafts.current.delete(sessionId);
+            }}
             onSelectAgent={(id) => {
               setSelectedAgentId(id);
               setRightPanel("agents");

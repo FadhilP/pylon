@@ -154,6 +154,38 @@ test("preserves age 0 and caps only eligible successful age-1 output", () => {
   assert.equal(read.stats.transformed, 0);
 });
 
+test("prunes bulky Heartbeat status and Memory lists without covering short mutation tools", () => {
+  const source = "x".repeat(4_001);
+  const heartbeat = textResult("heartbeat_status", source, { toolCallId: "heartbeat-1", details: { id: "job-1" } });
+  const activeHeartbeat = sieveMessages([user("current"), heartbeat], 4_000, { pruneActive: true });
+  assert.equal(activeHeartbeat.stats.transformedBy.activeThreshold, 1);
+  assert.ok(((activeHeartbeat.messages[1] as any).content[0].text as string).length <= 4_000);
+  assert.match((activeHeartbeat.messages[1] as any).content[0].text, /sieve_recall\(toolCallId="heartbeat-1"\)/);
+  assert.deepEqual((activeHeartbeat.messages[1] as any).details, { id: "job-1" });
+  assert.equal(activeHeartbeat.recoverableActiveResults[0]?.toolName, "heartbeat_status");
+  assert.ok((activeHeartbeat.recoverableActiveResults[0]?.content[0]?.text.length ?? 0) > 0);
+
+  const recalledHeartbeat = recalledResult("heartbeat_status", source);
+  const agedRecall = sieveMessages([user("before"), recalledHeartbeat, user("second"), user("third")], 4_000);
+  assert.equal(agedRecall.stats.transformedBy.ageThreshold, 1);
+  assert.match((agedRecall.messages[1] as any).content[0].text, /recalled heartbeat_status/);
+
+  const memoryList = textResult("memory", source, { details: { memoryList: true } });
+  const agedMemory = sieveMessages([user("before"), memoryList, user("second"), user("third")], 4_000);
+  assert.equal(agedMemory.stats.transformedBy.ageThreshold, 1);
+
+  for (const result of [
+    textResult("memory", source, { details: { memoryCandidate: { action: "add", key: "workflow.test" } } }),
+    textResult("continuity_update", source),
+    textResult("heartbeat_start", source),
+    textResult("heartbeat_cancel", source),
+  ]) {
+    const unchanged = sieveMessages([user("before"), result, user("second"), user("third")], 4_000);
+    assert.equal(unchanged.messages[1], result);
+    assert.equal(unchanged.stats.skipped.ineligibleTool, 1);
+  }
+});
+
 test("enforces the retained successful-output budget at equality, overflow, and newest-first", () => {
   const budgetContext = (lengths: number[]) => [
     user("before"),
