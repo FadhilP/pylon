@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -12,6 +12,17 @@ import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
 const run = promisify(execFile);
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pylon-coordinator-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

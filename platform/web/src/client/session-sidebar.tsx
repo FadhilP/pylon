@@ -2,7 +2,7 @@ import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, Ic
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatRelativeTime } from "../shared/format";
-import { SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { displayDate, displayTime } from "./format";
 
 export interface SessionProject {
@@ -39,6 +39,7 @@ interface SidebarProps {
   onSetSessionActive: (session: SessionSummary, active: boolean) => void;
   onSetSessionPinned: (session: SessionSummary, pinned: boolean) => void;
   onLoadMore: (project: SessionProject) => void;
+  onShowLess: (project: SessionProject) => void;
   onAddProject: () => void;
   onOpenArchives: () => void;
   terminalOpen: boolean;
@@ -55,7 +56,7 @@ interface SidebarProps {
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -322,9 +323,14 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
               />)}
-              {page?.nextCursor && <button className="session-show-more" type="button" onClick={() => onLoadMore(project)} disabled={projectLoading === project.id}>
-                {projectLoading === project.id ? "Loading…" : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
-              </button>}
+              {page && (page.sessions.length > SESSION_LIST_INITIAL_LIMIT || page.nextCursor) && <div className="session-list-controls">
+                {page.nextCursor && <button className="session-list-button" type="button" onClick={() => onLoadMore(project)} disabled={projectLoading === project.id}>
+                  {projectLoading === project.id ? "Loading…" : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
+                </button>}
+                {page.sessions.length > SESSION_LIST_INITIAL_LIMIT && <button className="session-list-button" type="button" onClick={() => onShowLess(project)} disabled={projectLoading === project.id}>
+                  Show less
+                </button>}
+              </div>}
             </div>}
           </section>;
         })}

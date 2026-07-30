@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -14,6 +14,17 @@ import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pylon-runtime-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 test("user completion resolves its entry ID after persistence", async () => {
   const session = SessionManager.inMemory();

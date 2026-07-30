@@ -653,17 +653,22 @@
   .session-runtime-state.is-running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: breathe 1.5s ease-in-out infinite; }
   .session-runtime-state.is-attention { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
   .session-runtime-state.is-idle { opacity: .6; }
-  .session-show-more {
-    width: max-content;
+  .session-list-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     margin: 3px 7px 4px;
+  }
+  .session-list-button {
+    width: max-content;
     padding: 4px 6px;
     border-radius: 5px;
     color: var(--text-muted);
     font-size: 12px;
     text-align: left;
   }
-  .session-show-more:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-soft); }
-  .session-show-more:disabled { cursor: default; opacity: .6; }
+  .session-list-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-soft); }
+  .session-list-button:disabled { cursor: default; opacity: .6; }
 
   .sidebar-state { padding: 12px 8px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
   .package-required { padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 12px; font-weight: 650; }

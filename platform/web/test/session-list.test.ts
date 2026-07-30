@@ -60,6 +60,19 @@ test("session list refresh drops expanded pages missing from fresh project list"
   assert.deepEqual(result.projects.map((project) => project.id), ["remaining"]);
 });
 
+test("expanded project sessions can collapse to the initial three", async () => {
+  const [app, sidebar, styles] = await Promise.all([
+    readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
+  ]);
+  const collapse = app.slice(app.indexOf("const showLessSessions"), app.indexOf("const archiveProject"));
+
+  assert.match(collapse, /limit: SESSION_LIST_INITIAL_LIMIT/);
+  assert.match(sidebar, /page\.sessions\.length > SESSION_LIST_INITIAL_LIMIT/);
+  assert.match(sidebar, /onShowLess\(project\)/);
+});
+
 test("pin and activation updates do not show a current-session transition", async () => {
   const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
   const activation = app.slice(app.indexOf("const setSessionActive"), app.indexOf("const setSessionPinned"));

@@ -12,7 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
-import { listSessionsPreservingPages, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
@@ -572,6 +572,32 @@ export function App() {
     }
   };
 
+  const showLessSessions = async (project: SessionProject) => {
+    const current = sessionPages.find((page) => page.id === project.id);
+    if (!current || current.sessions.length <= SESSION_LIST_INITIAL_LIMIT || projectLoading) return;
+    const request = sessionListRequest.current;
+    const requestQuery = query.trim();
+    const runtime = live.runtime;
+    setProjectLoading(project.id);
+    try {
+      const result = await runtimeStore.listSessions({
+        projectId: project.id,
+        query: requestQuery || undefined,
+        limit: SESSION_LIST_INITIAL_LIMIT,
+      });
+      if (request !== sessionListRequest.current || query.trim() !== requestQuery || !runtime
+        || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)) return;
+      const next = result.projects[0];
+      if (!next) return;
+      setActiveSessions(result.activeSessions);
+      updateSessionPages((pages) => pages.map((page) => page.id === project.id ? next : page));
+    } catch (cause) {
+      reportError(cause, "Unable to show fewer sessions");
+    } finally {
+      setProjectLoading("");
+    }
+  };
+
   const archiveProject = async (project: SessionProject) => {
     if (projectBusy || sessionBusy || sessionDeleting) return;
     setProjectBusy(project.id);
@@ -686,6 +712,7 @@ export function App() {
         onSetSessionActive={(session, active) => void setSessionActive(session, active)}
         onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
         onLoadMore={(project) => void loadMoreSessions(project)}
+        onShowLess={(project) => void showLessSessions(project)}
         onAddProject={() => void addProject()}
         onOpenArchives={() => {
           setArchivesOpen(true);

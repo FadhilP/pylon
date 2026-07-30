@@ -1,10 +1,22 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import { randomUUID } from "node:crypto";
-import { readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "../extensions/pi-timeline.ts";
+
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-naming-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 function namingHarness(entries: any[], completeTitle: any = async () => ({
   content: [{ type: "text", text: "Semantic Timeline Session" }],

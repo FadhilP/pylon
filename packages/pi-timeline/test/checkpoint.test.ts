@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -10,6 +10,17 @@ import { capture, makePortable } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 
 const exec = promisify(execFile);
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-checkpoint-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 async function repository() {
   const root = await mkdtemp(join(tmpdir(), "pi-timeline-test-"));
