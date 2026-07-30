@@ -1704,7 +1704,7 @@ function ToolTurnGroup({ tools, onExpand }: { tools: MessageReadModel[]; onExpan
   const names = [...new Set(tools.map((tool) => tool.tool?.name || "Tool"))];
   return <AnimatedDetails
     className="tool-turn-group"
-    summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(0, 3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
+    summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(-3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
     onExpand={onExpand}
   >
     <div className="tool-turn-items">

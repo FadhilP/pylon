@@ -52,7 +52,7 @@ function schedule(audio: AudioContext, kind: WebAudioCueKind): void {
     oscillator.type = "sine";
     oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
     gain.gain.setValueAtTime(.0001, toneStart);
-    gain.gain.exponentialRampToValueAtTime(.25, toneStart + .01);
+    gain.gain.exponentialRampToValueAtTime(.3, toneStart + .01);
     gain.gain.exponentialRampToValueAtTime(.0001, toneEnd);
     oscillator.connect(gain).connect(audio.destination);
     oscillator.start(toneStart);
