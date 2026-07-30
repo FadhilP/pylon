@@ -7,6 +7,7 @@ import {
   IconMoon,
   IconSun,
   IconUsers,
+  IconWorld,
   IconX,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
@@ -17,6 +18,7 @@ import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
+import { BrowserPanel } from "./browser-panel";
 import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -26,7 +28,7 @@ import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "agents" | "files" | null;
+type RightPanel = "inspector" | "agents" | "files" | "browser" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 type SidebarAction = {
   key: string;
@@ -137,6 +139,7 @@ export function App() {
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const agentsToggleRef = useRef<HTMLButtonElement>(null);
   const filesToggleRef = useRef<HTMLButtonElement>(null);
+  const browserToggleRef = useRef<HTMLButtonElement>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
@@ -251,7 +254,9 @@ export function App() {
       ? agentsToggleRef.current
       : previousRightPanel.current === "files"
         ? filesToggleRef.current
-        : inspectorToggleRef.current;
+        : previousRightPanel.current === "browser"
+          ? browserToggleRef.current
+          : inspectorToggleRef.current;
     trigger?.focus();
     previousRightPanel.current = rightPanel;
   }, [rightPanel]);
@@ -810,10 +815,13 @@ export function App() {
           inspectorButtonRef={inspectorToggleRef}
           agentsButtonRef={agentsToggleRef}
           filesButtonRef={filesToggleRef}
+          browserButtonRef={browserToggleRef}
+          browserAvailable={activePackages.has("pi-helios")}
           onToggleMenu={toggleSidebar}
           onToggleInspector={() => toggleRightPanel("inspector")}
           onToggleAgents={() => toggleRightPanel("agents")}
           onToggleFiles={() => toggleRightPanel("files")}
+          onToggleBrowser={() => toggleRightPanel("browser")}
         />
         {(toast || live.connection === "disconnected" || live.recovery) && <div className="app-toast-stack">
           {live.connection === "disconnected" && !live.recovery && <div className="app-connection-toast" role="status">Disconnected. Waiting to reconnect…</div>}
@@ -881,6 +889,11 @@ export function App() {
             key={`files:${live.runtime?.sessionId ?? "loading"}`}
             live={live}
             requestedPath={requestedFile}
+            onClose={() => setRightPanel(null)}
+            onError={reportError}
+          />}
+          {rightPanel === "browser" && <BrowserPanel
+            key={`browser:${live.runtime?.sessionId ?? "loading"}`}
             onClose={() => setRightPanel(null)}
             onError={reportError}
           />}
@@ -1130,7 +1143,7 @@ function RecoveryToast({ recovery, onAction }: {
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void }) {
+function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
   const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = live.runtime?.gitBranch || "No Git branch";
   const turn = live.runtime?.metrics.userMessages ?? 0;
@@ -1160,6 +1173,10 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
           <span>Files</span>
           {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
         </button>
+        {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""}`} type="button" onClick={onToggleBrowser} aria-label="Helios browser" aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
+          <IconWorld size={16} />
+          <span>Browser</span>
+        </button>}
         <button className="icon-button" onClick={onToggleTheme} aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
           {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
         </button>

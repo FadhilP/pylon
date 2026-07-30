@@ -2150,6 +2150,30 @@
   }
   .session-transition .status-orb { animation: breathe 1.5s ease-in-out infinite; }
 
+  .browser-panel { overflow: hidden; }
+  .browser-panel > header { display: flex; min-height: 52px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .browser-panel > header > div { display: flex; align-items: center; gap: 9px; }
+  .browser-toolbar { display: flex; align-items: center; gap: 4px; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  .browser-toolbar > button,
+  .browser-tabs > button { display: grid; width: 29px; height: 29px; flex: 0 0 auto; place-items: center; border-radius: 6px; color: var(--text-muted); }
+  .browser-toolbar > button:hover:not(:disabled),
+  .browser-tabs > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  .browser-toolbar form { min-width: 0; flex: 1; }
+  .browser-toolbar input { width: 100%; height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; outline: none; background: var(--surface-subtle); color: var(--text); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; }
+  .browser-toolbar input:focus { border-color: var(--accent); }
+  .browser-tabs { display: flex; align-items: center; gap: 3px; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  .browser-tabs select { min-width: 0; height: 28px; flex: 1; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); color: var(--text-soft); font-size: 12px; }
+  .browser-error { margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--red-soft); color: var(--red); font-size: 12px; }
+  .browser-empty { display: grid; min-height: 0; flex: 1; place-content: center; justify-items: center; gap: 8px; padding: 28px; color: var(--text-muted); text-align: center; }
+  .browser-empty strong { color: var(--text); font-size: 14px; }
+  .browser-empty span { max-width: 320px; font-size: 12px; line-height: 1.5; }
+  .browser-empty button { margin-top: 5px; padding: 7px 11px; border-radius: 7px; background: var(--accent); color: white; font-size: 12px; font-weight: 620; }
+  .browser-viewport { position: relative; display: grid; min-width: 0; min-height: 240px; flex: 1; place-items: center; overflow: hidden; outline: none; background: #16181d; cursor: default; touch-action: none; user-select: none; }
+  .browser-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .browser-viewport img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .browser-viewport > span { display: flex; align-items: center; gap: 8px; color: #9ca3af; font-size: 12px; }
+  .browser-viewport small { position: absolute; right: 8px; bottom: 7px; padding: 3px 6px; border-radius: 5px; background: rgb(0 0 0 / 64%); color: #d1d5db; font-size: 10px; pointer-events: none; }
+
   .topbar-actions .icon-button.is-active { background: var(--surface-active); color: var(--accent-text); }
 
   @media (max-width: 1179px) {

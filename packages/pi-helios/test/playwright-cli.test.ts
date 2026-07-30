@@ -66,6 +66,23 @@ test("adapter invokes pinned CLI with argument array and private cwd", async () 
   } finally { await cli.dispose(); }
 });
 
+test("artifact reads stay inside the private directory and enforce the byte cap", async () => {
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }));
+  const outside = await mkdtemp(join(tmpdir(), "helios-artifact-outside-"));
+  try {
+    const frame = join(cli.directory, "artifacts", "frame.png");
+    const escaped = join(outside, "frame.png");
+    await writeFile(frame, PNG);
+    await writeFile(escaped, PNG);
+    assert.equal((await cli.readArtifact(frame, PNG.length)).equals(PNG), true);
+    await assert.rejects(cli.readArtifact(frame, PNG.length - 1), /oversized/);
+    await assert.rejects(cli.readArtifact(escaped, PNG.length), /artifact path/);
+  } finally {
+    await cli.dispose();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("find uses bounded CLI snapshot search output", async () => {
   const calls: string[][] = [];
   const found = 'Found 1 match for "Add to cart":\n\n- button "Add to cart" [ref=e9]';

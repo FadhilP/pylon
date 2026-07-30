@@ -38,4 +38,6 @@ Project-folder and Session-worktree sessions can apply their bounded session del
 
 The Files right panel exposes bounded, read-only file content and per-session diffs. “Move to project checkout” parks the checkout's branch, index, and working state and moves the session branch there; “Move to worktree” reverses that operation. Timeline must confirm checkpoint portability before either handoff.
 
+When `pi-helios` is active, the Browser right panel can launch or take exclusive direct control of a Helios-owned browser. The screenshot-backed viewport supports pointer, keyboard, wheel, navigation, resize, and tab controls. Attached user browsers remain tool-only; panel frames are local, ephemeral, and served with `Cache-Control: no-store`.
+
 `npm run verify` runs type checking, Node tests, and the production build. Before release, also exercise the session switcher, image paste/retry flow, responsive layout, and remote dialogs with keyboard-only navigation.

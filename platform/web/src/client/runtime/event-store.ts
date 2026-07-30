@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
+import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
@@ -589,6 +590,16 @@ export class RuntimeEventStore {
       throw new Error("Package list is stale or invalid");
     }
     return packages;
+  }
+
+  async heliosBrowser(input: Omit<HeliosBrowserCommand, "expectedGeneration">, signal?: AbortSignal): Promise<HeliosBrowserResult> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.heliosBrowser({ ...input, expectedGeneration: runtime.sessionGeneration }, signal);
+    const current = this.snapshot.runtime;
+    if (!current || result.sessionGeneration !== current.sessionGeneration || current.sessionId !== runtime.sessionId) {
+      throw new Error("Helios browser response is stale");
+    }
+    return result;
   }
 
   async setPackageEnabled(packageId: string, enabled: boolean): Promise<void> {

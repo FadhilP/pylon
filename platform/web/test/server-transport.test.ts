@@ -4,6 +4,7 @@ import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket } from "ws";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
+import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
@@ -53,6 +54,7 @@ class FakeDriver implements PiDriver {
   packageSettingsUpdates: unknown[] = [];
   indexRebuilds = 0;
   newSessionParent?: string;
+  heliosRequests: HeliosBrowserInput[] = [];
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
@@ -82,6 +84,10 @@ class FakeDriver implements PiDriver {
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [], sessions: [], totalSessionCount: 0 });
   }
   listPackages(): Promise<PackageListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, packages: [{ id: "pi-test", name: "pi-test", description: "Test package", enabled: true, active: true, extensionCount: 1 }] }); }
+  heliosBrowser(input: HeliosBrowserInput) {
+    this.heliosRequests.push(input);
+    return Promise.resolve({ version: 1 as const, sessionGeneration: this.current.sessionGeneration, active: true, ownership: "owned" as const, state: "ready" as const, controlled: true });
+  }
   prompt(input: PromptInput): Promise<AcceptedCommand> {
     this.prompts.push(input.message);
     this.promptImages.push(input.images);
@@ -326,6 +332,8 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(malformedPath.status, 400);
     const noStream = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "prompt", commandId: "before-stream", expectedGeneration: 1, message: "hello" }) });
     assert.equal(noStream.status, 409);
+    const noStreamBrowser = await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) });
+    assert.equal(noStreamBrowser.status, 409);
     const badCsrf = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ type: "abort", commandId: "bad", expectedGeneration: 1 }) });
     assert.equal(badCsrf.status, 403);
     const stale = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "abort", commandId: "stale", expectedGeneration: 2 }) });
@@ -337,6 +345,14 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(events.status, 200);
     const firstChunk = await events.body!.getReader().read();
     assert.match(new TextDecoder().decode(firstChunk.value), /: connected/);
+    const browserStatus = await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) });
+    assert.equal(browserStatus.status, 200);
+    assert.equal(browserStatus.headers.get("cache-control"), "no-store");
+    assert.equal((await body(browserStatus)).controlled, true);
+    assert.equal(driver.heliosRequests.at(-1)?.owner, "web:tab-owner");
+    assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "pointer", expectedGeneration: 1, x: -1, y: 1, phase: "move" }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 2 }) })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) })).status, 403);
     const images = [{ mimeType: "image/png", data: "eA==" }] as const;
     const command = { type: "prompt", commandId: "once", expectedGeneration: 1, message: "hello", images };
     const accepted = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(command) });

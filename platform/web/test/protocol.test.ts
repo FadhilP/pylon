@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
+import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
 
 test("command validation allowlists bounded v23 commands and attachments", () => {
@@ -104,6 +105,18 @@ test("command validation allowlists bounded v23 commands and attachments", () =>
   assert.equal(validateCommand({ type: "steerQueuedPrompt", queueId: "", commandId: "steer", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: [{ ...image, mimeType: "image/svg+xml" }] }).ok, false);
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: Array(5).fill(image) }).ok, false);
+});
+
+test("embedded Helios browser validation allowlists bounded direct controls", () => {
+  assert.ok(validateHeliosBrowserCommand({ action: "status", expectedGeneration: 1 }));
+  assert.ok(validateHeliosBrowserCommand({ action: "start", expectedGeneration: 1, url: "https://example.com", width: 900, height: 650 }));
+  assert.ok(validateHeliosBrowserCommand({ action: "pointer", expectedGeneration: 1, x: 10, y: 20, phase: "down", button: "left" }));
+  assert.ok(validateHeliosBrowserCommand({ action: "key", expectedGeneration: 1, phase: "down", key: "Shift" }));
+  assert.equal(validateHeliosBrowserCommand({ action: "status", expectedGeneration: 1, url: "https://unexpected.test" }), undefined);
+  assert.equal(validateHeliosBrowserCommand({ action: "resize", expectedGeneration: 1, width: 319, height: 650 }), undefined);
+  assert.equal(validateHeliosBrowserCommand({ action: "pointer", expectedGeneration: 1, x: -1, y: 20, phase: "move" }), undefined);
+  assert.equal(validateHeliosBrowserCommand({ action: "key", expectedGeneration: 1, phase: "down", key: "bad\nkey" }), undefined);
+  assert.equal(validateHeliosBrowserCommand({ action: "tab-close", expectedGeneration: 1, tabIndex: 101 }), undefined);
 });
 
 test("event and snapshot validators reject incompatible versions", () => {

@@ -21,6 +21,91 @@ const BROWSER_ACTIONS = ["start", "attach", "navigate", "snapshot", "continue", 
 const PAGE_CONTEXT_ACTIONS = new Set(["start", "attach", "navigate", "snapshot", "find", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
 const PAGE_CHANGE_ACTIONS = new Set(["start", "attach", "navigate", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
 const OWNERSHIP_ACTIONS = new Set(["start", "attach", "close", "detach"]);
+const MAX_EMBEDDED_FRAME_BYTES = 5 * 1024 * 1024;
+
+type EmbeddedRequest = {
+  version: 1;
+  sessionId: string;
+  owner: string;
+  action: string;
+  url?: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  phase?: "move" | "down" | "up";
+  button?: "left" | "middle" | "right";
+  deltaX?: number;
+  deltaY?: number;
+  key?: string;
+  tabIndex?: number;
+  signal?: AbortSignal;
+  claim(): boolean;
+  respond(value: Promise<unknown>): void;
+};
+
+function embeddedState(manager: BrowserSessionManager, sessionId: string, owner: string) {
+  return { version: 1 as const, ...manager.state(sessionId, owner) };
+}
+
+async function embeddedBrowserRequest(manager: BrowserSessionManager, request: EmbeddedRequest): Promise<unknown> {
+  const { sessionId: id, owner, signal } = request;
+  if (!id || id.length > 200 || !/^web:[A-Za-z0-9-]{1,128}$/.test(owner)) throw new Error("Invalid embedded browser identity");
+  if (request.action === "status") return embeddedState(manager, id, owner);
+  if (request.action === "start") {
+    await manager.start(id, request.url, signal, false);
+    await manager.acquireInteractive(id, owner);
+    if (request.width !== undefined && request.height !== undefined) {
+      await manager.operateInteractive(id, [{ kind: "resize", width: request.width, height: request.height }], owner, signal);
+    }
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "acquire") {
+    await manager.acquireInteractive(id, owner);
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "release") {
+    await manager.releaseInteractive(id, owner);
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "close") {
+    await manager.close(id, "close", signal, owner);
+    return embeddedState(manager, id, owner);
+  }
+
+  let actions: BrowserAction[];
+  switch (request.action) {
+    case "frame": actions = [{ kind: "tab-list" }, { kind: "screenshot" }]; break;
+    case "navigate": actions = [{ kind: "navigate", url: request.url! }]; break;
+    case "back": case "forward": case "reload": actions = [{ kind: request.action }]; break;
+    case "resize": actions = [{ kind: "resize", width: request.width!, height: request.height! }]; break;
+    case "pointer": actions = [
+      { kind: "mouse-move", x: request.x!, y: request.y! },
+      ...(request.phase === "down" ? [{ kind: "mouse-down", button: request.button! } as const]
+        : request.phase === "up" ? [{ kind: "mouse-up", button: request.button! } as const] : []),
+    ]; break;
+    case "wheel": actions = [
+      { kind: "mouse-move", x: request.x!, y: request.y! },
+      { kind: "mouse-wheel", deltaX: request.deltaX!, deltaY: request.deltaY! },
+    ]; break;
+    case "key": actions = [{ kind: request.phase === "down" ? "key-down" : "key-up", key: request.key! }]; break;
+    case "tab-list": actions = [{ kind: "tab-list" }]; break;
+    case "tab-new": actions = [{ kind: "tab-new", url: request.url }]; break;
+    case "tab-select": actions = [{ kind: "tab-select", index: request.tabIndex! }]; break;
+    case "tab-close": actions = [{ kind: "tab-close", index: request.tabIndex! }]; break;
+    default: throw new Error("Unsupported embedded browser action");
+  }
+
+  const results = await manager.operateInteractive(id, actions, owner, signal);
+  const artifactPath = results.at(-1)?.artifactPath;
+  if (!artifactPath) return embeddedState(manager, id, owner);
+  try {
+    const data = await manager.readArtifact(id, artifactPath, MAX_EMBEDDED_FRAME_BYTES);
+    return { ...embeddedState(manager, id, owner), frame: { mimeType: "image/png" as const, data: data.toString("base64") } };
+  } finally {
+    await rm(artifactPath, { force: true }).catch(() => {});
+  }
+}
 const browserActionFields = {
   url: Type.Optional(Type.String({ maxLength: 4096 })),
   attachMode: Type.Optional(StringEnum(["cdp", "extension"] as const)),
@@ -141,6 +226,11 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
   const settingsPath = options.configPath ?? configPath();
   const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => pi.exec(command, args, options);
   const manager = new BrowserSessionManager(exec);
+  const disposeEmbeddedBrowser = pi.events.on("pylon:helios-browser-request", (value: unknown) => {
+    const request = value && typeof value === "object" ? value as Partial<EmbeddedRequest> : undefined;
+    if (request?.version !== 1 || typeof request.claim !== "function" || typeof request.respond !== "function" || !request.claim()) return;
+    request.respond(embeddedBrowserRequest(manager, request as EmbeddedRequest));
+  });
   let healthDiagnostic: Promise<string> | undefined;
   const cachedHealthDiagnostic = () => {
     if (!healthDiagnostic) {
@@ -203,6 +293,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
   pi.on("session_shutdown", async (_event, ctx) => {
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-helios" });
     disposeWebScoutCapability();
+    disposeEmbeddedBrowser();
     disposeHealth();
     const summary = await manager.shutdown();
     if (!ctx.hasUI) return;

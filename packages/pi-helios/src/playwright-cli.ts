@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { validatePngFile, type Exec } from "./capture.ts";
@@ -20,6 +20,7 @@ const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const CONTINUATION_CURSOR = /^hc_[a-f0-9]{32}$/;
 const INVALIDATES_CONTINUATION = new Set([
   "open", "attach-cdp", "attach-extension", "navigate", "click", "fill", "press", "hover", "select", "check", "uncheck",
+  "mouse-move", "mouse-down", "mouse-up", "mouse-wheel", "key-down", "key-up", "resize",
   "back", "forward", "reload", "tab-new", "tab-select", "tab-close", "close", "detach",
 ]);
 
@@ -38,6 +39,11 @@ export type BrowserAction =
   | { kind: "fill"; target: string; text: string }
   | { kind: "press"; key: string }
   | { kind: "select"; target: string; value: string }
+  | { kind: "mouse-move"; x: number; y: number }
+  | { kind: "mouse-down" | "mouse-up"; button: "left" | "middle" | "right" }
+  | { kind: "mouse-wheel"; deltaX: number; deltaY: number }
+  | { kind: "key-down" | "key-up"; key: string }
+  | { kind: "resize"; width: number; height: number }
   | { kind: "back" | "forward" | "reload" | "tab-list" | "detach" | "close" | "list" }
   | { kind: "tab-new"; url?: string }
   | { kind: "tab-select" | "tab-close"; index: number };
@@ -288,6 +294,30 @@ export class PlaywrightCli {
     await rm(this.directory, { recursive: true, force: true });
   }
 
+  async readArtifact(path: string, maximumBytes: number): Promise<Buffer> {
+    const artifactDirectory = resolve(this.directory, "artifacts");
+    const resolved = resolve(path);
+    if (dirname(resolved) !== artifactDirectory || !Number.isInteger(maximumBytes) || maximumBytes < 1) throw new Error("Invalid Helios artifact path");
+    const info = await lstat(resolved);
+    if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > maximumBytes) throw new Error("Helios artifact is invalid or oversized");
+    const handle = await open(resolved, "r");
+    try {
+      const current = await handle.stat();
+      if (!current.isFile() || current.size <= 0 || current.size > maximumBytes) throw new Error("Helios artifact is invalid or oversized");
+      const buffer = Buffer.allocUnsafe(maximumBytes + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+        if (!chunk.bytesRead) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead <= 0 || bytesRead > maximumBytes) throw new Error("Helios artifact is invalid or oversized");
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  }
+
   async configureOwned(profileDirectory: string, headed: boolean, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<void> {
     await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
     await this.writeConfig({
@@ -431,6 +461,22 @@ export class PlaywrightCli {
       case "select":
         if (!action.value || action.value.length > 1000) throw new Error("Select value must contain 1 to 1000 characters");
         return { command: "select", args: [target(action.target), action.value], timeout: normal };
+      case "mouse-move":
+        if (![action.x, action.y].every((value) => Number.isInteger(value) && value >= 0 && value <= 4096)) throw new Error("Mouse coordinates must be integers from 0 to 4096");
+        return { command: "mousemove", args: [String(action.x), String(action.y)], timeout: normal };
+      case "mouse-down": case "mouse-up":
+        if (!["left", "middle", "right"].includes(action.button)) throw new Error("Unsupported mouse button");
+        return { command: action.kind === "mouse-down" ? "mousedown" : "mouseup", args: [action.button], timeout: normal };
+      case "mouse-wheel":
+        if (![action.deltaX, action.deltaY].every((value) => Number.isInteger(value) && Math.abs(value) <= 5000)) throw new Error("Mouse wheel deltas must be integers from -5000 to 5000");
+        return { command: "mousewheel", args: [String(action.deltaX), String(action.deltaY)], timeout: normal };
+      case "key-down": case "key-up":
+        if (!action.key || action.key.length > 64 || /[\r\n\0]/u.test(action.key)) throw new Error("Unsupported browser key");
+        return { command: action.kind === "key-down" ? "keydown" : "keyup", args: [action.key], timeout: normal };
+      case "resize":
+        if (!Number.isInteger(action.width) || action.width < 320 || action.width > 1920
+          || !Number.isInteger(action.height) || action.height < 240 || action.height > 1080) throw new Error("Browser viewport must be 320-1920 by 240-1080 pixels");
+        return { command: "resize", args: [String(action.width), String(action.height)], timeout: normal };
       case "back": return { command: "go-back", args: [], timeout: 75_000 };
       case "forward": return { command: "go-forward", args: [], timeout: 75_000 };
       case "reload": return { command: "reload", args: [], timeout: 75_000 };

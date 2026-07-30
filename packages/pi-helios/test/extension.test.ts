@@ -113,6 +113,47 @@ test("visibility command changes future owned launches only", async () => {
   assert.match(notification, /Active owned session unchanged/);
 });
 
+test("embedded browser bridge launches headless, returns an ephemeral frame, and closes", async () => {
+  const commands: string[] = [];
+  const { eventHandlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const action = args.find((arg) => ["open", "resize", "tab-list", "screenshot", "close"].includes(arg)) ?? "unknown";
+    commands.push(action);
+    if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (action === "screenshot") {
+      const filename = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(filename, PNG);
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const call = async (input: Record<string, unknown>) => {
+    let claimed = false;
+    let response: Promise<any> | undefined;
+    const request = {
+      version: 1,
+      sessionId: "embedded-session",
+      owner: "web:tab-one",
+      ...input,
+      claim() { if (claimed) return false; claimed = true; return true; },
+      respond(value: Promise<unknown>) { response = Promise.resolve(value); },
+    };
+    const handler = eventHandlers.get("pylon:helios-browser-request")![0];
+    handler(request);
+    handler(request);
+    assert.ok(response);
+    return response;
+  };
+  const started = await call({ action: "start", url: "https://example.com", width: 900, height: 650 });
+  assert.equal(started.controlled, true);
+  assert.equal(commands.filter((command) => command === "open").length, 1);
+  const frame = await call({ action: "frame" });
+  assert.equal(frame.frame.mimeType, "image/png");
+  assert.equal(Buffer.from(frame.frame.data, "base64").equals(PNG), true);
+  await call({ action: "close" });
+  assert.ok(commands.includes("resize"));
+  assert.ok(commands.includes("screenshot"));
+  assert.ok(commands.includes("close"));
+});
+
 test("doctor checks pinned CLI without launching a browser", async () => {
   const calls: string[][] = [];
   const { commands } = runtime({ exec: async (_command: string, args: string[]) => {

@@ -28,6 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
+import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
 import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
@@ -130,6 +131,52 @@ function agentWasAborted(value: Record<string, unknown>): boolean {
     if (item.role === "assistant") return item.stopReason === "aborted";
   }
   return false;
+}
+
+const MAX_HELIOS_FRAME_BYTES = 5 * 1024 * 1024;
+const MAX_HELIOS_FRAME_BASE64 = Math.ceil(MAX_HELIOS_FRAME_BYTES / 3) * 4;
+
+function heliosPage(value: unknown): HeliosPageIdentity | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const page = value as Record<string, unknown>;
+  if (!Number.isInteger(page.index) || (page.index as number) < 0 || (page.index as number) > 100
+    || typeof page.title !== "string" || page.title.length > 500
+    || typeof page.url !== "string" || page.url.length > 4096) return undefined;
+  return { index: page.index as number, title: page.title, url: page.url };
+}
+
+function heliosResult(value: unknown, sessionGeneration: number): HeliosBrowserResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Helios returned an invalid embedded browser response");
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1 || typeof raw.active !== "boolean" || typeof raw.controlled !== "boolean") throw new Error("Helios returned an invalid embedded browser response");
+  const ownership = ["owned", "cdp-attached", "extension-attached"].includes(String(raw.ownership))
+    ? raw.ownership as HeliosBrowserResult["ownership"] : undefined;
+  const state = ["starting", "ready", "cleanup-required", "closing", "closed"].includes(String(raw.state))
+    ? raw.state as HeliosBrowserResult["state"] : undefined;
+  const page = raw.page === undefined ? undefined : heliosPage(raw.page);
+  const tabs = Array.isArray(raw.tabs) ? raw.tabs.slice(0, 101).map(heliosPage) : undefined;
+  if (raw.page !== undefined && !page || tabs?.some((tab) => !tab)) throw new Error("Helios returned invalid page metadata");
+  let frame: HeliosBrowserResult["frame"];
+  if (raw.frame !== undefined) {
+    const image = raw.frame && typeof raw.frame === "object" && !Array.isArray(raw.frame) ? raw.frame as Record<string, unknown> : undefined;
+    if (image?.mimeType !== "image/png" || typeof image.data !== "string" || !image.data
+      || image.data.length > MAX_HELIOS_FRAME_BASE64 || image.data.length % 4 !== 0
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)) throw new Error("Helios returned an invalid embedded browser frame");
+    const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
+    if (image.data.length / 4 * 3 - padding > MAX_HELIOS_FRAME_BYTES) throw new Error("Helios returned an oversized embedded browser frame");
+    frame = { mimeType: "image/png", data: image.data };
+  }
+  return {
+    version: 1,
+    sessionGeneration,
+    active: raw.active,
+    controlled: raw.controlled,
+    ...(ownership ? { ownership } : {}),
+    ...(state ? { state } : {}),
+    ...(page ? { page } : {}),
+    ...(tabs ? { tabs: tabs as HeliosPageIdentity[] } : {}),
+    ...(frame ? { frame } : {}),
+  };
 }
 
 export function terminalAgentError(messages: unknown): string | undefined {
@@ -843,6 +890,45 @@ export class SessionRuntime implements PiDriver {
       ...(typeof value.text === "string" ? { text: value.text.slice(0, 2 * 1024 * 1024) } : {}),
       ...(value.truncated === true ? { truncated: true } : {}),
     };
+  }
+
+  async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
+    if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:helios-browser-request", {
+      version: 1,
+      ...input,
+      sessionId: runtime.session.sessionId,
+      signal: controller.signal,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("Helios embedded browser is unavailable");
+    const timeout = setTimeout(() => controller.abort(), 80_000);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Helios embedded browser request timed out")), { once: true })),
+      ]);
+      if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
+      return heliosResult(value, this.gate.generation);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
   }
 
   deleteSession(input: DeleteSessionInput): Promise<void> {

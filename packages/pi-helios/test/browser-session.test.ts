@@ -80,6 +80,54 @@ test("owned lifecycle closes and attached lifecycle only detaches", async () => 
   assert.ok(!attachedLog.includes("close"));
 });
 
+test("interactive lease is owned-only, excludes agent actions, and releases held input", async () => {
+  const log: string[] = [];
+  const manager = new BrowserSessionManager(exec as any, async () => fakeCli(log));
+  await manager.start("interactive");
+  assert.equal((await manager.acquireInteractive("interactive", "web:tab-one")).controlled, true);
+  await assert.rejects(manager.acquireInteractive("interactive", "web:tab-two"), /another Pylon tab/);
+  await assert.rejects(manager.operate("interactive", { kind: "snapshot" }), /direct user control/);
+  await manager.operateInteractive("interactive", [
+    { kind: "mouse-move", x: 10, y: 20 },
+    { kind: "mouse-down", button: "left" },
+    { kind: "key-down", key: "Shift" },
+  ], "web:tab-one");
+  await manager.releaseInteractive("interactive", "web:tab-one");
+  assert.ok(log.includes("mouse-up"));
+  assert.ok(log.includes("key-up"));
+  await manager.operate("interactive", { kind: "snapshot" });
+  await manager.close("interactive", "close");
+
+  const attached = new BrowserSessionManager(exec as any, async () => fakeCli([]));
+  await attached.attachCdp("interactive-attached", "http://127.0.0.1:9222");
+  await assert.rejects(attached.acquireInteractive("interactive-attached", "web:tab-one"), /only for Helios-owned/);
+  await attached.close("interactive-attached", "detach");
+});
+
+test("failed input keeps the lease until reset succeeds and idle expiry releases input", async () => {
+  let failMouseUp = true;
+  const log: string[] = [];
+  const cli = fakeCli(log);
+  cli.run = async (_session: string, action: any) => {
+    log.push(action.kind);
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "mouse-down") throw new Error("uncertain down");
+    if (action.kind === "mouse-up" && failMouseUp) throw new Error("uncertain up");
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli, 15);
+  await manager.start("uncertain-input");
+  await manager.acquireInteractive("uncertain-input", "web:tab-one");
+  await assert.rejects(manager.operateInteractive("uncertain-input", [{ kind: "mouse-down", button: "left" }], "web:tab-one"), /uncertain down/);
+  await assert.rejects(manager.releaseInteractive("uncertain-input", "web:tab-one"), /could not release/);
+  assert.equal(manager.state("uncertain-input", "web:tab-one").controlled, true);
+  failMouseUp = false;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(manager.state("uncertain-input", "web:tab-one").controlled, false);
+  assert.ok(log.filter((action) => action === "mouse-up").length >= 2);
+  await manager.close("uncertain-input", "close");
+});
+
 test("operations serialize and shutdown is idempotent", async () => {
   const log: string[] = [];
   const manager = new BrowserSessionManager(exec as any, async () => fakeCli(log, 15));

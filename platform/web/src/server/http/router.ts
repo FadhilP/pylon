@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
+import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
@@ -84,6 +85,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/helios-browser") return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-ownership/")) return await this.uiOwnership(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-ownership/".length)));
@@ -159,6 +161,22 @@ export class ServerTransport {
     this.renew(tabId);
     const close = () => this.removeClient(client);
     request.once("close", close); response.once("close", close);
+  }
+
+  private async heliosBrowser(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = validateHeliosBrowserCommand(await readJson(request));
+    if (!input) throw httpError(400, "invalid Helios browser request");
+    if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (![...this.clients].some((client) => client.tabId === tabId)) throw httpError(409, "the browser tab must have an SSE connection");
+    if (!this.driver.heliosBrowser) throw httpError(409, "Helios embedded browser is unavailable");
+    this.renew(tabId);
+    const result = await this.driver.heliosBrowser({ ...input, owner: `web:${tabId}` });
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while controlling Helios browser");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
   }
 
   private async command(request: IncomingMessage, response: ServerResponse): Promise<void> {

@@ -1,4 +1,5 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
+import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
@@ -165,6 +166,16 @@ export class ApiClient {
     return json<ArchiveListSnapshot>(await fetch(`/api/v1/archives${query.size ? `?${query}` : ""}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
+    }));
+  }
+
+  async heliosBrowser(command: HeliosBrowserCommand, signal?: AbortSignal): Promise<HeliosBrowserResult> {
+    return json<HeliosBrowserResult>(await fetch("/api/v1/helios-browser", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify(command),
+      signal,
     }));
   }
 

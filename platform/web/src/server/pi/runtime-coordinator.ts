@@ -1,5 +1,6 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
+import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -320,6 +321,15 @@ export class RuntimeCoordinator implements PiDriver {
     const result = await slot.driver.listPackages();
     this.assertSelected(slot, generation, "listing packages");
     return { ...result, sessionGeneration: generation };
+  }
+
+  async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    if (!slot.driver.heliosBrowser) throw new Error("Helios embedded browser is unavailable");
+    const result = await slot.driver.heliosBrowser({ ...input, expectedGeneration: slot.innerGeneration });
+    this.assertSelected(slot, input.expectedGeneration, "controlling Helios browser");
+    return { ...result, sessionGeneration: this.generation };
   }
 
   async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
