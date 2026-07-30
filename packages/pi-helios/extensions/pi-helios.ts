@@ -5,9 +5,10 @@ import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { BrowserSessionManager, validateCdpEndpoint } from "../src/browser-session.ts";
+import { BrowserSessionManager, validateCdpEndpoint, type BrowserOperationResult } from "../src/browser-session.ts";
 import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
 import { configPath, loadConfig, saveConfig } from "../src/config.ts";
+import { ELEMENT_REF_PATTERN } from "../src/element-ref.ts";
 import { diagnosePlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { issueWebScoutGrant } from "../src/web-scout-grant.ts";
 
@@ -25,7 +26,7 @@ const browserActionFields = {
   attachMode: Type.Optional(StringEnum(["cdp", "extension"] as const)),
   endpoint: Type.Optional(Type.String({ maxLength: 2048 })),
   browser: Type.Optional(StringEnum(["chrome", "msedge"] as const, { description: "Browser for extension attachment; ignored by start" })),
-  target: Type.Optional(Type.String({ maxLength: 32, description: "Element reference from latest snapshot, such as e12" })),
+  target: Type.Optional(Type.String({ pattern: ELEMENT_REF_PATTERN, maxLength: 32, description: "Element reference from latest snapshot, such as e12 or f1e12" })),
   text: Type.Optional(Type.String({ maxLength: 10000, description: "Exact text to find; keep narrow to avoid large match sets" })),
   regex: Type.Optional(Type.String({ maxLength: 500, description: "Regular expression to find; keep specific to avoid large match sets" })),
   key: Type.Optional(Type.String({ maxLength: 64 })),
@@ -97,7 +98,7 @@ function browserAction(params: BrowserParams): BrowserAction {
   }
 }
 
-function describe(result: { action: string; ownership: string; outcome: string; metadataAvailable?: boolean; metadataStale?: boolean; page?: { index: number; title: string; url: string }; tabs?: Array<{ index: number; title: string; url: string }>; snapshot?: string; snapshotRedactions?: number; snapshotTruncated?: boolean; snapshotOmittedLines?: number; snapshotOmittedBytes?: number; findMatches?: number; snapshotContinuation?: string; cleanupWarnings?: string[] }): string {
+function describe(result: BrowserOperationResult): string {
   const ownership = OWNERSHIP_ACTIONS.has(result.action) ? ` (${result.ownership})` : "";
   const lines = [`Browser ${result.action} ${result.outcome}${ownership}.`];
   if (PAGE_CONTEXT_ACTIONS.has(result.action)) {
@@ -111,6 +112,20 @@ function describe(result: { action: string; ownership: string; outcome: string; 
   if (result.snapshotTruncated) lines.push(`Remaining: ${result.snapshotOmittedLines ?? 0} lines / ${result.snapshotOmittedBytes ?? 0} bytes.`);
   if (result.snapshotContinuation) lines.push(`Continuation: ${result.snapshotContinuation}`);
   if (result.action === "find" && ((result.findMatches ?? 0) > 20 || result.snapshotTruncated)) lines.push("Refine find query or continue with returned cursor.");
+  for (const warning of result.cleanupWarnings ?? []) lines.push(`Warning: ${warning}.`);
+  return lines.join("\n");
+}
+
+function describeCompactBatchStep(index: number, action: string, result: BrowserOperationResult, pageChanged: boolean): string {
+  const ownership = OWNERSHIP_ACTIONS.has(action) ? ` (${result.ownership})` : "";
+  const lines = [`Step ${index} (${action}): ${result.outcome}${ownership}.`];
+  if (PAGE_CONTEXT_ACTIONS.has(action)) {
+    if (result.metadataAvailable === false && !result.page) lines.push("Page metadata unavailable.");
+    else if (result.metadataStale && PAGE_CHANGE_ACTIONS.has(action)) lines.push("Page metadata may be stale.");
+    else if (pageChanged && result.page) lines.push(`Page: ${result.page.title} (${result.page.url})`);
+  }
+  if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
+  if (result.snapshotTruncated) lines.push(`Intermediate snapshot omitted and truncated; ${result.snapshotOmittedLines ?? 0} lines / ${result.snapshotOmittedBytes ?? 0} bytes remain. Request a new snapshot if needed.`);
   for (const warning of result.cleanupWarnings ?? []) lines.push(`Warning: ${warning}.`);
   return lines.join("\n");
 }
@@ -263,6 +278,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
     promptGuidelines: [
       "Use only for user-requested browser work; start or attach first, then close or detach when done. Never monitor. User must supervise purchases, messages, publishing, destructive actions, and other consequential clicks.",
       "Act through returned element references; never guess selectors. Prefer find for narrow text, otherwise start snapshots at depth 4–6 or target a returned ref.",
+      "Reuse snapshots returned by helios_browser actions; request another only when absent, truncated, or insufficient. Prefer targeted screenshots; use fullPage only when whole-page context is necessary.",
       "Use continuation cursors to read remaining output; each chunk replaces prior usable refs. Refine truncated searches instead of broadening immediately.",
       "Batch only predetermined, non-consequential actions with known refs; separate calls when an earlier result determines the next action.",
     ],
@@ -330,6 +346,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       }
       const content: any[] = [];
       const steps: Array<{ action: string; details: unknown }> = [];
+      let previousPage: string | undefined;
       for (const [index, action] of params.actions.entries()) {
         let result;
         try {
@@ -339,10 +356,20 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
           throw new Error(`Browser batch step ${index + 1} (${action.action}) failed: ${message}`, { cause: error });
         }
         steps.push({ action: action.action, details: result.details });
-        for (const item of result.content) {
-          content.push(item.type === "text" ? { ...item, text: `Step ${index + 1} (${action.action}):\n${item.text}` } : item);
+        const details = result.details as BrowserOperationResult & { declined?: boolean };
+        const final = index === params.actions.length - 1;
+        if (final || details.declined) {
+          for (const item of result.content) {
+            content.push(item.type === "text" ? { ...item, text: `Step ${index + 1} (${action.action}):\n${item.text}` } : item);
+          }
+        } else {
+          const page = details.metadataStale ? undefined : details.page;
+          const pageKey = page ? `${page.title}\n${page.url}` : undefined;
+          content.push({ type: "text", text: describeCompactBatchStep(index + 1, action.action, details, pageKey !== undefined && pageKey !== previousPage) });
+          for (const item of result.content) if (item.type !== "text") content.push(item);
+          if (pageKey !== undefined) previousPage = pageKey;
         }
-        if ((result.details as { declined?: boolean }).declined) {
+        if (details.declined) {
           return { content, details: { steps, completed: steps.length, stoppedAt: index + 1, reason: "declined" } };
         }
       }

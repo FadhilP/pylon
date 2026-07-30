@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Exec } from "./capture.ts";
 import { loopbackUrl } from "./capture.ts";
+import { elementReferences } from "./element-ref.ts";
 import { HeliosCliError, PlaywrightCli, type BrowserAction, type BrowserOwnership, type CliResult } from "./playwright-cli.ts";
 
 export type BrowserState = "starting" | "ready" | "cleanup-required" | "closing" | "closed";
@@ -160,8 +161,10 @@ export class BrowserSessionManager {
     const startedAt = Date.now();
     try {
       await cli.configureOwned(record.profileDirectory!, headed, webIsolation);
-      const result = await cli.run(record.cliSessionName, { kind: "open", url, profileDirectory: record.profileDirectory!, headed }, signal);
+      const action = { kind: "open", url, profileDirectory: record.profileDirectory!, headed } as const;
+      const result = await cli.run(record.cliSessionName, action, signal);
       record.state = "ready";
+      this.updateReferences(managed, action, result.snapshot);
       return await this.envelope(managed, "start", result, signal, false, startedAt);
     } catch (error) {
       const cleaned = await this.cleanupUncertainStart(managed, "close");
@@ -196,6 +199,7 @@ export class BrowserSessionManager {
     try {
       const result = await cli.run(record.cliSessionName, action, signal);
       record.state = "ready";
+      this.updateReferences(managed, action, result.snapshot);
       return await this.envelope(managed, "attach", result, signal, false, startedAt);
     } catch (error) {
       const cleaned = await this.cleanupUncertainStart(managed, "detach");
@@ -302,7 +306,7 @@ export class BrowserSessionManager {
 
   private updateReferences(managed: Managed, action: BrowserAction, snapshot?: string): void {
     if (snapshot !== undefined) {
-      managed.references = new Set(snapshot.match(/\bref=(e\d+)\b/g)?.map((item) => item.slice(4)) ?? []);
+      managed.references = new Set(elementReferences(snapshot));
       return;
     }
     if (this.invalidatesReferences(action)) managed.references.clear();

@@ -918,6 +918,8 @@ export function App() {
         disabled={activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         models={live.runtime?.sessionControls.models ?? []}
         sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
+        theme={theme}
+        onThemeChange={setTheme}
         onClose={() => setSettingsOpen(false)}
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}

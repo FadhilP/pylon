@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { validatePngFile, type Exec } from "./capture.ts";
+import { ELEMENT_REF_FRAGMENT, isElementReference } from "./element-ref.ts";
 
 const CLI_PATH = fileURLToPath(import.meta.resolve("@playwright/cli/playwright-cli.js"));
 const MAX_STDOUT_BYTES = 256 * 1024;
@@ -16,7 +17,6 @@ const MAX_FIND_BYTES = 12 * 1024;
 const MAX_ACTION_SNAPSHOT_LINES = 100;
 const MAX_ACTION_SNAPSHOT_BYTES = 10 * 1024;
 const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
-const ELEMENT_REF = /^e\d+$/;
 const CONTINUATION_CURSOR = /^hc_[a-f0-9]{32}$/;
 const INVALIDATES_CONTINUATION = new Set([
   "open", "attach-cdp", "attach-extension", "navigate", "click", "fill", "press", "hover", "select", "check", "uncheck",
@@ -86,7 +86,7 @@ export function validateNavigationUrl(value: string): string {
 }
 
 function target(value: string): string {
-  if (!ELEMENT_REF.test(value)) throw new Error("Browser element target must be a current snapshot reference such as e12");
+  if (!isElementReference(value)) throw new Error("Browser element target must be a current snapshot reference such as e12 or f1e12");
   return value;
 }
 
@@ -158,7 +158,7 @@ function findMatchCount(value: string): number | undefined {
 
 function redactSnapshot(value: string): RedactedSnapshot {
   let redactions = 0;
-  let redacted = value.replace(/(\b(?:textbox|searchbox|combobox|spinbutton)\b.*\[ref=e\d+\])\s*:.+$/gim, (_match, field: string) => {
+  let redacted = value.replace(new RegExp(`(\\b(?:textbox|searchbox|combobox|spinbutton)\\b.*\\[ref=${ELEMENT_REF_FRAGMENT}\\])\\s*:.+$`, "gim"), (_match, field: string) => {
     redactions++;
     return `${field}: [value redacted]`;
   });

@@ -31,6 +31,38 @@ test("session names are opaque and endpoints are strict loopback origins", () =>
   ]);
 });
 
+test("start action snapshots expose current references without another snapshot", async () => {
+  const log: string[] = [];
+  const cli = fakeCli(log);
+  cli.run = async (_session: string, action: any) => {
+    log.push(action.kind);
+    if (action.kind === "open") return { value: {}, snapshot: "- button [ref=f1e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  const started = await manager.start("start-refs", "https://example.com");
+  assert.match(started.snapshot!, /ref=f1e1/);
+  await manager.operate("start-refs", { kind: "click", target: "f1e1" });
+  await manager.close("start-refs", "close");
+});
+
+test("attach action snapshots expose current references without another snapshot", async () => {
+  const log: string[] = [];
+  const cli = fakeCli(log);
+  cli.run = async (_session: string, action: any) => {
+    log.push(action.kind);
+    if (action.kind === "attach-cdp") return { value: {}, snapshot: "- button [ref=f1e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  const attached = await manager.attachCdp("attach-refs", "http://127.0.0.1:9222");
+  assert.match(attached.snapshot!, /ref=f1e1/);
+  await manager.operate("attach-refs", { kind: "click", target: "f1e1" });
+  await manager.close("attach-refs", "detach");
+});
+
 test("owned lifecycle closes and attached lifecycle only detaches", async () => {
   const ownedLog: string[] = [];
   const owned = new BrowserSessionManager(exec as any, async () => fakeCli(ownedLog));
@@ -181,21 +213,23 @@ test("secondary missing-session metadata marks cleanup required", async () => {
   await manager.shutdown();
 });
 
-test("action snapshots replace references without an explicit snapshot command", async () => {
+test("action snapshots preserve namespaced reference identity and replace stale references", async () => {
   const actions: string[] = [];
   const cli = fakeCli(actions);
   cli.run = async (session: string, action: any) => {
     actions.push(action.kind);
     if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
-    if (action.kind === "navigate") return { value: {}, snapshot: "- link [ref=e2]" };
+    if (action.kind === "navigate") return { value: {}, snapshot: "- link [ref=f1e2]" };
     return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("action-refs");
   const navigated = await manager.operate("action-refs", { kind: "navigate", url: "https://example.com" });
-  assert.match(navigated.snapshot!, /ref=e2/);
-  await manager.operate("action-refs", { kind: "click", target: "e2" });
+  assert.match(navigated.snapshot!, /ref=f1e2/);
   await assert.rejects(manager.operate("action-refs", { kind: "click", target: "e2" }), /stale/);
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f2e2" }), /stale/);
+  await manager.operate("action-refs", { kind: "click", target: "f1e2" });
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e2" }), /stale/);
   assert.equal(actions.includes("list"), false);
   await manager.close("action-refs", "close");
 });

@@ -47,7 +47,7 @@ Ordered actions can be sent in one batch (up to 20 steps):
 { actions: [{ action: "start", url: "https://example.com" }, { action: "snapshot" }, { action: "close" }] }
 ```
 
-Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead.
+Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead. Batch output keeps compact intermediate status, page changes, warnings, and images; the final step keeps full text and snapshot output.
 
 Prefer targeted search over a full snapshot when the element text is known:
 
@@ -57,6 +57,8 @@ Prefer targeted search over a full snapshot when the element text is known:
 ```
 
 `find` accepts exactly one plain-text or regular-expression query, searches the current accessibility snapshot, and returns matching nodes with nearby context and usable refs. Queries are limited to 500 characters. Keep queries narrow; large match sets return a bounded prefix, total match count, remaining counts, and a refinement hint.
+
+Browser actions may already return a usable snapshot. Request another only when output is absent, truncated, or insufficient. Prefer screenshots targeted to a returned element ref; use `fullPage` only when whole-page context is necessary.
 
 Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 120 lines / 12 KB, and snapshots emitted by other actions up to 100 lines / 10 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser subprocess. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
 

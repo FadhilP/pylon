@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import { rm } from "node:fs/promises";
 import { BrowserSessionManager } from "../src/browser-session.ts";
+import { elementReferences } from "../src/element-ref.ts";
 import { PublicNetworkProxy } from "../src/public-proxy.ts";
 
 const live = process.env.PI_HELIOS_LIVE_BROWSER === "1";
@@ -23,9 +24,9 @@ const exec = (command: string, args: string[], options?: { signal?: AbortSignal;
 });
 
 function reference(snapshot: string | undefined, role: string): string {
-  const match = snapshot?.split(/\r?\n/).find((line) => line.includes(`- ${role}`))?.match(/\[ref=(e\d+)\]/);
-  assert.ok(match, `missing ${role} reference in snapshot`);
-  return match[1];
+  const ref = elementReferences(snapshot?.split(/\r?\n/).find((line) => line.includes(`- ${role}`)) ?? "")[0];
+  assert.ok(ref, `missing ${role} reference in snapshot`);
+  return ref;
 }
 
 test("live pinned CLI owned browser workflow", { skip: !live, timeout: 120_000 }, async () => {
