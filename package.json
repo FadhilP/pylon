@@ -21,7 +21,7 @@
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test",
     "install:packages": "npm install --workspaces --include-workspace-root",
-    "web": "npm run build --workspace @pylon/web && npm run start --workspace @pylon/web",
+    "web": "node scripts/web.mjs",
     "web:update": "git pull --ff-only && npm run web"
   },
   "pi": {
