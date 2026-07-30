@@ -28,7 +28,7 @@ import {
 } from "pylon-core/src/worktree.ts";
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -72,6 +72,7 @@ import type {
   TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
+  UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
   WorkspaceFileInput,
   WorkspaceFilesInput,
@@ -320,6 +321,14 @@ export class RuntimeCoordinator implements PiDriver {
     const generation = this.generation;
     const result = await slot.driver.listPackages();
     this.assertSelected(slot, generation, "listing packages");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async listHookSettings(): Promise<HookSettingsSnapshot> {
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await slot.driver.listHookSettings();
+    this.assertSelected(slot, generation, "listing hook settings");
     return { ...result, sessionGeneration: generation };
   }
 
@@ -1256,6 +1265,24 @@ export class RuntimeCoordinator implements PiDriver {
       this.sessionIndex.invalidate();
       this.emitProjectsChanged();
       return this.replacement(false);
+    });
+  }
+
+  async updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
+    await this.withLifecycle(async () => {
+      for (const slot of this.slots.values()) {
+        if (!this.slotCanSleep(slot)) throw new Error("hook settings can only change while every session is idle");
+      }
+      const selected = this.selected();
+      await selected.driver.updateHookSettings(input);
+      for (const slot of [...this.slots.values()]) {
+        if (slot.id !== this.selectedId) {
+          await this.registry().deactivateSession(slot.id);
+          await this.disposeSlot(slot);
+        }
+      }
+      this.sessionIndex.invalidate();
+      this.emitProjectsChanged();
     });
   }
 

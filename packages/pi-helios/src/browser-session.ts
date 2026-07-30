@@ -64,6 +64,7 @@ interface Managed {
   interactiveEpoch: number;
   heldButtons: Set<"left" | "middle" | "right">;
   heldKeys: Set<string>;
+  pendingOperations: number;
   page?: PageIdentity;
   tabs?: PageIdentity[];
 }
@@ -161,7 +162,7 @@ export class BrowserSessionManager {
     };
   }
 
-  async start(piSessionId: string, url?: string, signal?: AbortSignal, headed = true, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<BrowserOperationResult> {
+  async start(piSessionId: string, url?: string, signal?: AbortSignal, headed = false, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<BrowserOperationResult> {
     if (this.sessions.has(piSessionId)) throw new Error("Pi session already has an active Helios browser session");
     const cli = await this.createCli(this.exec);
     const record: BrowserSessionRecord = {
@@ -173,7 +174,7 @@ export class BrowserSessionManager {
       capabilities: { observe: true, interact: true },
       createdAt: Date.now(),
     };
-    const managed: Managed = { record, cli, tail: Promise.resolve(), references: new Set(), closingRequested: false, interactiveEpoch: 0, heldButtons: new Set(), heldKeys: new Set() };
+    const managed: Managed = { record, cli, tail: Promise.resolve(), references: new Set(), closingRequested: false, interactiveEpoch: 0, heldButtons: new Set(), heldKeys: new Set(), pendingOperations: 0 };
     this.sessions.set(piSessionId, managed);
     const startedAt = Date.now();
     try {
@@ -210,7 +211,7 @@ export class BrowserSessionManager {
       capabilities: { observe: true, interact: true },
       createdAt: Date.now(),
     };
-    const managed: Managed = { record, cli, tail: Promise.resolve(), references: new Set(), closingRequested: false, interactiveEpoch: 0, heldButtons: new Set(), heldKeys: new Set() };
+    const managed: Managed = { record, cli, tail: Promise.resolve(), references: new Set(), closingRequested: false, interactiveEpoch: 0, heldButtons: new Set(), heldKeys: new Set(), pendingOperations: 0 };
     this.sessions.set(piSessionId, managed);
     const startedAt = Date.now();
     try {
@@ -279,6 +280,13 @@ export class BrowserSessionManager {
       if (!await this.releaseHeldInput(managed)) throw new Error("Helios could not reset prior browser input; close the browser session");
       return this.performOperation(managed, action, signal);
     });
+  }
+
+  async observeFrame(piSessionId: string, signal?: AbortSignal): Promise<BrowserOperationResult | undefined> {
+    const managed = this.requireManaged(piSessionId, { kind: "screenshot" });
+    if (managed.record.ownership !== "owned") throw new Error("Embedded mirroring is available only for Helios-owned browsers");
+    if (managed.interactiveOwner || managed.pendingOperations) return undefined;
+    return this.serialized(managed, () => this.performOperation(managed, { kind: "screenshot" }, signal));
   }
 
   async operateInteractive(piSessionId: string, actions: BrowserAction[], owner: string, signal?: AbortSignal): Promise<BrowserOperationResult[]> {
@@ -536,8 +544,12 @@ export class BrowserSessionManager {
   }
 
   private serialized<T>(managed: Managed, operation: () => Promise<T>): Promise<T> {
+    managed.pendingOperations++;
     const result = managed.tail.then(operation, operation);
-    managed.tail = result.then(() => {}, () => {});
+    managed.tail = result.then(
+      () => { managed.pendingOperations--; },
+      () => { managed.pendingOperations--; },
+    );
     return result;
   }
 }

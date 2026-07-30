@@ -66,11 +66,11 @@ Browser output uses action-specific limits: explicit snapshots allow up to 200 l
 
 Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S) and `about:blank`, not credentials or local files. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.
 
-In Pylon Web, the **Browser** right panel can launch or take direct control of a Helios-owned session. It mirrors the viewport with bounded local screenshots and forwards pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
+In Pylon Web, an agent-started owned session automatically opens the **Browser** right panel and passively mirrors the viewport with bounded local screenshots while agent actions continue. The panel can also launch a browser or take direct control to forward pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never mirrored or controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
 
 The embedded surface is screenshot-backed rather than an iframe, so fast animation, media, IME input, and precision dragging can feel less responsive than a native browser window.
 
-Owned sessions are shown by default, isolated, temporary, and closed on explicit `close` or Pi session shutdown. Toggle future owned launches between shown and headless mode:
+Owned sessions are headless by default, isolated, temporary, and closed on explicit `close` or Pi session shutdown. Toggle future owned launches between shown and headless mode:
 
 ```text
 /helios-visibility
@@ -79,7 +79,7 @@ Owned sessions are shown by default, isolated, temporary, and closed on explicit
 /helios-visibility status
 ```
 
-No argument toggles setting. Change is in-memory and affects only future owned launches in current loaded session; active owned and attached browsers remain unchanged. Headless mode cannot provide visual supervision and must not be used for purchases, messages, publishing, permissions, or destructive actions.
+No argument toggles the setting. Changes persist and affect future owned launches; active owned and attached browsers remain unchanged. Headless mode shows no separate native browser window; use Pylon's live mirror for visual supervision. Purchases, messages, publishing, permissions, and destructive actions still require direct user supervision.
 
 Check pinned CLI readiness without launching a browser:
 

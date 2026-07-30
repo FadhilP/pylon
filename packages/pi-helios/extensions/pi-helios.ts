@@ -73,6 +73,17 @@ async function embeddedBrowserRequest(manager: BrowserSessionManager, request: E
     return embeddedState(manager, id, owner);
   }
 
+  if (request.action === "frame" && !manager.state(id, owner).controlled) {
+    const result = await manager.observeFrame(id, signal);
+    if (!result?.artifactPath) return embeddedState(manager, id, owner);
+    try {
+      const data = await manager.readArtifact(id, result.artifactPath, MAX_EMBEDDED_FRAME_BYTES);
+      return { ...embeddedState(manager, id, owner), frame: { mimeType: "image/png" as const, data: data.toString("base64") } };
+    } finally {
+      await rm(result.artifactPath, { force: true }).catch(() => {});
+    }
+  }
+
   let actions: BrowserAction[];
   switch (request.action) {
     case "frame": actions = [{ kind: "screenshot" }]; break;
@@ -274,9 +285,9 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       }
     })());
   });
-  let ownedHeaded = true;
+  let ownedHeaded = false;
   pi.on("session_start", async () => {
-    ownedHeaded = (await loadConfig(settingsPath)).headed ?? true;
+    ownedHeaded = (await loadConfig(settingsPath)).headed ?? false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",

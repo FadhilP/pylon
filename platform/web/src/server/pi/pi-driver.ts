@@ -2,7 +2,7 @@ import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -171,6 +171,10 @@ export interface UpdatePackageSettingsInput {
   settings: PackageSettingsReadModel;
 }
 
+export interface UpdateHookSettingsInput {
+  settings: HookSettingsReadModel;
+}
+
 export interface SetModelInput {
   provider: string;
   modelId: string;
@@ -292,6 +296,7 @@ export interface PiDriver {
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
+  listHookSettings?(): Promise<HookSettingsSnapshot>;
   prompt(input: PromptInput): Promise<AcceptedCommand>;
   queuePrompt(input: PromptInput): Promise<AcceptedCommand>;
   queuedPrompt(input: QueueMutationInput): Promise<QueuedPromptPayload>;
@@ -324,6 +329,7 @@ export interface PiDriver {
   updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
+  updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
   rebuildDiscoverIndex(): Promise<void>;
   setModel(input: SetModelInput): Promise<void>;
   setThinkingLevel(input: SetThinkingLevelInput): void;

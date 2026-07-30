@@ -1,14 +1,15 @@
 import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, UiRequestReadModel } from "../shared/protocol/events";
-import type { PackageSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
+import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
+import { HookSettingsFields } from "./hook-settings-fields";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 
-export type SettingsTab = "providers" | "packages" | "notifications" | "appearance";
+export type SettingsTab = "providers" | "packages" | "hooks" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "notifications", "appearance"];
+const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "hooks", "notifications", "appearance"];
 
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
@@ -16,8 +17,11 @@ interface SettingsDialogProps {
   providerAuth?: ProviderAuthReadModel;
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
+  hookSettings?: HookSettingsReadModel;
   loading: boolean;
+  hookLoading: boolean;
   busy: string;
+  hookBusy: boolean;
   disabled: boolean;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
@@ -29,9 +33,10 @@ interface SettingsDialogProps {
   onProviderCancel: () => void;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
+  onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, loading, busy, disabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, loading, hookLoading, busy, hookBusy, disabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
@@ -198,6 +203,11 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               </section>;
             })}</div>}
             {disabled && !loading && <p className="settings-note" role="status">Settings are available when every active session is idle.</p>}
+          </section>
+
+          <section id="settings-panel-hooks" className="settings-pane hooks-pane" role="tabpanel" aria-labelledby="settings-tab-hooks" hidden={activeTab !== "hooks"}>
+            <div className="settings-pane-header"><div><h2>Hooks</h2><p>Add workspace instructions at two predictable points in the agent lifecycle. Import Markdown or text snapshots, or write instructions directly.</p></div></div>
+            <HookSettingsFields settings={hookSettings} loading={hookLoading} disabled={disabled || hookBusy} onUpdate={onUpdateHooks} />
           </section>
 
           <section id="settings-panel-notifications" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden={activeTab !== "notifications"}>

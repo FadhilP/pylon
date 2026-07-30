@@ -12,7 +12,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
-import type { PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
@@ -21,6 +21,7 @@ import { ConversationPanel } from "./conversation-panel";
 import { BrowserPanel } from "./browser-panel";
 import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
+import { startsHeliosBrowser } from "../shared/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog, type SettingsTab } from "./settings-dialog";
@@ -111,6 +112,7 @@ export function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
+  const [browserMirrorRequest, setBrowserMirrorRequest] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
@@ -134,6 +136,9 @@ export function App() {
   const [packages, setPackages] = useState<PackageSummary[]>([]);
   const [packagesLoading, setPackagesLoading] = useState(true);
   const [packageBusy, setPackageBusy] = useState("");
+  const [hookSettings, setHookSettings] = useState<HookSettingsReadModel>();
+  const [hooksLoading, setHooksLoading] = useState(true);
+  const [hooksBusy, setHooksBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -146,6 +151,8 @@ export function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
   const previousRightPanel = useRef(rightPanel);
+  const browserToolSession = useRef<string | undefined>(undefined);
+  const observedBrowserTools = useRef(new Set<string>());
   const sessionListRequest = useRef(0);
   const sessionListApplied = useRef(false);
   const sessionPagesRef = useRef<SessionProjectPage[]>([]);
@@ -233,6 +240,28 @@ export function App() {
 
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
   useEffect(() => { setSelectedAgentId(undefined); }, [live.runtime?.sessionId]);
+  useEffect(() => {
+    const sessionId = live.runtime?.sessionId;
+    const tools = live.runtime?.conversation.tools ?? [];
+    if (!sessionId) return;
+    if (browserToolSession.current !== sessionId) {
+      browserToolSession.current = sessionId;
+      observedBrowserTools.current = new Set(tools.map((tool) => tool.id));
+      const runningStart = [...tools].reverse().find((tool) => tool.status === "running" && startsHeliosBrowser(tool));
+      setBrowserMirrorRequest(runningStart ? `${sessionId}:${runningStart.id}` : "");
+      if (runningStart) {
+        setSidebarOpen(false);
+        setRightPanel("browser");
+      }
+      return;
+    }
+    const start = [...tools].reverse().find((tool) => tool.status !== "failed" && !observedBrowserTools.current.has(tool.id) && startsHeliosBrowser(tool));
+    for (const tool of tools) observedBrowserTools.current.add(tool.id);
+    if (!start) return;
+    setBrowserMirrorRequest(`${sessionId}:${start.id}`);
+    setSidebarOpen(false);
+    setRightPanel("browser");
+  }, [live.runtime?.sessionId, live.runtime?.conversation.tools]);
   useEffect(() => {
     const sessionId = live.runtime?.sessionId;
     if (sessionId) runtimeStore.markSessionSeen(sessionId);
@@ -344,6 +373,24 @@ export function App() {
       if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) reportError(cause, "Unable to list packages");
     }).finally(() => {
       if (active) setPackagesLoading(false);
+    });
+    return () => { active = false; };
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
+
+  useEffect(() => {
+    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    let active = true;
+    const sessionId = live.runtime.sessionId;
+    const generation = live.runtime.sessionGeneration;
+    setHooksLoading(true);
+    void runtimeStore.listHookSettings().then((result) => {
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) setHookSettings(result.settings);
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Unable to load hook settings";
+      if (/session changed while listing hook settings|hook settings are stale/i.test(message)) return;
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) reportError(cause, "Unable to load hook settings");
+    }).finally(() => {
+      if (active) setHooksLoading(false);
     });
     return () => { active = false; };
   }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
@@ -679,6 +726,20 @@ export function App() {
     }
   };
 
+  const updateHookSettings = async (settings: HookSettingsReadModel) => {
+    if (hooksBusy) throw new Error("Another hook settings update is still saving");
+    setHooksBusy(true);
+    try {
+      await runtimeStore.updateHookSettings(settings);
+      setHookSettings(settings);
+    } catch (cause) {
+      reportError(cause, "Unable to update hook settings");
+      throw cause;
+    } finally {
+      setHooksBusy(false);
+    }
+  };
+
   return (
     <div
       ref={appShellRef}
@@ -917,6 +978,7 @@ export function App() {
           />}
           {rightPanel === "browser" && <BrowserPanel
             key={`browser:${live.runtime?.sessionId ?? "loading"}`}
+            mirrorRequest={browserMirrorRequest}
             onClose={() => setRightPanel(null)}
             onError={reportError}
           />}
@@ -968,8 +1030,11 @@ export function App() {
         providerAuth={live.runtime?.providerAuth}
         pendingUi={live.pendingUi}
         packages={packages}
+        hookSettings={hookSettings}
         loading={packagesLoading}
+        hookLoading={hooksLoading}
         busy={packageBusy}
+        hookBusy={hooksBusy}
         disabled={activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         models={live.runtime?.sessionControls.models ?? []}
         sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
@@ -984,6 +1049,7 @@ export function App() {
         onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
+        onUpdateHooks={updateHookSettings}
       />}
     </div>
   );

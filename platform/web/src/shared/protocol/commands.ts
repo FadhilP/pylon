@@ -1,4 +1,4 @@
-import type { DialogTimeoutSeconds, PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
+import type { DialogTimeoutSeconds, HookSettingsReadModel, PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
@@ -29,6 +29,7 @@ export const COMMAND_NAMES = [
   "timeline",
   "setPackageEnabled",
   "updatePackageSettings",
+  "updateHookSettings",
   "rebuildDiscoverIndex",
   "setModel",
   "setThinkingLevel",
@@ -101,6 +102,7 @@ export type WebCommand =
   | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
   | ({ type: "updatePackageSettings"; packageId: string; settings: PackageSettingsReadModel } & CommandBase)
+  | ({ type: "updateHookSettings"; settings: HookSettingsReadModel } & CommandBase)
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)

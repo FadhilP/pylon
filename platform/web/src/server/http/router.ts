@@ -85,6 +85,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/hooks") return await this.hookSettings(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-browser") return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
@@ -237,6 +238,16 @@ export class ServerTransport {
     if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
     const result = await this.driver.listPackages();
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing packages");
+    this.send(response, 200, result);
+  }
+
+  private async hookSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    if (!this.driver.listHookSettings) throw httpError(409, "hook settings are unavailable");
+    const result = await this.driver.listHookSettings();
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing hook settings");
     this.send(response, 200, result);
   }
 
@@ -534,6 +545,11 @@ export class ServerTransport {
         if (this.projection.pendingUi) return Promise.reject(httpError(409, "packages cannot change while a UI request is pending"));
         return this.driver.updatePackageSettings({ packageId: command.packageId, settings: command.settings })
           .then((result) => accepted(result.sessionGeneration));
+      case "updateHookSettings":
+        if (this.projection.pendingUi) return Promise.reject(httpError(409, "hook settings cannot change while a UI request is pending"));
+        if (!this.driver.updateHookSettings) return Promise.reject(httpError(409, "hook settings are unavailable"));
+        return this.driver.updateHookSettings({ settings: command.settings })
+          .then(() => accepted(command.expectedGeneration));
       case "rebuildDiscoverIndex":
         return this.driver.rebuildDiscoverIndex().then(() => accepted(command.expectedGeneration));
       case "setModel":

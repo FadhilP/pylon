@@ -6,10 +6,10 @@ import { WebSocket } from "ws";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
-import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput } from "../src/server/pi/pi-driver.ts";
+import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
 import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
@@ -52,6 +52,8 @@ class FakeDriver implements PiDriver {
   selectedModels: Array<{ provider: string; modelId: string }> = [];
   selectedThinking: string[] = [];
   packageSettingsUpdates: unknown[] = [];
+  hookSettingsUpdates: HookSettingsReadModel[] = [];
+  hookSettings: HookSettingsReadModel = { sessionStart: { enabled: false, sources: [] }, beforeAgentStart: { enabled: false, sources: [] } };
   indexRebuilds = 0;
   newSessionParent?: string;
   heliosRequests: HeliosBrowserInput[] = [];
@@ -84,6 +86,7 @@ class FakeDriver implements PiDriver {
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [], sessions: [], totalSessionCount: 0 });
   }
   listPackages(): Promise<PackageListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, packages: [{ id: "pi-test", name: "pi-test", description: "Test package", enabled: true, active: true, extensionCount: 1 }] }); }
+  listHookSettings(): Promise<HookSettingsSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, settings: structuredClone(this.hookSettings) }); }
   heliosBrowser(input: HeliosBrowserInput) {
     this.heliosRequests.push(input);
     return Promise.resolve({ version: 1 as const, sessionGeneration: this.current.sessionGeneration, active: true, ownership: "owned" as const, state: "ready" as const, controlled: true });
@@ -156,6 +159,11 @@ class FakeDriver implements PiDriver {
   updatePackageSettings(input: unknown): Promise<ReplacementResult> {
     this.packageSettingsUpdates.push(input);
     return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration });
+  }
+  updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
+    this.hookSettings = structuredClone(input.settings);
+    this.hookSettingsUpdates.push(structuredClone(input.settings));
+    return Promise.resolve();
   }
   rebuildDiscoverIndex(): Promise<void> { this.indexRebuilds++; return Promise.resolve(); }
   setModel(input: { provider: string; modelId: string }): Promise<void> {
@@ -534,6 +542,15 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(settingsCommand) })).status, 200);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(settingsCommand) })).status, 200);
     assert.equal(driver.packageSettingsUpdates.length, 1);
+    const hooks = await fetch(`${origin}/api/v1/hooks`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(hooks.status, 200);
+    assert.equal((await body(hooks)).sessionGeneration, 1);
+    const hookSettings = { sessionStart: { enabled: true, sources: [{ id: "start", name: "Start", kind: "text", content: "hello" }] }, beforeAgentStart: { enabled: false, sources: [] } };
+    const hookCommand = { type: "updateHookSettings", settings: hookSettings, commandId: "hooks-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(hookCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(hookCommand) })).status, 200);
+    assert.equal(driver.hookSettingsUpdates.length, 1);
+    assert.deepEqual(driver.hookSettings, hookSettings);
     const indexCommand = { type: "rebuildDiscoverIndex", commandId: "index-once", expectedGeneration: 1 };
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);

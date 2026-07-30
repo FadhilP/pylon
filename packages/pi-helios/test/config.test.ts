@@ -4,6 +4,18 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config.ts";
+import { readSettings, updateSettings } from "../src/web-settings.ts";
+
+test("Helios web settings default headless and preserve explicit visibility", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-helios-web-settings-"));
+  try {
+    assert.deepEqual(await readSettings({ agentDir }), { kind: "helios", headed: false });
+    await updateSettings({ kind: "helios", headed: true }, { agentDir });
+    assert.deepEqual(await readSettings({ agentDir }), { kind: "helios", headed: true });
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
 
 test("Helios visibility config persists and quarantines invalid input", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-helios-config-"));

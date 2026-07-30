@@ -3,7 +3,18 @@ import assert from "node:assert/strict";
 import { ACTIVE_FRAME_INTERVAL_MS, IDLE_FRAME_INTERVAL_MS, framePollingDelay } from "../src/shared/browser-polling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+
+test("hook settings protocol accepts bounded exact settings", () => {
+  const settings = {
+    sessionStart: { enabled: true, sources: [{ id: "start", name: "Start", kind: "text", content: "hello" }] },
+    beforeAgentStart: { enabled: false, sources: [] },
+  };
+  assert.equal(validateCommand({ type: "updateHookSettings", settings, commandId: "hooks", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateHookSettings", settings: { ...settings, extra: true }, commandId: "hooks", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateHookSettings", settings: { ...settings, sessionStart: { ...settings.sessionStart, sources: [{ ...settings.sessionStart.sources[0], content: "x".repeat(64 * 1024 + 1) }] } }, commandId: "hooks", expectedGeneration: 1 }).ok, false);
+  assert.equal(isHookSettingsSnapshot({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, settings }), true);
+});
 
 test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_001), ACTIVE_FRAME_INTERVAL_MS);

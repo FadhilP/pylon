@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -83,6 +83,27 @@ function validDialogTimeout(value: unknown, allowInherit = false): boolean {
   return value === null
     || allowInherit && value === "inherit"
     || Number.isSafeInteger(value) && (value as number) >= 15 && (value as number) <= 86_400;
+}
+
+export function validHookSettings(value: unknown): value is HookSettingsReadModel {
+  if (!record(value) || Object.keys(value).length !== 2
+    || !record(value.sessionStart) || !record(value.beforeAgentStart)) return false;
+  let totalBytes = 0;
+  const hook = (item: Record<string, unknown>) => {
+    if (Object.keys(item).length !== 2 || typeof item.enabled !== "boolean"
+      || !Array.isArray(item.sources) || item.sources.length > 20) return false;
+    const ids = new Set<string>();
+    for (const source of item.sources) {
+      if (!record(source) || Object.keys(source).length !== 4 || !identifier(source.id) || !boundedString(source.name, 200)
+        || (source.kind !== "file" && source.kind !== "text") || typeof source.content !== "string") return false;
+      const bytes = new TextEncoder().encode(source.content).byteLength;
+      if (bytes > 64 * 1024 || ids.has(source.id)) return false;
+      ids.add(source.id);
+      totalBytes += bytes;
+    }
+    return true;
+  };
+  return hook(value.sessionStart) && hook(value.beforeAgentStart) && totalBytes <= 96 * 1024;
 }
 
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
@@ -209,6 +230,9 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     if (!identifier(value.packageId)) return { ok: false, error: "invalid packageId" };
     if (!validPackageSettings(value.settings)) return { ok: false, error: "invalid package settings" };
   }
+  if (value.type === "updateHookSettings" && !validHookSettings(value.settings)) {
+    return { ok: false, error: "invalid hook settings" };
+  }
   if (value.type === "updateProjectWorktreeSettings"
     && (typeof value.setupCommand !== "string" || value.setupCommand.length > 2_000)) {
     return { ok: false, error: "invalid worktree setup command" };
@@ -275,6 +299,11 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
 
   return { ok: true, value: value as unknown as WebCommand };
+}
+
+export function isHookSettingsSnapshot(value: unknown): value is HookSettingsSnapshot {
+  return record(value) && value.protocolVersion === PROTOCOL_VERSION
+    && generation(value.sessionGeneration) && validHookSettings(value.settings);
 }
 
 export function isPackageListSnapshot(value: unknown): value is PackageListSnapshot {

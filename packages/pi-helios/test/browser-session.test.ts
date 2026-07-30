@@ -104,6 +104,34 @@ test("interactive lease is owned-only, excludes agent actions, and releases held
   await attached.close("interactive-attached", "detach");
 });
 
+test("passive frames do not acquire control or queue behind agent work", async () => {
+  let releaseSnapshot!: () => void;
+  const snapshotGate = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+  const log: string[] = [];
+  const cli = fakeCli(log);
+  cli.run = async (_session: string, action: any) => {
+    log.push(action.kind);
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "snapshot") await snapshotGate;
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("passive-mirror");
+  const agentOperation = manager.operate("passive-mirror", { kind: "snapshot" });
+  assert.equal(await manager.observeFrame("passive-mirror"), undefined);
+  releaseSnapshot();
+  await agentOperation;
+  assert.equal((await manager.observeFrame("passive-mirror"))?.action, "screenshot");
+  assert.equal(manager.state("passive-mirror", "web:tab-one").controlled, false);
+  await manager.operate("passive-mirror", { kind: "navigate", url: "https://example.com" });
+  await manager.close("passive-mirror", "close");
+
+  const attached = new BrowserSessionManager(exec as any, async () => fakeCli([]));
+  await attached.attachCdp("passive-attached", "http://127.0.0.1:9222");
+  await assert.rejects(attached.observeFrame("passive-attached"), /only for Helios-owned/);
+  await attached.close("passive-attached", "detach");
+});
+
 test("failed input keeps the lease until reset succeeds and idle expiry releases input", async () => {
   let failMouseUp = true;
   const log: string[] = [];

@@ -4,9 +4,9 @@ import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope"
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -599,6 +599,25 @@ export class RuntimeEventStore {
     return packages;
   }
 
+  async listHookSettings(): Promise<HookSettingsSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const hooks = await this.api.hooks();
+    if (!isHookSettingsSnapshot(hooks) || hooks.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Hook settings are stale or invalid");
+    }
+    return hooks;
+  }
+
+  async updateHookSettings(settings: HookSettingsReadModel): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updateHookSettings",
+      settings,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async heliosBrowser(input: Omit<HeliosBrowserCommand, "expectedGeneration">, signal?: AbortSignal): Promise<HeliosBrowserResult> {
     const runtime = this.requireReadyRuntime();
     const result = await this.api.heliosBrowser({ ...input, expectedGeneration: runtime.sessionGeneration }, signal);
@@ -805,7 +824,7 @@ export class RuntimeEventStore {
   private async sendCommand(command: WebCommand): Promise<AcceptedCommand> {
     try { return await this.api.command(command); }
     catch (error) {
-      if (!["setPackageEnabled", "updatePackageSettings", "timeline", "updateContinuityMemory", "deleteContinuityMemory"].includes(command.type)) {
+      if (!["setPackageEnabled", "updatePackageSettings", "updateHookSettings", "timeline", "updateContinuityMemory", "deleteContinuityMemory"].includes(command.type)) {
         this.set({
           ...this.snapshot,
           error: error instanceof Error ? error.message : "Command failed",

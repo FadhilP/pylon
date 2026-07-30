@@ -30,7 +30,7 @@ import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
 import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -68,6 +68,7 @@ import type {
   TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
+  UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
@@ -75,6 +76,8 @@ import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-fa
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
+import { HookInjectionBridge } from "./hook-injection.ts";
+import { HookSettingsStore } from "./hook-settings.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
 import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
@@ -301,6 +304,8 @@ export class SessionRuntime implements PiDriver {
   private readonly sessionIndex = new SessionIndex();
   private readonly promptAttachments = new PromptAttachmentBridge();
   private readonly workspaceApplyTool = new WorkspaceApplyTool();
+  private hookSettings?: HookSettingsStore;
+  private hookInjection?: HookInjectionBridge;
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
   private workDurationsLeafId: string | null | undefined;
@@ -352,10 +357,13 @@ export class SessionRuntime implements PiDriver {
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     this.gitBranch = this.readDisplayGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
-    const [packageState, modelRuntime] = await Promise.all([
+    this.hookSettings = new HookSettingsStore(target.agentDir);
+    const [packageState, modelRuntime, hookSettings] = await Promise.all([
       this.packageCatalog.scan(),
       this.options.modelRuntime ?? createPylonModelRuntime(target.agentDir),
+      this.hookSettings.read(),
     ]);
+    this.hookInjection = new HookInjectionBridge(hookSettings);
     this.packageState = packageState;
     this.modelRuntime = modelRuntime;
     this.storedProviderIds = new Set((await modelRuntime.listCredentials()).map((credential) => credential.providerId));
@@ -364,7 +372,7 @@ export class SessionRuntime implements PiDriver {
     const createRuntime = await createPylonRuntimeFactory({
       agentDir: target.agentDir,
       additionalExtensionPaths: this.packageState.extensionPaths,
-      extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, ...(this.options.extensionFactories ?? [])],
+      extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, this.hookInjection!.extension, ...(this.options.extensionFactories ?? [])],
       eventBus: this.eventBus,
       modelRuntime,
     });
@@ -553,6 +561,12 @@ export class SessionRuntime implements PiDriver {
       sessionGeneration: this.gate.generation,
       packages,
     };
+  }
+
+  async listHookSettings(): Promise<HookSettingsSnapshot> {
+    const store = this.hookSettings;
+    if (!store || !this.gate.ready) throw new Error("runtime is not ready");
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.gate.generation, settings: await store.read() };
   }
 
   prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -1124,6 +1138,16 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
+  async updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
+    const store = this.hookSettings;
+    const bridge = this.hookInjection;
+    if (!store || !bridge || !this.gate.ready || !this.canSleep()) {
+      throw new Error("hook settings can only change while the session is idle");
+    }
+    await store.update(input.settings);
+    bridge.update(input.settings);
+  }
+
   async rebuildDiscoverIndex(): Promise<void> {
     const runtime = this.requireRuntime();
     if (!this.gate.ready || this.indexUpdate || !this.canSleep()) {
@@ -1178,7 +1202,7 @@ export class SessionRuntime implements PiDriver {
       const nextFactory = await createPylonRuntimeFactory({
         agentDir: this.target.agentDir,
         additionalExtensionPaths: change.next.extensionPaths,
-        extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, ...(this.options.extensionFactories ?? [])],
+        extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, this.hookInjection!.extension, ...(this.options.extensionFactories ?? [])],
         eventBus: this.eventBus,
       });
       this.packageState = change.next;

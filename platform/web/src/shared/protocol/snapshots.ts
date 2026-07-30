@@ -338,3 +338,29 @@ export interface PackageListSnapshot {
   sessionGeneration: number;
   packages: PackageSummary[];
 }
+
+export type HookKind = "file" | "text";
+
+export interface HookSourceReadModel {
+  id: string;
+  name: string;
+  kind: HookKind;
+  content: string;
+}
+
+export interface HookReadModel {
+  enabled: boolean;
+  sources: HookSourceReadModel[];
+}
+
+/** The only web-configurable lifecycle hooks. */
+export interface HookSettingsReadModel {
+  sessionStart: HookReadModel;
+  beforeAgentStart: HookReadModel;
+}
+
+export interface HookSettingsSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  settings: HookSettingsReadModel;
+}

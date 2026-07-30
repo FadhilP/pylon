@@ -13,7 +13,7 @@ const WINDOW = { handle: 42, processId: 7, title: "Visual Studio Code" };
 const SETTINGS_PATH = join(tmpdir(), `pi-helios-test-${process.pid}.json`);
 after(() => rm(SETTINGS_PATH, { force: true }));
 
-function runtime(pi: Record<string, unknown> = {}) {
+function runtime(pi: Record<string, unknown> = {}, configPath = SETTINGS_PATH) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
@@ -30,7 +30,7 @@ function runtime(pi: Record<string, unknown> = {}) {
     registerTool(value: any) { tools.set(value.name, value); },
     registerCommand(name: string, value: any) { commands.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any, { configPath: SETTINGS_PATH });
+  } as any, { configPath });
   return { tools, commands, handlers, eventHandlers };
 }
 
@@ -90,6 +90,21 @@ test("advertises compact deferred browser usages to Pylon", async () => {
     helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
     helios_capture: "capture a consented Windows window for visual debugging",
   });
+});
+
+test("owned launches default to headless when visibility is not configured", async () => {
+  let openArgs: string[] = [];
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const cliCommand = args.find((arg) => ["open", "tab-list", "close"].includes(arg));
+    if (cliCommand === "open") openArgs = args;
+    if (cliCommand === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } }, `${SETTINGS_PATH}.missing`);
+  const ctx = context();
+  await handlers.get("session_start")![0]({}, ctx);
+  await tools.get("helios_browser").execute("start", { action: "start" }, undefined, undefined, ctx);
+  assert.ok(!openArgs.includes("--headed"));
+  await tools.get("helios_browser").execute("close", { action: "close" }, undefined, undefined, ctx);
 });
 
 test("visibility command changes future owned launches only", async () => {
@@ -154,6 +169,43 @@ test("embedded browser bridge launches headless, returns an ephemeral frame, and
   assert.ok(commands.includes("resize"));
   assert.ok(commands.includes("screenshot"));
   assert.ok(commands.includes("close"));
+});
+
+test("embedded panel passively mirrors an agent-owned browser without taking control", async () => {
+  const commands: string[] = [];
+  const { tools, eventHandlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const action = args.find((arg) => ["open", "goto", "tab-list", "screenshot", "close"].includes(arg)) ?? "unknown";
+    commands.push(action);
+    if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (action === "screenshot") {
+      const filename = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(filename, PNG);
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } }, `${SETTINGS_PATH}.passive`);
+  const ctx = context();
+  await tools.get("helios_browser").execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+
+  const call = async (action: string) => {
+    let response: Promise<any> | undefined;
+    eventHandlers.get("pylon:helios-browser-request")![0]({
+      version: 1,
+      sessionId: "test-session",
+      owner: "web:tab-one",
+      action,
+      claim: () => true,
+      respond(value: Promise<unknown>) { response = Promise.resolve(value); },
+    });
+    assert.ok(response);
+    return response;
+  };
+  assert.equal((await call("status")).controlled, false);
+  const frame = await call("frame");
+  assert.equal(frame.controlled, false);
+  assert.equal(Buffer.from(frame.frame.data, "base64").equals(PNG), true);
+  await tools.get("helios_browser").execute("navigate", { action: "navigate", url: "https://example.com/next" }, undefined, undefined, ctx);
+  assert.ok(commands.includes("goto"));
+  await tools.get("helios_browser").execute("close", { action: "close" }, undefined, undefined, ctx);
 });
 
 test("doctor checks pinned CLI without launching a browser", async () => {
