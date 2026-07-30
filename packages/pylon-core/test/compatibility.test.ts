@@ -35,6 +35,9 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     const commands = new Map<string, any>();
     const tools = new Map<string, any>();
     const model = { provider: "provider", id: "base" };
+    const scopedModel = { provider: "provider", id: "scoped" };
+    const models = new Map([["provider/base", model], ["provider/scoped", scopedModel]]);
+    const selections: Array<{ title: string; options: string[] }> = [];
     const pi: any = {
       events,
       getActiveTools: () => [...active],
@@ -60,15 +63,19 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       hasUI: false,
       mode: "json",
       model,
+      scopedModels: [{ model: scopedModel, thinkingLevel: "high" }],
       modelRegistry: {
-        find: (provider: string, id: string) =>
-          provider === model.provider && id === model.id ? model : undefined,
+        find: (provider: string, id: string) => models.get(`${provider}/${id}`),
         hasConfiguredAuth: () => true,
         getAvailable: () => [model],
       },
       sessionManager: { getSessionId: () => "compat-session" },
       ui: {
-        notify: () => {}, setStatus: () => {}, setWidget: () => {}, confirm: async () => false,
+        notify: () => {}, setStatus: () => {}, setWidget: () => {}, confirm: async () => true,
+        select: async (title: string, options: string[]) => {
+          selections.push({ title, options });
+          return options[0];
+        },
       },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
@@ -84,6 +91,43 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     assert.ok(active.includes("grunt"));
     assert.ok(active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
+
+    ctx.mode = "tui";
+    await commands.get("advisor").handler("", ctx);
+    await commands.get("grunt").handler("", ctx);
+    await commands.get("scout").handler("", ctx);
+    await commands.get("continuity").handler("planner", ctx);
+    assert.deepEqual(
+      selections.filter(({ title }) => title.endsWith("model")),
+      [
+        { title: "Advisor model", options: ["provider/scoped"] },
+        { title: "Grunt worker model", options: ["provider/scoped"] },
+        { title: "Scout model", options: ["provider/scoped"] },
+        { title: "planner model", options: ["provider/scoped"] },
+      ],
+    );
+    assert.deepEqual(
+      selections.filter(({ title }) => title.includes("thinking level")).map(({ title }) => title),
+      ["Advisor thinking level", "Scout thinking level", "planner thinking level"],
+    );
+
+    selections.length = 0;
+    ctx.scopedModels = [];
+    await commands.get("advisor").handler("", ctx);
+    await commands.get("grunt").handler("", ctx);
+    await commands.get("scout").handler("", ctx);
+    await commands.get("continuity").handler("planner", ctx);
+    assert.deepEqual(
+      selections.filter(({ title }) => title.endsWith("model")),
+      [
+        { title: "Advisor model", options: ["provider/base"] },
+        { title: "Grunt worker model", options: ["provider/base"] },
+        { title: "Scout model", options: ["provider/base"] },
+        { title: "planner model", options: ["provider/base"] },
+      ],
+    );
+    ctx.mode = "json";
+
     const capabilities: any[] = [];
     events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => capabilities.push(value) });
     assert.equal(capabilities.length, 1);

@@ -565,7 +565,10 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
         selected =
           (await ctx.ui.select(
             "Advisor model",
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
         if (!selected) return;
       }

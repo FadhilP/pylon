@@ -1459,7 +1459,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         selected =
           (await ctx.ui.select(
             `${role} model`,
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
       if (!selected) {
         ctx.ui.notify(

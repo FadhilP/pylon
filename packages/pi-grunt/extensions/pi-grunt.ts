@@ -473,7 +473,13 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
       let selected = value;
       if (!selected) {
         if (ctx.mode !== "tui") { ctx.ui.notify("Usage: /grunt <provider/model-id>|isolated|direct|dynamic|status|reset|disable", "info"); return; }
-        selected = (await ctx.ui.select("Grunt worker model", ctx.modelRegistry.getAvailable().map(modelName))) ?? "";
+        selected = (await ctx.ui.select(
+          "Grunt worker model",
+          (ctx.scopedModels.length
+            ? ctx.scopedModels.map(({ model }) => model)
+            : ctx.modelRegistry.getAvailable()
+          ).map(modelName),
+        )) ?? "";
         if (!selected) return;
       }
       const ref = parseModelRef(selected);

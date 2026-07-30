@@ -751,7 +751,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         selected =
           (await ctx.ui.select(
             "Scout model",
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
         if (!selected) return;
       }
