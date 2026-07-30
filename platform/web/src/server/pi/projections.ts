@@ -615,9 +615,9 @@ export class RuntimeProjection {
     }
     if (kind === "agent_start") {
       if (raw.metrics) this.metrics(object(raw.metrics));
-      const startedAt = typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
+      const startedAt = this.runtime.conversation.workStartedAt ?? (typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
         ? raw.workStartedAt
-        : new Date().toISOString();
+        : new Date().toISOString());
       this.runtime.conversation.workStartedAt = startedAt;
       this.runtime.conversation.workModelName = text(raw.modelName, 200) || undefined;
       this.runtime.conversation.workThinkingLevel = thinkingLevel(raw.thinkingLevel);
@@ -640,24 +640,27 @@ export class RuntimeProjection {
       const durationMs = Number.isSafeInteger(raw.workDurationMs)
         ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, raw.workDurationMs as number))
         : undefined;
+      const willRetry = raw.willRetry === true && raw.stopped !== true;
       const assistant = [...this.messages.values()].reverse().find((message) => message.role === "assistant");
       const turnId = id(raw.turnId, "");
-      if (assistant && turnId) {
+      if (!willRetry && assistant && turnId) {
         this.turnMessages.set(turnId, assistant.id);
         trimMap(this.turnMessages, 20);
       }
-      if (assistant && durationMs !== undefined) {
+      if (!willRetry && assistant && durationMs !== undefined) {
         assistant.workDurationMs = durationMs;
         assistant.modelName = text(raw.modelName, 200) || undefined;
         assistant.thinkingLevel = thinkingLevel(raw.thinkingLevel);
         this.messages.set(assistant.id, assistant);
       }
-      this.runtime.conversation.workStartedAt = undefined;
-      this.runtime.conversation.workModelName = undefined;
-      this.runtime.conversation.workThinkingLevel = undefined;
+      if (!willRetry) {
+        this.runtime.conversation.workStartedAt = undefined;
+        this.runtime.conversation.workModelName = undefined;
+        this.runtime.conversation.workThinkingLevel = undefined;
+      }
       this.runtime.conversation.stopping = false;
       const stopped = raw.stopped === true;
-      const agentError = raw.willRetry === true ? undefined : text(raw.errorMessage, 1_000) || undefined;
+      const agentError = willRetry ? undefined : text(raw.errorMessage, 1_000) || undefined;
       this.runtime.conversation.agentError = agentError;
       this.runtime.conversation.stoppedRun = stopped && durationMs !== undefined
         ? {
@@ -669,7 +672,7 @@ export class RuntimeProjection {
           }
         : undefined;
       this.publish(`agent.${kind.slice(6)}`, {
-        willRetry: raw.willRetry === true,
+        willRetry,
         message: agentError,
         durationMs,
         turnId,

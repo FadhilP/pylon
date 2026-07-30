@@ -524,6 +524,35 @@ test("projection publishes live session names and agent timing metadata", () => 
   assert.ok(published.some((event) => event.type === "turn.changes"));
 });
 
+test("projection keeps one active timer across retry attempts", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  const originalStart = "2026-01-01T00:00:00.000Z";
+
+  projection.apply(session({ type: "agent_start", turnId: "turn-1", workStartedAt: originalStart, modelName: "GPT-5" }));
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Temporary failure" }] } }));
+  projection.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Temporary failure" }] } }));
+  projection.apply(session({ type: "agent_end", turnId: "turn-1", workDurationMs: 1_000, willRetry: true }));
+
+  assert.equal(projection.snapshot().conversation.workStartedAt, originalStart);
+  assert.equal(projection.snapshot().conversation.messages.at(-1)?.workDurationMs, undefined);
+
+  projection.apply(session({ type: "agent_start", turnId: "turn-1", workStartedAt: "2026-01-01T00:00:10.000Z", modelName: "GPT-5" }));
+  assert.equal(projection.snapshot().conversation.workStartedAt, originalStart);
+
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  projection.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  projection.apply(session({ type: "agent_end", turnId: "turn-1", workDurationMs: 12_000, willRetry: false }));
+
+  assert.equal(projection.snapshot().conversation.workStartedAt, undefined);
+  assert.equal(projection.snapshot().conversation.messages.at(-1)?.workDurationMs, 12_000);
+
+  projection.apply(session({ type: "agent_start", turnId: "turn-2", workStartedAt: originalStart }));
+  projection.apply(session({ type: "agent_end", turnId: "turn-2", workDurationMs: 500, willRetry: true, stopped: true }));
+  assert.equal(projection.snapshot().conversation.workStartedAt, undefined);
+  assert.equal((published.at(-1)?.payload as { willRetry?: boolean }).willRetry, false);
+});
+
 test("projection persists terminal agent errors and clears them for retries and new runs", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));

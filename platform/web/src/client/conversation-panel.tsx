@@ -1,6 +1,6 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport } from "../shared/transcript";
 import { formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
@@ -12,6 +12,7 @@ import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../sh
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor } from "./agent-color";
+import { matrixSelectionAtPoint, matrixThinkingAxis, moveMatrixSelection } from "../shared/model-matrix";
 import { AnimatedDetails } from "./animated-details";
 import { UiDialog } from "./ui-dialog";
 
@@ -625,6 +626,8 @@ export function ConversationPanel({
             />}
           </div>;
         })}
+        {runtime.conversation.retry.active && <p className="conversation-note transcript-note" role="status">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
+        {runtime.conversation.compaction.active && <p className="conversation-note transcript-note" role="status">Compacting context…</p>}
         {runtime.conversation.workStartedAt ? <WorkTimer
           startedAt={runtime.conversation.workStartedAt}
           modelName={runtime.conversation.workModelName}
@@ -666,8 +669,6 @@ export function ConversationPanel({
         onCancel={() => setFork(undefined)}
         onConfirm={(name, mode) => void submitFork(name, mode)}
       />}
-      {runtime?.conversation.retry.active && <p className="conversation-note">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
-      {runtime?.conversation.compaction.active && <p className="conversation-note">Compacting context…</p>}
       {runtime && <ExtensionUiSurface runtime={runtime} />}
       {runtime?.commandResult && <div className={`composer-surface command-result is-${runtime.commandResult.severity}`} role="status">
         <div><strong>/{runtime.commandResult.command}</strong><span>{runtime.commandResult.output || "Command completed with no output."}</span></div>
@@ -924,6 +925,13 @@ function PlusMenu({
   </div>;
 }
 
+function matrixThinkingLabel(level: ThinkingLevelReadModel): string {
+  if (level === "minimal") return "Min";
+  if (level === "medium") return "Med";
+  if (level === "xhigh") return "XH";
+  return thinkingLabel(level);
+}
+
 function ModelControl({
   controls,
   open,
@@ -943,22 +951,33 @@ function ModelControl({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const matrixRef = useRef<HTMLDivElement>(null);
+  const matrixBodyRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLSpanElement>(null);
+  const dragStartRef = useRef<{ modelKey: string; level: ThinkingLevelReadModel } | undefined>(undefined);
+  const applyingRef = useRef(false);
+  const queuedSelectionRef = useRef<{ model: ModelOptionReadModel; level: ThinkingLevelReadModel } | undefined>(undefined);
   const [modelKey, setModelKey] = useState("");
   const [level, setLevel] = useState<ThinkingLevelReadModel>("off");
-  const selectedModel = controls?.models.find((model) => `${model.provider}/${model.id}` === modelKey);
-  const levels = selectedModel?.thinkingLevels ?? [];
-  const levelIndex = Math.max(0, levels.indexOf(level));
+  const [dragging, setDragging] = useState(false);
+  const models = controls?.models ?? [];
+  const axisLevels = useMemo(() => matrixThinkingAxis(models), [controls?.models]);
+  const selectedModelIndex = Math.max(0, models.findIndex((model) => `${model.provider}/${model.id}` === modelKey));
+  const selectedModel = models[selectedModelIndex];
+  const selectedLevelIndex = Math.max(0, axisLevels.indexOf(level));
+  const selectedCellId = `model-matrix-cell-${selectedModelIndex}-${selectedLevelIndex}`;
 
   useEffect(() => {
     if (!open) return;
     const selectedControls = controls?.pending ?? controls;
     const currentKey = selectedControls?.model ? `${selectedControls.model.provider}/${selectedControls.model.id}` : "";
-    const currentModel = controls?.models.find((model) => `${model.provider}/${model.id}` === currentKey);
+    const currentModel = models.find((model) => `${model.provider}/${model.id}` === currentKey) ?? models[0];
     const availableLevels = currentModel?.thinkingLevels ?? [];
-    setModelKey(currentKey);
-    setLevel(availableLevels.includes(selectedControls?.thinkingLevel ?? "off")
+    const currentLevel = availableLevels.includes(selectedControls?.thinkingLevel ?? "off")
       ? selectedControls?.thinkingLevel ?? "off"
-      : availableLevels[0] ?? "off");
+      : availableLevels[0] ?? "off";
+    setModelKey(currentModel ? `${currentModel.provider}/${currentModel.id}` : "");
+    setLevel(currentLevel);
     const pointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onClose();
     };
@@ -970,33 +989,103 @@ function ModelControl({
     };
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("keydown", keyDown);
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>("[aria-current=true]")?.focus());
+    requestAnimationFrame(() => {
+      rootRef.current?.querySelector<HTMLElement>('[data-active-model="true"]')?.scrollIntoView({ block: "nearest" });
+      matrixRef.current?.focus();
+    });
     return () => {
       document.removeEventListener("pointerdown", pointerDown);
       document.removeEventListener("keydown", keyDown);
     };
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open || !thumbRef.current || !matrixBodyRef.current) return;
+    const positionThumb = () => {
+      const cell = document.getElementById(selectedCellId);
+      const thumb = thumbRef.current;
+      const body = matrixBodyRef.current;
+      if (!cell || !thumb || !body) return;
+      if (!dragging) cell.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const cellRect = cell.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      const transform = `translate3d(${cellRect.left - bodyRect.left + cellRect.width / 2}px, ${cellRect.top - bodyRect.top + cellRect.height / 2}px, 0) translate(-50%, -50%)`;
+      if (!thumb.dataset.positioned) {
+        thumb.style.transition = "none";
+        thumb.style.transform = transform;
+        thumb.dataset.positioned = "true";
+        requestAnimationFrame(() => thumb.style.removeProperty("transition"));
+        return;
+      }
+      thumb.style.transform = transform;
+    };
+    positionThumb();
+    const resize = new ResizeObserver(positionThumb);
+    resize.observe(matrixBodyRef.current);
+    return () => resize.disconnect();
+  }, [dragging, open, selectedCellId]);
+
   const applySelection = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel) => {
-    void onApply(model, nextLevel).catch(() => {
-      // The shared toast reports the rejected mutation.
-    });
+    queuedSelectionRef.current = { model, level: nextLevel };
+    if (applyingRef.current) return;
+    applyingRef.current = true;
+    void (async () => {
+      try {
+        while (queuedSelectionRef.current) {
+          const next = queuedSelectionRef.current;
+          queuedSelectionRef.current = undefined;
+          try {
+            await onApply(next.model, next.level);
+          } catch {
+            // The shared toast reports the rejected mutation.
+          }
+        }
+      } finally {
+        applyingRef.current = false;
+      }
+    })();
   };
-  const chooseModel = (model: ModelOptionReadModel) => {
-    const nextLevels = model.thinkingLevels ?? [];
-    const nextLevel = nextLevels.includes(level) ? level : nextLevels[0] ?? "off";
+  const select = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel, apply: boolean) => {
     setModelKey(`${model.provider}/${model.id}`);
     setLevel(nextLevel);
-    applySelection(model, nextLevel);
+    if (apply) applySelection(model, nextLevel);
   };
-  const navigateModels = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!["ArrowDown", "ArrowUp"].includes(event.key) || event.target instanceof HTMLInputElement) return;
-    const buttons = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>("[data-model-option]") ?? [])];
-    if (!buttons.length) return;
+  const selectionFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const body = matrixBodyRef.current;
+    if (!body) return undefined;
+    const rect = body.getBoundingClientRect();
+    const firstCell = document.getElementById("model-matrix-cell-0-0")?.getBoundingClientRect();
+    const lastCell = document.getElementById(`model-matrix-cell-0-${axisLevels.length - 1}`)?.getBoundingClientRect();
+    if (!firstCell || !lastCell) return undefined;
+    return matrixSelectionAtPoint(
+      models,
+      axisLevels,
+      (event.clientX - firstCell.left) / (lastCell.right - firstCell.left),
+      (event.clientY - rect.top) / rect.height,
+    );
+  };
+  const cancelDrag = () => {
+    const start = dragStartRef.current;
+    dragStartRef.current = undefined;
+    setDragging(false);
+    if (!start) return;
+    const model = models.find((item) => `${item.provider}/${item.id}` === start.modelKey);
+    if (model) select(model, start.level, false);
+  };
+  const moveSelection = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const moves: Record<string, [number, number]> = {
+      ArrowDown: [1, 0],
+      ArrowLeft: [0, -1],
+      ArrowRight: [0, 1],
+      ArrowUp: [-1, 0],
+    };
+    const move = moves[event.key];
+    if (!move || !selectedModel) return;
     event.preventDefault();
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const offset = event.key === "ArrowDown" ? 1 : -1;
-    buttons[(Math.max(0, current) + offset + buttons.length) % buttons.length]?.focus();
+    const next = moveMatrixSelection(models, axisLevels, selectedModelIndex, level, move[0], move[1]);
+    if (!next) return;
+    const nextKey = `${next.model.provider}/${next.model.id}`;
+    if (nextKey !== modelKey || next.level !== level) select(next.model, next.level, true);
   };
 
   return <div ref={rootRef} className="composer-popover-root model-control">
@@ -1004,7 +1093,7 @@ function ModelControl({
       ref={triggerRef}
       className="model-trigger"
       type="button"
-      disabled={disabled || !controls?.models.length}
+      disabled={disabled || !models.length}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={onToggle}
@@ -1013,44 +1102,92 @@ function ModelControl({
       {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && <small>{thinkingLabel(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel ?? "off")}</small>}
       <IconChevronDown size={14} />
     </button>
-    {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy} onKeyDown={navigateModels}>
-      <div className="model-options" role="listbox" aria-label="Models">
-        {controls?.models.map((model) => {
-          const key = `${model.provider}/${model.id}`;
-          return <button
-            type="button"
-            role="option"
-            data-model-option
-            aria-selected={key === modelKey}
-            aria-current={key === modelKey}
-            key={key}
-            onClick={() => chooseModel(model)}
-          >
-            <span>{model.name}</span>
-            {key === modelKey && <IconCheck size={15} />}
-          </button>;
-        })}
-      </div>
-      <div className="thinking-slider">
-        <span>Thinking</span>
-        <strong>{thinkingLabel(levels[levelIndex] ?? "off")}</strong>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(0, levels.length - 1)}
-          step={1}
-          value={levelIndex}
-          disabled={levels.length < 2}
-          aria-label="Thinking level"
-          aria-valuetext={thinkingLabel(levels[levelIndex] ?? "off")}
-          onChange={(event) => {
-            const nextLevel = levels[Number(event.target.value)] ?? "off";
-            setLevel(nextLevel);
-            if (selectedModel) applySelection(selectedModel, nextLevel);
+    {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy}>
+      <div
+        ref={matrixRef}
+        className={`model-matrix${dragging ? " is-dragging" : ""}`}
+        role="grid"
+        tabIndex={0}
+        aria-label="Model and thinking selector"
+        aria-rowcount={models.length + 1}
+        aria-colcount={axisLevels.length + 1}
+        aria-activedescendant={selectedCellId}
+        aria-describedby="model-matrix-help"
+        style={{ "--matrix-level-count": axisLevels.length } as CSSProperties}
+        onKeyDown={moveSelection}
+      >
+        <div className="model-matrix-header" role="row">
+          <span role="columnheader">Model</span>
+          {axisLevels.map((item) => <span role="columnheader" key={item} title={thinkingLabel(item)}>{matrixThinkingLabel(item)}</span>)}
+        </div>
+        <div
+          ref={matrixBodyRef}
+          className="model-matrix-body"
+          role="rowgroup"
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest(".model-matrix-name")) return;
+            if (event.pointerType === "mouse" && event.button !== 0) return;
+            event.preventDefault();
+            const next = selectionFromPointer(event);
+            if (!next) return;
+            dragStartRef.current = { modelKey, level };
+            setDragging(true);
+            matrixRef.current?.focus();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            select(next.model, next.level, false);
           }}
-        />
-        <div>{levels.map((item) => <i key={item} aria-hidden="true" />)}</div>
+          onPointerMove={(event) => {
+            if (!dragStartRef.current) return;
+            const next = selectionFromPointer(event);
+            if (next) select(next.model, next.level, false);
+          }}
+          onPointerUp={(event) => {
+            if (!dragStartRef.current) return;
+            const next = selectionFromPointer(event);
+            const start = dragStartRef.current;
+            dragStartRef.current = undefined;
+            setDragging(false);
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            if (!next) return;
+            select(next.model, next.level, false);
+            if (`${next.model.provider}/${next.model.id}` !== start.modelKey || next.level !== start.level) applySelection(next.model, next.level);
+          }}
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={() => {
+            if (dragStartRef.current) cancelDrag();
+          }}
+        >
+          {models.map((model, modelIndex) => {
+            const key = `${model.provider}/${model.id}`;
+            return <div className="model-matrix-row" role="row" key={key} data-active-model={key === modelKey}>
+              <span className="model-matrix-name" role="rowheader">
+                <strong>{model.name}</strong>
+                <small>{model.provider}</small>
+              </span>
+              {axisLevels.map((item, axisIndex) => {
+                const available = model.thinkingLevels?.includes(item) ?? item === "off";
+                const active = key === modelKey && item === level;
+                return <span
+                  className={`model-matrix-cell${available ? "" : " is-unavailable"}${active ? " is-active" : ""}`}
+                  role="gridcell"
+                  id={`model-matrix-cell-${modelIndex}-${axisIndex}`}
+                  aria-selected={active}
+                  aria-disabled={!available}
+                  aria-label={available ? `${model.name}, ${thinkingLabel(item)} thinking` : `${model.name}, ${thinkingLabel(item)} thinking unavailable`}
+                  title={available ? `${model.name}, ${thinkingLabel(item)}` : `${thinkingLabel(item)} unavailable for ${model.name}`}
+                  key={item}
+                />;
+              })}
+            </div>;
+          })}
+          <span ref={thumbRef} className="model-matrix-thumb" aria-hidden="true" />
+        </div>
       </div>
+      <div className="model-matrix-footer" aria-live="polite">
+        <span><strong>{selectedModel?.name ?? "No model"}</strong> with <strong>{thinkingLabel(level)}</strong> thinking</span>
+        <small>{dragging ? "Release to apply" : busy ? "Applying" : controls?.pending ? "Applies after current response" : "Current session"}</small>
+      </div>
+      <p className="model-matrix-help" id="model-matrix-help">Drag across thinking and between models. Arrow keys move one option at a time.</p>
     </div>}
   </div>;
 }
@@ -1505,7 +1642,7 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
     {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
     {startedAt && modelName && <> · {modelName}</>}
-    {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+    {startedAt && thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
   </span>;
 }
 

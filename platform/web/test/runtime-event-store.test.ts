@@ -13,12 +13,14 @@ test("expected session replacement clears stale runtime while staying loading", 
   assert.match(source, /source\.onerror = \(\) => \{[\s\S]*?connection: "disconnected"/);
 });
 
-test("terminal agent errors are subscribed and reduced into conversation state", async () => {
+test("retryable agent events preserve active work while terminal errors settle it", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
   assert.match(source, /"agent\.start", "agent\.end", "agent\.error"/);
   assert.match(source, /case "agent\.start":[\s\S]*?agentError: undefined/);
-  assert.match(source, /case "agent\.end":[\s\S]*?agentError: info\.willRetry === true \|\| typeof info\.message !== "string"/);
-  assert.match(source, /case "agent\.error":[\s\S]*?agentError: info\.willRetry === true \|\| typeof info\.message !== "string"/);
+  assert.match(source, /case "agent\.end":[\s\S]*?workStartedAt: willRetry \? conversation\.workStartedAt : undefined/);
+  assert.match(source, /case "agent\.end":[\s\S]*?agentError: willRetry \|\| typeof info\.message !== "string"/);
+  assert.match(source, /case "agent\.error":[\s\S]*?workStartedAt: willRetry \? conversation\.workStartedAt : undefined/);
+  assert.match(source, /case "agent\.error":[\s\S]*?agentError: willRetry \|\| typeof info\.message !== "string"/);
 });
 
 test("files wait for replacement runtime to reconnect before loading", async () => {

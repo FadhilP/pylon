@@ -1199,9 +1199,10 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
     }
     case "agent.end": {
       const info = asRecord(payload);
+      const willRetry = info.willRetry === true;
       const durationMs = Number.isSafeInteger(info.durationMs) ? info.durationMs as number : undefined;
       const messageId = typeof info.messageId === "string" ? info.messageId : undefined;
-      const messages = durationMs === undefined || !messageId
+      const messages = willRetry || durationMs === undefined || !messageId
         ? conversation.messages
         : conversation.messages.map((message) => message.id === messageId ? {
             ...message,
@@ -1215,9 +1216,9 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         conversation: {
           ...conversation,
           messages,
-          workStartedAt: undefined,
-          workModelName: undefined,
-          workThinkingLevel: undefined,
+          workStartedAt: willRetry ? conversation.workStartedAt : undefined,
+          workModelName: willRetry ? conversation.workModelName : undefined,
+          workThinkingLevel: willRetry ? conversation.workThinkingLevel : undefined,
           stopping: false,
           stoppedRun: info.stopped === true && durationMs !== undefined
             ? {
@@ -1230,7 +1231,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
                   : undefined,
               }
             : undefined,
-          agentError: info.willRetry === true || typeof info.message !== "string"
+          agentError: willRetry || typeof info.message !== "string"
             ? undefined
             : info.message.slice(0, 1_000) || undefined,
         },
@@ -1238,15 +1239,16 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
     }
     case "agent.error": {
       const info = asRecord(payload);
+      const willRetry = info.willRetry === true;
       return {
         ...runtime,
         conversation: {
           ...conversation,
-          workStartedAt: undefined,
-          workModelName: undefined,
-          workThinkingLevel: undefined,
+          workStartedAt: willRetry ? conversation.workStartedAt : undefined,
+          workModelName: willRetry ? conversation.workModelName : undefined,
+          workThinkingLevel: willRetry ? conversation.workThinkingLevel : undefined,
           stopping: false,
-          agentError: info.willRetry === true || typeof info.message !== "string"
+          agentError: willRetry || typeof info.message !== "string"
             ? undefined
             : info.message.slice(0, 1_000) || undefined,
         },

@@ -1379,13 +1379,15 @@ export class SessionRuntime implements PiDriver {
       })) return;
       let forwarded: unknown = payload;
       if (kind === "agent_start") {
-        this.workTurnId = `turn-${++this.nextTurnId}`;
-        this.workStartedAtMs = Date.now();
-        this.workStartedAt = new Date(this.workStartedAtMs).toISOString();
+        if (this.workStartedAtMs === undefined) {
+          this.workTurnId = `turn-${++this.nextTurnId}`;
+          this.workStartedAtMs = Date.now();
+          this.workStartedAt = new Date(this.workStartedAtMs).toISOString();
+          this.workUserEntryId = this.latestUserEntryId(session);
+          this.workAssistantEntryIdAtStart = this.latestAssistantEntryId(session);
+        }
         this.workModelName = session.model?.name;
         this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;
-        this.workUserEntryId = this.latestUserEntryId(session);
-        this.workAssistantEntryIdAtStart = this.latestAssistantEntryId(session);
         this.stopping = false;
         this.stoppedRun = undefined;
         this.agentError = undefined;
@@ -1401,7 +1403,35 @@ export class SessionRuntime implements PiDriver {
         };
       } else if (kind === "agent_end") {
         const duration = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
-        this.agentError = raw.willRetry === true ? undefined : terminalAgentError(raw.messages);
+        const stopped = this.stopping || agentWasAborted(raw);
+        const willRetry = raw.willRetry === true && !stopped;
+        const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
+        const modelName = this.workModelName;
+        const thinkingLevel = this.workThinkingLevel;
+        const userEntryId = this.workUserEntryId;
+        this.agentError = willRetry ? undefined : terminalAgentError(raw.messages);
+        if (willRetry) {
+          this.sessionIndex.invalidate();
+          this.refreshSnapshot();
+          forwarded = {
+            ...raw,
+            workDurationMs: duration,
+            turnId,
+            modelName,
+            thinkingLevel,
+            gitBranch: this.gitBranch,
+            metrics: this.lastSnapshot?.metrics,
+            stopped: false,
+            userEntryId,
+          };
+          this.emit({
+            type: "session.event",
+            sessionId: session.sessionId,
+            sessionGeneration: generation,
+            payload: forwarded,
+          });
+          return;
+        }
         const messages = this.transcriptMessages(session);
         let assistantIndex = -1;
         for (let index = messages.length - 1; index >= 0; index--) {
@@ -1436,13 +1466,8 @@ export class SessionRuntime implements PiDriver {
             thinkingLevel: this.workThinkingLevel,
           });
         }
-        const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
         this.pendingWorktreeTurns.push({ turnId, messageId, assistantEntryId });
         if (this.pendingWorktreeTurns.length > 20) this.pendingWorktreeTurns.shift();
-        const modelName = this.workModelName;
-        const thinkingLevel = this.workThinkingLevel;
-        const userEntryId = this.workUserEntryId;
-        const stopped = this.stopping || agentWasAborted(raw);
         if (stopped) {
           this.stoppedRun = {
             turnId,
