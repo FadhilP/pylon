@@ -34,7 +34,7 @@ function statsText(stats: TransformStats, outcomeLabel: string) {
   return [
     `scanned ${stats.scanned}`,
     `${outcomeLabel} ${stats.transformed}`,
-    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}`,
+    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}, stale-read ${stats.transformedBy.staleRead}`,
     `${outcomeLabel.replace("transformations", "gross omitted")} ~${estimatedTokens(stats.omittedChars)} tokens`,
     `${outcomeLabel.replace("transformations", "net saved")} ~${estimatedTokens(stats.netCharsSaved)} tokens`,
     `skips: recent-window ${skipped.recentWindow}, ineligible-tool ${skipped.ineligibleTool}, error ${skipped.error}, non-text/mixed/empty ${skipped.nonTextMixedOrEmptyContent}, malformed-structured ${skipped.malformedStructuredContent}, at/below-threshold ${skipped.atOrBelowThreshold}, recovery-unavailable ${skipped.recoveryUnavailable}`,
@@ -63,7 +63,7 @@ function statusText(
     "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
     `Retained successful-output budget: ${3 * threshold} characters, newest-to-oldest`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
-    `Read exclusion: ${READ_TOOL_NAME} is never transformed`,
+    `Read policy: ${READ_TOOL_NAME} is excluded from size/age pruning; superseded stale text reads may be replaced`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
     `Recent-window policy: ${RECENT_WINDOW_POLICY}`,
@@ -189,10 +189,10 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-sieve" });
   });
 
-  pi.on("context", (event) => {
+  pi.on("context", (event, ctx) => {
     if (mode === "disabled") return;
 
-    const result = sieveMessages(event.messages, threshold, { pruneActive: activePruning });
+    const result = sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
     latestMode = mode;
     latestStats = result.stats;
     if (mode === "observe") {
