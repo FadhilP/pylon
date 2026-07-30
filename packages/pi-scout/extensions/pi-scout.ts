@@ -234,7 +234,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       owner: "pi-scout",
       managedTools: ["repo_scout", "web_scout"],
       enabledTools: enabled ? ["repo_scout", "web_scout"] : [],
-      ...(enabled ? { deferredTools: ["web_scout"] } : {}),
+      ...(enabled ? {
+        deferredTools: ["web_scout"],
+        deferredToolUsage: { web_scout: "research current public web pages with bounded URL-cited evidence" },
+      } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) return;

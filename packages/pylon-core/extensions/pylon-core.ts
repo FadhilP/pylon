@@ -76,6 +76,21 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     new Set([...managedByOwner.values()].flatMap((tools) => [...tools]));
   const discoverableTools = () =>
     new Set([...policies.values()].flatMap((policy) => policy.deferredTools ?? []));
+  const discoveryCatalog = () => {
+    const entries = new Map<string, Set<string>>();
+    for (const policy of policies.values()) {
+      for (const name of policy.deferredTools ?? []) {
+        const usages = entries.get(name) ?? new Set<string>();
+        const usage = policy.deferredToolUsage?.[name];
+        if (usage) usages.add(usage);
+        entries.set(name, usages);
+      }
+    }
+    return [...entries].sort(([a], [b]) => a.localeCompare(b)).map(([name, usages]) => ({
+      name,
+      usage: usages.size === 1 ? [...usages][0] : undefined,
+    }));
+  };
   const captureBaseline = () => {
     if (initialized && hasGate()) return;
     const managed = managedTools();
@@ -134,6 +149,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       managedTools: [...message.managedTools],
       enabledTools: [...message.enabledTools],
       ...(message.deferredTools ? { deferredTools: [...message.deferredTools] } : {}),
+      ...(message.deferredToolUsage ? { deferredToolUsage: { ...message.deferredToolUsage } } : {}),
       ...(message.allowOnly ? { allowOnly: [...message.allowOnly] } : {}),
     });
     if (message.restoreTools && !hasGate()) {
@@ -167,6 +183,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
   const discoveryCapability = {
     eligible: () => [...discoverableTools()].sort(),
+    catalog: () => discoveryCatalog(),
     select: (names: string[]) => {
       if (!Array.isArray(names) || names.length > 6 || names.some((name) => typeof name !== "string" || !name) || new Set(names).size !== names.length)
         return { error: "selection must contain at most six unique non-empty tool names" };

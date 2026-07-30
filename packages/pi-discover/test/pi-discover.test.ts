@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const execFileAsync = promisify(execFile);
-import discover, { keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
+import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
@@ -545,6 +545,10 @@ test("host refreshes its SQLite index after each turn", async () => {
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
     assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status"]);
+    assert.deepEqual(policy.deferredToolUsage, {
+      relationship_graph: "map source symbols or tokens to related files and source locations",
+      index_status: "inspect local repository code-index status",
+    });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
     await waitFor(() => indexStates.at(-1)?.state === "idle");
@@ -772,15 +776,77 @@ test("query normalization and structured metadata outrank description overlap", 
   ], "Public WEB", 2)[0].name, "alpha");
 });
 
-test("search_tools uses exactly one synchronous capability and activates eligible matches", async () => {
+test("discovery guidance lists bounded usages without exposing tool names", () => {
+  const entries = [
+    { name: "z_tool", usage: "capture a consented application window" },
+    { name: "a_tool", usage: "research current public web pages" },
+    { name: "duplicate", usage: "research current public web pages" },
+    { name: "large", usage: "x".repeat(200) },
+  ];
+  const guidance = formatToolDiscoveryGuidance(entries, 240, 3)!;
+  assert.ok(guidance.length <= 240);
+  assert.match(guidance, /research current public web pages/);
+  assert.match(guidance, /additional deferred capabilities/i);
+  assert.doesNotMatch(guidance, /a_tool|z_tool|duplicate|large/);
+  assert.equal((guidance.match(/research current public web pages/g) ?? []).length, 1);
+});
+
+test("before_agent_start advertises the current deferred usage catalog", () => {
+  const { events, lifecycle } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["web_lookup", "git_history"],
+    catalog: () => [
+      { name: "web_lookup", usage: "research current public web pages" },
+      { name: "git_history", usage: "inspect release provenance" },
+    ],
+    select: () => ({ selected: [] }),
+    reset: () => ({ selected: [] }),
+  }));
+  const handler = lifecycle.handlers.get("before_agent_start")![0];
+  const result = handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
+  });
+  assert.match(result.systemPrompt, /Deferred tool discovery/);
+  assert.match(result.systemPrompt, /research current public web pages/);
+  assert.match(result.systemPrompt, /inspect release provenance/);
+  assert.doesNotMatch(result.systemPrompt, /web_lookup|git_history/);
+  const repeated = handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
+  });
+  assert.equal(repeated.systemPrompt, result.systemPrompt);
+  assert.equal((repeated.systemPrompt.match(/Deferred tool discovery/g) ?? []).length, 1);
+  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"] } }), undefined);
+  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: {} }), undefined);
+});
+
+test("old discovery capability ranks descriptions without generated guidance", async () => {
+  const { events, lifecycle, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["web_lookup"],
+    select: (names: string[]) => ({ selected: names }),
+    reset: () => ({ selected: [] }),
+  }));
+  const handler = lifecycle.handlers.get("before_agent_start")![0];
+  assert.equal(handler({
+    systemPrompt: "base",
+    systemPromptOptions: { selectedTools: ["search_tools"] },
+  }), undefined);
+  const result = await tools.get("search_tools").execute("id", { query: "public pages" }, undefined, undefined, {});
+  assert.deepEqual(result.details.matches, ["web_lookup"]);
+});
+
+test("search_tools uses advertised usage and activates eligible matches", async () => {
   const { events, tools, getSetActiveCalls } = setup();
   const selected: string[][] = [];
   events.on("pylon:tool-discovery", (request) => request.respond({
     eligible: () => ["git_history"],
+    catalog: () => [{ name: "git_history", usage: "inspect release provenance" }],
     select: (names: string[]) => { selected.push(names); return { selected: names }; },
     reset: () => ({ reset: true }),
   }));
-  const result = await tools.get("search_tools").execute("id", { query: "search history" }, undefined, undefined, {});
+  const result = await tools.get("search_tools").execute("id", { query: "release provenance" }, undefined, undefined, {});
   assert.deepEqual(selected, [["git_history"]]);
   assert.equal(getSetActiveCalls(), 0);
   assert.match(result.content[0].text, /next model turn/i);
@@ -806,8 +872,12 @@ test("search_tools caches normalized searches within a turn", async () => {
 
 test("search_tools marks repeated misses and invalidates them on turn end or inventory change", async () => {
   const { active, events, lifecycle, tools } = setup();
+  let usage: string | undefined;
   events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["shell"], select: () => ({ selected: [] }), reset: () => ({ selected: [] }),
+    eligible: () => ["shell"],
+    catalog: () => [{ name: "shell", usage }],
+    select: () => ({ selected: [] }),
+    reset: () => ({ selected: [] }),
   }));
   const search = () => tools.get("search_tools").execute("id", { query: "browser" }, undefined, undefined, {});
   assert.equal((await search()).details.alreadySearched, false);
@@ -816,7 +886,12 @@ test("search_tools marks repeated misses and invalidates them on turn end or inv
   assert.match(repeated.content[0].text, /already searched/i);
   assert.match(repeated.details.missMarker.query, /^[a-f0-9]{16}$/);
   assert.doesNotMatch(JSON.stringify(repeated.details.missMarker), /browser/);
+  usage = "automate browser pages";
+  const changedUsage = await search();
+  assert.equal(changedUsage.details.cacheHit, false);
+  assert.deepEqual(changedUsage.details.matches, ["shell"]);
   lifecycle.emit("turn_end", {});
+  usage = undefined;
   assert.equal((await search()).details.alreadySearched, false);
   active.push("other_tool");
   assert.equal((await search()).details.alreadySearched, false);

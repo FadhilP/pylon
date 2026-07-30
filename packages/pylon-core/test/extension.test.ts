@@ -294,10 +294,12 @@ test("discovery capability replaces deferred selections and respects gates", () 
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-advisor",
     managedTools: ["advisor"], enabledTools: ["advisor"], deferredTools: ["advisor"],
+    deferredToolUsage: { advisor: "review consequential decisions" },
   });
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-scout",
     managedTools: ["repo_scout"], enabledTools: ["repo_scout"], deferredTools: ["repo_scout"],
+    deferredToolUsage: { repo_scout: "trace repository evidence" },
   });
   assert.ok(!runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("repo_scout"));
@@ -307,6 +309,21 @@ test("discovery capability replaces deferred selections and respects gates", () 
   assert.equal(responses.length, 1);
   const capability = responses[0];
   assert.deepEqual(capability.eligible(), ["advisor", "repo_scout"]);
+  assert.deepEqual(capability.catalog(), [
+    { name: "advisor", usage: "review consequential decisions" },
+    { name: "repo_scout", usage: "trace repository evidence" },
+  ]);
+  const catalog = capability.catalog();
+  catalog[0].usage = "mutated";
+  assert.equal(capability.catalog()[0].usage, "review consequential decisions");
+  runtime.events.emit("pylon:tool-policy", {
+    version: 1, kind: "register", owner: "pi-other",
+    managedTools: ["advisor"], enabledTools: ["advisor"], deferredTools: ["advisor"],
+    deferredToolUsage: { advisor: "provide a different review" },
+  });
+  assert.equal(capability.catalog().find((entry: any) => entry.name === "advisor").usage, undefined);
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-other" });
+  assert.equal(capability.catalog()[0].usage, "review consequential decisions");
   assert.deepEqual(capability.select(["advisor"]), { selected: ["advisor"], blocked: [] });
   assert.ok(runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("repo_scout"));
@@ -322,6 +339,8 @@ test("discovery capability replaces deferred selections and respects gates", () 
   assert.ok(!runtime.active().includes("advisor"));
   assert.match(capability.select(["missing"]).error, /not eligible/);
   assert.deepEqual(capability.reset(), { selected: [] });
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-scout" });
+  assert.deepEqual(capability.catalog(), [{ name: "advisor", usage: "review consequential decisions" }]);
 });
 
 test("discovery selection validation and failed reconciliation preserve prior selection", () => {

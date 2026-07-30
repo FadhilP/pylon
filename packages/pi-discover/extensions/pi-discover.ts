@@ -26,11 +26,53 @@ export type ToolDiscoveryResult = {
   selected?: string[];
   blocked?: string[];
 };
+export type ToolDiscoveryCatalogEntry = { name: string; usage?: string };
 export type ToolDiscoveryCapability = {
   eligible(): string[];
+  catalog?(): ToolDiscoveryCatalogEntry[];
   select(names: string[]): ToolDiscoveryResult;
   reset(): ToolDiscoveryResult;
 };
+
+const MAX_DISCOVERY_GUIDANCE_CHARS = 1_000;
+const MAX_DISCOVERY_GUIDANCE_ENTRIES = 20;
+
+function normalizedUsage(value: unknown): string | undefined {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return undefined;
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  if (!normalized) return undefined;
+  return normalized.length <= 120 ? normalized : `${normalized.slice(0, 117).trimEnd()}...`;
+}
+
+export function formatToolDiscoveryGuidance(
+  entries: readonly ToolDiscoveryCatalogEntry[],
+  maxChars = MAX_DISCOVERY_GUIDANCE_CHARS,
+  maxEntries = MAX_DISCOVERY_GUIDANCE_ENTRIES,
+): string | undefined {
+  const prefix = "search_tools can activate deferred capabilities for: ";
+  const suffix = ". Call search_tools with the relevant capability phrase when needed.";
+  const omittedNote = " Some additional deferred capabilities remain searchable.";
+  const budget = maxChars - prefix.length - suffix.length - omittedNote.length;
+  if (budget < 1 || maxEntries < 1) return undefined;
+  const phrases: string[] = [];
+  const seen = new Set<string>();
+  let length = 0;
+  let omitted = false;
+  for (const { usage } of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    const phrase = normalizedUsage(usage);
+    if (!phrase || seen.has(phrase)) continue;
+    const addedLength = (phrases.length ? 2 : 0) + phrase.length;
+    if (phrases.length >= maxEntries || length + addedLength > budget) {
+      omitted = true;
+      continue;
+    }
+    phrases.push(phrase);
+    seen.add(phrase);
+    length += addedLength;
+  }
+  if (!phrases.length) return undefined;
+  return `${prefix}${phrases.join("; ")}${omitted ? omittedNote : ""}${suffix}`;
+}
 
 function keywords(query: string): string[] {
   return [...new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? [])];
@@ -89,7 +131,37 @@ function discoveryCapability(pi: ExtensionAPI): ToolDiscoveryCapability | undefi
   if (responses.length !== 1) return undefined;
   const capability = responses[0] as Partial<ToolDiscoveryCapability>;
   if (typeof capability?.eligible !== "function" || typeof capability.select !== "function" || typeof capability.reset !== "function") return undefined;
+  if (capability.catalog !== undefined && typeof capability.catalog !== "function") return undefined;
   return capability as ToolDiscoveryCapability;
+}
+
+function discoveryInventory(pi: ExtensionAPI, capability: ToolDiscoveryCapability) {
+  const eligible = [...new Set(capability.eligible())].sort();
+  const eligibleSet = new Set(eligible);
+  let catalog: ToolDiscoveryCatalogEntry[] = [];
+  try {
+    const value = capability.catalog?.();
+    if (Array.isArray(value)) catalog = value;
+  } catch { /* Fall back to registered tool descriptions. */ }
+  const usageByName = new Map(
+    catalog
+      .filter((entry) => entry && eligibleSet.has(entry.name))
+      .map((entry) => [entry.name, normalizedUsage(entry.usage)] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+  );
+  const candidates = [...new Map(
+    ((pi.getAllTools?.() ?? []) as ToolMetadata[])
+      .filter((tool) => eligibleSet.has(tool.name))
+      .map((tool) => {
+        const usage = usageByName.get(tool.name);
+        return [tool.name, usage ? {
+          ...tool,
+          capabilities: [...(tool.capabilities ?? []), usage],
+        } : tool] as const;
+      }),
+  ).values()];
+  const guidance = eligible.map((name) => ({ name, usage: usageByName.get(name) }));
+  return { eligible, candidates, guidance };
 }
 
 export default function discoverExtension(pi: ExtensionAPI) {
@@ -119,6 +191,10 @@ export default function discoverExtension(pi: ExtensionAPI) {
       managedTools: deferredTools,
       enabledTools: deferredTools,
       deferredTools,
+      deferredToolUsage: {
+        relationship_graph: "map source symbols or tokens to related files and source locations",
+        index_status: "inspect local repository code-index status",
+      },
       acknowledge: () => { coordinated = true; },
     });
     if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter((name) => !deferredTools.includes(name)));
@@ -281,6 +357,14 @@ export default function discoverExtension(pi: ExtensionAPI) {
     clearTurnState();
     scheduleIndexRefresh(ctx);
   });
+  pi.on("before_agent_start", (event: any) => {
+    if (!event.systemPromptOptions?.selectedTools?.includes("search_tools")) return;
+    const capability = discoveryCapability(pi);
+    if (!capability) return;
+    const guidance = formatToolDiscoveryGuidance(discoveryInventory(pi, capability).guidance);
+    if (!guidance) return;
+    return { systemPrompt: `${event.systemPrompt}\n\nDeferred tool discovery:\n- ${guidance}` };
+  });
   pi.on("tool_call", (event: any) => {
     if (selectedTools.has(event?.toolName)) increment(invoked, [event.toolName]);
   });
@@ -347,7 +431,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
     promptGuidelines: ["Use search_tools when a relevant Pi tool is inactive. Activated definitions become callable next model turn; do not assume they are callable in this turn."],
     parameters: Type.Object({
       action: Type.Optional(StringEnum(["search", "reset"] as const)),
-      query: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Keywords to match against inactive tool names and descriptions" })),
+      query: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Keywords to match against inactive tool names, advertised usages, and descriptions" })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 6, description: "Maximum matching tools to activate; default 3" })),
     }, { additionalProperties: false }),
     async execute(_id, params): Promise<{
@@ -382,14 +466,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
         details: { action: "search", matches: [] },
       };
       metrics.searches++;
-      const eligible = [...new Set(capability.eligible())].sort();
-      const eligibleSet = new Set(eligible);
+      const { eligible, candidates } = discoveryInventory(pi, capability);
       const active = [...new Set(pi.getActiveTools())].sort();
-      const candidates = [...new Map(
-        ((pi.getAllTools?.() ?? []) as ToolMetadata[])
-          .filter((tool) => eligibleSet.has(tool.name))
-          .map((tool) => [tool.name, tool] as const),
-      ).values()];
       const limit = params.limit ?? 3;
       if (!Number.isInteger(limit) || limit < 1 || limit > 6) return {
         content: [{ type: "text" as const, text: "Tool search limit must be an integer from 1 to 6." }],

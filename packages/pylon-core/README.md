@@ -56,12 +56,13 @@ pi.events.emit("pylon:tool-policy", {
   managedTools: ["example_tool"],
   enabledTools: ["example_tool"],
   deferredTools: ["example_tool"], // optional: available through search_tools
+  deferredToolUsage: { example_tool: "inspect example project data" }, // optional compact discovery phrase
   allowOnly: undefined,
   restoreTools: undefined,
   acknowledge: () => { coordinated = true; },
 });
 ```
 
-`deferredTools` must be a subset of `enabledTools`. Deferred tools stay inactive until selected through the synchronous `pylon:tool-discovery` capability used by pi-discover. Each selection replaces the previous one and is capped at six tools. `allowOnly` still intersects the result, so planning and safety gates remain authoritative. When removing a gate, `restoreTools` may provide the package's pre-gate snapshot; Pylon merges unmanaged entries into its baseline only when no other gate remains. No acknowledgement means Pylon is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
+`deferredTools` must be a subset of `enabledTools`. `deferredToolUsage` optionally maps deferred tool names to concise one-line capability phrases (maximum 120 characters) used for discovery matching and model guidance; its keys must be deferred tools. If multiple owners advertise different phrases for the same tool, Pylon omits that ambiguous usage. Deferred tools stay inactive until selected through the synchronous `pylon:tool-discovery` capability used by pi-discover. The capability exposes the currently eligible names and usage catalog. Each selection replaces the previous one and is capped at six tools. `allowOnly` still intersects the result, so planning and safety gates remain authoritative. When removing a gate, `restoreTools` may provide the package's pre-gate snapshot; Pylon merges unmanaged entries into its baseline only when no other gate remains. No acknowledgement means Pylon is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
 
 Doctor health collection emits `pylon:health-request`. Reporters must call `respond(reportPromise)` synchronously; Pylon awaits each promise for at most three seconds. Reports contain only `version`, `owner`, `label`, bounded `lines`, and `warning`—never page content, URLs, credentials, or raw logs.

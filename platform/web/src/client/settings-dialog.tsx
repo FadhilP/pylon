@@ -136,7 +136,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
             {providers.length > 0 && filteredProviders.length === 0 && <div className="settings-empty"><strong>No matching providers</strong><span>Try a different filter.</span></div>}
             {filteredProviders.length > 0 && <div className="settings-provider-list">{filteredProviders.map((provider) => <section className="settings-provider" key={provider.id}>
               <div className="settings-provider-copy">
-                <span className="provider-mark" aria-hidden="true">{packageInitials(provider.name)}</span>
+                {/* <span className="provider-mark" aria-hidden="true">{packageInitials(provider.name)}</span> */}
                 <span><strong>{provider.name}</strong><small>{provider.id}</small></span>
               </div>
               <span className={`provider-state${provider.configured ? " is-connected" : ""}`}>{provider.configured ? provider.stored ? "Connected" : "External" : "Not connected"}</span>
@@ -172,7 +172,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               return <section className={`settings-package${expanded ? " is-expanded" : ""}`} key={item.id} hidden={!matchesFilter}>
                 <header>
                   <div className="settings-package-main">
-                    <span className="package-mark" aria-hidden="true">{packageInitials(item.name)}</span>
+                    {/* <span className="package-mark" aria-hidden="true">{packageInitials(item.name)}</span> */}
                     <span className="package-copy">
                       <strong>{item.name}</strong>
                       <small>{item.description || `${item.extensionCount} Pi extension${item.extensionCount === 1 ? "" : "s"}`}</small>

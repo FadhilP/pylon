@@ -194,6 +194,10 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       managedTools: ["helios_browser", "helios_capture"],
       enabledTools: ["helios_browser", "helios_capture"],
       deferredTools: ["helios_browser", "helios_capture"],
+      deferredToolUsage: {
+        helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
+        helios_capture: "capture a consented Windows window for visual debugging",
+      },
     });
   });
   pi.on("session_shutdown", async (_event, ctx) => {

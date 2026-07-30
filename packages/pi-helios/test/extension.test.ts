@@ -81,6 +81,17 @@ test("registers native capture and constrained browser tools", () => {
   assert.match(guidance, /User must supervise purchases/i);
 });
 
+test("advertises compact deferred browser usages to Pylon", async () => {
+  const { handlers, eventHandlers } = runtime();
+  let policy: any;
+  eventHandlers.set("pylon:tool-policy", [(value: any) => { policy = value; }]);
+  await handlers.get("session_start")![0]({}, context());
+  assert.deepEqual(policy.deferredToolUsage, {
+    helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
+    helios_capture: "capture a consented Windows window for visual debugging",
+  });
+});
+
 test("visibility command changes future owned launches only", async () => {
   let openArgs: string[] = [];
   let notification = "";
