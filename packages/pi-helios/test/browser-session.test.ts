@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BrowserSessionManager, cliSessionName, parseTabs, validateCdpEndpoint } from "../src/browser-session.ts";
-import { HeliosCliError } from "../src/playwright-cli.ts";
+import { HeliosCliError, PlaywrightCli } from "../src/playwright-cli.ts";
 
 function fakeCli(log: string[], delay = 0) {
   return {
@@ -232,6 +232,28 @@ test("action snapshots preserve namespaced reference identity and replace stale 
   await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e2" }), /stale/);
   assert.equal(actions.includes("list"), false);
   await manager.close("action-refs", "close");
+});
+
+test("compacted continuation authorizes only retained refs from its latest page", async () => {
+  const raw = "- generic [ref=e1]:\n  - button First [ref=e2]\n- generic [ref=e3]:\n  - button Second [ref=e4]";
+  const adapterExec = async (_command: string, args: string[]) => {
+    const action = args.find((value) => ["open", "snapshot", "click", "tab-list", "close"].includes(value));
+    if (action === "snapshot") return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
+    if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  };
+  const manager = new BrowserSessionManager(adapterExec as any, (exec) => PlaywrightCli.create(exec, { maxSnapshotLines: 1, maxSnapshotBytes: 1024 }));
+  await manager.start("compact-continuation");
+  const first = await manager.operate("compact-continuation", { kind: "snapshot" });
+  assert.equal(first.snapshot, "- button First [ref=e2]");
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e1" }), /stale/);
+
+  const second = await manager.operate("compact-continuation", { kind: "continue", cursor: first.snapshotContinuation! });
+  assert.equal(second.snapshot, "- button Second [ref=e4]");
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e2" }), /stale/);
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e3" }), /stale/);
+  await manager.operate("compact-continuation", { kind: "click", target: "e4" });
+  await manager.close("compact-continuation", "close");
 });
 
 test("continuation chunks replace usable references", async () => {

@@ -303,6 +303,34 @@ test("browser continue pages cached output without another CLI command and repla
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });
 
+test("browser snapshot mode defaults compact and full restores container targets", async () => {
+  const raw = '- generic [ref=e1]:\n  - button "Submit" [ref=e2]';
+  const commands: string[] = [];
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "snapshot", "tab-list", "close"].includes(value)) ?? "unknown";
+    commands.push(command);
+    if (command === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (command === "snapshot") return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start" }, undefined, undefined, ctx);
+
+  const compact = await browser.execute("compact", { action: "snapshot" }, undefined, undefined, ctx);
+  assert.doesNotMatch(compact.content[0].text, /generic \[ref=e1\]/);
+  assert.match(compact.content[0].text, /button "Submit" \[ref=e2\]/);
+  await assert.rejects(browser.execute("removed", { action: "snapshot", target: "e1" }, undefined, undefined, ctx), /stale/);
+
+  const full = await browser.execute("full", { action: "snapshot", snapshotMode: "full" }, undefined, undefined, ctx);
+  assert.match(full.content[0].text, /generic \[ref=e1\]/);
+  await browser.execute("restored", { action: "snapshot", target: "e1" }, undefined, undefined, ctx);
+  await assert.rejects(browser.execute("wrong-mode", { action: "navigate", url: "https://example.com", snapshotMode: "full" }, undefined, undefined, ctx), /does not accept snapshotMode/);
+  assert.equal(commands.filter((command) => command === "snapshot").length, 3);
+
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+});
+
 test("browser batch compacts intermediate snapshots and metadata but keeps final output and images", async () => {
   const commands: string[] = [];
   let tabLists = 0;

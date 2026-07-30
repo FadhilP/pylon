@@ -30,7 +30,7 @@ export type BrowserAction =
   | { kind: "attach-extension"; browser: "chrome" | "msedge" }
   | { kind: "navigate"; url: string }
   | { kind: "link-url"; target: string }
-  | { kind: "snapshot"; target?: string; depth?: number }
+  | { kind: "snapshot"; target?: string; depth?: number; snapshotMode?: "compact" | "full" }
   | { kind: "continue"; cursor: string }
   | { kind: "find"; text?: string; regex?: string }
   | { kind: "screenshot"; target?: string; fullPage?: boolean }
@@ -169,6 +169,30 @@ function redactSnapshot(value: string): RedactedSnapshot {
     });
   }
   return { lines: redacted.split(/\r?\n/), redactions };
+}
+
+export function compactSnapshotLines(lines: string[]): string[] {
+  const indentation = lines.map((line) => line.match(/^\s*/u)?.[0] ?? "");
+  if (lines.some((line, index) => line.trim() && (/[^ ]/u.test(indentation[index]) || indentation[index].length % 2))) return lines;
+
+  const wrapper = new RegExp(`^( *)- generic \\[ref=(${ELEMENT_REF_FRAGMENT})\\](:?)$`);
+  const removed: number[] = [];
+  const compacted: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) {
+      compacted.push(line);
+      continue;
+    }
+    const indent = indentation[index].length;
+    while (removed.length && indent <= removed.at(-1)!) removed.pop();
+    const match = line.match(wrapper);
+    if (match) {
+      if (match[3]) removed.push(indent);
+      continue;
+    }
+    compacted.push(line.slice(removed.length * 2));
+  }
+  return compacted;
 }
 
 function splitOversizedLines(lines: string[], maxBytes: number): string[] {
@@ -322,7 +346,10 @@ export class PlaywrightCli {
     }
     const limits = snapshotLimits(action, this.options);
     const redacted = rawSnapshot === undefined ? undefined : redactSnapshot(rawSnapshot);
-    const lines = redacted === undefined ? undefined : splitOversizedLines(redacted.lines, Math.max(4, limits.bytes));
+    const snapshotLines = redacted === undefined || (action.kind === "snapshot" && action.snapshotMode === "full")
+      ? redacted?.lines
+      : compactSnapshotLines(redacted.lines);
+    const lines = snapshotLines === undefined ? undefined : splitOversizedLines(snapshotLines, Math.max(4, limits.bytes));
     const snapshot = lines === undefined ? undefined : boundedSnapshot(lines, 0, limits);
     const snapshotContinuation = snapshot?.nextIndex === undefined ? undefined : this.storeContinuation(sessionName, lines!, snapshot.nextIndex, limits);
     return {

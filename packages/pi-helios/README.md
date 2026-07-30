@@ -60,6 +60,8 @@ Prefer targeted search over a full snapshot when the element text is known:
 
 Browser actions may already return a usable snapshot. Request another only when output is absent, truncated, or insufficient. Prefer screenshots targeted to a returned element ref; use `fullPage` only when whole-page context is necessary.
 
+Snapshots compact exact unnamed `generic` accessibility wrappers by default while preserving their children, named or interactive generics, semantic roles, states, and other attributes. Use `snapshotMode: "full"` on an explicit `snapshot` only when an unnamed container ref is needed for a targeted snapshot or screenshot. Full snapshots remain redacted and bounded.
+
 Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 120 lines / 12 KB, and snapshots emitted by other actions up to 100 lines / 10 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser subprocess. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
 
 Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S) and `about:blank`, not credentials or local files. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.

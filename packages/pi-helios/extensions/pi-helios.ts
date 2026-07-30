@@ -32,6 +32,7 @@ const browserActionFields = {
   key: Type.Optional(Type.String({ maxLength: 64 })),
   value: Type.Optional(Type.String({ maxLength: 1000 })),
   depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: "Snapshot depth; prefer 4-6 first, then target a returned ref for more detail" })),
+  snapshotMode: Type.Optional(StringEnum(["compact", "full"] as const, { description: "Snapshot structure: compact flattens anonymous generic wrappers (default); full preserves them" })),
   cursor: Type.Optional(Type.String({ pattern: "^hc_[a-f0-9]{32}$", maxLength: 35, description: "One-use cursor returned by truncated snapshot, find, or action output" })),
   fullPage: Type.Optional(Type.Boolean()),
   tabAction: Type.Optional(StringEnum(["list", "select", "create", "close"] as const)),
@@ -69,7 +70,7 @@ function rejectExtra(params: BrowserParams, allowed: readonly (keyof BrowserPara
 function browserAction(params: BrowserParams): BrowserAction {
   switch (params.action) {
     case "navigate": rejectExtra(params, ["url"]); return { kind: "navigate", url: requireField(params, "url") };
-    case "snapshot": rejectExtra(params, ["target", "depth"]); return { kind: "snapshot", target: params.target, depth: params.depth };
+    case "snapshot": rejectExtra(params, ["target", "depth", "snapshotMode"]); return { kind: "snapshot", target: params.target, depth: params.depth, snapshotMode: params.snapshotMode };
     case "continue": rejectExtra(params, ["cursor"]); return { kind: "continue", cursor: requireField(params, "cursor") };
     case "find": {
       rejectExtra(params, ["text", "regex"]);
