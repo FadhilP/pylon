@@ -60,7 +60,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
   const guidance = guidelines.join("\n");
   assert.equal(guidelines.length, 3);
   assert.ok(guidelines.every((guideline) => /advisor/i.test(guideline)));
-  assert.match(tool.description, /Maximum three authenticated attempts/);
+  assert.match(tool.description, /Maximum three successful consultations/);
+  assert.match(tool.description, /failures do not consume quota/);
   assert.match(guidance, /two advisor consultations by default for consequential work/);
   assert.match(guidance, /Skip advisor for trivial or local work/);
   assert.match(guidance, /after implementation and before final verification/);
@@ -132,7 +133,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
       events: { emit: () => {} },
       getActiveTools: () => [],
       setActiveTools: () => {},
-    } as any, complete as any);
+    } as any, complete as any, async () => true);
     return tool.execute("failure", { request: "review" }, undefined, undefined, ctx);
   };
   try {
@@ -143,7 +144,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
       errorMessage: `bad\napi_key=${secret}\u0000\u0085\u2028\u2029${"z".repeat(600)}`,
     }));
     assert.equal(providerError.details.failureCode, "invalid_response");
-    assert.equal(providerError.content[0].text, "Advisor failed nonfatally: invalid_response.");
+    assert.match(providerError.content[0].text, /^\[A-[\w-]+ · Advisor\] Advisor failed nonfatally: invalid_response\.$/);
     assert.ok(providerError.details.failureMessage.length <= 500);
     assert.doesNotMatch(providerError.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.doesNotMatch(providerError.details.failureMessage, new RegExp(secret));
@@ -161,7 +162,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
     assert.equal(rateLimit.details.failureMessage, "429 rate limit");
 
     const thrown = await run(async () => { throw new Error("socket closed"); });
-    assert.equal(thrown.details.failureCode, "invalid_response");
+    assert.equal(thrown.details.failureCode, "provider_unavailable");
     assert.equal(thrown.details.failureMessage, "socket closed");
 
     const nonError = await run(async () => { throw { private: "value" }; });
@@ -172,6 +173,86 @@ test("advisor records bounded redacted failure diagnostics", async () => {
 
     const aborted = await run(async () => ({ content: [], stopReason: "aborted" }));
     assert.equal(aborted.details.failureCode, "aborted");
+  } finally {
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+  }
+});
+
+test("Advisor retries transient failures and only successful consultations consume quota", async () => {
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-advisor-retry-"));
+  await saveConfig({ version: 1, advisorModel: "test/model" });
+  let tool: any;
+  let providerCalls = 0;
+  let mode: "retry" | "fail" | "exhaust" | "paid" | "success" = "retry";
+  advisor({
+    on: () => {}, registerTool: (value: any) => { tool = value; }, registerCommand: () => {},
+    events: { emit: () => {} }, getActiveTools: () => [], setActiveTools: () => {},
+  } as any, (async () => {
+    providerCalls++;
+    if (mode === "retry" && providerCalls === 1)
+      return {
+        content: [],
+        stopReason: "error",
+        errorMessage: "Codex error: An error occurred while processing your request. You can retry your request.",
+      };
+    if (mode === "fail")
+      return { content: [], stopReason: "error", errorMessage: "invalid request" };
+    if (mode === "exhaust" || mode === "paid") return {
+      content: [], stopReason: "error", errorMessage: mode === "exhaust" ? "WebSocket error" : "503 model at capacity",
+      usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: mode === "paid" ? 0.1 : 0 } },
+    };
+    return {
+      content: [{ type: "text", text: `advice ${providerCalls}` }], stopReason: "stop",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+    };
+  }) as any, async () => true);
+  const model = {
+    provider: "test", id: "model", contextWindow: 32_000, maxTokens: 8_192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const ctx = {
+    cwd: process.cwd(), hasUI: false, getSystemPrompt: () => "system",
+    modelRegistry: { find: () => model, async getApiKeyAndHeaders() { return { ok: true, apiKey: "key" }; } },
+    sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
+  };
+  try {
+    const retried = await tool.execute("retry", { request: "review" }, undefined, undefined, ctx);
+    assert.equal(retried.details.callNumber, 1);
+    assert.equal(retried.details.attempts, 2);
+    assert.equal(providerCalls, 2);
+
+    mode = "fail";
+    const failed = await tool.execute("fail", { request: "review" }, undefined, undefined, ctx);
+    assert.equal(failed.details.failureCode, "invalid_response");
+    assert.equal(failed.details.callNumber, 2);
+    assert.equal(failed.details.attempts, 1);
+
+    mode = "exhaust";
+    const callsBeforeExhaustion = providerCalls;
+    const exhausted = await tool.execute("exhaust", { request: "review" }, undefined, undefined, ctx);
+    assert.equal(providerCalls, callsBeforeExhaustion + 3);
+    assert.equal(exhausted.details.failureCode, "provider_unavailable");
+    assert.equal(exhausted.details.attempts, 3);
+    assert.equal(exhausted.details.usage.input, 3);
+    assert.equal(exhausted.details.callNumber, 2);
+
+    mode = "paid";
+    const callsBeforePaidFailure = providerCalls;
+    const paid = await tool.execute("paid", { request: "review" }, undefined, undefined, ctx);
+    assert.equal(providerCalls, callsBeforePaidFailure + 1);
+    assert.equal(paid.details.usage.cost, 0.1);
+    assert.equal(paid.details.callNumber, 2);
+
+    mode = "success";
+    const second = await tool.execute("second", { request: "review" }, undefined, undefined, ctx);
+    const third = await tool.execute("third", { request: "review" }, undefined, undefined, ctx);
+    const blocked = await tool.execute("blocked", { request: "review" }, undefined, undefined, ctx);
+    assert.equal(second.details.callNumber, 2);
+    assert.equal(third.details.callNumber, 3);
+    assert.equal(blocked.details.failureCode, "unavailable");
+    assert.match(blocked.content[0].text, /call limit reached/);
   } finally {
     if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousDir;

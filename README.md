@@ -24,7 +24,24 @@ pi install /absolute/path/to/pylon
 
 > **Security:** Pi extensions run with your user permissions. Review package source before installation.
 
-## First-run Setup
+## Web Setup
+
+From the repository root, install dependencies and start the local web app:
+
+```sh
+npm install
+npm run web
+```
+
+Then open [http://127.0.0.1:3141](http://127.0.0.1:3141). For development without a production build, run:
+
+```sh
+npm run dev --workspace @pylon/web
+```
+
+The web host binds only to loopback. `PYLON_CWD` selects the initial project directory; `PYLON_PORT` changes the default port (`3141`).
+
+## Terminal Setup
 
 Select models for the child-agent tools after reloading. Replace the examples with models available through your configured Pi providers:
 
@@ -85,6 +102,8 @@ Packages coordinate through bounded, versioned event-bus metadata while remainin
 Raw verification and Heartbeat logs never cross package events.
 
 ## Development
+
+Platform applications live under `platform/`: `platform/web` contains the current local web client and host, while `platform/desktop` reserves the future desktop shell.
 
 Packages follow the same responsibility-based layout:
 

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import extension from "../extensions/pi-sieve.ts";
 import { loadConfig } from "../src/config.ts";
 import {
@@ -15,6 +15,7 @@ import {
   recalledGiantErrorMarker,
   recalledOmissionMarker,
   sieveMessages,
+  staleReadMarker,
 } from "../src/sieve.ts";
 
 const textResult = (toolName: string, text: string, extra: Record<string, unknown> = {}) => ({
@@ -38,7 +39,7 @@ const noSkips = {
   atOrBelowThreshold: 0,
   recoveryUnavailable: 0,
 };
-const noTransformTypes = { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0 };
+const noTransformTypes = { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 };
 
 function oldResultAtAge(age: number, text: string, extra: Record<string, unknown> = {}) {
   return sieveMessages([user("before"), textResult("bash", text, extra), ...Array.from({ length: age }, (_, index) => user(`after-${index}`))], 4_000);
@@ -57,24 +58,14 @@ function rankedSearchText(kind: "symbol" | "code", count = 20) {
 }
 
 function relationshipGraphText(count = 12) {
-  const queryId = "query:run";
-  const nodes: any[] = [{ id: queryId, kind: "query", label: "run" }];
-  const edges: any[] = [];
-  for (let index = 0; index < count; index++) {
-    const fileId = `file:src/file-${index}.ts`;
-    const locationId = `location:src/file-${index}.ts:${index + 1}`;
-    nodes.push({ id: fileId, kind: "file", label: `src/file-${index}.ts` });
-    nodes.push({ id: locationId, kind: "location", path: `src/file-${index}.ts`, line: index + 1, text: "x".repeat(120), roles: ["reference"] });
-    edges.push({ from: fileId, to: locationId, type: "contains" });
-    edges.push({ from: locationId, to: queryId, type: "mentions" });
-  }
-  nodes.push({ id: "file:orphan.ts", kind: "file", label: "src/orphan.ts" });
   return JSON.stringify({
     query: "run",
     scope: ".",
     heuristic: true,
-    nodes,
-    edges,
+    files: Array.from({ length: count }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      locations: [{ line: index + 1, text: "x".repeat(120), roles: ["reference"] }],
+    })),
     metadata: { observedMatchCount: count, returnedCount: count, truncated: false },
   });
 }
@@ -107,7 +98,7 @@ test("partially retains old output and treats all text blocks as one source", ()
   assert.deepEqual(result.stats, {
     scanned: 1,
     transformed: 1,
-    transformedBy: { ageThreshold: 1, budget: 0, giantError: 0, activeThreshold: 0 },
+    transformedBy: { ageThreshold: 1, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 },
     omittedChars,
     netCharsSaved: source.length - output.length,
     skipped: noSkips,
@@ -162,6 +153,38 @@ test("preserves age 0 and caps only eligible successful age-1 output", () => {
   assert.equal(oldResultAtAge(1, "x".repeat(50_000), { isError: true }).stats.transformed, 0);
   const read = sieveMessages([user("before"), textResult("read", "x".repeat(50_000)), user("after")], 4_000);
   assert.equal(read.stats.transformed, 0);
+});
+
+test("prunes bulky Heartbeat status and Memory lists without covering short mutation tools", () => {
+  const source = "x".repeat(4_001);
+  const heartbeat = textResult("heartbeat_status", source, { toolCallId: "heartbeat-1", details: { id: "job-1" } });
+  const activeHeartbeat = sieveMessages([user("current"), heartbeat], 4_000, { pruneActive: true });
+  assert.equal(activeHeartbeat.stats.transformedBy.activeThreshold, 1);
+  assert.ok(((activeHeartbeat.messages[1] as any).content[0].text as string).length <= 4_000);
+  assert.match((activeHeartbeat.messages[1] as any).content[0].text, /sieve_recall\(toolCallId="heartbeat-1"\)/);
+  assert.deepEqual((activeHeartbeat.messages[1] as any).details, { id: "job-1" });
+  assert.equal(activeHeartbeat.recoverableActiveResults[0]?.toolName, "heartbeat_status");
+  assert.ok((activeHeartbeat.recoverableActiveResults[0]?.content[0]?.text.length ?? 0) > 0);
+
+  const recalledHeartbeat = recalledResult("heartbeat_status", source);
+  const agedRecall = sieveMessages([user("before"), recalledHeartbeat, user("second"), user("third")], 4_000);
+  assert.equal(agedRecall.stats.transformedBy.ageThreshold, 1);
+  assert.match((agedRecall.messages[1] as any).content[0].text, /recalled heartbeat_status/);
+
+  const memoryList = textResult("memory", source, { details: { memoryList: true } });
+  const agedMemory = sieveMessages([user("before"), memoryList, user("second"), user("third")], 4_000);
+  assert.equal(agedMemory.stats.transformedBy.ageThreshold, 1);
+
+  for (const result of [
+    textResult("memory", source, { details: { memoryCandidate: { action: "add", key: "workflow.test" } } }),
+    textResult("continuity_update", source),
+    textResult("heartbeat_start", source),
+    textResult("heartbeat_cancel", source),
+  ]) {
+    const unchanged = sieveMessages([user("before"), result, user("second"), user("third")], 4_000);
+    assert.equal(unchanged.messages[1], result);
+    assert.equal(unchanged.stats.skipped.ineligibleTool, 1);
+  }
 });
 
 test("enforces the retained successful-output budget at equality, overflow, and newest-first", () => {
@@ -225,6 +248,170 @@ test("truncates only giant eligible text errors and preserves their concatenated
   assert.equal(result.stats.netCharsSaved, source.length - GIANT_ERROR_TAIL_CHARS - marker.length);
 });
 
+test("prunes a read only after a successful mutation and covering post-mutation read", () => {
+  const cwd = resolve("stale-read-workspace");
+  const relativePath = "src/example\u00a0file.ts";
+  const normalizedRelativePath = "src/example file.ts";
+  const absolutePath = resolve(cwd, normalizedRelativePath);
+  const oldSource = "old snapshot\n".repeat(100);
+  const newSource = "current snapshot\n".repeat(100);
+  const messages = [
+    user("update the file"),
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "read-old", name: "read", arguments: { path: relativePath, offset: 10, limit: 20 } }],
+    },
+    {
+      ...textResult("read", oldSource, { toolCallId: "read-old", isError: false, details: { source: "preserved" } }),
+      custom: true,
+    },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "edit", name: "edit", arguments: { path: normalizedRelativePath, edits: [{ oldText: "old", newText: "new" }] } }],
+    },
+    textResult("edit", "Successfully replaced 1 block", { toolCallId: "edit", isError: false }),
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "read-new", name: "read", arguments: { path: absolutePath, offset: 1, limit: 40 } }],
+    },
+    textResult("read", newSource, { toolCallId: "read-new", isError: false }),
+  ];
+
+  const result = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  const stale: any = result.messages[2];
+  assert.deepEqual(stale.content, [{ type: "text", text: staleReadMarker(relativePath, oldSource.length) }]);
+  assert.equal(stale.toolCallId, "read-old");
+  assert.deepEqual(stale.details, { source: "preserved" });
+  assert.equal(stale.custom, true);
+  assert.equal(result.messages[6], messages[6]);
+  assert.equal((messages[2] as any).content[0].text, oldSource, "stored source message remains untouched");
+  assert.equal(result.stats.transformedBy.staleRead, 1);
+  assert.equal(result.stats.omittedChars, oldSource.length);
+  assert.equal(result.stats.netCharsSaved, oldSource.length - stale.content[0].text.length);
+});
+
+test("keeps reads when mutation ordering, success, or range coverage is ambiguous", () => {
+  const cwd = resolve("stale-read-safety");
+  const source = "context\n".repeat(100);
+  const context = (mutationError: boolean, newArguments: Record<string, unknown>, sameTurn = false) => {
+    const oldCall = { type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } };
+    const mutationCall = { type: "toolCall", id: "mutation", name: "write", arguments: { path: "file.ts", content: "new" } };
+    const newCall = { type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", ...newArguments } };
+    return [
+      user("update"),
+      { role: "assistant", content: [oldCall] },
+      textResult("read", source, { toolCallId: "old", isError: false }),
+      { role: "assistant", content: sameTurn ? [mutationCall, newCall] : [mutationCall] },
+      textResult("write", "write result", { toolCallId: "mutation", isError: mutationError }),
+      ...(sameTurn ? [] : [{ role: "assistant", content: [newCall] }]),
+      textResult("read", "new context\n".repeat(100), { toolCallId: "new", isError: false }),
+    ];
+  };
+
+  for (const messages of [
+    context(true, { offset: 1, limit: 100 }),
+    context(false, { offset: 50, limit: 20 }),
+    context(false, { offset: 1, limit: 100 }),
+    context(false, { offset: 1, limit: 100 }, true),
+  ]) {
+    const result = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+    assert.equal(result.messages[2], messages[2]);
+    assert.equal(result.stats.transformedBy.staleRead, 0);
+  }
+
+  const wholeFileAfterWrite = context(false, {});
+  const pruned = sieveMessages(wholeFileAfterWrite, SIEVE_THRESHOLD, { cwd });
+  assert.match((pruned.messages[2] as any).content[0].text, /stale read/);
+});
+
+test("ambiguous mutation attempts block partial pruning but allow a later whole-file snapshot", () => {
+  const source = "baseline\n".repeat(100);
+  const messages: any[] = [
+    user("update"),
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } }] },
+    textResult("read", source, { toolCallId: "old", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "failed", name: "edit", arguments: { path: "file.ts", edits: [{ oldText: "x", newText: "x\nshift" }] } }] },
+    textResult("edit", "aborted after write", { toolCallId: "failed", isError: true }),
+    { role: "assistant", content: [{ type: "toolCall", id: "ok", name: "edit", arguments: { path: "file.ts", edits: [{ oldText: "old", newText: "new" }] } }] },
+    textResult("edit", "edited", { toolCallId: "ok", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } }] },
+    textResult("read", "current\n".repeat(100), { toolCallId: "new", isError: false }),
+  ];
+  const cwd = resolve("ambiguous-mutation");
+  const partial = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.equal(partial.messages[2], messages[2]);
+
+  delete messages[7].content[0].arguments.limit;
+  const wholeFile = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.match(wholeFile.messages[2].content[0].text, /stale read/);
+
+  messages[3].content.push({
+    type: "toolCall", id: "ok", name: "edit",
+    arguments: { path: "file.ts", edits: [{ oldText: "a", newText: "b" }] },
+  });
+  messages[7].content[0].arguments.limit = 100;
+  const duplicateId = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.equal(duplicateId.messages[2], messages[2]);
+});
+
+test("rejects malformed and overflowing read ranges", () => {
+  const source = "baseline\n".repeat(100);
+  const messages: any[] = [
+    user("update"),
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } }] },
+    textResult("read", source, { toolCallId: "old", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "edit", name: "edit", arguments: { path: "file.ts", edits: [{ oldText: "old", newText: "new" }] } }] },
+    textResult("edit", "edited", { toolCallId: "edit", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", offset: Number.MAX_SAFE_INTEGER, limit: 2 } }] },
+    textResult("read", "current", { toolCallId: "new", isError: false }),
+  ];
+  const result = sieveMessages(messages, SIEVE_THRESHOLD, { cwd: resolve("bad-ranges") });
+  assert.equal(result.messages[2], messages[2]);
+});
+
+test("uses actual returned lines for limited reads that reach EOF", () => {
+  const source = Array.from({ length: 100 }, (_, index) => `old-${index}`).join("\n");
+  const messages: any[] = [
+    user("update"),
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } }] },
+    textResult("read", source, { toolCallId: "old", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "edit", name: "edit", arguments: { path: "file.ts", edits: [{ oldText: "old", newText: "new" }] } }] },
+    textResult("edit", "edited", { toolCallId: "edit", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", offset: 1, limit: 100 } }] },
+    textResult("read", Array.from({ length: 20 }, (_, index) => `new-${index}`).join("\n"), { toolCallId: "new", isError: false }),
+  ];
+  const cwd = resolve("eof-read");
+  const limited = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.equal(limited.messages[2], messages[2]);
+
+  delete messages[5].content[0].arguments.limit;
+  const wholeFile = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.match(wholeFile.messages[2].content[0].text, /stale read/);
+});
+
+test("uses truncation metadata when deciding whether a newer read covers an old read", () => {
+  const source = "old\n".repeat(300);
+  const messages = [
+    user("update"),
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 50 } }] },
+    textResult("read", source, {
+      toolCallId: "old",
+      isError: false,
+      details: { truncation: { truncated: true, firstLineExceedsLimit: false, outputLines: 25 } },
+    }),
+    { role: "assistant", content: [{ type: "toolCall", id: "edit", name: "edit", arguments: { path: "file.ts", edits: [{ oldText: "old", newText: "new" }] } }] },
+    textResult("edit", "edited", { toolCallId: "edit", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", offset: 40, limit: 40 } }] },
+    textResult("read", "new\n".repeat(300), { toolCallId: "new", isError: false }),
+  ];
+  const result = sieveMessages(messages, SIEVE_THRESHOLD, { cwd: resolve("truncated-read") });
+  assert.match((result.messages[2] as any).content[0].text, /stale read/);
+
+  (messages[5] as any).content[0].arguments.limit = 20;
+  const uncovered = sieveMessages(messages, SIEVE_THRESHOLD, { cwd: resolve("truncated-read") });
+  assert.equal(uncovered.messages[2], messages[2]);
+});
+
 test("keeps read output, including giant successes and errors, fully preserved", () => {
   const giant = "x".repeat(40_001);
   const readSuccess = textResult("read", giant);
@@ -246,6 +433,8 @@ test("structure-aware ranked search pruning preserves valid JSON, rank order, an
 
     assert.ok(activeOutput.results.length > 0);
     assert.ok(activeOutput.results.length < 20);
+    assert.equal(activeOutput.returned, activeOutput.results.length);
+    assert.equal(activeOutput.truncated, true);
     assert.deepEqual(
       activeOutput.results.map((result: any) => result.path),
       Array.from({ length: activeOutput.results.length }, (_, index) => `src/result-${index}.ts`),
@@ -260,6 +449,8 @@ test("structure-aware ranked search pruning preserves valid JSON, rank order, an
     const aged = sieveMessages([user("before"), active, user("second"), user("third")], 1_000);
     const agedOutput = JSON.parse((aged.messages[1].content as any)[0].text);
     assert.ok(agedOutput.results.length < 20);
+    assert.equal(agedOutput.returned, agedOutput.results.length);
+    assert.equal(agedOutput.truncated, true);
     assert.equal(agedOutput.results[0].path, "src/result-0.ts");
     assert.equal(agedOutput.piSieve.recoverVia, undefined);
     assert.equal(aged.stats.transformedBy.ageThreshold, 1);
@@ -285,12 +476,10 @@ test("relationship graph keeps recent output, prunes complete graph records, the
 
   const aged = sieveMessages([user("before"), graph, user("second"), user("third")], 1_000);
   const agedGraph = JSON.parse((aged.messages[1].content as any)[0].text);
-  const nodeIds = new Set(agedGraph.nodes.map((node: any) => node.id));
   assert.ok(agedGraph.metadata.returnedCount < 12);
   assert.equal(agedGraph.metadata.truncated, true);
   assert.equal(agedGraph.piSieve.omittedLocations, 12 - agedGraph.metadata.returnedCount);
-  assert.ok(agedGraph.edges.every((edge: any) => nodeIds.has(edge.from) && nodeIds.has(edge.to)));
-  assert.equal(nodeIds.has("file:orphan.ts"), false);
+  assert.equal(agedGraph.files.reduce((count: number, file: any) => count + file.locations.length, 0), agedGraph.metadata.returnedCount);
   assert.equal(aged.stats.transformedBy.ageThreshold, 1);
 
   const old = sieveMessages([
@@ -307,7 +496,7 @@ test("relationship graph keeps recent output, prunes complete graph records, the
   });
 
   const malformedGraphValue = JSON.parse(source);
-  malformedGraphValue.edges[0].from = "file:missing.ts";
+  malformedGraphValue.files[0].locations[0].line = "bad";
   const malformedGraph = textResult("relationship_graph", JSON.stringify(malformedGraphValue));
   for (const age of [2, 6]) {
     const result = sieveMessages([
@@ -600,7 +789,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((context.messages[1].content[0] as { text: string }).text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /pi-sieve: observe/);
-  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0; projected gross omitted ~${expectedGrossTokens} tokens`));
+  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0, stale-read 0; projected gross omitted ~${expectedGrossTokens} tokens`));
   assert.match(notification, /actual transformations 0.*projected observe transformations 1/);
 
   await command.handler("enable", ctx);

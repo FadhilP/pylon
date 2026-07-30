@@ -15,7 +15,14 @@ import {
   recordToolResult,
   recordVerificationOutcome,
 } from "../src/token-meter.ts";
-import { worktreeFingerprint } from "../src/worktree.ts";
+import {
+  createWorktreeSummary,
+  WORKTREE_SUMMARY_ENTRY_TYPE,
+  worktreeDiff,
+  worktreeFingerprint,
+  worktreeSnapshot,
+  type WorktreeSnapshot,
+} from "../src/worktree.ts";
 
 export default function pylonCoreExtension(pi: ExtensionAPI) {
   const baseline = new Set<string>();
@@ -31,12 +38,59 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   let shellBaseline: Promise<string | undefined> | undefined;
   let shellCwd = "";
   let shellToolCallIds: string[] = [];
+  let runBaseline: Promise<WorktreeSnapshot | undefined> | undefined;
+  let runCwd = "";
+  const delegateNames = new Map<string, string>();
+  const delegateCounts = { A: 0, G: 0, S: 0 };
+
+  const rebuildDelegateNames = (ctx: any) => {
+    delegateNames.clear();
+    delegateCounts.A = delegateCounts.G = delegateCounts.S = 0;
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      const message = entry?.message;
+      const name = message?.details?.agentName;
+      const match = typeof name === "string" ? /^(A|G|S)(\d+)$/.exec(name) : undefined;
+      if (!match) continue;
+      delegateCounts[match[1] as keyof typeof delegateCounts] = Math.max(
+        delegateCounts[match[1] as keyof typeof delegateCounts],
+        Number(match[2]),
+      );
+      if (typeof message?.toolCallId === "string") delegateNames.set(message.toolCallId, name);
+    }
+  };
+  const disposeDelegateNames = pi.events.on("pylon:delegate-name", (request: any) => {
+    if (request?.version !== 1 || typeof request.callId !== "string" || typeof request.respond !== "function") return;
+    const prefix = request.kind === "advisor" ? "A" : request.kind === "grunt" ? "G"
+      : request.kind === "repo_scout" || request.kind === "web_scout" ? "S" : undefined;
+    if (!prefix) return;
+    let name = delegateNames.get(request.callId);
+    if (!name) {
+      name = `${prefix}${++delegateCounts[prefix]}`;
+      delegateNames.set(request.callId, name);
+    }
+    request.respond(name);
+  });
 
   const hasGate = () => [...policies.values()].some((policy) => policy.allowOnly);
   const managedTools = () =>
     new Set([...managedByOwner.values()].flatMap((tools) => [...tools]));
   const discoverableTools = () =>
     new Set([...policies.values()].flatMap((policy) => policy.deferredTools ?? []));
+  const discoveryCatalog = () => {
+    const entries = new Map<string, Set<string>>();
+    for (const policy of policies.values()) {
+      for (const name of policy.deferredTools ?? []) {
+        const usages = entries.get(name) ?? new Set<string>();
+        const usage = policy.deferredToolUsage?.[name];
+        if (usage) usages.add(usage);
+        entries.set(name, usages);
+      }
+    }
+    return [...entries].sort(([a], [b]) => a.localeCompare(b)).map(([name, usages]) => ({
+      name,
+      usage: usages.size === 1 ? [...usages][0] : undefined,
+    }));
+  };
   const captureBaseline = () => {
     if (initialized && hasGate()) return;
     const managed = managedTools();
@@ -95,6 +149,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       managedTools: [...message.managedTools],
       enabledTools: [...message.enabledTools],
       ...(message.deferredTools ? { deferredTools: [...message.deferredTools] } : {}),
+      ...(message.deferredToolUsage ? { deferredToolUsage: { ...message.deferredToolUsage } } : {}),
       ...(message.allowOnly ? { allowOnly: [...message.allowOnly] } : {}),
     });
     if (message.restoreTools && !hasGate()) {
@@ -128,6 +183,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
   const discoveryCapability = {
     eligible: () => [...discoverableTools()].sort(),
+    catalog: () => discoveryCatalog(),
     select: (names: string[]) => {
       if (!Array.isArray(names) || names.length > 6 || names.some((name) => typeof name !== "string" || !name) || new Set(names).size !== names.length)
         return { error: "selection must contain at most six unique non-empty tool names" };
@@ -227,12 +283,50 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];
+    runBaseline = undefined;
+    runCwd = "";
     captureBaseline();
     reconcile();
     rebuildTokenMeter(ctx);
+    rebuildDelegateNames(ctx);
   });
-  pi.on("session_tree", (_event, ctx) => rebuildTokenMeter(ctx));
-  pi.on("agent_settled", (_event, ctx) => rebuildTokenMeter(ctx));
+  pi.on("session_tree", (_event, ctx) => {
+    rebuildTokenMeter(ctx);
+    rebuildDelegateNames(ctx);
+  });
+  pi.on("agent_start", async (_event, ctx) => {
+    runCwd = ctx.cwd;
+    runBaseline = worktreeSnapshot(ctx.cwd);
+    await runBaseline;
+  });
+  pi.on("agent_settled", async (_event, ctx) => {
+    rebuildTokenMeter(ctx);
+    const beforePromise = runBaseline;
+    const cwd = runCwd || ctx.cwd;
+    runBaseline = undefined;
+    runCwd = "";
+    if (!beforePromise) return;
+    const [before, after] = await Promise.all([beforePromise, worktreeSnapshot(cwd)]);
+    const files = before && after ? await worktreeDiff(before, after) : undefined;
+    const assistantEntryId = [...(ctx.sessionManager?.getBranch?.() ?? [])]
+      .reverse()
+      .find((entry: any) => entry?.type === "message" && entry.message?.role === "assistant")
+      ?.id;
+    const summary = files && typeof assistantEntryId === "string"
+      ? createWorktreeSummary(assistantEntryId, files)
+      : undefined;
+    if (summary?.files.length) {
+      try { pi.appendEntry(WORKTREE_SUMMARY_ENTRY_TYPE, summary); }
+      catch { /* Summary persistence must not disrupt a completed model turn. */ }
+    }
+    pi.events.emit("pylon:worktree-summary", {
+      version: 1,
+      cwd,
+      known: Boolean(files),
+      assistantEntryId: summary?.assistantEntryId,
+      files: summary?.files ?? [],
+    });
+  });
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
     if (!shellBaseline) {
@@ -267,12 +361,16 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     disposeWorktreeObserverRequest();
     disposeTelemetryListener();
     disposeVerifyTelemetry();
+    disposeDelegateNames();
     shellBaseline = undefined;
     shellCwd = "";
     shellToolCallIds = [];
+    runBaseline = undefined;
+    runCwd = "";
     selectedTools.clear();
     policies.clear();
     managedByOwner.clear();
+    delegateNames.clear();
   });
 
   const doctor = async (ctx: any) => {

@@ -116,8 +116,22 @@ async function saveProjectApproval(approval: ApprovalIdentity): Promise<boolean>
 export default function guardExtension(pi: ExtensionAPI) {
   let blocked = 0;
   let confirmed = 0;
+  let approvalTimeoutSeconds: number | null | undefined;
   // This closure is per extension instance; Pi replaces it when a session is replaced.
   const sessionApprovals = new Set<string>();
+  const disposePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
+    if (event?.version !== 2) return;
+    const value = event.dialogTimeouts?.guard;
+    if (value === null || Number.isInteger(value) && value >= 15 && value <= 86_400) {
+      approvalTimeoutSeconds = value;
+    }
+  });
+  const dialogOptions = (signal?: AbortSignal) => approvalTimeoutSeconds === undefined
+    ? signal ? { signal } : undefined
+    : {
+        ...(signal ? { signal } : {}),
+        timeout: approvalTimeoutSeconds === null ? 0 : approvalTimeoutSeconds * 1_000,
+      };
 
   const publish = (ctx: any, decision: string, reason: string) => {
     pi.events.emit("pi-guard:decision", {
@@ -174,7 +188,7 @@ export default function guardExtension(pi: ExtensionAPI) {
       selected = await ctx.ui.select(
         `Pi Guard confirmation\n\n${reason}.\n\n${detail.slice(0, 2000)}${remembered}`,
         choices,
-        signal ? { signal } : undefined,
+        dialogOptions(signal),
       );
     } catch {
       return false;
@@ -267,4 +281,5 @@ export default function guardExtension(pi: ExtensionAPI) {
       ctx.ui.notify(`Pi Guard active. Blocked: ${blocked}. Approved: ${confirmed}.`, "info");
     },
   });
+  pi.on("session_shutdown", () => disposePolicy?.());
 }

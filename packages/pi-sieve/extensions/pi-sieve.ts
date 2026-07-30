@@ -34,7 +34,7 @@ function statsText(stats: TransformStats, outcomeLabel: string) {
   return [
     `scanned ${stats.scanned}`,
     `${outcomeLabel} ${stats.transformed}`,
-    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}`,
+    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}, stale-read ${stats.transformedBy.staleRead}`,
     `${outcomeLabel.replace("transformations", "gross omitted")} ~${estimatedTokens(stats.omittedChars)} tokens`,
     `${outcomeLabel.replace("transformations", "net saved")} ~${estimatedTokens(stats.netCharsSaved)} tokens`,
     `skips: recent-window ${skipped.recentWindow}, ineligible-tool ${skipped.ineligibleTool}, error ${skipped.error}, non-text/mixed/empty ${skipped.nonTextMixedOrEmptyContent}, malformed-structured ${skipped.malformedStructuredContent}, at/below-threshold ${skipped.atOrBelowThreshold}, recovery-unavailable ${skipped.recoveryUnavailable}`,
@@ -63,7 +63,7 @@ function statusText(
     "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
     `Retained successful-output budget: ${3 * threshold} characters, newest-to-oldest`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
-    `Read exclusion: ${READ_TOOL_NAME} is never transformed`,
+    `Read policy: ${READ_TOOL_NAME} is excluded from size/age pruning; superseded stale text reads may be replaced`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
     `Recent-window policy: ${RECENT_WINDOW_POLICY}`,
@@ -94,6 +94,25 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let configLoadError: unknown;
   let configQueue: Promise<void> = loadConfig(settingsPath).then(applyConfig).catch((error) => {
     configLoadError = error;
+  });
+  const stateSnapshot = (available = true) => ({
+    version: 1,
+    available,
+    mode,
+    threshold,
+    activePruning,
+    latestMode,
+    latest: latestStats,
+    cumulativeActual,
+    cumulativeProjected,
+    recalls: activeRecalls,
+    recalledChars: activeRecalledChars,
+    updatedAt: new Date().toISOString(),
+    ...(configLoadError ? { error: (configLoadError as any)?.message ?? String(configLoadError) } : {}),
+  });
+  const publishState = () => pi.events.emit("pi-sieve:state-change", stateSnapshot());
+  const disposeStateRequest = pi.events.on("pi-sieve:state-request", (request: any) => {
+    if (request?.version === 1 && typeof request.respond === "function") request.respond(stateSnapshot());
   });
   const updateConfig = async (patch: { activePruning?: boolean; threshold?: number }) => {
     const operation = configQueue.then(async () => {
@@ -130,7 +149,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   pi.registerTool({
     name: RECALL_TOOL_NAME,
     label: "Sieve Recall",
-    description: "Recover one current-turn tool result omitted by opt-in pi-sieve active pruning.",
+    description: "Recover one current-turn tool result omitted by pi-sieve active pruning.",
     parameters: Type.Object({
       toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
@@ -145,6 +164,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       const sourceChars = result.content.reduce((length, block) => length + block.text.length, 0);
       activeRecalls++;
       activeRecalledChars += sourceChars;
+      publishState();
       return {
         content: result.content.map((block) => ({ ...block })),
         details: { found: true, sourceToolCallId: result.toolCallId, sourceToolName: result.toolName, sourceIsError: result.isError },
@@ -156,6 +176,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     await configQueue;
     recoverableActiveResults.clear();
     refreshRecallTool();
+    publishState();
     if (configLoadError)
       ctx.ui.notify(`Could not load pi-sieve settings: ${(configLoadError as any)?.message ?? String(configLoadError)}`, "error");
   });
@@ -163,17 +184,20 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     recoverableActiveResults.clear();
   });
   pi.on("session_shutdown", () => {
+    disposeStateRequest();
+    pi.events.emit("pi-sieve:state-change", stateSnapshot(false));
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-sieve" });
   });
 
-  pi.on("context", (event) => {
+  pi.on("context", (event, ctx) => {
     if (mode === "disabled") return;
 
-    const result = sieveMessages(event.messages, threshold, { pruneActive: activePruning });
+    const result = sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
     latestMode = mode;
     latestStats = result.stats;
     if (mode === "observe") {
       addTransformStats(cumulativeProjected, result.stats);
+      publishState();
       // Classify exactly as enabled, but leave Pi's outbound messages unchanged.
       return;
     }
@@ -181,11 +205,12 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     addTransformStats(cumulativeActual, result.stats);
     for (const recoverable of result.recoverableActiveResults)
       recoverableActiveResults.set(recoverable.toolCallId, recoverable);
+    publishState();
     return { messages: result.messages };
   });
 
   pi.registerCommand("sieve", {
-    description: "Configure outbound bulky tool-output limiting, including opt-in active-result pruning and recall",
+    description: "Configure outbound bulky tool-output limiting, including active-result pruning and recall",
     handler: async (args, ctx) => {
       const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const [action = "status", value] = parts;
@@ -202,12 +227,14 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         }
         if (!activePruning) recoverableActiveResults.clear();
         refreshRecallTool();
+        publishState();
         ctx.ui.notify(`pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}.`, "info");
         return;
       }
       if (action === "enable" && hasNoValue) {
         mode = "enabled";
         refreshRecallTool();
+        publishState();
         ctx.ui.notify("pi-sieve enabled.", "info");
         return;
       }
@@ -215,6 +242,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         mode = "observe";
         recoverableActiveResults.clear();
         refreshRecallTool();
+        publishState();
         ctx.ui.notify("pi-sieve observing: classifications are reported without changing outbound messages.", "info");
         return;
       }
@@ -222,6 +250,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         mode = "disabled";
         recoverableActiveResults.clear();
         refreshRecallTool();
+        publishState();
         ctx.ui.notify("pi-sieve disabled.", "info");
         return;
       }
@@ -231,6 +260,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         cumulativeProjected = emptyTransformStats();
         activeRecalls = 0;
         activeRecalledChars = 0;
+        publishState();
         ctx.ui.notify("pi-sieve statistics reset.", "info");
         return;
       }
@@ -241,6 +271,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
           ctx.ui.notify(`Could not save pi-sieve threshold: ${error?.message ?? String(error)}`, "error");
           return;
         }
+        publishState();
         ctx.ui.notify(`pi-sieve threshold reset to ${threshold}.`, "info");
         return;
       }
@@ -257,6 +288,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
             ctx.ui.notify(`Could not save pi-sieve threshold: ${error?.message ?? String(error)}`, "error");
             return;
           }
+          publishState();
           ctx.ui.notify(`pi-sieve threshold set to ${threshold}.`, "info");
           return;
         }

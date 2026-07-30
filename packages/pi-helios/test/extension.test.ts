@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,8 +10,10 @@ import { consumeWebScoutGrant, issueWebScoutGrant, WEB_SCOUT_GRANT_ENV } from ".
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const WINDOW = { handle: 42, processId: 7, title: "Visual Studio Code" };
+const SETTINGS_PATH = join(tmpdir(), `pi-helios-test-${process.pid}.json`);
+after(() => rm(SETTINGS_PATH, { force: true }));
 
-function runtime(pi: Record<string, unknown> = {}) {
+function runtime(pi: Record<string, unknown> = {}, configPath = SETTINGS_PATH) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
@@ -28,7 +30,7 @@ function runtime(pi: Record<string, unknown> = {}) {
     registerTool(value: any) { tools.set(value.name, value); },
     registerCommand(name: string, value: any) { commands.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any);
+  } as any, { configPath });
   return { tools, commands, handlers, eventHandlers };
 }
 
@@ -65,13 +67,44 @@ test("registers native capture and constrained browser tools", () => {
   const browser = tools.get("helios_browser");
   assert.equal(browser.parameters.anyOf, undefined);
   assert.ok(browser.parameters.properties.actions);
+  const targetPattern = new RegExp(browser.parameters.properties.target.pattern);
+  assert.equal(targetPattern.test("f1e12"), true);
+  assert.equal(targetPattern.test("f1f2e12"), false);
   const guidance = browser.promptGuidelines.join("\n");
   assert.ok(guidance.length < 1_000);
   assert.match(guidance, /Never monitor/i);
   assert.match(guidance, /never guess selectors/i);
   assert.match(guidance, /continuation cursors/i);
+  assert.match(guidance, /Reuse snapshots returned by helios_browser actions/i);
+  assert.match(guidance, /Prefer targeted screenshots; use fullPage only/i);
   assert.match(guidance, /Batch only predetermined, non-consequential actions/i);
   assert.match(guidance, /User must supervise purchases/i);
+});
+
+test("advertises compact deferred browser usages to Pylon", async () => {
+  const { handlers, eventHandlers } = runtime();
+  let policy: any;
+  eventHandlers.set("pylon:tool-policy", [(value: any) => { policy = value; }]);
+  await handlers.get("session_start")![0]({}, context());
+  assert.deepEqual(policy.deferredToolUsage, {
+    helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
+    helios_capture: "capture a consented Windows window for visual debugging",
+  });
+});
+
+test("owned launches default to headless when visibility is not configured", async () => {
+  let openArgs: string[] = [];
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const cliCommand = args.find((arg) => ["open", "tab-list", "close"].includes(arg));
+    if (cliCommand === "open") openArgs = args;
+    if (cliCommand === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } }, `${SETTINGS_PATH}.missing`);
+  const ctx = context();
+  await handlers.get("session_start")![0]({}, ctx);
+  await tools.get("helios_browser").execute("start", { action: "start" }, undefined, undefined, ctx);
+  assert.ok(!openArgs.includes("--headed"));
+  await tools.get("helios_browser").execute("close", { action: "close" }, undefined, undefined, ctx);
 });
 
 test("visibility command changes future owned launches only", async () => {
@@ -93,6 +126,86 @@ test("visibility command changes future owned launches only", async () => {
   assert.ok(!openArgs.includes("--headed"));
   await commands.get("helios-visibility").handler("show", ctx);
   assert.match(notification, /Active owned session unchanged/);
+});
+
+test("embedded browser bridge launches headless, returns an ephemeral frame, and closes", async () => {
+  const commands: string[] = [];
+  const { eventHandlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const action = args.find((arg) => ["open", "resize", "tab-list", "screenshot", "close"].includes(arg)) ?? "unknown";
+    commands.push(action);
+    if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (action === "screenshot") {
+      const filename = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(filename, PNG);
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const call = async (input: Record<string, unknown>) => {
+    let claimed = false;
+    let response: Promise<any> | undefined;
+    const request = {
+      version: 1,
+      sessionId: "embedded-session",
+      owner: "web:tab-one",
+      ...input,
+      claim() { if (claimed) return false; claimed = true; return true; },
+      respond(value: Promise<unknown>) { response = Promise.resolve(value); },
+    };
+    const handler = eventHandlers.get("pylon:helios-browser-request")![0];
+    handler(request);
+    handler(request);
+    assert.ok(response);
+    return response;
+  };
+  const started = await call({ action: "start", url: "https://example.com", width: 900, height: 650 });
+  assert.equal(started.controlled, true);
+  assert.equal(commands.filter((command) => command === "open").length, 1);
+  const tabListsBeforeFrame = commands.filter((command) => command === "tab-list").length;
+  const frame = await call({ action: "frame" });
+  assert.equal(commands.filter((command) => command === "tab-list").length, tabListsBeforeFrame);
+  assert.equal(frame.frame.mimeType, "image/png");
+  assert.equal(Buffer.from(frame.frame.data, "base64").equals(PNG), true);
+  await call({ action: "close" });
+  assert.ok(commands.includes("resize"));
+  assert.ok(commands.includes("screenshot"));
+  assert.ok(commands.includes("close"));
+});
+
+test("embedded panel passively mirrors an agent-owned browser without taking control", async () => {
+  const commands: string[] = [];
+  const { tools, eventHandlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const action = args.find((arg) => ["open", "goto", "tab-list", "screenshot", "close"].includes(arg)) ?? "unknown";
+    commands.push(action);
+    if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (action === "screenshot") {
+      const filename = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(filename, PNG);
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } }, `${SETTINGS_PATH}.passive`);
+  const ctx = context();
+  await tools.get("helios_browser").execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+
+  const call = async (action: string) => {
+    let response: Promise<any> | undefined;
+    eventHandlers.get("pylon:helios-browser-request")![0]({
+      version: 1,
+      sessionId: "test-session",
+      owner: "web:tab-one",
+      action,
+      claim: () => true,
+      respond(value: Promise<unknown>) { response = Promise.resolve(value); },
+    });
+    assert.ok(response);
+    return response;
+  };
+  assert.equal((await call("status")).controlled, false);
+  const frame = await call("frame");
+  assert.equal(frame.controlled, false);
+  assert.equal(Buffer.from(frame.frame.data, "base64").equals(PNG), true);
+  await tools.get("helios_browser").execute("navigate", { action: "navigate", url: "https://example.com/next" }, undefined, undefined, ctx);
+  assert.ok(commands.includes("goto"));
+  await tools.get("helios_browser").execute("close", { action: "close" }, undefined, undefined, ctx);
 });
 
 test("doctor checks pinned CLI without launching a browser", async () => {
@@ -148,6 +261,9 @@ test("Web Scout child extension requires and consumes issued grant", async () =>
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   } as any);
   assert.deepEqual([...tools.keys()], ["scout_browser"]);
+  const targetPattern = new RegExp(tools.get("scout_browser").parameters.properties.target.pattern);
+  assert.equal(targetPattern.test("f1e12"), true);
+  assert.equal(targetPattern.test("f1f2e12"), false);
   assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
   await assert.rejects(webScoutBrowser({} as any), /grant is missing/);
@@ -165,7 +281,7 @@ test("Web Scout reuses navigation snapshots without extra snapshot subprocesses"
       commands.push(action);
       if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://1.1.1.1/)" }), stderr: "", killed: false };
       if (action === "eval") return { code: 0, stdout: JSON.stringify({ result: "https://1.1.1.1/next" }), stderr: "", killed: false };
-      if (action === "goto") return { code: 0, stdout: JSON.stringify({ snapshot: Array.from({ length: 105 }, (_, index) => `- link Item ${index} [ref=e${index + 1}]`).join("\n") }), stderr: "", killed: false };
+      if (action === "goto") return { code: 0, stdout: JSON.stringify({ snapshot: ["- text: link [ref=f1e999]", ...Array.from({ length: 105 }, (_, index) => `- link Item ${index} [ref=f1e${index + 1}]`)].join("\n") }), stderr: "", killed: false };
       return { code: 0, stdout: "{}", stderr: "", killed: false };
     },
     registerTool(value: any) { tools.set(value.name, value); },
@@ -173,14 +289,15 @@ test("Web Scout reuses navigation snapshots without extra snapshot subprocesses"
   } as any);
   const browser = tools.get("scout_browser");
   const navigated = await browser.execute("navigate", { action: "navigate", url: "https://1.1.1.1" });
-  assert.match(navigated.content[0].text, /ref=e1/);
+  assert.match(navigated.content[0].text, /ref=f1e1/);
   assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list"]);
-  const followed = await browser.execute("follow", { action: "follow", target: "e1" });
+  await assert.rejects(browser.execute("follow-spoof", { action: "follow", target: "f1e999" }), /link reference/);
+  const followed = await browser.execute("follow", { action: "follow", target: "f1e1" });
   assert.deepEqual(commands.slice(4), ["eval", "goto", "tab-list"]);
   const beforeContinue = commands.length;
   const continued = await browser.execute("continue", { action: "continue", cursor: followed.details.continuation });
   assert.equal(commands.length, beforeContinue);
-  assert.match(continued.content[0].text, /ref=e105/);
+  assert.match(continued.content[0].text, /ref=f1e105/);
   assert.equal(commands.includes("snapshot"), false);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
 });
@@ -292,27 +409,107 @@ test("browser continue pages cached output without another CLI command and repla
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });
 
-test("browser batch runs ordered steps and returns labeled aggregate details", async () => {
+test("browser snapshot mode defaults compact and full restores container targets", async () => {
+  const raw = '- generic [ref=e1]:\n  - button "Submit" [ref=e2]';
   const commands: string[] = [];
-  const { tools } = runtime({ exec: async (_command: string, args: string[]) => {
-    const command = args.find((value) => ["open", "goto", "tab-list", "close"].includes(value)) ?? "unknown";
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "snapshot", "tab-list", "close"].includes(value)) ?? "unknown";
     commands.push(command);
     if (command === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    if (command === "snapshot") return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
     return { code: 0, stdout: "{}", stderr: "", killed: false };
   } });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start" }, undefined, undefined, ctx);
+
+  const compact = await browser.execute("compact", { action: "snapshot" }, undefined, undefined, ctx);
+  assert.doesNotMatch(compact.content[0].text, /generic \[ref=e1\]/);
+  assert.match(compact.content[0].text, /button "Submit" \[ref=e2\]/);
+  await assert.rejects(browser.execute("removed", { action: "snapshot", target: "e1" }, undefined, undefined, ctx), /stale/);
+
+  const full = await browser.execute("full", { action: "snapshot", snapshotMode: "full" }, undefined, undefined, ctx);
+  assert.match(full.content[0].text, /generic \[ref=e1\]/);
+  await browser.execute("restored", { action: "snapshot", target: "e1" }, undefined, undefined, ctx);
+  await assert.rejects(browser.execute("wrong-mode", { action: "navigate", url: "https://example.com", snapshotMode: "full" }, undefined, undefined, ctx), /does not accept snapshotMode/);
+  assert.equal(commands.filter((command) => command === "snapshot").length, 3);
+
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+});
+
+test("browser batch compacts intermediate snapshots and metadata but keeps final output and images", async () => {
+  const commands: string[] = [];
+  let tabLists = 0;
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "goto", "reload", "screenshot", "snapshot", "tab-list", "close"].includes(value)) ?? "unknown";
+    commands.push(command);
+    if (command === "tab-list") {
+      const next = ++tabLists > 1;
+      return { code: 0, stdout: JSON.stringify({ result: `- 0: (current) [${next ? "Next" : "Example"}](https://example.com/${next ? "next" : ""})` }), stderr: "", killed: false };
+    }
+    if (command === "screenshot") {
+      const path = args.find((arg) => arg.startsWith("--filename="))!.slice("--filename=".length);
+      await writeFile(path, PNG);
+    }
+    const snapshot = command === "open" ? '- button "Start" [ref=e1]'
+      : command === "goto" ? '- button "Navigate" [ref=f1e2]'
+        : command === "reload" ? '- button "Reload" [ref=f2e3]'
+          : command === "snapshot" ? '- button "Final" [ref=f2e4]'
+            : undefined;
+    return { code: 0, stdout: JSON.stringify(snapshot ? { snapshot } : {}), stderr: "", killed: false };
+  } });
+  const ctx = context();
   const result = await tools.get("helios_browser").execute("batch", {
     actions: [
       { action: "start", url: "https://example.com" },
       { action: "navigate", url: "https://example.com/next" },
-      { action: "close" },
+      { action: "reload" },
+      { action: "screenshot" },
+      { action: "snapshot" },
     ],
+  }, undefined, undefined, ctx);
+  assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list", "reload", "tab-list", "screenshot", "snapshot"]);
+  assert.deepEqual(result.details.steps.map((step: any) => step.action), ["start", "navigate", "reload", "screenshot", "snapshot"]);
+  assert.equal(result.details.completed, 5);
+  const text = result.content.filter((item: any) => item.type === "text").map((item: any) => item.text);
+  assert.match(text[0], /^Step 1 \(start\): completed \(owned\)\./);
+  assert.match(text[0], /Page: Example/);
+  assert.doesNotMatch(text[0], /button "Start"/);
+  assert.match(text[1], /Page: Next/);
+  assert.doesNotMatch(text[1], /button "Navigate"/);
+  assert.doesNotMatch(text[2], /Page:/);
+  assert.doesNotMatch(text[2], /button "Reload"/);
+  const imageIndex = result.content.findIndex((item: any) => item.type === "image" && item.data.length > 0);
+  assert.ok(imageIndex > 0);
+  assert.match(result.content[imageIndex - 1].text, /^Step 4 \(screenshot\): completed\./);
+  assert.match(result.content[imageIndex + 1].text, /^Step 5 \(snapshot\):/);
+  assert.match(text.at(-1), /^Step 5 \(snapshot\):\nBrowser snapshot completed/);
+  assert.match(text.at(-1), /button "Final" \[ref=f2e4\]/);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  assert.equal(commands.at(-1), "close");
+});
+
+test("browser batch keeps intermediate warnings while omitting truncated snapshot text", async () => {
+  const raw = ['- textbox "Password" [ref=f1e1]: hunter2', ...Array.from({ length: 100 }, (_, index) => `- button Item ${index} [ref=f1e${index + 2}]`)].join("\n");
+  let tabLists = 0;
+  const { tools } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "click", "tab-list", "close"].includes(value));
+    if (command === "tab-list") {
+      if (++tabLists > 1) return { code: 1, stdout: "", stderr: "metadata failed", killed: false };
+      return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+    }
+    if (command === "open") return { code: 0, stdout: JSON.stringify({ snapshot: "- button Submit [ref=e1]" }), stderr: "", killed: false };
+    if (command === "click") return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const result = await tools.get("helios_browser").execute("batch-warnings", {
+    actions: [{ action: "start" }, { action: "click", target: "e1" }, { action: "close" }],
   }, undefined, undefined, context());
-  assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list", "close"]);
-  assert.deepEqual(result.details.steps.map((step: any) => step.action), ["start", "navigate", "close"]);
-  assert.deepEqual(result.details.steps.map((step: any) => step.details.action), ["start", "navigate", "close"]);
-  assert.equal(result.details.completed, 3);
-  assert.match(result.content[0].text, /^Step 1 \(start\):/);
-  assert.match(result.content[1].text, /^Step 2 \(navigate\):/);
+  assert.match(result.content[1].text, /Page metadata may be stale/);
+  assert.match(result.content[1].text, /Redactions: 1/);
+  assert.match(result.content[1].text, /Intermediate snapshot omitted and truncated; 1 lines \/ [1-9][0-9]* bytes remain/);
+  assert.match(result.content[1].text, /Request a new snapshot if needed/);
+  assert.doesNotMatch(result.content[1].text, /Continuation:|hunter2|button Item/);
 });
 
 test("browser single-action result remains unwrapped", async () => {
@@ -343,6 +540,7 @@ test("browser batch rejects mixed input and stops after declined attachment", as
   assert.equal(declined.details.completed, 1);
   assert.equal(declined.details.stoppedAt, 1);
   assert.equal(declined.details.reason, "declined");
+  assert.match(declined.content[0].text, /^Step 1 \(attach\):\nUser declined browser attachment\./);
   assert.equal(calls, 0);
 });
 
@@ -358,7 +556,11 @@ test("browser batch stops after a failed step", async () => {
   const ctx = context();
   await assert.rejects(tools.get("helios_browser").execute("failed", {
     actions: [{ action: "start" }, { action: "navigate", url: "https://example.com" }, { action: "close" }],
-  }, undefined, undefined, ctx), /batch step 2 \(navigate\) failed:.*command failed/i);
+  }, undefined, undefined, ctx), (error: any) => {
+    assert.match(error.message, /batch step 2 \(navigate\) failed:.*command failed/i);
+    assert.ok(error.cause);
+    return true;
+  });
   assert.deepEqual(commands, ["open", "tab-list", "goto"]);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });

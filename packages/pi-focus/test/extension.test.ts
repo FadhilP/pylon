@@ -54,10 +54,11 @@ test("focused chrome shows current session name and Git branch", () => {
     bold: (text: string) => text,
     fg: (_color: string, text: string) => text,
   };
+  let branchReads = 0;
   const ctx: any = {
     mode: "tui",
     cwd: "/work/pylon",
-    sessionManager: { getBranch: () => [] },
+    sessionManager: { getBranch: () => { branchReads++; return []; } },
     getContextUsage: () => undefined,
     ui: {
       theme,
@@ -89,10 +90,14 @@ test("focused chrome shows current session name and Git branch", () => {
     },
   );
   assert.match(footer.render(120)[0], /^Renamed session · pylon:feature\/footer · READY/);
+  footer.render(120);
+  assert.equal(branchReads, 1);
   branch = null;
   branchChange();
   assert.equal(renders, 1);
+  assert.equal(branchReads, 2);
   assert.match(footer.render(120)[0], /^Renamed session · pylon · READY/);
+  assert.equal(branchReads, 2);
 });
 
 test("Grunt shows and clears child-model activity widget", () => {

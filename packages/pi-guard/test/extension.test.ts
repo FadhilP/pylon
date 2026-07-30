@@ -56,7 +56,10 @@ function context(cwd: string, selections: Array<string | undefined>, prompts: an
   return {
     cwd, hasUI: true,
     ui: {
-      async select(title: string, options: string[]) { prompts.push({ title, options }); return selections.shift(); },
+      async select(title: string, options: string[], dialogOptions?: { timeout?: number }) {
+        prompts.push({ title, options, dialogOptions });
+        return selections.shift();
+      },
       setStatus() {},
     },
   };
@@ -145,4 +148,32 @@ test("malformed records, cancellation, UI errors, and no UI fail closed", { conc
     cwd: root, hasUI: false, ui: { async select() { throw new Error("must not run"); }, setStatus() {} },
   });
   assert.equal(unavailable.block, true);
+});
+
+test("Guard uses the effective runtime-policy timeout", { concurrency: false }, async () => {
+  const { root, outside, agent } = await paths();
+  process.env.PI_CODING_AGENT_DIR = agent;
+  const timed = harness();
+  timed.events.emit("pylon:runtime-policy", {
+    version: 2,
+    dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  const timedPrompts: any[] = [];
+  assert.equal(
+    (await timed.tool(event("write", outside), context(root, ["Deny"], timedPrompts))).block,
+    true,
+  );
+  assert.deepEqual(timedPrompts[0].dialogOptions, { timeout: 90_000 });
+
+  const never = harness();
+  never.events.emit("pylon:runtime-policy", {
+    version: 2,
+    dialogTimeouts: { guard: null, clarify: 60 },
+  });
+  const neverPrompts: any[] = [];
+  assert.equal(
+    (await never.tool(event("write", outside), context(root, ["Deny"], neverPrompts))).block,
+    true,
+  );
+  assert.deepEqual(neverPrompts[0].dialogOptions, { timeout: 0 });
 });

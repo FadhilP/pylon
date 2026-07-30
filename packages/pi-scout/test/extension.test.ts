@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
+import scout, { repoScoutOrientationGuidance, startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
@@ -33,7 +33,7 @@ async function harness(runRepoScout?: Parameters<typeof scout>[1], enabled = tru
     getActiveTools: () => [...active], setActiveTools: (value: string[]) => { active = value; },
     getThinkingLevel: () => "low",
   };
-  scout(pi, runRepoScout);
+  scout(pi, runRepoScout, async () => true);
   return { events, tools, handlers, restore() { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; } };
 }
 
@@ -55,6 +55,53 @@ test("historical findings use one persistent before-agent message", async () => 
   } finally { runtime.restore(); }
 });
 
+test("Repo Scout orientation guidance follows currently selected tools", async () => {
+  assert.equal(repoScoutOrientationGuidance(["read", "symbol_search"]), undefined);
+  const indexed = repoScoutOrientationGuidance(["repo_scout", "symbol_search", "rg", "read"]);
+  assert.match(indexed!, /symbol_search.*identifiers/);
+  assert.match(indexed!, /rg.*live content/);
+  assert.match(indexed!, /read.*narrow source ranges/);
+  assert.doesNotMatch(indexed!, /`(?:code_search|relationship_graph|fd|grep|find)`/);
+  const standalone = repoScoutOrientationGuidance(["repo_scout", "grep", "find", "read"]);
+  assert.match(standalone!, /find.*paths/);
+  assert.match(standalone!, /grep.*live content/);
+  assert.doesNotMatch(standalone!, /`(?:symbol_search|code_search|relationship_graph|fd|rg)`/);
+
+  const runtime = await harness();
+  try {
+    const result = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "BASE",
+      systemPromptOptions: { selectedTools: ["repo_scout", "code_search", "read"] },
+    }, context());
+    assert.match(result.systemPrompt, /^BASE\n\nRepo Scout orientation tools currently visible:/);
+    assert.match(result.systemPrompt, /code_search.*concepts/);
+    assert.match(result.systemPrompt, /Unless exact anchors already exist, use 1–3 targeted searches/);
+    assert.doesNotMatch(result.systemPrompt, /`(?:symbol_search|relationship_graph|fd|rg|grep|find)`/);
+
+    runtime.handlers.get("input")?.forEach(handler => handler({
+      source: "interactive",
+      text: "Search my Pi sessions for absent evidence",
+    }));
+    const combined = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "CHAINED",
+      systemPromptOptions: { selectedTools: ["repo_scout", "grep", "read"] },
+    }, context());
+    assert.match(combined.message.content, /No matching eligible Pi-session text found/);
+    assert.match(combined.systemPrompt, /^CHAINED\n\nRepo Scout orientation tools currently visible:/);
+
+    runtime.handlers.get("input")?.forEach(handler => handler({
+      source: "interactive",
+      text: "Search my Pi sessions for absent evidence",
+    }));
+    const messageOnly = await runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "CHAINED",
+      systemPromptOptions: { selectedTools: ["read"] },
+    }, context());
+    assert.match(messageOnly.message.content, /No matching eligible Pi-session text found/);
+    assert.equal("systemPrompt" in messageOnly, false);
+  } finally { runtime.restore(); }
+});
+
 test("Repo Scout renders collapsed failures with reason", async () => {
   const runtime = await harness();
   try {
@@ -73,24 +120,60 @@ test("Repo Scout renders collapsed failures with reason", async () => {
 
 test("Repo Scout publishes sanitized bounded child failure details", async () => {
   const secret = `sk-${"x".repeat(40)}`;
-  const runtime = await harness(async (): Promise<ScoutRun> => ({
+  let calls = 0;
+  const runtime = await harness(async (): Promise<ScoutRun> => {
+    calls++;
+    return ({
     text: "", error: `bad\napi_key=${secret}\u2028${"z".repeat(600)}`,
     stderr: "", durationMs: 1,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
     turns: [], truncated: false, exitCode: 1, activity: [],
     budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
     contextTokens: 0, cacheReadTokens: 0,
-  }));
+  });
+  });
   try {
     const result = await runtime.tools.get("repo_scout").execute(
       "failure", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
     );
     assert.equal(result.details.failureCode, "child_error");
+    assert.equal(calls, 1);
     assert.ok(result.details.failureMessage.length <= 500);
     assert.doesNotMatch(result.details.failureMessage, new RegExp(secret));
     assert.doesNotMatch(result.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.match(result.content[0].text, /\[possible credential redacted\]/);
     assert.doesNotMatch(result.content[0].text, new RegExp(secret));
+  } finally { runtime.restore(); }
+});
+
+test("Repo Scout retries transient child failures in fresh sessions", async () => {
+  let calls = 0;
+  const sessionDirs: string[] = [];
+  const runtime = await harness(async (args): Promise<ScoutRun> => {
+    calls++;
+    sessionDirs.push(args[args.indexOf("--session-dir") + 1]);
+    if (calls === 1) return {
+      text: "", error: "503 model at capacity", stderr: "", durationMs: 1,
+      usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 1, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
+    };
+    return {
+      text: "## Findings\n\n- Recovered. `src/a.ts:1-2`", stderr: "", durationMs: 1,
+      usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 0, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 5, cacheReadTokens: 0,
+    };
+  });
+  try {
+    const result = await runtime.tools.get("repo_scout").execute(
+      "retry", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
+    );
+    assert.equal(calls, 2);
+    assert.equal(result.details.attempts, 2);
+    assert.equal(result.details.failureCode, undefined);
+    assert.equal(result.details.usage.input, 3);
+    assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally { runtime.restore(); }
 });
 
@@ -256,18 +339,29 @@ test("Scout registers separate repo and web tools", async () => {
     assert.equal(repoGuidelines.length, 3);
     assert.ok(repoGuidance.length < 1_000);
     assert.ok(repoGuidelines.every((guideline) => /repo_scout/i.test(guideline)));
-    assert.match(repoGuidance, /before edits needing non-local repository/i);
-    assert.match(repoGuidance, /Skip repo_scout for known-file self-contained edits/i);
+    assert.match(repoGuidance, /Default to repo_scout for non-local, architecture-mapping, data-flow, cross-file, or unfamiliar-code work/i);
+    assert.match(repoGuidance, /visible orientation searches/i);
+    assert.match(repoGuidance, /find exact anchors and sharpen the task/i);
+    assert.doesNotMatch(repoGuidance, /symbol_search|code_search|relationship_graph|fd\/rg/i);
+    assert.match(repoGuidance, /Skip orientation with exact anchors/i);
+    assert.match(repoGuidance, /Leave non-local tracing to repo_scout/i);
+    assert.match(repoGuidance, /skip it only for known-file self-contained work/i);
+    assert.match(repoGuidance, /Convert normative or mixed questions into factual tasks/i);
+    assert.match(repoGuidance, /never ask repo_scout to design, recommend, prioritize, choose architecture/i);
+    assert.match(repoGuidance, /decide whether something should be canonical/i);
     assert.match(repoGuidance, /observable action/i);
     assert.match(repoGuidance, /concrete scope anchors/i);
     assert.match(repoGuidance, /required evidence/i);
     assert.match(repoGuidance, /finite stopping boundary/i);
-    assert.match(repoGuidance, /callers, config, registries, and tests/i);
-    assert.match(repoGuidance, /main model evaluates/i);
-    assert.match(repoGuidance, /Reread only for an exact edit, evidence gap\/conflict, or changed state/i);
-    assert.match(repoGuidance, /each child session starts fresh/i);
-    assert.match(repoGuidance, /otherwise call it before mutation/i);
+    assert.match(repoGuidance, /main model evaluates and decides/i);
+    assert.match(repoGuidance, /Reread only for exact edit, evidence gap\/conflict, or changed state/i);
+    assert.match(repoGuidance, /each repo_scout child starts fresh/i);
     assert.doesNotMatch(repoGuidance, /Replace ['"]|Across packages\/a|Within named auth entrypoints/i);
+    const taskDescription = repoTool.parameters.properties.task.description as string;
+    const retryDescription = repoTool.parameters.properties.retryReason.description as string;
+    assert.match(taskDescription, /Evidence-only repository search, mapping, or tracing task/i);
+    assert.match(taskDescription, /exclude design, recommendation, prioritization, and architecture-choice requests/i);
+    assert.match(retryDescription, /not a decision or recommendation request/i);
     assert.match(runtime.tools.get("web_scout").description, /fresh temporary Helios browser/);
   } finally { runtime.restore(); }
 });
@@ -337,13 +431,13 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
     }, undefined, undefined, context({ hasUI: false, ui: {
       async confirm() { confirmations++; return false; }, setStatus() {},
     } }));
-    assert.equal(result.content[0].text, "cited report");
+    assert.match(result.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
 
     const uiResult = await runtime.tools.get("web_scout").execute("ui", { task: "read current docs", maxPages: 2 }, undefined, undefined, context({ ui: {
       async confirm() { confirmations++; return false; },
       setStatus(_key: string, value: string | undefined) { statuses.push(value); },
     } }));
-    assert.equal(uiResult.content[0].text, "cited report");
+    assert.match(uiResult.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
     assert.equal(confirmations, 0);
     assert.equal(revoked, 2);
     assert.equal(statuses.at(-1), undefined);

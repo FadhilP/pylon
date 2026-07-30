@@ -295,3 +295,46 @@ test("verify selects a stable child-package check ID", async () => {
   assert.match(executions[0]!.command, /npm.*run.*test/);
   assert.equal(result.details.results[0].id, "package-a/npm:test");
 });
+
+test("runtime policy overrides model-supplied Verify checks", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-policy-"));
+  await writeFile(join(cwd, "package.json"), JSON.stringify({
+    scripts: { test: "node test.js", lint: "node lint.js" },
+  }));
+  let tool: any;
+  const sessionHandlers = new Map<string, (value: any, ctx?: any) => any>();
+  const eventHandlers = new Map<string, (value: any) => any>();
+  const commands: string[] = [];
+  extension({
+    registerTool: (value: any) => { tool = value; },
+    on: (name: string, handler: (value: any, ctx?: any) => any) => sessionHandlers.set(name, handler),
+    events: {
+      emit: () => {},
+      on: (name: string, handler: (value: any) => any) => {
+        eventHandlers.set(name, handler);
+        return () => {};
+      },
+    },
+    appendEntry: () => {},
+    exec: async (command: string, args: string[]) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (command === "git") return { code: 0, stdout: "", stderr: "" };
+      commands.push(args.join(" "));
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  } as any);
+  sessionHandlers.get("session_start")!({}, {
+    cwd,
+    sessionManager: { getSessionId: () => "session", getEntries: () => [] },
+  });
+  eventHandlers.get("pylon:runtime-policy")!({
+    version: 1,
+    sessionId: "session",
+    verify: { mode: "selected", checks: ["npm:lint"] },
+  });
+  await tool.execute("policy", { scope: "project", checks: ["npm:test"] }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.deepEqual(commands, ["/d /s /c npm run lint"]);
+});

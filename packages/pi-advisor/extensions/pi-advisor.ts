@@ -23,17 +23,21 @@ import {
 import { advisorMaxTokens, buildSnapshot, type DuplicateTelemetry, type SectionAllocation } from "../src/context.ts";
 import { loadEvidenceRecords, type EvidenceRef } from "../src/evidence.ts";
 import { redact } from "../src/redact.ts";
+import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
 
 type FailureCode =
   | "unavailable"
   | "timeout"
   | "aborted"
   | "rate_limited"
+  | "provider_unavailable"
   | "invalid_response"
   | "budget_exceeded"
   | "pricing_unavailable"
   | "context_overflow";
 type Details = {
+  agentName: string;
+  startedAt: string;
   advisorModel?: string;
   durationMs: number;
   usage: {
@@ -43,6 +47,7 @@ type Details = {
     cacheWrite: number;
     cost: number;
   };
+  thinking?: string;
   callNumber: 1 | 2 | 3;
   snapshotEstimatedTokens: number;
   redactionCount: number;
@@ -53,6 +58,7 @@ type Details = {
   duplicateTelemetry?: DuplicateTelemetry;
   failureCode?: FailureCode;
   failureMessage?: string;
+  attempts?: number;
 };
 const emptyUsage = () => ({
   input: 0,
@@ -84,12 +90,27 @@ function errorCode(
 ): FailureCode {
   if (timedOut) return "timeout";
   if (aborted) return "aborted";
-  return /429|rate.?limit/i.test(String((error as any)?.message ?? error))
+  const message = String((error as any)?.message ?? error);
+  return /429|rate.?limit/i.test(message)
     ? "rate_limited"
-    : "invalid_response";
+    : isTransientProviderFailure(message)
+      ? "provider_unavailable"
+      : "invalid_response";
+}
+function delegatedName(pi: ExtensionAPI, callId: string): string {
+  let assigned: string | undefined;
+  pi.events.emit("pylon:delegate-name", {
+    version: 1,
+    kind: "advisor",
+    callId,
+    respond: (name: unknown) => {
+      if (typeof name === "string" && /^A\d+$/.test(name)) assigned = name;
+    },
+  });
+  return assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
 }
 
-export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = complete) {
+export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = complete, retryWait = waitForDelegateRetry) {
   let calls = 0;
   let previousAdvice: string | undefined;
   let advisorQueue = Promise.resolve();
@@ -150,7 +171,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     name: "advisor",
     label: "Advisor",
     description:
-      "Send configured tool-free strategic advisor a concrete request using a redacted bounded snapshot of current executor context plus optional high-priority workspace file ranges. Maximum three authenticated attempts per original user prompt; unavailable model or credential checks do not consume quota.",
+      "Send configured tool-free strategic advisor a concrete request using a redacted bounded snapshot of current executor context plus optional high-priority workspace file ranges. Maximum three successful consultations per original user prompt; failures do not consume quota.",
     promptSnippet:
       "Consult selected strategic model for difficult planning, review, or failure recovery",
     promptGuidelines: [
@@ -187,7 +208,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       return serializeAdvisor(async () => {
       const callNumber = Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"];
       const cacheRetention: "short" | "long" =
@@ -212,11 +233,17 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           },
         };
       const started = Date.now();
+      const startedAt = new Date(started).toISOString();
+      const agentName = delegatedName(pi, id);
+      const named = (value: string) => `[${agentName} · Advisor] ${value}`;
       const model = await configuredModel(ctx);
       const config = await loadConfig();
       const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
       const base = {
+        agentName,
+        startedAt,
         advisorModel: model ? modelName(model) : undefined,
+        thinking,
         durationMs: 0,
         usage: emptyUsage(),
         callNumber,
@@ -246,7 +273,6 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
           ],
           details: { ...base, failureCode: "unavailable" as const },
         };
-      calls++;
       const messages: any[] = ctx.sessionManager
         .buildContextEntries()
         .flatMap(sessionEntryToContextMessages);
@@ -278,7 +304,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       );
       if (snapshot.requiredContextOmitted)
         return {
-          content: [{ type: "text" as const, text: "Advisor failed nonfatally: required context exceeds the input budget." }],
+          content: [{ type: "text" as const, text: named("Advisor failed nonfatally: required context exceeds the input budget.") }],
           details: { ...base, snapshotEstimatedTokens: 0, truncated: true, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: "context_overflow" as const },
         };
       const budget = advisorBudget(
@@ -293,7 +319,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             ? "estimated input cost exceeds the limit"
             : "estimated output budget is exhausted";
         return {
-          content: [{ type: "text" as const, text: `Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).` }],
+          content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`) }],
           details: { ...base, snapshotEstimatedTokens: snapshot.estimatedTokens, redactionCount: snapshot.redactionCount, truncated: snapshot.truncated, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: budget.error === "pricing_unavailable" ? "pricing_unavailable" as const : "budget_exceeded" as const },
         };
       }
@@ -336,135 +362,116 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       try {
         const userMessage: Message = {
           role: "user",
-          content: [
-            {
-              type: "text",
-              text: `${continuationPrefix}${snapshot.text}`,
-            },
-          ],
+          content: [{ type: "text", text: `${continuationPrefix}${snapshot.text}` }],
           timestamp: Date.now(),
         };
-        const response = await completeAdvisor(
-          model,
-          { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
-          {
-            apiKey: auth.apiKey,
-            headers: auth.headers,
-            env: auth.env,
-            signal: controller.signal,
-            timeoutMs: ADVISOR_TIMEOUT_MS,
-            maxTokens: budget.maxTokens,
-            cacheRetention,
-            sessionId: `${ctx.sessionManager.getSessionId()}:advisor`,
-            ...(thinking
-              ? { reasoning: thinking === "off" ? undefined : thinking }
-              : process.env.PI_ADVISOR_THINKING
-                ? { reasoning: process.env.PI_ADVISOR_THINKING }
-                : {}),
-          },
-        );
-        const raw = response.content
-          .filter((part) => part.type === "text")
-          .map((part) => (part as any).text)
-          .join("\n")
-          .trim();
-        if (
-          response.stopReason === "error" ||
-          response.stopReason === "aborted" ||
-          !raw
-        ) {
-          const code =
-            response.stopReason === "aborted"
-              ? timedOut
-                ? "timeout"
-                : "aborted"
-              : /429|rate.?limit/i.test(response.errorMessage ?? "")
-                ? "rate_limited"
-                : "invalid_response";
-          return {
-            content: [
+        let attempts = 0;
+        const totalUsage = emptyUsage();
+        for (;;) {
+          attempts++;
+          try {
+            const response = await completeAdvisor(
+              model,
+              { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
               {
-                type: "text" as const,
-                text: `Advisor failed nonfatally: ${code}.`,
+                apiKey: auth.apiKey,
+                headers: auth.headers,
+                env: auth.env,
+                signal: controller.signal,
+                timeoutMs: ADVISOR_TIMEOUT_MS,
+                maxTokens: budget.maxTokens,
+                cacheRetention,
+                sessionId: `${ctx.sessionManager.getSessionId()}:advisor`,
+                ...(thinking
+                  ? { reasoning: thinking === "off" ? undefined : thinking }
+                  : process.env.PI_ADVISOR_THINKING
+                    ? { reasoning: process.env.PI_ADVISOR_THINKING }
+                    : {}),
               },
-            ],
-            details: {
+            );
+            const responseUsage = response.usage;
+            if (responseUsage) {
+              totalUsage.input += responseUsage.input ?? 0;
+              totalUsage.output += responseUsage.output ?? 0;
+              totalUsage.cacheRead += responseUsage.cacheRead ?? 0;
+              totalUsage.cacheWrite += responseUsage.cacheWrite ?? 0;
+              totalUsage.cost += responseUsage.cost?.total ?? 0;
+            }
+            const raw = response.content
+              .filter((part) => part.type === "text")
+              .map((part) => (part as any).text)
+              .join("\n")
+              .trim();
+            if (response.stopReason === "error" || response.stopReason === "aborted" || !raw) {
+              const retryable = response.stopReason === "error" && isTransientProviderFailure(response.errorMessage);
+              if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && retryable && await retryWait(attempts, controller.signal)) {
+                onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, attempts } });
+                continue;
+              }
+              const code = response.stopReason === "aborted"
+                ? timedOut ? "timeout" : "aborted"
+                : /429|rate.?limit/i.test(response.errorMessage ?? "")
+                  ? "rate_limited"
+                  : retryable ? "provider_unavailable" : "invalid_response";
+              return {
+                content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${code}.`) }],
+                details: {
+                  ...base,
+                  durationMs: Date.now() - started,
+                  usage: totalUsage,
+                  snapshotEstimatedTokens: snapshot.estimatedTokens,
+                  redactionCount: snapshot.redactionCount,
+                  truncated: snapshot.truncated,
+                  omittedEvidence: snapshot.omittedEvidence,
+                  sectionAllocations: snapshot.sectionAllocations,
+                  duplicateTelemetry: snapshot.duplicateTelemetry,
+                  failureCode: code,
+                  failureMessage: failureMessage(response.errorMessage, !raw ? "Provider returned no text content." : "Provider returned an error without a message."),
+                  attempts,
+                },
+              };
+            }
+            const advice = capAdvice(raw);
+            calls++;
+            previousAdvice = advice.text;
+            const details: Details = {
               ...base,
               durationMs: Date.now() - started,
+              usage: totalUsage,
               snapshotEstimatedTokens: snapshot.estimatedTokens,
               redactionCount: snapshot.redactionCount,
-              truncated: snapshot.truncated,
+              truncated: snapshot.truncated || advice.truncated,
               omittedEvidence: snapshot.omittedEvidence,
               sectionAllocations: snapshot.sectionAllocations,
               duplicateTelemetry: snapshot.duplicateTelemetry,
-              failureCode: code,
-              failureMessage: failureMessage(
-                response.errorMessage,
-                !raw
-                  ? "Provider returned no text content."
-                  : "Provider returned an error without a message.",
-              ),
-            },
-          };
+              attempts,
+            };
+            return { content: [{ type: "text" as const, text: `${named("Advice:")}\n\n${advice.text}` }], details };
+          } catch (error) {
+            if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && isTransientProviderFailure(error) && await retryWait(attempts, controller.signal)) {
+              onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, attempts } });
+              continue;
+            }
+            const code = errorCode(error, controller.signal.aborted && !timedOut, timedOut);
+            return {
+              content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${code}.`) }],
+              details: {
+                ...base,
+                durationMs: Date.now() - started,
+                usage: totalUsage,
+                snapshotEstimatedTokens: snapshot.estimatedTokens,
+                redactionCount: snapshot.redactionCount,
+                truncated: snapshot.truncated,
+                omittedEvidence: snapshot.omittedEvidence,
+                sectionAllocations: snapshot.sectionAllocations,
+                duplicateTelemetry: snapshot.duplicateTelemetry,
+                failureCode: code,
+                failureMessage: failureMessage(error, "Advisor request failed without an Error message."),
+                attempts,
+              },
+            };
+          }
         }
-        const advice = capAdvice(raw);
-        previousAdvice = advice.text;
-        const usage = response.usage;
-        const details: Details = {
-          ...base,
-          durationMs: Date.now() - started,
-          usage: {
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite,
-            cost: usage.cost.total,
-          },
-          snapshotEstimatedTokens: snapshot.estimatedTokens,
-          redactionCount: snapshot.redactionCount,
-          truncated: snapshot.truncated || advice.truncated,
-          omittedEvidence: snapshot.omittedEvidence,
-          sectionAllocations: snapshot.sectionAllocations,
-          duplicateTelemetry: snapshot.duplicateTelemetry,
-        };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `\n\n${advice.text}`,
-            },
-          ],
-          details,
-        };
-      } catch (error) {
-        const code = errorCode(
-          error,
-          controller.signal.aborted && !timedOut,
-          timedOut,
-        );
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Advisor failed nonfatally: ${code}.`,
-            },
-          ],
-          details: {
-            ...base,
-            durationMs: Date.now() - started,
-            snapshotEstimatedTokens: snapshot.estimatedTokens,
-            redactionCount: snapshot.redactionCount,
-            truncated: snapshot.truncated,
-            omittedEvidence: snapshot.omittedEvidence,
-            sectionAllocations: snapshot.sectionAllocations,
-            duplicateTelemetry: snapshot.duplicateTelemetry,
-            failureCode: code,
-            failureMessage: failureMessage(
-              error,
-              "Advisor request failed without an Error message.",
-            ),
-          },
-        };
       } finally {
         clearTimeout(timeout);
         clearInterval(heartbeat);
@@ -558,7 +565,10 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
         selected =
           (await ctx.ui.select(
             "Advisor model",
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
         if (!selected) return;
       }

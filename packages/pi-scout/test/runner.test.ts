@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { cacheReadTokensFromUsage, contextTokensFromUsage, runPi } from "../src/runner.ts";
+import { cacheReadTokensFromUsage, contextTokensFromUsage, getPiInvocation, runPi } from "../src/runner.ts";
 import { scoutChildEnv } from "../src/child-env.ts";
 
 const rpc = (body: string) => `import readline from 'node:readline';
@@ -19,6 +19,31 @@ async function fake(prefix: string, body: string) {
   await writeFile(script, rpc(body));
   return { dir, invocation: { command: process.execPath, args: [script] } };
 }
+
+test("child invocation does not mistake an embedding web host for the Pi CLI", async () => {
+  const originalScript = process.argv[1];
+  const originalMarker = process.env.PI_CODING_AGENT;
+  const dir = await mkdtemp(join(tmpdir(), "scout-host-"));
+  const host = join(dir, "web-server.mjs");
+  await writeFile(host, "");
+  try {
+    process.argv[1] = host;
+    delete process.env.PI_CODING_AGENT;
+    const embedded = getPiInvocation(["--mode", "rpc"]);
+    assert.equal(embedded.command, process.execPath);
+    assert.notEqual(embedded.args[0], host);
+    assert.match(embedded.args[0]!, /[\\/]dist[\\/]cli\.js$/);
+
+    process.env.PI_CODING_AGENT = "true";
+    assert.notEqual(getPiInvocation(["--mode", "rpc"]).args[0], host);
+    process.argv[1] = embedded.args[0]!;
+    assert.deepEqual(getPiInvocation(["--mode", "rpc"]).args, [embedded.args[0], "--mode", "rpc"]);
+  } finally {
+    process.argv[1] = originalScript;
+    if (originalMarker === undefined) delete process.env.PI_CODING_AGENT;
+    else process.env.PI_CODING_AGENT = originalMarker;
+  }
+});
 
 // Tiny RPC children acknowledge commands and stay alive until the runner terminates them.
 test("runner submits its prompt and selects final assistant usage", async () => {

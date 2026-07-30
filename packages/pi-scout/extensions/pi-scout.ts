@@ -24,6 +24,7 @@ import { capReport, capText, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, struc
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "../src/redact.ts";
+import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
 import {
   collectSessionEvidence,
   parseSessionIntent,
@@ -100,6 +101,18 @@ function webStartUrl(value: string): string {
 function modelName(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
+function delegatedName(pi: ExtensionAPI, kind: "repo_scout" | "web_scout", callId: string): string {
+  let assigned: string | undefined;
+  pi.events.emit("pylon:delegate-name", {
+    version: 1,
+    kind,
+    callId,
+    respond: (name: unknown) => {
+      if (typeof name === "string" && /^S\d+$/.test(name)) assigned = name;
+    },
+  });
+  return assigned ?? `S-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
+}
 export function startsNewRepoSequence(event: { source: string; streamingBehavior?: string }): boolean {
   return event.source !== "extension" && event.streamingBehavior !== "steer";
 }
@@ -137,7 +150,24 @@ export function searchTelemetry(activity: readonly ScoutActivity[], seen: Set<st
   return { searches, repeatedSearches };
 }
 
-export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
+export function repoScoutOrientationGuidance(selectedTools?: readonly string[]): string | undefined {
+  const selected = new Set(selectedTools ?? []);
+  if (!selected.has("repo_scout")) return undefined;
+  const uses = [
+    selected.has("symbol_search") && "`symbol_search` for identifiers",
+    selected.has("code_search") && "`code_search` for concepts",
+    selected.has("relationship_graph") && "`relationship_graph` for known tokens",
+    selected.has("fd") && "`fd` for live paths",
+    selected.has("rg") && "`rg` for live content, regex, config, or index misses",
+    selected.has("find") && "`find` for paths",
+    selected.has("grep") && "`grep` for live content or regex",
+    selected.has("read") && "`read` for narrow source ranges",
+  ].filter((value): value is string => Boolean(value));
+  if (!uses.length) return undefined;
+  return `Repo Scout orientation tools currently visible: ${uses.join("; ")}. Unless exact anchors already exist, use 1–3 targeted searches, then prompt repo_scout with concrete anchors; leave non-local tracing to Scout.`;
+}
+
+export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retryWait = waitForDelegateRetry) {
   let repoRuns = 0;
   let repoCallQueue = Promise.resolve();
   const seenRepoSearches = new Set<string>();
@@ -204,7 +234,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       owner: "pi-scout",
       managedTools: ["repo_scout", "web_scout"],
       enabledTools: enabled ? ["repo_scout", "web_scout"] : [],
-      ...(enabled ? { deferredTools: ["web_scout"] } : {}),
+      ...(enabled ? {
+        deferredTools: ["web_scout"],
+        deferredToolUsage: { web_scout: "research current public web pages with bounded URL-cited evidence" },
+      } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) return;
@@ -237,10 +270,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     pendingIntent = parseSessionIntent(event.text);
   });
 
-  pi.on("before_agent_start", async (_event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const orientationGuidance = repoScoutOrientationGuidance(event.systemPromptOptions?.selectedTools);
+    const result = (content?: string) => {
+      const message = content ? findingMessage(content) : undefined;
+      if (!orientationGuidance) return message;
+      return {
+        ...message,
+        systemPrompt: `${event.systemPrompt}\n\n${orientationGuidance}`,
+      };
+    };
     const intent = pendingIntent;
     pendingIntent = undefined;
-    if (!intent || !isScoutEnabled(await loadConfig())) return;
+    if (!intent || !isScoutEnabled(await loadConfig())) return result();
     if (ctx.hasUI)
       ctx.ui.setStatus("pi-scout", "scout: searching Pi sessions…");
     try {
@@ -252,19 +294,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       if (!evidence.excerptCount) {
         ephemeralFinding =
           "Historical Pi-session result. No matching eligible Pi-session text found.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const model = await resolveModel(ctx);
       if (!model) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: no selected model.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) {
         ephemeralFinding =
           "Historical Pi-session scout unavailable: selected model has no credentials.";
-        return findingMessage(ephemeralFinding);
+        return result(ephemeralFinding);
       }
       const args = [
         "--mode",
@@ -305,7 +347,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     } finally {
       if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
     }
-    return ephemeralFinding ? findingMessage(ephemeralFinding) : undefined;
+    return result(ephemeralFinding);
   });
 
   pi.registerEntryRenderer("pi-scout-session", (entry, _options, theme) => {
@@ -324,13 +366,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
     name: "repo_scout",
     label: "Repo Scout",
     description:
-      "Read-only isolated repository reconnaissance with exact line-range citations. Every call starts a fresh child session; the main model owns evaluation and conclusions.",
+      "Read-only isolated repository reconnaissance with exact line-range citations. It gathers observable evidence; the main model owns evaluation, recommendations, decisions, and conclusions. Transient provider failures retry in fresh child sessions up to three total attempts.",
     promptSnippet:
-      "Map concrete repository paths, symbols, patterns, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty",
+      "Gather cited repository evidence about paths, symbols, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty without making decisions",
     promptGuidelines: [
-      "Use repo_scout before edits needing non-local repository, architecture, data-flow, or cross-file understanding. If no anchor is known, first do one bounded fd/rg/read orientation. Skip repo_scout for known-file self-contained edits; otherwise call it before mutation.",
-      "Give repo_scout an observable action, concrete scope anchors, required evidence, and a finite stopping boundary that permits directly relevant callers, config, registries, and tests. Scout reports cited facts and uncertainty; the main model evaluates them.",
-      "Treat repo_scout citations as the working set. Reread only for an exact edit, evidence gap/conflict, or changed state. For follow-ups, pass relevant prior facts and the unresolved gap because each child session starts fresh.",
+      "Default to repo_scout for non-local, architecture-mapping, data-flow, cross-file, or unfamiliar-code work. Before calling, use 1–3 visible orientation searches to find exact anchors and sharpen the task. Skip orientation with exact anchors. Leave non-local tracing to repo_scout; skip it only for known-file self-contained work.",
+      "Ask repo_scout only to search, map, or trace observable evidence. Convert normative or mixed questions into factual tasks covering contracts, callers, transformations, divergences, constraints, and tests; never ask repo_scout to design, recommend, prioritize, choose architecture, or decide whether something should be canonical. Include an observable action, concrete scope anchors, required evidence, and a finite stopping boundary. Main model evaluates and decides.",
+      "Treat repo_scout citations as working set. Reread only for exact edit, evidence gap/conflict, or changed state. Follow-ups include prior facts and unresolved gap; each repo_scout child starts fresh.",
     ],
     parameters: Type.Object(
       {
@@ -338,19 +380,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           minLength: 1,
           maxLength: 1000,
           description:
-            "Self-contained repository search, mapping, or tracing task with relevant scope/constraints and observable paths, symbols, patterns, boundaries, inputs, sinks, or flows",
+            "Evidence-only repository search, mapping, or tracing task with observable scope, paths, symbols, boundaries, inputs, sinks, or flows; exclude design, recommendation, prioritization, and architecture-choice requests",
         }),
         retryReason: Type.Optional(
           Type.String({
             minLength: 1,
             maxLength: 500,
-            description: "Gap or follow-up context for a later Scout call",
+            description: "Factual evidence gap or follow-up context for a later Scout call; not a decision or recommendation request",
           }),
         ),
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       return serializeRepoCall(async () => {
       if (!isScoutEnabled(await loadConfig()))
         return {
@@ -389,24 +431,26 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           ],
           details: { failureCode: "unavailable", model: modelName(model) },
         };
+      const thinking = await resolveThinking();
       repoRuns++;
+      const started = Date.now();
+      const agent = { agentName: delegatedName(pi, "repo_scout", id), startedAt: new Date(started).toISOString() };
       if (ctx.hasUI)
         ctx.ui.setStatus("pi-scout", "scout: searching repository…");
       onUpdate?.({
         content: [{ type: "text", text: "Scout searching repository…" }],
-        details: { model: modelName(model), state: "running" },
+        details: { ...agent, model: modelName(model), thinking, state: "running" },
       });
-      const started = Date.now();
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
-      let sessionDir: string | undefined;
+      const sessionDirs: string[] = [];
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
         lastUpdateAt = now;
         onUpdate?.({
           content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }],
-          details: { model: modelName(model), state: "running", durationMs: now - started, activity },
+          details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started, activity },
         });
       }, HEARTBEAT_MS);
       heartbeat.unref();
@@ -423,55 +467,61 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           ...(discoverTools?.toolNames ?? []),
           "grep", "find", "ls",
         ].join(",");
-        const args = [
-          "--mode",
-          "rpc",
-          "--session-dir",
-          (sessionDir = await repoSessionDir()),
-          "--no-extensions",
-          "-e",
-          scoutChildToolsExtension,
-          ...(discoverTools ? ["-e", discoverTools.childExtensionPath] : []),
-          "--no-skills",
-          "--no-prompt-templates",
-          "--no-context-files",
-          "--tools",
-          childToolNames,
-          "--model",
-          modelName(model),
-          "--thinking",
-          await resolveThinking(),
-          "--system-prompt",
-          REPO_SCOUT_PROMPT,
-        ];
-        const run = await runChild(args, {
-          cwd: ctx.cwd,
-          prompt,
-          signal,
-          timeoutMs: repoTimeoutMs(),
-          maxCostUsd: scoutMaxCostUsd(),
-          // Failure wrapping happens here; cap once afterward so retrieval notices survive.
-          resultMaxBytes: false,
-          env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
-          onActivity: (_item, all) => {
-            lastUpdateAt = Date.now();
-            activity = all;
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `Scout child activity:\n${activityText(all)}`,
-                },
-              ],
-              details: {
-                model: modelName(model),
-                state: "running",
-                durationMs: lastUpdateAt - started,
-                activity: all,
-              },
-            });
-          },
-        });
+        const timeoutMs = repoTimeoutMs();
+        const maxCostUsd = scoutMaxCostUsd();
+        const deadline = started + timeoutMs;
+        const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+        const turns: ScoutRun["turns"] = [];
+        let attempts = 0;
+        let run!: ScoutRun;
+        for (;;) {
+          attempts++;
+          const sessionDir = await repoSessionDir();
+          sessionDirs.push(sessionDir);
+          const args = [
+            "--mode", "rpc", "--session-dir", sessionDir,
+            "--no-extensions", "-e", scoutChildToolsExtension,
+            ...(discoverTools ? ["-e", discoverTools.childExtensionPath] : []),
+            "--no-skills", "--no-prompt-templates", "--no-context-files",
+            "--tools", childToolNames, "--model", modelName(model), "--thinking", thinking,
+            "--system-prompt", REPO_SCOUT_PROMPT,
+          ];
+          run = await runChild(args, {
+            cwd: ctx.cwd,
+            prompt,
+            signal,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            maxCostUsd: maxCostUsd === undefined ? undefined : Math.max(0, maxCostUsd - usage.cost),
+            // Failure wrapping happens here; cap once afterward so retrieval notices survive.
+            resultMaxBytes: false,
+            env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
+            onActivity: (_item, all) => {
+              lastUpdateAt = Date.now();
+              activity = all;
+              onUpdate?.({
+                content: [{ type: "text", text: `Scout child activity:\n${activityText(all)}` }],
+                details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, activity: all, attempts },
+              });
+            },
+          });
+          usage.input += run.usage.input;
+          usage.output += run.usage.output;
+          usage.cacheRead += run.usage.cacheRead;
+          usage.cacheWrite += run.usage.cacheWrite;
+          usage.cost += run.usage.cost;
+          turns.push(...run.turns);
+          const canRetry = attempts < DELEGATE_MAX_ATTEMPTS
+            && Date.now() < deadline
+            && (maxCostUsd === undefined || usage.cost < maxCostUsd)
+            && run.failure !== "budget_exceeded"
+            && isTransientProviderFailure(run.error);
+          if (!canRetry || !await retryWait(attempts, signal)) break;
+          if (signal?.aborted || Date.now() >= deadline || (maxCostUsd !== undefined && usage.cost >= maxCostUsd)) break;
+          onUpdate?.({
+            content: [{ type: "text", text: `Scout provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }],
+            details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: Date.now() - started, attempts },
+          });
+        }
         // Include any failure wrapper in the same hard report budget as child output.
         const failureMessage = run.error
           ? sanitizeFailureMessage(run.error, "Repo Scout child failed.")
@@ -481,17 +531,20 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         const claims = structuredClaims(report.text);
         const searches = searchTelemetry(run.activity, seenRepoSearches);
         return {
-          content: [{ type: "text" as const, text: report.text }],
+          content: [{ type: "text" as const, text: `[${agent.agentName} · Repo Scout] ${report.text}` }],
           details: {
+            ...agent,
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
             callNumber: repoRuns,
             contextTokens: run.contextTokens,
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
-            durationMs: run.durationMs,
-            usage: run.usage,
-            turns: run.turns,
+            thinking,
+            durationMs: Date.now() - started,
+            usage,
+            turns,
+            attempts,
             activity: run.activity,
             stopReason: run.stopReason,
             truncated: run.truncated || report.truncated,
@@ -512,7 +565,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         };
       } finally {
         clearInterval(heartbeat);
-        if (sessionDir) {
+        for (const sessionDir of sessionDirs) {
           repoSessionDirs.delete(sessionDir);
           await rm(sessionDir, { recursive: true, force: true });
         }
@@ -566,7 +619,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 12, default: 8 })),
     }, { additionalProperties: false }),
     executionMode: "sequential",
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       if (!isScoutEnabled(await loadConfig())) return { content: [{ type: "text" as const, text: "Web Scout inactive. Configure it with /scout or use /scout reset." }], details: { failureCode: "disabled" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Web scout task must not be empty." }], details: { failureCode: "invalid" } };
@@ -579,19 +632,21 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
       if (!model) return { content: [{ type: "text" as const, text: "Web scout unavailable: no selected model." }], details: { failureCode: "unavailable" } };
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey) return { content: [{ type: "text" as const, text: "Web scout unavailable: selected model has no credentials." }], details: { failureCode: "unavailable", model: modelName(model) } };
+      const thinking = await resolveThinking();
       const maxPages = params.maxPages ?? 8;
       const maxActions = Math.min(80, maxPages * 6 + 8);
       const grant = await capability.issueGrant({ maxPages, maxActions, headed: false });
-      if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: researching public web…");
-      onUpdate?.({ content: [{ type: "text", text: "Web Scout launching isolated browser…" }], details: { model: modelName(model), state: "running" } });
       const started = Date.now();
+      const agent = { agentName: delegatedName(pi, "web_scout", id), startedAt: new Date(started).toISOString() };
+      if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: researching public web…");
+      onUpdate?.({ content: [{ type: "text", text: "Web Scout launching isolated browser…" }], details: { ...agent, model: modelName(model), thinking, state: "running" } });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       const heartbeat = setInterval(() => {
         const now = Date.now();
         if (now - lastUpdateAt < HEARTBEAT_MS) return;
         lastUpdateAt = now;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { model: modelName(model), state: "running", durationMs: now - started } });
+        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
       try {
@@ -600,7 +655,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           "--mode", "rpc", "--no-session", "--no-extensions", "-e", capability.childExtensionPath,
           "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
           "--no-builtin-tools", "--tools", "scout_browser", "--model", modelName(model),
-          "--thinking", await resolveThinking(), "--system-prompt", WEB_SCOUT_PROMPT,
+          "--thinking", thinking, "--system-prompt", WEB_SCOUT_PROMPT,
         ];
         const run = await runChild(args, {
           cwd: ctx.cwd,
@@ -613,7 +668,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           onActivity: (_item, all) => {
             lastUpdateAt = Date.now();
             activity = all;
-            onUpdate?.({ content: [{ type: "text", text: `Web Scout child activity:\n${activityText(all)}` }], details: { model: modelName(model), state: "running", durationMs: lastUpdateAt - started } });
+            onUpdate?.({ content: [{ type: "text", text: `Web Scout child activity:\n${activityText(all)}` }], details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, activity: all } });
           },
         });
         const failureMessage = run.error
@@ -621,12 +676,14 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
           : undefined;
         const text = failureMessage ? `Web scout failed nonfatally: ${failureMessage}` : run.text;
         return {
-          content: [{ type: "text" as const, text }],
+          content: [{ type: "text" as const, text: `[${agent.agentName} · Web Scout] ${text}` }],
           details: {
+            ...agent,
             task,
             startUrls,
             maxPages,
             model: modelName(model),
+            thinking,
             durationMs: run.durationMs,
             usage: run.usage,
             turns: run.turns,
@@ -637,7 +694,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
             finalizationSucceeded: run.finalizationSucceeded,
             failureCode: run.failure === "budget_exceeded" ? "budget_exceeded" : run.error ? "child_error" : undefined,
             ...(failureMessage ? { failureMessage } : {}),
-            activity: run.activity.map((item) => ({ kind: item.kind, tool: item.tool, isError: item.isError })),
+            activity: run.activity,
           },
         };
       } finally {
@@ -697,7 +754,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi) {
         selected =
           (await ctx.ui.select(
             "Scout model",
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
         if (!selected) return;
       }

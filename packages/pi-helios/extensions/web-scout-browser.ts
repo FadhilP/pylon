@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { BrowserSessionManager, type BrowserOperationResult } from "../src/browser-session.ts";
+import { elementReferences, ELEMENT_REF_PATTERN } from "../src/element-ref.ts";
 import { PlaywrightCli } from "../src/playwright-cli.ts";
 import { PublicNetworkProxy, resolvePublicHost, validatePublicWebUrl } from "../src/public-proxy.ts";
 import { consumeWebScoutGrant } from "../src/web-scout-grant.ts";
@@ -59,8 +60,8 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI) {
   };
   const acceptSnapshot = (result: BrowserOperationResult) => {
     linkRefs = new Set(result.snapshot?.split(/\r?\n/)
-      .filter((line) => /\blink\b/i.test(line))
-      .flatMap((line) => line.match(/\bref=(e\d+)\b/g)?.map((item) => item.slice(4)) ?? []) ?? []);
+      .filter((line) => /^\s*- link\b/i.test(line))
+      .flatMap(elementReferences) ?? []);
     return result;
   };
   const snapshot = async (signal?: AbortSignal) => acceptSnapshot(await manager.operate(sessionId, { kind: "snapshot", depth: 6 }, signal));
@@ -86,7 +87,7 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       action: StringEnum(["navigate", "snapshot", "continue", "follow", "back"] as const),
       url: Type.Optional(Type.String({ maxLength: 2048 })),
-      target: Type.Optional(Type.String({ pattern: "^e[0-9]+$", maxLength: 32 })),
+      target: Type.Optional(Type.String({ pattern: ELEMENT_REF_PATTERN, maxLength: 32 })),
       cursor: Type.Optional(Type.String({ pattern: "^hc_[a-f0-9]{32}$", maxLength: 35 })),
     }, { additionalProperties: false }),
     executionMode: "sequential",

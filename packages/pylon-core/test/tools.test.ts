@@ -48,8 +48,25 @@ test("protocol validates version, owners, and managed subsets", () => {
   assert.match((parseToolMessage({ version: 1, kind: "register", owner: "bad", managedTools: [], enabledTools: [] }) as any).error, /owner/);
   assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pi-test", managedTools: [], enabledTools: ["read"] }) as any).error, /subset/);
   assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pi-test", managedTools: ["read"], enabledTools: [], deferredTools: ["read"] }) as any).error, /deferredTools.*subset/);
-  assert.deepEqual(
-    (parseToolMessage({ version: 1, kind: "register", owner: "pi-test", managedTools: ["read"], enabledTools: ["read"], deferredTools: ["read"] }) as any).message.deferredTools,
-    ["read"],
-  );
+  const parsed = parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read"], enabledTools: ["read"], deferredTools: ["read"],
+    deferredToolUsage: { read: "  inspect project files  " },
+  }) as any;
+  assert.deepEqual(parsed.message.deferredTools, ["read"]);
+  assert.deepEqual(parsed.message.deferredToolUsage, { read: "inspect project files" });
+  assert.match((parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read"], enabledTools: ["read"], deferredToolUsage: { read: "inspect files" },
+  }) as any).error, /requires deferredTools/);
+  assert.match((parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read"], enabledTools: ["read"], deferredTools: ["read"],
+    deferredToolUsage: { write: "change files" },
+  }) as any).error, /keys must be deferred tools/);
+  assert.match((parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read"], enabledTools: ["read"], deferredTools: ["read"],
+    deferredToolUsage: { read: "inspect\nfiles" },
+  }) as any).error, /one-line/);
 });

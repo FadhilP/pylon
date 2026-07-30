@@ -1,10 +1,22 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import { randomUUID } from "node:crypto";
-import { readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "../extensions/pi-timeline.ts";
+
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-naming-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 function namingHarness(entries: any[], completeTitle: any = async () => ({
   content: [{ type: "text", text: "Semantic Timeline Session" }],
@@ -36,6 +48,11 @@ function namingHarness(entries: any[], completeTitle: any = async () => ({
   return { handlers, names, telemetry, ctx, artifactRoot };
 }
 
+async function settleTurn(handlers: Map<string, Function[]>, ctx: any) {
+  await handlers.get("agent_settled")![0]({}, ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 test("same-session start keeps one continuous artifact lease", async () => {
   const { handlers, ctx, artifactRoot } = namingHarness([]);
   try {
@@ -49,7 +66,7 @@ test("same-session start keeps one continuous artifact lease", async () => {
   }
 });
 
-test("settled unnamed session gets a dedicated semantic title", async () => {
+test("settled unnamed session launches a background semantic title call", async () => {
   const calls: any[] = [], entries = [
     {
       type: "message", id: "user-1",
@@ -68,7 +85,7 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
     };
   });
   await handlers.get("session_start")![0]({}, ctx);
-  await handlers.get("agent_settled")![0]({}, ctx);
+  await settleTurn(handlers, ctx);
 
   assert.deepEqual(names, ["Persistent TUI Session Names"]);
   assert.equal(calls.length, 1);
@@ -78,6 +95,7 @@ test("settled unnamed session gets a dedicated semantic title", async () => {
   assert.equal(telemetry.length, 1);
   assert.deepEqual(telemetry[0].usage, { turns: 1, input: 12, output: 3, cacheRead: 4, cacheWrite: 0, cost: 0.002 });
   assert.equal(telemetry[0].context.request.characters, 35);
+  assert.equal(telemetry[0].context.result.characters, 27);
   assert.match(telemetry[0].context.request.hash, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(telemetry[0]).includes("Can we add session name"), false);
   assert.equal(handlers.has("before_agent_start"), false);
@@ -101,7 +119,7 @@ test("fresh Continuity executor kickoff triggers automatic session naming", asyn
   });
 
   await handlers.get("session_start")![0]({ reason: "new" }, ctx);
-  await handlers.get("agent_settled")![0]({}, ctx);
+  await settleTurn(handlers, ctx);
 
   assert.deepEqual(names, ["Execute Approved Continuity Plan"]);
   assert.equal(calls.length, 1);
@@ -119,7 +137,7 @@ test("invalid or failed title generation falls back to first prompt", async () =
     }];
     const { handlers, names, ctx } = namingHarness(entries, completeTitle);
     await handlers.get("session_start")![0]({}, ctx);
-    await handlers.get("agent_settled")![0]({}, ctx);
+    await settleTurn(handlers, ctx);
     assert.deepEqual(names, ["Add session naming without noise"]);
   }
 });
@@ -140,11 +158,15 @@ test("pending title call is single-flight and manual rename wins", async () => {
   await handlers.get("session_start")![0]({}, ctx);
   const settling = handlers.get("agent_settled")![0]({}, ctx);
   await started;
+  assert.equal(await Promise.race([
+    settling.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+  ]), true);
   await handlers.get("agent_settled")![0]({}, ctx);
   assert.equal(calls, 1);
   await handlers.get("session_info_changed")![0]({ name: "Manual title" }, ctx);
   finish({ content: [{ type: "text", text: "Generated Session Title" }] });
-  await settling;
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(names, []);
 });
 
@@ -161,7 +183,7 @@ test("pending title from an old session cannot rename a new session", async () =
     return pending;
   });
   await handlers.get("session_start")![0]({}, ctx);
-  const settling = handlers.get("agent_settled")![0]({}, ctx);
+  await handlers.get("agent_settled")![0]({}, ctx);
   await started;
   const nextCtx = {
     ...ctx,
@@ -173,7 +195,7 @@ test("pending title from an old session cannot rename a new session", async () =
   };
   await handlers.get("session_start")![0]({}, nextCtx);
   finish({ content: [{ type: "text", text: "Generated Old Session Title" }] });
-  await settling;
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(names, []);
 });
 
@@ -189,7 +211,7 @@ test("existing or manually cleared session names remain untouched", async () => 
       return { content: [{ type: "text", text: "Generated Session Title" }] };
     });
     await handlers.get("session_start")![0]({}, ctx);
-    await handlers.get("agent_settled")![0]({}, ctx);
+    await settleTurn(handlers, ctx);
     assert.deepEqual(names, []);
     assert.equal(calls, 0);
   }

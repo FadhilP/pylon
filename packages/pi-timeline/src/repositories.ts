@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { git } from "./git.ts";
 
-export type Repository = { root: string; prefix: string };
+export type Repository = { root: string; prefix: string; commonDir: string };
 
 const canonical = (path: string) =>
   process.platform === "win32" ? path.toLowerCase() : path;
@@ -40,7 +40,9 @@ async function childPaths(repository: Repository) {
 
 export async function discoverRepositories(cwd: string): Promise<Repository[]> {
   const workspace = await realpath(await git(cwd, ["rev-parse", "--show-toplevel"]));
-  const repositories: Repository[] = [{ root: workspace, prefix: "" }];
+  const identify = async (root: string) =>
+    realpath(await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+  const repositories: Repository[] = [{ root: workspace, prefix: "", commonDir: await identify(workspace) }];
   const queue = [{ repository: repositories[0], ancestors: new Set([canonical(workspace)]) }];
   const physicalRoots = new Set([canonical(workspace)]), prefixes = new Set([""]);
 
@@ -67,7 +69,7 @@ export async function discoverRepositories(cwd: string): Promise<Repository[]> {
       if (prefixes.has(prefix)) continue;
       physicalRoots.add(rootKey);
       prefixes.add(prefix);
-      const child = { root: childRoot, prefix };
+      const child = { root: childRoot, prefix, commonDir: await identify(childRoot) };
       repositories.push(child);
       queue.push({ repository: child, ancestors: new Set([...ancestors, rootKey]) });
     }

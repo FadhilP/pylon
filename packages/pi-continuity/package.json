@@ -11,6 +11,7 @@
     "check": "tsc --noEmit"
   },
   "pi": { "extensions": ["./extensions/pi-continuity.ts"] },
+  "pylon": { "settings": "./src/web-settings.ts" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",

@@ -1,4 +1,6 @@
 export type Option = { label: string; description?: string };
+export type Question = { question: string; options: Option[] };
+
 export function validateQuestion(question: string, options: Option[]) {
   if (
     !question.trim() ||
@@ -18,4 +20,10 @@ export function validateQuestion(question: string, options: Option[]) {
     throw Error(
       "Clarification options must be concise, non-empty, and unique.",
     );
+}
+
+export function validateQuestions(questions: Question[]) {
+  if (questions.length < 1 || questions.length > 6)
+    throw Error("Clarification requires 1-6 questions.");
+  for (const item of questions) validateQuestion(item.question, item.options);
 }

@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { BrowserSessionManager, validateCdpEndpoint } from "../src/browser-session.ts";
+import { BrowserSessionManager, validateCdpEndpoint, type BrowserOperationResult } from "../src/browser-session.ts";
 import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
+import { configPath, loadConfig, saveConfig } from "../src/config.ts";
+import { ELEMENT_REF_PATTERN } from "../src/element-ref.ts";
 import { diagnosePlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { issueWebScoutGrant } from "../src/web-scout-grant.ts";
 
@@ -19,17 +21,118 @@ const BROWSER_ACTIONS = ["start", "attach", "navigate", "snapshot", "continue", 
 const PAGE_CONTEXT_ACTIONS = new Set(["start", "attach", "navigate", "snapshot", "find", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
 const PAGE_CHANGE_ACTIONS = new Set(["start", "attach", "navigate", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
 const OWNERSHIP_ACTIONS = new Set(["start", "attach", "close", "detach"]);
+const MAX_EMBEDDED_FRAME_BYTES = 5 * 1024 * 1024;
+
+type EmbeddedRequest = {
+  version: 1;
+  sessionId: string;
+  owner: string;
+  action: string;
+  url?: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  phase?: "move" | "down" | "up";
+  button?: "left" | "middle" | "right";
+  deltaX?: number;
+  deltaY?: number;
+  key?: string;
+  tabIndex?: number;
+  signal?: AbortSignal;
+  claim(): boolean;
+  respond(value: Promise<unknown>): void;
+};
+
+function embeddedState(manager: BrowserSessionManager, sessionId: string, owner: string) {
+  return { version: 1 as const, ...manager.state(sessionId, owner) };
+}
+
+async function embeddedBrowserRequest(manager: BrowserSessionManager, request: EmbeddedRequest): Promise<unknown> {
+  const { sessionId: id, owner, signal } = request;
+  if (!id || id.length > 200 || !/^web:[A-Za-z0-9-]{1,128}$/.test(owner)) throw new Error("Invalid embedded browser identity");
+  if (request.action === "status") return embeddedState(manager, id, owner);
+  if (request.action === "start") {
+    await manager.start(id, request.url, signal, false);
+    await manager.acquireInteractive(id, owner);
+    if (request.width !== undefined && request.height !== undefined) {
+      await manager.operateInteractive(id, [{ kind: "resize", width: request.width, height: request.height }], owner, signal);
+    }
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "acquire") {
+    await manager.acquireInteractive(id, owner);
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "release") {
+    await manager.releaseInteractive(id, owner);
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "close") {
+    await manager.close(id, "close", signal, owner);
+    return embeddedState(manager, id, owner);
+  }
+  if (request.action === "resize" && !manager.state(id, owner).controlled) {
+    await manager.operate(id, { kind: "resize", width: request.width!, height: request.height! }, signal);
+    return embeddedState(manager, id, owner);
+  }
+
+  if (request.action === "frame" && !manager.state(id, owner).controlled) {
+    const result = await manager.observeFrame(id, signal);
+    if (!result?.artifactPath) return embeddedState(manager, id, owner);
+    try {
+      const data = await manager.readArtifact(id, result.artifactPath, MAX_EMBEDDED_FRAME_BYTES);
+      return { ...embeddedState(manager, id, owner), frame: { mimeType: "image/png" as const, data: data.toString("base64") } };
+    } finally {
+      await rm(result.artifactPath, { force: true }).catch(() => {});
+    }
+  }
+
+  let actions: BrowserAction[];
+  switch (request.action) {
+    case "frame": actions = [{ kind: "screenshot" }]; break;
+    case "navigate": actions = [{ kind: "navigate", url: request.url! }]; break;
+    case "back": case "forward": case "reload": actions = [{ kind: request.action }]; break;
+    case "resize": actions = [{ kind: "resize", width: request.width!, height: request.height! }]; break;
+    case "pointer": actions = [
+      { kind: "mouse-move", x: request.x!, y: request.y! },
+      ...(request.phase === "down" ? [{ kind: "mouse-down", button: request.button! } as const]
+        : request.phase === "up" ? [{ kind: "mouse-up", button: request.button! } as const] : []),
+    ]; break;
+    case "wheel": actions = [
+      { kind: "mouse-move", x: request.x!, y: request.y! },
+      { kind: "mouse-wheel", deltaX: request.deltaX!, deltaY: request.deltaY! },
+    ]; break;
+    case "key": actions = [{ kind: request.phase === "down" ? "key-down" : "key-up", key: request.key! }]; break;
+    case "tab-list": actions = [{ kind: "tab-list" }]; break;
+    case "tab-new": actions = [{ kind: "tab-new", url: request.url }]; break;
+    case "tab-select": actions = [{ kind: "tab-select", index: request.tabIndex! }]; break;
+    case "tab-close": actions = [{ kind: "tab-close", index: request.tabIndex! }]; break;
+    default: throw new Error("Unsupported embedded browser action");
+  }
+
+  const results = await manager.operateInteractive(id, actions, owner, signal);
+  const artifactPath = results.at(-1)?.artifactPath;
+  if (!artifactPath) return embeddedState(manager, id, owner);
+  try {
+    const data = await manager.readArtifact(id, artifactPath, MAX_EMBEDDED_FRAME_BYTES);
+    return { ...embeddedState(manager, id, owner), frame: { mimeType: "image/png" as const, data: data.toString("base64") } };
+  } finally {
+    await rm(artifactPath, { force: true }).catch(() => {});
+  }
+}
 const browserActionFields = {
   url: Type.Optional(Type.String({ maxLength: 4096 })),
   attachMode: Type.Optional(StringEnum(["cdp", "extension"] as const)),
   endpoint: Type.Optional(Type.String({ maxLength: 2048 })),
   browser: Type.Optional(StringEnum(["chrome", "msedge"] as const, { description: "Browser for extension attachment; ignored by start" })),
-  target: Type.Optional(Type.String({ maxLength: 32, description: "Element reference from latest snapshot, such as e12" })),
+  target: Type.Optional(Type.String({ pattern: ELEMENT_REF_PATTERN, maxLength: 32, description: "Element reference from latest snapshot, such as e12 or f1e12" })),
   text: Type.Optional(Type.String({ maxLength: 10000, description: "Exact text to find; keep narrow to avoid large match sets" })),
   regex: Type.Optional(Type.String({ maxLength: 500, description: "Regular expression to find; keep specific to avoid large match sets" })),
   key: Type.Optional(Type.String({ maxLength: 64 })),
   value: Type.Optional(Type.String({ maxLength: 1000 })),
   depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: "Snapshot depth; prefer 4-6 first, then target a returned ref for more detail" })),
+  snapshotMode: Type.Optional(StringEnum(["compact", "full"] as const, { description: "Snapshot structure: compact flattens anonymous generic wrappers (default); full preserves them" })),
   cursor: Type.Optional(Type.String({ pattern: "^hc_[a-f0-9]{32}$", maxLength: 35, description: "One-use cursor returned by truncated snapshot, find, or action output" })),
   fullPage: Type.Optional(Type.Boolean()),
   tabAction: Type.Optional(StringEnum(["list", "select", "create", "close"] as const)),
@@ -67,7 +170,7 @@ function rejectExtra(params: BrowserParams, allowed: readonly (keyof BrowserPara
 function browserAction(params: BrowserParams): BrowserAction {
   switch (params.action) {
     case "navigate": rejectExtra(params, ["url"]); return { kind: "navigate", url: requireField(params, "url") };
-    case "snapshot": rejectExtra(params, ["target", "depth"]); return { kind: "snapshot", target: params.target, depth: params.depth };
+    case "snapshot": rejectExtra(params, ["target", "depth", "snapshotMode"]); return { kind: "snapshot", target: params.target, depth: params.depth, snapshotMode: params.snapshotMode };
     case "continue": rejectExtra(params, ["cursor"]); return { kind: "continue", cursor: requireField(params, "cursor") };
     case "find": {
       rejectExtra(params, ["text", "regex"]);
@@ -96,7 +199,7 @@ function browserAction(params: BrowserParams): BrowserAction {
   }
 }
 
-function describe(result: { action: string; ownership: string; outcome: string; metadataAvailable?: boolean; metadataStale?: boolean; page?: { index: number; title: string; url: string }; tabs?: Array<{ index: number; title: string; url: string }>; snapshot?: string; snapshotRedactions?: number; snapshotTruncated?: boolean; snapshotOmittedLines?: number; snapshotOmittedBytes?: number; findMatches?: number; snapshotContinuation?: string; cleanupWarnings?: string[] }): string {
+function describe(result: BrowserOperationResult): string {
   const ownership = OWNERSHIP_ACTIONS.has(result.action) ? ` (${result.ownership})` : "";
   const lines = [`Browser ${result.action} ${result.outcome}${ownership}.`];
   if (PAGE_CONTEXT_ACTIONS.has(result.action)) {
@@ -114,15 +217,35 @@ function describe(result: { action: string; ownership: string; outcome: string; 
   return lines.join("\n");
 }
 
+function describeCompactBatchStep(index: number, action: string, result: BrowserOperationResult, pageChanged: boolean): string {
+  const ownership = OWNERSHIP_ACTIONS.has(action) ? ` (${result.ownership})` : "";
+  const lines = [`Step ${index} (${action}): ${result.outcome}${ownership}.`];
+  if (PAGE_CONTEXT_ACTIONS.has(action)) {
+    if (result.metadataAvailable === false && !result.page) lines.push("Page metadata unavailable.");
+    else if (result.metadataStale && PAGE_CHANGE_ACTIONS.has(action)) lines.push("Page metadata may be stale.");
+    else if (pageChanged && result.page) lines.push(`Page: ${result.page.title} (${result.page.url})`);
+  }
+  if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
+  if (result.snapshotTruncated) lines.push(`Intermediate snapshot omitted and truncated; ${result.snapshotOmittedLines ?? 0} lines / ${result.snapshotOmittedBytes ?? 0} bytes remain. Request a new snapshot if needed.`);
+  for (const warning of result.cleanupWarnings ?? []) lines.push(`Warning: ${warning}.`);
+  return lines.join("\n");
+}
+
 async function withBrowserStatus<T>(ctx: any, action: string, operation: () => Promise<T>): Promise<T> {
   if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", `browser: ${action}`);
   try { return await operation(); }
   finally { if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", undefined); }
 }
 
-export default function heliosExtension(pi: ExtensionAPI) {
+export default function heliosExtension(pi: ExtensionAPI, options: { configPath?: string } = {}) {
+  const settingsPath = options.configPath ?? configPath();
   const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => pi.exec(command, args, options);
   const manager = new BrowserSessionManager(exec);
+  const disposeEmbeddedBrowser = pi.events.on("pylon:helios-browser-request", (value: unknown) => {
+    const request = value && typeof value === "object" ? value as Partial<EmbeddedRequest> : undefined;
+    if (request?.version !== 1 || typeof request.claim !== "function" || typeof request.respond !== "function" || !request.claim()) return;
+    request.respond(embeddedBrowserRequest(manager, request as EmbeddedRequest));
+  });
   let healthDiagnostic: Promise<string> | undefined;
   const cachedHealthDiagnostic = () => {
     if (!healthDiagnostic) {
@@ -166,9 +289,9 @@ export default function heliosExtension(pi: ExtensionAPI) {
       }
     })());
   });
-  let ownedHeaded = true;
-  pi.on("session_start", () => {
-    ownedHeaded = true;
+  let ownedHeaded = false;
+  pi.on("session_start", async () => {
+    ownedHeaded = (await loadConfig(settingsPath)).headed ?? false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -176,11 +299,16 @@ export default function heliosExtension(pi: ExtensionAPI) {
       managedTools: ["helios_browser", "helios_capture"],
       enabledTools: ["helios_browser", "helios_capture"],
       deferredTools: ["helios_browser", "helios_capture"],
+      deferredToolUsage: {
+        helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
+        helios_capture: "capture a consented Windows window for visual debugging",
+      },
     });
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-helios" });
     disposeWebScoutCapability();
+    disposeEmbeddedBrowser();
     disposeHealth();
     const summary = await manager.shutdown();
     if (!ctx.hasUI) return;
@@ -213,6 +341,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
       if (action === "toggle") ownedHeaded = !ownedHeaded;
       if (action === "show") ownedHeaded = true;
       if (action === "hide") ownedHeaded = false;
+      if (action !== "status") await saveConfig({ version: 1, headed: ownedHeaded }, settingsPath);
       const active = manager.get(sessionId(ctx));
       const unchanged = active?.ownership === "owned" ? " Active owned session unchanged." : "";
       ctx.ui.notify(`Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.${unchanged}`, "info");
@@ -260,6 +389,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use only for user-requested browser work; start or attach first, then close or detach when done. Never monitor. User must supervise purchases, messages, publishing, destructive actions, and other consequential clicks.",
       "Act through returned element references; never guess selectors. Prefer find for narrow text, otherwise start snapshots at depth 4–6 or target a returned ref.",
+      "Reuse snapshots returned by helios_browser actions; request another only when absent, truncated, or insufficient. Prefer targeted screenshots; use fullPage only when whole-page context is necessary.",
       "Use continuation cursors to read remaining output; each chunk replaces prior usable refs. Refine truncated searches instead of broadening immediately.",
       "Batch only predetermined, non-consequential actions with known refs; separate calls when an earlier result determines the next action.",
     ],
@@ -327,6 +457,7 @@ export default function heliosExtension(pi: ExtensionAPI) {
       }
       const content: any[] = [];
       const steps: Array<{ action: string; details: unknown }> = [];
+      let previousPage: string | undefined;
       for (const [index, action] of params.actions.entries()) {
         let result;
         try {
@@ -336,10 +467,20 @@ export default function heliosExtension(pi: ExtensionAPI) {
           throw new Error(`Browser batch step ${index + 1} (${action.action}) failed: ${message}`, { cause: error });
         }
         steps.push({ action: action.action, details: result.details });
-        for (const item of result.content) {
-          content.push(item.type === "text" ? { ...item, text: `Step ${index + 1} (${action.action}):\n${item.text}` } : item);
+        const details = result.details as BrowserOperationResult & { declined?: boolean };
+        const final = index === params.actions.length - 1;
+        if (final || details.declined) {
+          for (const item of result.content) {
+            content.push(item.type === "text" ? { ...item, text: `Step ${index + 1} (${action.action}):\n${item.text}` } : item);
+          }
+        } else {
+          const page = details.metadataStale ? undefined : details.page;
+          const pageKey = page ? `${page.title}\n${page.url}` : undefined;
+          content.push({ type: "text", text: describeCompactBatchStep(index + 1, action.action, details, pageKey !== undefined && pageKey !== previousPage) });
+          for (const item of result.content) if (item.type !== "text") content.push(item);
+          if (pageKey !== undefined) previousPage = pageKey;
         }
-        if ((result.details as { declined?: boolean }).declined) {
+        if (details.declined) {
           return { content, details: { steps, completed: steps.length, stoppedAt: index + 1, reason: "declined" } };
         }
       }

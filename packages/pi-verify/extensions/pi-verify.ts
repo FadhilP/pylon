@@ -45,9 +45,48 @@ type Details = {
   hygiene?: Hygiene;
   results: Result[];
 };
+type VerifyPolicy = { mode: "auto" } | { mode: "selected"; checks: string[] };
 
 export default function verifyExtension(pi: ExtensionAPI) {
   let latestContext: any;
+  let currentCwd = "";
+  let currentSessionId = "";
+  let policy: VerifyPolicy = { mode: "auto" };
+  const catalog = async (cwd: string) => {
+    const detection = await detectChecks(cwd);
+    return {
+      version: 1,
+      checks: detection.available.slice(0, 100).map((check) => ({
+        id: check.id.slice(0, 100),
+        label: check.label.slice(0, 200),
+        command: [check.command, ...check.args].join(" ").slice(0, 500),
+      })),
+    };
+  };
+  const publishCatalog = async () => {
+    if (!currentCwd) return;
+    pi.events.emit("pi-verify:catalog", await catalog(currentCwd));
+  };
+  const disposePolicy = pi.events.on?.("pylon:runtime-policy", (value: any) => {
+    if (value?.version !== 1 || value.sessionId !== currentSessionId) return;
+    const verify = value.verify;
+    if (verify?.mode === "auto") policy = { mode: "auto" };
+    else if (verify?.mode === "selected" && Array.isArray(verify.checks)) {
+      policy = {
+        mode: "selected",
+        checks: verify.checks
+          .filter((id: unknown): id is string => typeof id === "string" && id.length > 0 && id.length <= 100)
+          .slice(0, 6),
+      };
+    }
+  });
+  const disposeCatalog = pi.events.on?.("pi-verify:catalog-request", (request: any) => {
+    if (request?.version !== 1
+      || request.sessionId !== currentSessionId
+      || typeof request.respond !== "function"
+      || !currentCwd) return;
+    request.respond(catalog(currentCwd));
+  });
   const worktreeState = async (cwd: string, signal?: AbortSignal) => {
     try {
       const [head, status] = await Promise.all([
@@ -119,10 +158,20 @@ export default function verifyExtension(pi: ExtensionAPI) {
     pi.appendEntry("pi-verify-result", persisted);
   };
   pi.on("session_start", (_event, ctx) => {
+    currentCwd = ctx.cwd;
+    currentSessionId = ctx.sessionManager.getSessionId();
     latestContext = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
       ?.data;
+    if (latestContext) pi.events.emit("pi-verify:lifecycle", latestContext);
+    void publishCatalog();
+  });
+  pi.on("session_shutdown", () => {
+    disposePolicy?.();
+    disposeCatalog?.();
+    currentCwd = "";
+    currentSessionId = "";
   });
   pi.on("tool_call", (event) => {
     if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
@@ -202,7 +251,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
       }
 
       const detection = await detectChecks(ctx.cwd);
-      const requested = params.checks ?? [];
+      const selectedPolicy = policy.mode === "selected" ? policy : undefined;
+      const requested = selectedPolicy?.checks ?? params.checks ?? [];
       const unknown = requested.filter((id: string) => !detection.available.some((check) => check.id === id));
       if (unknown.length) {
         const details: Details = {
@@ -214,10 +264,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "Verify: invalid selection");
         return { content: [{ type: "text" as const, text: details.skipped! }], details };
       }
-      const checks = requested.length
+      const checks = selectedPolicy
+        ? requested.map((id: string) => detection.available.find((check) => check.id === id)!)
+        : requested.length
         ? requested.map((id: string) => detection.available.find((check) => check.id === id)!)
         : detection.checks;
-      const omittedChecks = requested.length ? [] : detection.omitted.map((check) => check.id);
+      const omittedChecks = selectedPolicy || requested.length ? [] : detection.omitted.map((check) => check.id);
       if (!checks.length) {
         const details: Details = {
           scope: params.scope, runId, state: "no_checks", worktreeId: initialIdentity,

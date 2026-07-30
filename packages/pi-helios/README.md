@@ -47,7 +47,7 @@ Ordered actions can be sent in one batch (up to 20 steps):
 { actions: [{ action: "start", url: "https://example.com" }, { action: "snapshot" }, { action: "close" }] }
 ```
 
-Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead.
+Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead. Batch output keeps compact intermediate status, page changes, warnings, and images; the final step keeps full text and snapshot output.
 
 Prefer targeted search over a full snapshot when the element text is known:
 
@@ -58,11 +58,19 @@ Prefer targeted search over a full snapshot when the element text is known:
 
 `find` accepts exactly one plain-text or regular-expression query, searches the current accessibility snapshot, and returns matching nodes with nearby context and usable refs. Queries are limited to 500 characters. Keep queries narrow; large match sets return a bounded prefix, total match count, remaining counts, and a refinement hint.
 
+Browser actions may already return a usable snapshot. Request another only when output is absent, truncated, or insufficient. Prefer screenshots targeted to a returned element ref; use `fullPage` only when whole-page context is necessary.
+
+Snapshots compact exact unnamed `generic` accessibility wrappers by default while preserving their children, named or interactive generics, semantic roles, states, and other attributes. Use `snapshotMode: "full"` on an explicit `snapshot` only when an unnamed container ref is needed for a targeted snapshot or screenshot. Full snapshots remain redacted and bounded.
+
 Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 120 lines / 12 KB, and snapshots emitted by other actions up to 100 lines / 10 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser subprocess. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
 
 Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S) and `about:blank`, not credentials or local files. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.
 
-Owned sessions are shown by default, isolated, temporary, and closed on explicit `close` or Pi session shutdown. Toggle future owned launches between shown and headless mode:
+In Pylon Web, an agent-started owned session automatically opens the **Browser** right panel and passively mirrors the viewport with bounded local screenshots while agent actions continue. The panel can also launch a browser or take direct control to forward pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never mirrored or controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
+
+The embedded surface is screenshot-backed rather than an iframe, so fast animation, media, IME input, and precision dragging can feel less responsive than a native browser window.
+
+Owned sessions are headless by default, isolated, temporary, and closed on explicit `close` or Pi session shutdown. Toggle future owned launches between shown and headless mode:
 
 ```text
 /helios-visibility
@@ -71,7 +79,7 @@ Owned sessions are shown by default, isolated, temporary, and closed on explicit
 /helios-visibility status
 ```
 
-No argument toggles setting. Change is in-memory and affects only future owned launches in current loaded session; active owned and attached browsers remain unchanged. Headless mode cannot provide visual supervision and must not be used for purchases, messages, publishing, permissions, or destructive actions.
+No argument toggles the setting. Changes persist and affect future owned launches; active owned and attached browsers remain unchanged. Headless mode shows no separate native browser window; use Pylon's live mirror for visual supervision. Purchases, messages, publishing, permissions, and destructive actions still require direct user supervision.
 
 Check pinned CLI readiness without launching a browser:
 

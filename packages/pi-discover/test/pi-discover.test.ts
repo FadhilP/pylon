@@ -8,9 +8,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const execFileAsync = promisify(execFile);
-import discover, { keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
+import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
+import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 
 class Bus {
   handlers = new Map<string, ((...values: any[]) => any)[]>();
@@ -59,14 +60,13 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
   return { active, commands, events, lifecycle, tools, getSetActiveCalls: () => setActiveCalls };
 }
 
-test("host and child entrypoints register their intended discovery tools", () => {
-  const { commands, tools } = setup();
-  assert.deepEqual([...commands.keys()], ["discover-index"]);
-  assert.deepEqual([...tools.keys()], ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_tools"]);
-  const childTools = new Map<string, any>();
-  registerDiscoverChildTools({ registerTool: (tool: any) => childTools.set(tool.name, tool) } as any);
-  assert.deepEqual([...childTools.keys()], ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status"]);
-});
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not met");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 test("indexed searches display only model-useful fields", async () => {
   const tools = new Map<string, any>();
@@ -79,12 +79,37 @@ test("indexed searches display only model-useful fields", async () => {
   assert.deepEqual(JSON.parse(symbolResult.content[0].text), {
     heuristic: true,
     results: [{ name: "redact", kind: "function", path: "src/redact.ts", line: 8 }],
+    observed: 1, returned: 1, truncated: false,
   });
   const codeResult = await tools.get("code_search").execute("code", { query: "redact" }, undefined, undefined, context);
   assert.deepEqual(JSON.parse(codeResult.content[0].text), {
     semantic: false,
-    results: [{ path: "src/redact.ts", language: "typescript", line: 8, text: "export function redact()" }],
+    results: [{ path: "src/redact.ts", line: 8, text: "export function redact()" }],
+    observed: 1, returned: 1, truncated: false,
   });
+});
+
+test("indexed search caps preserve valid JSON and complete ranked results", async () => {
+  const tools = new Map<string, any>();
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    name: `symbol_${index}_${"界".repeat(30)}`, kind: "function", path: `src/file-${index}.ts`, line: index + 1,
+  }));
+  const symbolRows = Object.assign(rows, { moreAvailable: true });
+  const codeRows = Object.assign(rows.map(({ path, line }) => ({ path, line, text: "界".repeat(100) })), { moreAvailable: true });
+  registerIndexTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, () => ({
+    searchSymbols: async () => symbolRows,
+    searchCode: async () => codeRows,
+  } as any), 600);
+  for (const name of ["symbol_search", "code_search"]) {
+    const result = await tools.get(name).execute("id", { query: "symbol", limit: 20 }, undefined, undefined, { cwd: process.cwd() });
+    assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 600);
+    const parsed = JSON.parse(result.content[0].text);
+    assert.equal(parsed.observed, 20);
+    assert.ok(parsed.returned < 20);
+    assert.equal(parsed.results.length, parsed.returned);
+    assert.equal(parsed.truncated, true);
+    assert.equal(parsed.moreAvailable, true);
+  }
 });
 
 test("discover child tools enforce their child-local output cap", async () => {
@@ -164,7 +189,7 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
     assert.equal((await index.searchSymbols(root, { query: "currentSymbol" }) as any[])[0].path, "current.ts");
     const migrated = new DatabaseSync(dbPath);
     try {
-      assert.equal((migrated.prepare("PRAGMA user_version").get() as any).user_version, 2);
+      assert.equal((migrated.prepare("PRAGMA user_version").get() as any).user_version, 3);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count, 1);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='stale.ts'").get() as any).count, 0);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='current.ts'").get() as any).count, 1);
@@ -178,9 +203,13 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
 });
 
 test("symbol extraction covers common language declarations", () => {
-  assert.deepEqual(extractSymbols("export function run() {}\nconst later = async () => 1", "typescript").map(({ name, kind }) => ({ name, kind })), [
-    { name: "run", kind: "function" }, { name: "later", kind: "function" },
+  assert.deepEqual(extractSymbols("export function run() {}\nconst later = async () => 1\nconst typed: Handler = async (value: string): Promise<void> => {}\nclass Worker {\n  async execute(): Promise<void> {}\n}", "typescript").map(({ name, kind }) => ({ name, kind })), [
+    { name: "run", kind: "function" }, { name: "later", kind: "function" }, { name: "typed", kind: "function" },
+    { name: "Worker", kind: "class" }, { name: "execute", kind: "function" },
   ]);
+  assert.deepEqual(extractSymbols("public class Worker {\n  public void run() {}\n}", "java").map(({ name }) => name), ["Worker", "run"]);
+  assert.deepEqual(extractSymbols("public class Worker {\n  public async Task Run() => done;\n}", "csharp").map(({ name }) => name), ["Worker", "Run"]);
+  assert.deepEqual(extractSymbols("int run(void) { return 0; }", "c").map(({ name }) => name), ["run"]);
   assert.deepEqual(extractSymbols("class Worker:\n    async def execute(self):", "python").map(({ name, kind }) => ({ name, kind })), [
     { name: "Worker", kind: "class" }, { name: "execute", kind: "function" },
   ]);
@@ -234,6 +263,102 @@ test("SQLite index refreshes changed, restored, and deleted files atomically", a
     assert.equal((await index.searchSymbols(root, { query: "alpha" }) as any[]).length, 0);
   } finally {
     await index.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SQLite index prunes workspaces, repositories, and FTS rows for missing directories", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "pi-discover-prune-"));
+  const live = join(parent, "live");
+  const stale = join(parent, "stale");
+  const dbPath = join(parent, "index.sqlite");
+  await Promise.all([mkdir(live), mkdir(stale)]);
+  await Promise.all([
+    writeFile(join(live, "app.ts"), "export function liveProject() {}\n"),
+    writeFile(join(stale, "app.ts"), "export function staleProject() {}\n"),
+  ]);
+  const executor = async (_command: string, args: string[]) => {
+    const cwd = args[1];
+    const gitArgs = args.slice(2);
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${cwd}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: `${cwd === live ? "live" : "stale"}-head\n`, stderr: "" };
+    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: "", stderr: "" };
+    throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
+  };
+  const liveIndex = new WorkspaceIndex(live, executor, dbPath);
+  const staleIndex = new WorkspaceIndex(stale, executor, dbPath);
+  try {
+    await liveIndex.refresh();
+    await staleIndex.refresh();
+    await rm(stale, { recursive: true, force: true });
+
+    assert.deepEqual(await liveIndex.prune(), {
+      removedWorkspaces: 1,
+      removedRepositories: 1,
+      removedFiles: 1,
+    });
+    const database = new DatabaseSync(dbPath);
+    try {
+      assert.deepEqual({
+        workspaces: Number((database.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count),
+        repositories: Number((database.prepare("SELECT count(*) AS count FROM repositories").get() as any).count),
+        files: Number((database.prepare("SELECT count(*) AS count FROM files").get() as any).count),
+        fts: Number((database.prepare("SELECT count(*) AS count FROM code_fts").get() as any).count),
+        symbols: Number((database.prepare("SELECT count(*) AS count FROM symbols").get() as any).count),
+      }, { workspaces: 1, repositories: 1, files: 1, fts: 1, symbols: 1 });
+    } finally {
+      database.close();
+    }
+    assert.deepEqual((await liveIndex.searchSymbols(live, { query: "liveProject" }) as any[]).map((row) => row.name), ["liveProject"]);
+  } finally {
+    await Promise.all([liveIndex.close(), staleIndex.close()]);
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("full refresh tracks dirty files, queries refresh on demand, and code search ignores filename-only hits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-discover-fresh-"));
+  const dbPath = join(root, "index.sqlite");
+  const sourcePath = join(root, "filenameonly.ts");
+  const runGit = (...args: string[]) => execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
+  const executor = async (command: string, args: string[]) => {
+    try {
+      const result = await execFileAsync(command, args, { encoding: "utf8" });
+      return { code: 0, stdout: result.stdout, stderr: result.stderr };
+    } catch (error: any) {
+      return { code: typeof error.code === "number" ? error.code : 1, stdout: error.stdout ?? "", stderr: error.stderr ?? error.message };
+    }
+  };
+  try {
+    await runGit("init", "-q");
+    await runGit("config", "user.email", "test@example.com");
+    await runGit("config", "user.name", "Test");
+    await writeFile(sourcePath, "export function run() {}\nexport function runner() {}\nexport function outrun() {}\n");
+    for (let index = 0; index < 12; index++)
+      await writeFile(join(root, `shared-${index}.ts`), `export const value${index} = 'shared searchable phrase';\n`);
+    await runGit("add", ".");
+    await runGit("commit", "-qm", "initial");
+    await writeFile(sourcePath, "export function dirtyOnly() { return 'dirty content'; }\n");
+
+    const index = new WorkspaceIndex(root, executor, dbPath);
+    try {
+      await index.refresh();
+      assert.equal((await index.searchSymbols(root, { query: "dirtyOnly" }) as any[]).length, 1);
+      await runGit("checkout", "--", "filenameonly.ts");
+      assert.deepEqual((await index.searchSymbols(root, { query: "run" }) as any[]).map((row) => row.name), ["run", "runner", "outrun"]);
+      assert.equal((await index.searchSymbols(root, { query: "dirtyOnly" }) as any[]).length, 0);
+      assert.equal((await index.searchCode(root, { query: "filenameonly" }) as any[]).length, 0);
+      const codeResults = await index.searchCode(root, { query: "shared searchable" }) as any;
+      assert.equal(codeResults.length, 10);
+      assert.equal(codeResults.moreAvailable, true);
+      await assert.rejects(() => index.searchSymbols(root, { query: "   " }), /non-whitespace/);
+      await assert.rejects(() => index.searchCode(root, { query: "   " }), /non-whitespace/);
+    } finally {
+      await index.close();
+    }
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -293,6 +418,18 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
       assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
       assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
       assert.equal((await childIndex.searchCode(child, { query: "shared content" }) as any[])[0].path, "nested.ts");
+
+      const database = new DatabaseSync(dbPath);
+      try {
+        assert.equal(database.prepare("UPDATE workspaces SET root=? WHERE root=?").run(join(root, "missing"), root).changes, 1);
+      } finally {
+        database.close();
+      }
+      assert.deepEqual(await childIndex.prune(), { removedWorkspaces: 1, removedRepositories: 0, removedFiles: 0 });
+      assert.deepEqual(counts(), { repositories: 2, workspaces: 1, files: 1, fts: 1, symbols: 1 });
+      assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
+      await aggregateIndex.refresh();
+      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
 
       await writeFile(source, "export function nestedDirty() { return 'updated shared content'; }\n");
       await childIndex.refresh();
@@ -400,13 +537,24 @@ test("host refreshes its SQLite index after each turn", async () => {
     },
   };
   let policy: any;
+  const indexStates: any[] = [];
   runtime.events.on("pylon:tool-policy", (value) => {
     if (value?.kind === "register" && value?.owner === "pi-discover") policy = value;
   });
+  runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.deepEqual(policy.deferredTools, ["index_status"]);
+    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status"]);
+    assert.deepEqual(policy.deferredToolUsage, {
+      relationship_graph: "map source symbols or tokens to related files and source locations",
+      index_status: "inspect local repository code-index status",
+    });
     assert.ok(!runtime.active.includes("index_status"));
+    assert.ok(!runtime.active.includes("relationship_graph"));
+    await waitFor(() => indexStates.at(-1)?.state === "idle");
+    assert.equal(indexStates.at(-1)?.state, "idle");
+    assert.equal(indexStates.at(-1)?.files, 1);
+    assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
     let result = await runtime.tools.get("symbol_search").execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "beforeTurn");
 
@@ -416,6 +564,16 @@ test("host refreshes its SQLite index after each turn", async () => {
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "manualRebuild");
     assert.match(notifications.at(-1)!.text, /rebuild complete/);
 
+    await new Promise<void>((resolve, reject) => runtime.events.emit("pi-discover:index-action", {
+      version: 1,
+      action: "rebuild",
+      acknowledge() {},
+      resolve,
+      reject,
+    }));
+    assert.ok(indexStates.some((state) => state.state === "indexing"));
+    assert.equal(indexStates.at(-1)?.state, "idle");
+
     await writeFile(sourcePath, "export function afterTurn() {}\n");
     status = " M app.ts\0";
     await runtime.lifecycle.emitAsync("turn_end", {}, ctx);
@@ -424,8 +582,42 @@ test("host refreshes its SQLite index after each turn", async () => {
 
     await runtime.commands.get("discover-index").handler("status", ctx);
     assert.match(notifications.at(-1)!.text, /index status/);
+
+    await runtime.commands.get("discover-index").handler("prune", ctx);
+    assert.match(notifications.at(-1)!.text, /prune complete.*"removedWorkspaces":0/);
   } finally {
     await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
+    if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
+    else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic indexing does not block session startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-discover-background-"));
+  const previousPath = process.env.PI_DISCOVER_INDEX_PATH;
+  process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
+  let releaseIndex!: () => void;
+  let markStarted!: () => void;
+  const release = new Promise<void>((resolve) => { releaseIndex = resolve; });
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const runtime = setup(async () => {
+    markStarted();
+    await release;
+    return { code: 1, stdout: "", stderr: "stopped" };
+  });
+  const ctx = { cwd: root };
+  try {
+    const startup = runtime.lifecycle.emitAsync("session_start", {}, ctx);
+    assert.equal(await Promise.race([
+      startup.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ]), true);
+    await started;
+    releaseIndex();
+    await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
+  } finally {
+    releaseIndex();
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
     else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
     await rm(root, { recursive: true, force: true });
@@ -467,6 +659,7 @@ test("relationship role classification remains explicitly heuristic", () => {
   assert.deepEqual(relationshipRoles("run", "export function run() {"), ["possible_definition", "possible_export"]);
   assert.deepEqual(relationshipRoles("run", "import { run } from './task.js';"), ["possible_import"]);
   assert.deepEqual(relationshipRoles("run", "const value = run;"), ["reference"]);
+  assert.deepEqual(relationshipRoles("run", "run();"), ["possible_call"]);
 });
 
 test("relationship_graph returns a bounded JSON occurrence graph", async () => {
@@ -476,7 +669,12 @@ test("relationship_graph returns a bounded JSON occurrence graph", async () => {
     rgMatch("src/b.ts", 8, "run();"),
     rgMatch("src/c.ts", 3, "const callback = run;"),
   ].join("\n");
-  const { tools } = setup(async (...args) => { call = args; return { code: 0, stdout, stderr: "" }; });
+  const { tools } = setup(async (...args) => {
+    call = args;
+    return args[1].includes("--files-with-matches")
+      ? { code: 0, stdout: "src/a.ts\0src/b.ts\0src/c.ts\0", stderr: "" }
+      : { code: 0, stdout, stderr: "" };
+  });
   const result = await tools.get("relationship_graph").execute(
     "id", { query: "run", path: "src", glob: "*.ts", max_results: 2 }, undefined, undefined, { cwd: process.cwd() },
   );
@@ -485,15 +683,33 @@ test("relationship_graph returns a bounded JSON occurrence graph", async () => {
   assert.equal(call[0], "rg");
   assert.ok(call[1].includes("--json"));
   assert.ok(call[1].includes("--word-regexp"));
-  assert.deepEqual(call[1].slice(-2), ["run", "src"]);
+  assert.deepEqual(call[1].slice(-4), ["run", "src/a.ts", "src/b.ts", "src/c.ts"]);
   assert.equal(graph.heuristic, true);
   assert.equal(graph.metadata.observedMatchCount, 3);
   assert.equal(graph.metadata.returnedCount, 2);
   assert.equal(graph.metadata.truncated, true);
-  assert.deepEqual(graph.nodes.find((node: any) => node.id === "location:src/a.ts:2").roles,
-    ["possible_definition", "possible_export"]);
-  assert.ok(graph.edges.some((edge: any) => edge.type === "contains"));
-  assert.ok(graph.edges.some((edge: any) => edge.type === "mentions"));
+  assert.equal(graph.files.length, 2);
+  assert.deepEqual(graph.files[0], {
+    path: "src/a.ts",
+    locations: [{ line: 2, text: "export function run() {", roles: ["possible_definition", "possible_export"] }],
+  });
+  assert.equal(call[1][call[1].indexOf("--max-count") + 1], "2");
+  assert.ok(call[1].includes("--max-filesize"));
+});
+
+test("relationship_graph preserves parseable grouped shape at small byte caps", async () => {
+  const tools = new Map<string, any>();
+  registerRelationshipGraph({
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (_command: string, args: string[]) => args.includes("--files-with-matches")
+      ? { code: 0, stdout: "src/long.ts\0", stderr: "" }
+      : { code: 0, stdout: rgMatch("src/long.ts", 1, "x".repeat(500)), stderr: "" },
+  } as any, 80);
+  const result = await tools.get("relationship_graph").execute(
+    "id", { query: "x" }, undefined, undefined, { cwd: process.cwd() },
+  );
+  assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 80);
+  assert.ok(Array.isArray(JSON.parse(result.content[0].text).files));
 });
 
 test("relationship_graph returns a valid empty graph and confines paths", async () => {
@@ -503,7 +719,7 @@ test("relationship_graph returns a valid empty graph and confines paths", async 
   );
   const graph = JSON.parse(result.content[0].text);
   assert.equal(graph.metadata.observedMatchCount, 0);
-  assert.equal(graph.nodes.length, 1);
+  assert.deepEqual(graph.files, []);
   await assert.rejects(() => tools.get("relationship_graph").execute(
     "id", { query: "missing", path: "../outside" }, undefined, undefined, { cwd: process.cwd() },
   ), /stay within workspace/);
@@ -514,7 +730,9 @@ test("relationship_graph deduplicates locations, reports malformed output, and a
   const match = rgMatch("src/a.ts", 4, "$run();");
   const { tools } = setup(async (_command, commandArgs) => {
     args = commandArgs;
-    return { code: 0, stdout: `${match}\n${match}\nnot-json`, stderr: "" };
+    return commandArgs.includes("--files-with-matches")
+      ? { code: 0, stdout: "src/a.ts\0", stderr: "" }
+      : { code: 0, stdout: `${match}\n${match}\nnot-json`, stderr: "" };
   });
   const result = await tools.get("relationship_graph").execute(
     "id", { query: "$run" }, undefined, undefined, { cwd: process.cwd() },
@@ -524,7 +742,7 @@ test("relationship_graph deduplicates locations, reports malformed output, and a
   assert.ok(!args.includes("--word-regexp"));
   assert.equal(graph.metadata.observedMatchCount, 1);
   assert.equal(graph.metadata.malformedEvents, 1);
-  assert.equal(graph.nodes.filter((node: any) => node.kind === "location").length, 1);
+  assert.equal(graph.files[0].locations.length, 1);
 });
 
 test("relationship_graph rejects whitespace-only direct execution", async () => {
@@ -558,18 +776,82 @@ test("query normalization and structured metadata outrank description overlap", 
   ], "Public WEB", 2)[0].name, "alpha");
 });
 
-test("search_tools uses exactly one synchronous capability and activates eligible matches", async () => {
+test("discovery guidance lists bounded usages without exposing tool names", () => {
+  const entries = [
+    { name: "z_tool", usage: "capture a consented application window" },
+    { name: "a_tool", usage: "research current public web pages" },
+    { name: "duplicate", usage: "research current public web pages" },
+    { name: "large", usage: "x".repeat(200) },
+  ];
+  const guidance = formatToolDiscoveryGuidance(entries, 240, 3)!;
+  assert.ok(guidance.length <= 240);
+  assert.match(guidance, /research current public web pages/);
+  assert.match(guidance, /additional deferred capabilities/i);
+  assert.doesNotMatch(guidance, /a_tool|z_tool|duplicate|large/);
+  assert.equal((guidance.match(/research current public web pages/g) ?? []).length, 1);
+});
+
+test("before_agent_start advertises the current deferred usage catalog", () => {
+  const { events, lifecycle } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["web_lookup", "git_history"],
+    catalog: () => [
+      { name: "web_lookup", usage: "research current public web pages" },
+      { name: "git_history", usage: "inspect release provenance" },
+    ],
+    select: () => ({ selected: [] }),
+    reset: () => ({ selected: [] }),
+  }));
+  const handler = lifecycle.handlers.get("before_agent_start")![0];
+  const result = handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
+  });
+  assert.match(result.systemPrompt, /Deferred tool discovery/);
+  assert.match(result.systemPrompt, /research current public web pages/);
+  assert.match(result.systemPrompt, /inspect release provenance/);
+  assert.doesNotMatch(result.systemPrompt, /web_lookup|git_history/);
+  const repeated = handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
+  });
+  assert.equal(repeated.systemPrompt, result.systemPrompt);
+  assert.equal((repeated.systemPrompt.match(/Deferred tool discovery/g) ?? []).length, 1);
+  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"] } }), undefined);
+  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: {} }), undefined);
+});
+
+test("old discovery capability ranks descriptions without generated guidance", async () => {
+  const { events, lifecycle, tools } = setup();
+  events.on("pylon:tool-discovery", (request) => request.respond({
+    eligible: () => ["web_lookup"],
+    select: (names: string[]) => ({ selected: names }),
+    reset: () => ({ selected: [] }),
+  }));
+  const handler = lifecycle.handlers.get("before_agent_start")![0];
+  assert.equal(handler({
+    systemPrompt: "base",
+    systemPromptOptions: { selectedTools: ["search_tools"] },
+  }), undefined);
+  const result = await tools.get("search_tools").execute("id", { query: "public pages" }, undefined, undefined, {});
+  assert.deepEqual(result.details.matches, ["web_lookup"]);
+});
+
+test("search_tools uses advertised usage and activates eligible matches", async () => {
   const { events, tools, getSetActiveCalls } = setup();
   const selected: string[][] = [];
   events.on("pylon:tool-discovery", (request) => request.respond({
     eligible: () => ["git_history"],
+    catalog: () => [{ name: "git_history", usage: "inspect release provenance" }],
     select: (names: string[]) => { selected.push(names); return { selected: names }; },
     reset: () => ({ reset: true }),
   }));
-  const result = await tools.get("search_tools").execute("id", { query: "search history" }, undefined, undefined, {});
+  const result = await tools.get("search_tools").execute("id", { query: "release provenance" }, undefined, undefined, {});
   assert.deepEqual(selected, [["git_history"]]);
   assert.equal(getSetActiveCalls(), 0);
   assert.match(result.content[0].text, /next model turn/i);
+  assert.equal((result.content[0].text.match(/git_history/g) ?? []).length, 1);
+  assert.doesNotMatch(result.content[0].text, /\{"selected"/);
   assert.deepEqual(result.details.matches, ["git_history"]);
 });
 
@@ -590,8 +872,12 @@ test("search_tools caches normalized searches within a turn", async () => {
 
 test("search_tools marks repeated misses and invalidates them on turn end or inventory change", async () => {
   const { active, events, lifecycle, tools } = setup();
+  let usage: string | undefined;
   events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["shell"], select: () => ({ selected: [] }), reset: () => ({ selected: [] }),
+    eligible: () => ["shell"],
+    catalog: () => [{ name: "shell", usage }],
+    select: () => ({ selected: [] }),
+    reset: () => ({ selected: [] }),
   }));
   const search = () => tools.get("search_tools").execute("id", { query: "browser" }, undefined, undefined, {});
   assert.equal((await search()).details.alreadySearched, false);
@@ -600,7 +886,12 @@ test("search_tools marks repeated misses and invalidates them on turn end or inv
   assert.match(repeated.content[0].text, /already searched/i);
   assert.match(repeated.details.missMarker.query, /^[a-f0-9]{16}$/);
   assert.doesNotMatch(JSON.stringify(repeated.details.missMarker), /browser/);
+  usage = "automate browser pages";
+  const changedUsage = await search();
+  assert.equal(changedUsage.details.cacheHit, false);
+  assert.deepEqual(changedUsage.details.matches, ["shell"]);
   lifecycle.emit("turn_end", {});
+  usage = undefined;
   assert.equal((await search()).details.alreadySearched, false);
   active.push("other_tool");
   assert.equal((await search()).details.alreadySearched, false);

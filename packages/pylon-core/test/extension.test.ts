@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -103,6 +103,36 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
 
+test("delegated runs receive stable role-local names", () => {
+  const runtime = harness();
+  const allocate = (kind: string, callId: string) => {
+    let name = "";
+    runtime.events.emit("pylon:delegate-name", {
+      version: 1,
+      kind,
+      callId,
+      respond: (value: string) => { name = value; },
+    });
+    return name;
+  };
+
+  assert.equal(allocate("advisor", "advisor-1"), "A1");
+  assert.equal(allocate("advisor", "advisor-1"), "A1");
+  assert.equal(allocate("grunt", "grunt-1"), "G1");
+  assert.equal(allocate("repo_scout", "repo-1"), "S1");
+  assert.equal(allocate("web_scout", "web-1"), "S2");
+
+  for (const handler of runtime.handlers.get("session_tree") ?? []) handler({}, {
+    sessionManager: {
+      getBranch: () => [{
+        message: { role: "toolResult", toolCallId: "repo-7", details: { agentName: "S7" } },
+      }],
+    },
+  });
+  assert.equal(allocate("repo_scout", "repo-7"), "S7");
+  assert.equal(allocate("web_scout", "web-8"), "S8");
+});
+
 test("shared worktree observer fingerprints one shell tool batch per turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-worktree-observer-"));
   await exec("git", ["init", "-q"], { cwd: root });
@@ -134,6 +164,54 @@ test("shared worktree observer fingerprints one shell tool batch per turn", asyn
   assert.equal(changes[0].changed, true);
   assert.equal(changes[0].known, true);
   assert.deepEqual(changes[0].toolCallIds, ["one", "two"]);
+});
+
+test("run summary survives the final shell turn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-run-summary-"));
+  try {
+    await exec("git", ["init", "-q"], { cwd: root });
+    await exec("git", ["config", "user.email", "pylon@test.local"], { cwd: root });
+    await exec("git", ["config", "user.name", "pylon-test"], { cwd: root });
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await exec("git", ["add", "tracked.txt"], { cwd: root });
+    await exec("git", ["commit", "-qm", "base"], { cwd: root });
+
+    const runtime = harness();
+    const summaries: any[] = [];
+    const ctx = {
+      cwd: root,
+      sessionManager: {
+        getBranch: () => [{
+          id: "assistant-1",
+          type: "message",
+          message: { role: "assistant" },
+        }],
+      },
+    };
+    runtime.events.on("pylon:worktree-summary", (event) => summaries.push(event));
+
+    await runtime.handlers.get("agent_start")![0]({}, ctx);
+    await runtime.handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "shell" }, ctx);
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+    await runtime.handlers.get("turn_end")![0]({}, ctx);
+    await runtime.handlers.get("agent_settled")![0]({}, ctx);
+
+    assert.deepEqual(summaries[0]?.files, [{ path: "tracked.txt", additions: 1, deletions: 1 }]);
+    assert.equal(summaries[0]?.assistantEntryId, "assistant-1");
+    assert.deepEqual(runtime.entries.at(-1), {
+      customType: "pylon-worktree-summary",
+      data: {
+        version: 1,
+        assistantEntryId: "assistant-1",
+        files: [{ path: "tracked.txt", additions: 1, deletions: 1 }],
+      },
+    });
+    await runtime.handlers.get("agent_start")![0]({}, ctx);
+    await runtime.handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(runtime.entries.filter((entry) => entry.customType === "pylon-worktree-summary").length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("doctor reports quarantined state and unavailable configured models", async () => {
@@ -216,10 +294,12 @@ test("discovery capability replaces deferred selections and respects gates", () 
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-advisor",
     managedTools: ["advisor"], enabledTools: ["advisor"], deferredTools: ["advisor"],
+    deferredToolUsage: { advisor: "review consequential decisions" },
   });
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-scout",
     managedTools: ["repo_scout"], enabledTools: ["repo_scout"], deferredTools: ["repo_scout"],
+    deferredToolUsage: { repo_scout: "trace repository evidence" },
   });
   assert.ok(!runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("repo_scout"));
@@ -229,6 +309,21 @@ test("discovery capability replaces deferred selections and respects gates", () 
   assert.equal(responses.length, 1);
   const capability = responses[0];
   assert.deepEqual(capability.eligible(), ["advisor", "repo_scout"]);
+  assert.deepEqual(capability.catalog(), [
+    { name: "advisor", usage: "review consequential decisions" },
+    { name: "repo_scout", usage: "trace repository evidence" },
+  ]);
+  const catalog = capability.catalog();
+  catalog[0].usage = "mutated";
+  assert.equal(capability.catalog()[0].usage, "review consequential decisions");
+  runtime.events.emit("pylon:tool-policy", {
+    version: 1, kind: "register", owner: "pi-other",
+    managedTools: ["advisor"], enabledTools: ["advisor"], deferredTools: ["advisor"],
+    deferredToolUsage: { advisor: "provide a different review" },
+  });
+  assert.equal(capability.catalog().find((entry: any) => entry.name === "advisor").usage, undefined);
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-other" });
+  assert.equal(capability.catalog()[0].usage, "review consequential decisions");
   assert.deepEqual(capability.select(["advisor"]), { selected: ["advisor"], blocked: [] });
   assert.ok(runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("repo_scout"));
@@ -244,6 +339,8 @@ test("discovery capability replaces deferred selections and respects gates", () 
   assert.ok(!runtime.active().includes("advisor"));
   assert.match(capability.select(["missing"]).error, /not eligible/);
   assert.deepEqual(capability.reset(), { selected: [] });
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-scout" });
+  assert.deepEqual(capability.catalog(), [{ name: "advisor", usage: "review consequential decisions" }]);
 });
 
 test("discovery selection validation and failed reconciliation preserve prior selection", () => {

@@ -117,14 +117,15 @@ export class JobManager {
       windowsHide: true,
       shell: inv.shell,
     });
+    const startedAt = Date.now();
     const j: Job = {
       id,
       label: (label?.trim() || command.slice(0, 60)).replace(/[\r\n\t]/g, " "),
       command,
       cwd,
       state: "running",
-      startedAt: Date.now(),
-      lastCheckedAt: Date.now(),
+      startedAt,
+      lastCheckedAt: startedAt,
       timeoutMs,
       pid: child.pid,
       stdoutTail: new TailBuffer(),

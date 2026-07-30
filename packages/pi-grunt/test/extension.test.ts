@@ -44,11 +44,21 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     let childArgs: string[] = [];
     const model = { provider: "test", id: "worker" };
     let workerCwd = "";
+    const workerCwds: string[] = [];
+    let workerAttempts = 0;
     let outcome: "completed" | "blocked" = "completed";
     const runningUpdates: any[] = [];
     const runWorker = async (args: string[], options: { cwd: string; onActivity?: Function }): Promise<WorkerRun> => {
       childArgs = args;
       workerCwd = options.cwd;
+      workerCwds.push(options.cwd);
+      workerAttempts++;
+      if (workerAttempts === 1) return {
+        text: "", cwd: options.cwd, model: "worker", stopReason: "error", error: "503 model at capacity",
+        failure: "child_error", stderr: "", durationMs: 2,
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, turns: 1,
+        truncated: false, exitCode: 1, activity: [],
+      };
       await new Promise((resolve) => setTimeout(resolve, 5));
       options.onActivity?.(
         { kind: "call", tool: "read", text: "README.md" },
@@ -80,7 +90,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       },
     };
     await saveConfig({ version: 1, disabled: false, mode: "dynamic" });
-    grunt(pi, runWorker as any);
+    grunt(pi, runWorker as any, async () => true);
     const ctx: any = {
       cwd, hasUI: false, model,
       modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model, hasConfiguredAuth: () => true },
@@ -102,6 +112,9 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(result.details.mode, "isolated");
     assert.equal(result.details.configuredMode, "dynamic");
     assert.equal(result.details.isolationVerified, true);
+    assert.equal(result.details.attempts, 2);
+    assert.equal(workerAttempts, 2);
+    assert.notEqual(workerCwds[0], workerCwds[1]);
     assert.equal(result.details.workerCwd, workerCwd);
     assert.notEqual(workerCwd, cwd);
     assert.equal(result.details.changedPaths, undefined);
@@ -118,7 +131,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(result.details.missingDependencies, undefined);
     assert.deepEqual(result.details.metrics, {
       workerStatus: "completed", integrationStatus: "completed", workerCostUsd: 0,
-      turns: 1, inputTokens: 1, outputTokens: 2, cacheReadTokens: 0,
+      turns: 2, inputTokens: 2, outputTokens: 2, cacheReadTokens: 0,
       cacheWriteTokens: 0, changedFileCount: 1,
     });
     assert.equal((await import("node:fs/promises").then((fs) => fs.readFile(join(cwd, "src", "worker.ts"), "utf8"))).replace(/\r\n/g, "\n"), "export const completed = true;\n");
@@ -154,7 +167,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.match(direct.content[0].text, /partial edits|affected the current working directory/i);
     assert.doesNotMatch(direct.content[0].text, /Worker report/);
     await commands.get("grunt").handler("status", ctx);
-    assert.match(notifications.at(-1)!.text, /2\/3 integrated · 1 requiring main attention · 3 turns/);
+    assert.match(notifications.at(-1)!.text, /2\/3 integrated · 1 requiring main attention · 4 turns/);
     assert.match(notifications.at(-1)!.text, /exclude main-model handoff, review, repair, and verification cost/);
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "new" }, ctx);
     await commands.get("grunt").handler("status", ctx);
@@ -214,21 +227,23 @@ test("Grunt publishes sanitized bounded worker and outer failure details", async
       registerTool: (tool: any) => tools.set(tool.name, tool), exec() {},
     };
     const secret = `sk-${"x".repeat(40)}`;
-    let outcome: "failure" | "success" | "throw" = "failure";
+    let outcome: "failure" | "transient" | "success" | "throw" = "failure";
+    let workerCalls = 0;
     await saveConfig({ version: 1, disabled: false, mode: "direct" });
     grunt(pi, async (_args, options): Promise<WorkerRun> => {
+      workerCalls++;
       if (outcome === "throw") throw { private: "value" };
       return {
         text: outcome === "success" ? "Status: completed" : "",
         cwd: options.cwd, model: "worker", stopReason: "stop", stderr: "", durationMs: 1,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, turns: 1,
         truncated: false, exitCode: outcome === "success" ? 0 : 1, activity: [],
-        ...(outcome === "failure" ? {
-          error: `bad\napi_key=${secret}\u0085\u2028${"z".repeat(600)}`,
+        ...(outcome === "failure" || outcome === "transient" ? {
+          error: outcome === "transient" ? "503 model at capacity" : `bad\napi_key=${secret}\u0085\u2028${"z".repeat(600)}`,
           failure: "child_error" as const,
         } : {}),
       };
-    });
+    }, async () => true);
     const model = { provider: "test", id: "worker" };
     const ctx: any = {
       cwd: root, hasUI: false, model,
@@ -244,6 +259,14 @@ test("Grunt publishes sanitized bounded worker and outer failure details", async
     assert.doesNotMatch(failed.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
     assert.match(failed.content[0].text, /\[REDACTED\]/);
     assert.doesNotMatch(failed.content[0].text, new RegExp(secret));
+
+    outcome = "transient";
+    const callsBeforeTransient = workerCalls;
+    const transient = await tools.get("grunt").execute(
+      "transient", { task: "Edit file", thinking: "medium" }, undefined, undefined, ctx,
+    );
+    assert.equal(workerCalls, callsBeforeTransient + 1);
+    assert.equal(transient.details.attempts, 1);
 
     outcome = "success";
     const succeeded = await tools.get("grunt").execute(

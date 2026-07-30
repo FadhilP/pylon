@@ -13,8 +13,13 @@ test("repo scout prompt preserves core contracts", () => {
   assert.match(REPO_SCOUT_PROMPT, /every additional tool call must resolve a named evidence gap/i);
   assert.doesNotMatch(REPO_SCOUT_PROMPT, /KiB|hard cap|soft target/i);
   assert.match(REPO_SCOUT_PROMPT, /Do not edit/i);
+  assert.match(REPO_SCOUT_PROMPT, /mixes factual reconnaissance with design, recommendation, prioritization, or architecture-choice requests/i);
+  assert.match(REPO_SCOUT_PROMPT, /decision portion is parent-owned/i);
+  assert.match(REPO_SCOUT_PROMPT, /do not answer it/i);
+  assert.match(REPO_SCOUT_PROMPT, /directly implicated by observed references or flows/i);
+  assert.doesNotMatch(REPO_SCOUT_PROMPT, /likely needing changes/i);
   assert.match(REPO_SCOUT_PROMPT, /parent model decides/i);
-  assert.match(REPO_SCOUT_PROMPT, /do not repeat evidence/i);
+  assert.match(REPO_SCOUT_PROMPT, /do not infer edits or repeat evidence/i);
   assert.doesNotMatch(REPO_SCOUT_PROMPT, /no fixed turn cap/i);
 });
 

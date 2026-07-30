@@ -4,11 +4,50 @@ import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validatePngFile } from "../src/capture.ts";
-import { PlaywrightCli, HeliosCliError, validateNavigationUrl } from "../src/playwright-cli.ts";
+import { elementReferences, isElementReference } from "../src/element-ref.ts";
+import { compactSnapshotLines, PlaywrightCli, HeliosCliError, validateNavigationUrl } from "../src/playwright-cli.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const SESSION = "helios-0123456789ab-0123456789ab";
 const OTHER_SESSION = "helios-fedcba987654-fedcba987654";
+
+test("element references accept Playwright namespaces without broadening the grammar", () => {
+  for (const ref of ["e1", "f1e41", "f000e0"]) assert.equal(isElementReference(ref), true);
+  for (const ref of ["f1", "fe1", "f1e", "f1f2e3", "f1e2x", "xf1e2"]) assert.equal(isElementReference(ref), false);
+  const snapshot = "- button [ref=f1e41]\n- link [ref=e2]\n- text: ref=f2e3\n- button [ref=f1f2e3]";
+  assert.deepEqual(elementReferences(snapshot), ["f1e41", "e2"]);
+  assert.deepEqual(elementReferences(snapshot), ["f1e41", "e2"]);
+});
+
+test("snapshot compactor flattens only exact anonymous generic wrappers", () => {
+  const raw = [
+    "- generic [ref=e1]:",
+    "  - generic [ref=f1e2]:",
+    '    - button "Go" [ref=f1e3] [cursor=pointer]',
+    '  - generic "Named" [ref=e4]:',
+    "    - text: Keep",
+    "  - generic [ref=e5] [cursor=pointer]:",
+    "    - text: Clickable",
+    "  - generic [ref=e6]",
+    "  - main [ref=e7]:",
+    "    - generic [ref=e8]:",
+    '      - link "Docs" [ref=e9]',
+  ];
+  assert.deepEqual(compactSnapshotLines(raw), [
+    '- button "Go" [ref=f1e3] [cursor=pointer]',
+    '- generic "Named" [ref=e4]:',
+    "  - text: Keep",
+    "- generic [ref=e5] [cursor=pointer]:",
+    "  - text: Clickable",
+    "- main [ref=e7]:",
+    '  - link "Docs" [ref=e9]',
+  ]);
+
+  for (const malformed of [
+    ["- generic [ref=e1]:", "\t- button Tabbed [ref=e2]"],
+    ["- generic [ref=e1]:", "   - button Odd [ref=e2]"],
+  ]) assert.deepEqual(compactSnapshotLines(malformed), malformed);
+});
 
 test("adapter invokes pinned CLI with argument array and private cwd", async () => {
   let call: { command: string; args: string[]; options: any } | undefined;
@@ -25,6 +64,23 @@ test("adapter invokes pinned CLI with argument array and private cwd", async () 
     assert.equal(result.snapshot, "- heading [ref=e1]");
     assert.equal(result.value.snapshot, undefined);
   } finally { await cli.dispose(); }
+});
+
+test("artifact reads stay inside the private directory and enforce the byte cap", async () => {
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }));
+  const outside = await mkdtemp(join(tmpdir(), "helios-artifact-outside-"));
+  try {
+    const frame = join(cli.directory, "artifacts", "frame.png");
+    const escaped = join(outside, "frame.png");
+    await writeFile(frame, PNG);
+    await writeFile(escaped, PNG);
+    assert.equal((await cli.readArtifact(frame, PNG.length)).equals(PNG), true);
+    await assert.rejects(cli.readArtifact(frame, PNG.length - 1), /oversized/);
+    await assert.rejects(cli.readArtifact(escaped, PNG.length), /artifact path/);
+  } finally {
+    await cli.dispose();
+    await rm(outside, { recursive: true, force: true });
+  }
 });
 
 test("find uses bounded CLI snapshot search output", async () => {
@@ -76,9 +132,11 @@ test("link URL lookup uses fixed trusted expression and snapshot reference", asy
     return { code: 0, stdout: JSON.stringify({ result: "https://example.com/docs" }), stderr: "", killed: false };
   });
   try {
-    await cli.run(SESSION, { kind: "link-url", target: "e7" });
-    assert.deepEqual(args.slice(1), ["--json", `-s=${SESSION}`, "eval", "el => el instanceof HTMLAnchorElement ? el.href : ''", "e7"]);
-    await assert.rejects(cli.run(SESSION, { kind: "link-url", target: "#link" }), /snapshot reference/);
+    await cli.run(SESSION, { kind: "link-url", target: "f1e7" });
+    assert.deepEqual(args.slice(1), ["--json", `-s=${SESSION}`, "eval", "el => el instanceof HTMLAnchorElement ? el.href : ''", "f1e7"]);
+    for (const target of ["#link", "f1", "fe1", "f1e", "f1f2e3", "f1e2x"]) {
+      await assert.rejects(cli.run(SESSION, { kind: "link-url", target }), /snapshot reference/);
+    }
   } finally { await cli.dispose(); }
 });
 
@@ -144,16 +202,51 @@ test("adapter validates screenshot and redacts credentials in bounded snapshots"
   const cli = await PlaywrightCli.create(async (_command, args) => {
     const filename = args.find((arg) => arg.startsWith("--filename="))?.slice("--filename=".length);
     if (filename) await writeFile(filename, PNG);
-    return { code: 0, stdout: JSON.stringify({ snapshot: '- textbox "Password" [ref=e7]: hunter2\r\n- text: token=ghp_abcdefghijklmnopqrstuvwxyz\r\n- text: Authorization: Bearer secret-value' }), stderr: "", killed: false };
+    return { code: 0, stdout: JSON.stringify({ snapshot: '- textbox "Password" [ref=f1e7]: hunter2\r\n- searchbox "Search" [ref=f2e8]: private query\r\n- combobox "Plan" [ref=f3e9]: Enterprise\r\n- spinbutton "Seats" [ref=f4e10]: 10\r\n- button "Keep" [ref=f4e11]: visible\r\n- text: token=ghp_abcdefghijklmnopqrstuvwxyz\r\n- text: Authorization: Bearer secret-value' }), stderr: "", killed: false };
   });
   try {
     const shot = await cli.run(SESSION, { kind: "screenshot" });
     assert.ok(shot.artifactPath);
     const snapshot = await cli.run(SESSION, { kind: "snapshot" });
-    assert.equal(snapshot.snapshot, '- textbox "Password" [ref=e7]: [value redacted]\n- text: [possible credential redacted]\n- text: [possible credential redacted]');
-    assert.equal(snapshot.snapshotRedactions, 3);
+    assert.equal(snapshot.snapshot, '- textbox "Password" [ref=f1e7]: [value redacted]\n- searchbox "Search" [ref=f2e8]: [value redacted]\n- combobox "Plan" [ref=f3e9]: [value redacted]\n- spinbutton "Seats" [ref=f4e10]: [value redacted]\n- button "Keep" [ref=f4e11]: visible\n- text: [possible credential redacted]\n- text: [possible credential redacted]');
+    assert.equal(snapshot.snapshotRedactions, 6);
     assert.equal(snapshot.snapshotTruncated, false);
     await assert.rejects(cli.run(SESSION, { kind: "click", target: "#submit" }), /snapshot reference/);
+  } finally { await cli.dispose(); }
+});
+
+test("snapshots compact by default while full mode preserves structure and redaction", async () => {
+  const raw = '- generic [ref=e1]:\n  - textbox "Password" [ref=f1e2]: hunter2';
+  const calls: string[][] = [];
+  const cli = await PlaywrightCli.create(async (_command, args) => {
+    calls.push(args);
+    return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
+  });
+  try {
+    const compact = await cli.run(SESSION, { kind: "snapshot" });
+    assert.equal(compact.snapshot, '- textbox "Password" [ref=f1e2]: [value redacted]');
+    assert.equal(compact.snapshotRedactions, 1);
+
+    const full = await cli.run(SESSION, { kind: "snapshot", snapshotMode: "full" });
+    assert.equal(full.snapshot, '- generic [ref=e1]:\n  - textbox "Password" [ref=f1e2]: [value redacted]');
+    assert.equal(full.snapshotRedactions, 1);
+
+    const action = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+    assert.equal(action.snapshot, '- textbox "Password" [ref=f1e2]: [value redacted]');
+    assert.equal(calls.every((args) => !args.includes("compact") && !args.includes("full")), true);
+  } finally { await cli.dispose(); }
+});
+
+test("continuation caches compacted structure and reports compacted counts", async () => {
+  const raw = Array.from({ length: 4 }, (_, index) => `- generic [ref=e${index * 2 + 1}]:\n  - button Item ${index} [ref=e${index * 2 + 2}]`).join("\n");
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false }), { maxSnapshotLines: 2, maxSnapshotBytes: 1024 });
+  try {
+    const first = await cli.run(SESSION, { kind: "snapshot" });
+    assert.equal(first.snapshot, "- button Item 0 [ref=e2]\n- button Item 1 [ref=e4]");
+    assert.equal(first.snapshotOmittedLines, 2);
+    const second = await cli.run(SESSION, { kind: "continue", cursor: first.snapshotContinuation! });
+    assert.equal(second.snapshot, "- button Item 2 [ref=e6]\n- button Item 3 [ref=e8]");
+    assert.equal(second.snapshotTruncated, false);
   } finally { await cli.dispose(); }
 });
 

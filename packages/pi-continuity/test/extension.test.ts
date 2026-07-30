@@ -29,6 +29,7 @@ function runtime() {
   let selectedModel: any;
   let modelSelections = 0;
   const appended: Array<{ customType: string; data: any }> = [];
+  const customMessages: Array<{ message: any; options: any }> = [];
   const sent: string[] = [];
   const handlers = new Map<string, Function[]>();
   const tools = new Map<string, any>();
@@ -63,6 +64,7 @@ function runtime() {
       sent.push(message);
       sendHook?.(message);
     },
+    sendMessage: (message: any, options: any) => customMessages.push({ message, options }),
   };
   extension(pi);
   return {
@@ -70,6 +72,7 @@ function runtime() {
     tools,
     commands,
     appended,
+    customMessages,
     sent,
     selectedModel: () => selectedModel,
     modelSelections: () => modelSelections,
@@ -598,6 +601,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       setStatus: () => {},
       setWidget: () => {},
       select: async () => selection,
+      input: async () => customAnswer,
       editor: async () => customAnswer,
     },
   };
@@ -688,6 +692,82 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     assert.deepEqual(custom.details.clarification, {
       question: "Any constraints?", answer: "Only API changes",
     });
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("standalone and bulk clarification use the effective timeout without creating work", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-standalone-clarify-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const app = runtime();
+  const selectionOptions: Array<{ timeout?: number } | undefined> = [];
+  const questionnaireOptions: Array<{ timeout?: number } | undefined> = [];
+  const ctx: any = {
+    cwd,
+    hasUI: true,
+    mode: "rpc",
+    abort: () => assert.fail("standalone clarification must not abort"),
+    sessionManager: {
+      getSessionId: () => "standalone-clarify-session",
+      getEntries: () => [],
+      getLeafEntry: () => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "toolCall",
+            id: "clarify",
+            name: "continuity_update",
+            arguments: { action: "clarify" },
+          }],
+        },
+      }),
+    },
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async (_title: string, _choices: string[], options?: { timeout?: number }) => {
+        selectionOptions.push(options);
+        return "Small";
+      },
+      input: async () => "Custom",
+      questionnaire: async (questions: unknown[], options?: { timeout?: number }) => {
+        questionnaireOptions.push(options);
+        return questions.length === 1 ? ["Small"] : ["Small", "Later"];
+      },
+    },
+  };
+  try {
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    app.emit("pylon:runtime-policy", {
+      version: 2,
+      dialogTimeouts: { guard: 60, clarify: 120 },
+    });
+    const tool = app.tools.get("continuity_update");
+    const single = await tool.execute("single", {
+      action: "clarify",
+      question: "Scope?",
+      options: [{ label: "Small" }, { label: "Large" }],
+    }, undefined, undefined, ctx);
+    assert.equal(single.content[0].text, "Small");
+    assert.deepEqual(selectionOptions, []);
+
+    const bulk = await tool.execute("bulk", {
+      action: "clarify",
+      questions: [
+        { question: "Scope?", options: [{ label: "Small" }, { label: "Large" }] },
+        { question: "Deploy?", options: [{ label: "Now" }, { label: "Later" }] },
+      ],
+    }, undefined, undefined, ctx);
+    assert.match(bulk.content[0].text, /1\. Scope\?/);
+    assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }, { timeout: 120_000 }]);
+    assert.equal(app.appended.some((entry) => entry.customType.includes("run")), false);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -850,7 +930,7 @@ test("subsequent plan inherits timeline lineage from a fresh executor session", 
   }
 });
 
-test("explicit plan selects planner and hands approved work to executor session", async () => {
+test("explicit plan resets model context without replacing the visible session", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-handoff-"));
   const cwd = join(root, "repo");
@@ -861,8 +941,7 @@ test("explicit plan selects planner and hands approved work to executor session"
     ["provider/planner", { provider: "provider", id: "planner" }],
     ["provider/executor", { provider: "provider", id: "executor" }],
   ]);
-  const childEntries: Array<{ type: string; value: any }> = [];
-  let kickoff = "";
+  let newSessions = 0;
   let planningRun: Promise<void> | undefined;
   let app: ReturnType<typeof runtime>;
   const ctx: any = {
@@ -882,27 +961,12 @@ test("explicit plan selects planner and hands approved work to executor session"
     },
     isIdle: () => !planningRun,
     waitForIdle: async () => { await planningRun; },
-    newSession: async ({ setup, withSession }: any) => {
-      await setup({
-        appendModelChange: (provider: string, id: string) =>
-          childEntries.push({ type: "model", value: { provider, id } }),
-        appendThinkingLevelChange: (value: string) =>
-          childEntries.push({ type: "thinking", value }),
-        appendCustomEntry: (type: string, value: any) =>
-          childEntries.push({ type, value }),
-      });
-      await withSession({
-        ...ctx,
-        model: models.get("provider/executor"),
-        sendUserMessage: async (text: string) => { kickoff = text; },
-      });
-      return { cancelled: false };
-    },
+    newSession: async () => { newSessions++; return { cancelled: false }; },
     ui: {
       notify: () => {},
       setStatus: () => {},
       setWidget: () => {},
-      select: async () => "Approve — fresh executor session",
+      select: async () => "Approve — reset context",
       editor: async () => "",
     },
   };
@@ -941,28 +1005,38 @@ test("explicit plan selects planner and hands approved work to executor session"
     );
     await app.commands.get("plan").handler("Ship change", ctx);
     await planningRun;
-    await waitFor(() => childEntries.length > 0);
-    assert.equal(app.selectedModel()?.id, "planner");
-    assert.equal(app.thinking(), "high");
+    await waitFor(() => app.customMessages.length > 0);
+    assert.equal(newSessions, 0);
+    assert.equal(app.selectedModel()?.id, "executor");
+    assert.equal(app.thinking(), "low");
     assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
-    assert.deepEqual(childEntries[0], {
-      type: "model",
-      value: { provider: "provider", id: "executor" },
-    });
-    assert.deepEqual(childEntries.map((entry) => entry.type), [
-      "model",
-      "thinking",
-      "pylon-run",
-      "pi-continuity-handoff",
-    ]);
-    const childRun = childEntries[2]!.value;
-    const childWork = childEntries[3]!.value.work;
-    assert.equal(childRun.timelineId, childRun.runId);
-    assert.equal(childWork.timelineId, childRun.timelineId);
+    const executorRun = [...app.appended].reverse().find((entry) =>
+      entry.customType === "pylon-run" && entry.data.role === "executor"
+    )?.data;
+    assert.ok(executorRun);
+    assert.equal(executorRun.timelineId, executorRun.runId);
+    const boundary = app.customMessages[0]!;
+    assert.equal(boundary.message.customType, "pi-continuity-handoff");
+    assert.equal(boundary.message.display, false);
+    assert.equal(boundary.options.triggerTurn, false);
+    assert.match(boundary.message.content, /Earlier messages remain visible but are excluded/);
+    assert.match(boundary.message.content, /Plan: Implement then verify/);
     assert.equal(
-      kickoff,
+      app.sent.at(-1),
       "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
     );
+    const context = app.handlers.get("context")![0];
+    const filtered = await context({
+      messages: [
+        { role: "user", content: "old prompt" },
+        { role: "assistant", content: [{ type: "text", text: "old response" }] },
+        { role: "custom", ...boundary.message },
+        { role: "user", content: "executor prompt" },
+      ],
+    });
+    assert.equal(filtered.messages.some((message: any) => message.content === "old prompt"), false);
+    assert.equal(filtered.messages.some((message: any) => message.content === "executor prompt"), true);
+    assert.equal(filtered.messages[0].customType, "pi-continuity-handoff");
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -1179,7 +1253,11 @@ test("TUI approval waits for the scheduled planner response before showing choic
       "Execute approved stored plan in current session. Track and verify todos.",
     ]);
     assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
-    const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.equal(app.customMessages.length, 0);
+    const context = await app.handlers.get("context")?.[0]({
+      messages: [{ role: "user", content: "Keep this context" }],
+    }, ctx);
+    assert.equal(context.messages[0].content, "Keep this context");
     assert.match(context.messages.at(-1).content, /Work: executing/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

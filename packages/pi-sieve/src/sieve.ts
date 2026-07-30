@@ -1,5 +1,9 @@
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export const SIEVE_THRESHOLD = 8_192;
-export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd"] as const;
+export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd", "heartbeat_status", "memory"] as const;
 export const RANKED_SEARCH_TOOL_NAMES = ["symbol_search", "code_search"] as const;
 export const RELATIONSHIP_GRAPH_TOOL_NAME = "relationship_graph";
 export const ELIGIBLE_TOOL_NAMES = [
@@ -10,11 +14,12 @@ export const ELIGIBLE_TOOL_NAMES = [
 export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
-  "Age 0 is preserved unless opt-in active pruning is enabled; successful eligible age-1 output is capped at the threshold with active pruning, or three times the threshold without it.";
+  "Age 0 is preserved when active pruning is disabled; successful eligible age-1 output is capped at the threshold with active pruning, or three times the threshold without it.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
 
 export type SieveOptions = {
   pruneActive?: boolean;
+  cwd?: string;
 };
 
 export type EligibleToolName = (typeof ELIGIBLE_TOOL_NAMES)[number];
@@ -50,6 +55,7 @@ export type TransformStats = {
     budget: number;
     giantError: number;
     activeThreshold: number;
+    staleRead: number;
   };
   /** Source text characters omitted (or projected to be omitted). */
   omittedChars: number;
@@ -78,7 +84,7 @@ export function emptyTransformStats(): TransformStats {
   return {
     scanned: 0,
     transformed: 0,
-    transformedBy: { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0 },
+    transformedBy: { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 },
     omittedChars: 0,
     netCharsSaved: 0,
     skipped: {
@@ -101,6 +107,7 @@ export function addTransformStats(target: TransformStats, source: TransformStats
   target.transformedBy.budget += source.transformedBy.budget;
   target.transformedBy.giantError += source.transformedBy.giantError;
   target.transformedBy.activeThreshold += source.transformedBy.activeThreshold;
+  target.transformedBy.staleRead += source.transformedBy.staleRead;
   target.omittedChars += source.omittedChars;
   target.netCharsSaved += source.netCharsSaved;
   target.skipped.recentWindow += source.skipped.recentWindow;
@@ -140,6 +147,10 @@ export function activeOmissionMarker(
   omittedChars: number,
 ) {
   return `[pi-sieve: OUTPUT TRUNCATED for ${toolName}; ${omittedChars} of ${sourceChars} chars omitted. Recover via sieve_recall(toolCallId=${JSON.stringify(toolCallId)}).]`;
+}
+
+export function staleReadMarker(path: string, sourceChars: number) {
+  return `[pi-sieve: stale read of ${JSON.stringify(path)} (${sourceChars} chars) omitted; superseded by a post-mutation read]`;
 }
 
 function textOnlyBlocks(content: unknown): TextBlock[] | undefined {
@@ -190,6 +201,9 @@ function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource
   const fields = message as Record<string, unknown>;
   if (fields.role !== "toolResult" || typeof fields.toolName !== "string") return undefined;
   if (eligibleTools.has(fields.toolName)) {
+    const details = fields.details;
+    if (fields.toolName === "memory"
+      && (!details || typeof details !== "object" || Array.isArray(details) || (details as Record<string, unknown>).memoryList !== true)) return undefined;
     return { toolName: fields.toolName, isError: fields.isError === true, recalled: false, kind: sourceKind(fields.toolName) };
   }
   if (!allowRecall || fields.toolName !== RECALL_TOOL_NAME || fields.isError === true) return undefined;
@@ -267,22 +281,19 @@ function validStructuredContent(blocks: TextBlock[], kind: Exclude<SieveKind, "p
   if (!parsed) return false;
   if (kind === "rankedSearch")
     return Array.isArray(parsed.results) && parsed.results.every((result) => jsonObject(result) !== undefined);
-  if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return false;
-  const nodeIds = new Set<string>();
-  for (const node of parsed.nodes) {
-    const value = jsonObject(node);
-    if (!value || typeof value.id !== "string" || typeof value.kind !== "string" || nodeIds.has(value.id)) return false;
-    nodeIds.add(value.id);
+  if (!Array.isArray(parsed.files)) return false;
+  const paths = new Set<string>();
+  for (const file of parsed.files) {
+    const value = jsonObject(file);
+    if (!value || typeof value.path !== "string" || paths.has(value.path) || !Array.isArray(value.locations)) return false;
+    paths.add(value.path);
+    for (const location of value.locations) {
+      const item = jsonObject(location);
+      if (!item || typeof item.line !== "number" || typeof item.text !== "string" || !Array.isArray(item.roles)
+        || item.roles.some((role) => typeof role !== "string")) return false;
+    }
   }
-  return parsed.edges.every((edge) => {
-    const value = jsonObject(edge);
-    return value !== undefined &&
-      typeof value.from === "string" &&
-      typeof value.to === "string" &&
-      typeof value.type === "string" &&
-      nodeIds.has(value.from) &&
-      nodeIds.has(value.to);
-  });
+  return true;
 }
 
 function sliceRankedSearch(
@@ -301,10 +312,15 @@ function sliceRankedSearch(
   delete base.piSieve;
   for (let returned = results.length; returned >= 0; returned--) {
     const selected = results.slice(0, returned);
-    const withoutMarker = JSON.stringify({ ...base, results: selected });
-    const outboundText = JSON.stringify({
+    const ranked = {
       ...base,
       results: selected,
+      returned,
+      truncated: base.truncated === true || returned < results.length,
+    };
+    const withoutMarker = JSON.stringify(ranked);
+    const outboundText = JSON.stringify({
+      ...ranked,
       piSieve: structuredPruneMetadata(source, text.length, "omittedResults", results.length - returned, toolCallId),
     });
     if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
@@ -326,49 +342,39 @@ function sliceRelationshipGraph(
 ): StructuredSlice | undefined {
   const text = blocks.map((block) => block.text).join("");
   const parsed = parseJsonText(blocks);
-  if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return undefined;
-  const locations = parsed.nodes.filter((node) => jsonObject(node)?.kind === "location");
+  if (!parsed || !Array.isArray(parsed.files)) return undefined;
+  const locationCount = parsed.files.reduce((count, file) => {
+    const value = jsonObject(file);
+    return count + (Array.isArray(value?.locations) ? value.locations.length : 0);
+  }, 0);
   const base = { ...parsed };
-  delete base.nodes;
-  delete base.edges;
+  delete base.files;
   delete base.piSieve;
 
-  for (let returned = locations.length; returned >= 0; returned--) {
-    const selectedLocationIds = new Set(
-      locations.slice(0, returned).map((node) => jsonObject(node)?.id).filter((id): id is string => typeof id === "string"),
-    );
-    const selectedEdges = parsed.edges.filter((edge) => {
-      const value = jsonObject(edge);
-      return value && (
-        (value.type === "contains" && selectedLocationIds.has(String(value.to))) ||
-        (value.type === "mentions" && selectedLocationIds.has(String(value.from)))
-      );
-    });
-    const selectedNodeIds = new Set<string>();
-    for (const edge of selectedEdges) {
-      const value = jsonObject(edge)!;
-      selectedNodeIds.add(String(value.from));
-      selectedNodeIds.add(String(value.to));
+  for (let returned = locationCount; returned >= 0; returned--) {
+    let remaining = returned;
+    const selectedFiles: JsonObject[] = [];
+    for (const file of parsed.files) {
+      if (remaining <= 0) break;
+      const value = jsonObject(file)!;
+      const locations = (value.locations as unknown[]).slice(0, remaining);
+      if (locations.length) selectedFiles.push({ ...value, locations });
+      remaining -= locations.length;
     }
-    const selectedNodes = parsed.nodes.filter((node) => {
-      const value = jsonObject(node);
-      return typeof value?.id === "string" && selectedNodeIds.has(value.id);
-    });
     const originalMetadata = jsonObject(parsed.metadata) ?? {};
     const graph = {
       ...base,
-      nodes: selectedNodes,
-      edges: selectedEdges,
+      files: selectedFiles,
       metadata: {
         ...originalMetadata,
         returnedCount: returned,
-        truncated: originalMetadata.truncated === true || returned < locations.length,
+        truncated: originalMetadata.truncated === true || returned < locationCount,
       },
     };
     const withoutMarker = JSON.stringify(graph);
     const outboundText = JSON.stringify({
       ...graph,
-      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locations.length - returned),
+      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locationCount - returned),
     });
     if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
       return {
@@ -446,6 +452,229 @@ function sliceActiveResult(
   }
 }
 
+type TrackedToolCall = {
+  id: string;
+  name: string;
+  arguments: JsonObject;
+  assistantOrdinal: number;
+  messageIndex: number;
+};
+
+type ReadCoverage = { start: number; end: number };
+type TrackedRead = {
+  messageIndex: number;
+  assistantOrdinal: number;
+  path: string;
+  displayPath: string;
+  coverage: ReadCoverage;
+  sourceChars: number;
+};
+type TrackedMutation = {
+  assistantOrdinal: number;
+  callMessageIndex: number;
+  resultMessageIndex?: number;
+  path: string;
+  successful: boolean;
+  preservesLineNumbers: boolean;
+};
+type TrackedToolResult = { fields: Record<string, unknown>; messageIndex: number };
+
+function rawToolPath(argumentsValue: JsonObject): string | undefined {
+  const value = argumentsValue.path ?? argumentsValue.file_path;
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function normalizedToolPath(argumentsValue: JsonObject, cwd: string): string | undefined {
+  const raw = rawToolPath(argumentsValue);
+  if (!raw) return undefined;
+  // Match resolveToCwd(): normalize Unicode spaces, strip model-supplied @, expand ~, and accept file URLs.
+  let normalized = raw.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+  if (normalized.startsWith("@")) normalized = normalized.slice(1);
+  if (normalized === "~") normalized = homedir();
+  else if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\")))
+    normalized = join(homedir(), normalized.slice(2));
+  if (/^file:\/\//.test(normalized)) {
+    try {
+      normalized = fileURLToPath(normalized);
+    } catch {
+      return undefined;
+    }
+  }
+  return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 1 ? value as number : undefined;
+}
+
+function safeRangeEnd(start: number, length: number): number | undefined {
+  const end = start + length - 1;
+  return Number.isSafeInteger(end) ? end : undefined;
+}
+
+function editPreservesLineNumbers(argumentsValue: JsonObject): boolean {
+  const rawEdits = argumentsValue.edits;
+  const edits = Array.isArray(rawEdits)
+    ? rawEdits
+    : typeof argumentsValue.oldText === "string" && typeof argumentsValue.newText === "string"
+      ? [{ oldText: argumentsValue.oldText, newText: argumentsValue.newText }]
+      : undefined;
+  return !!edits?.length && edits.every((value) => {
+    const edit = jsonObject(value);
+    if (typeof edit?.oldText !== "string" || typeof edit.newText !== "string") return false;
+    const oldLines = edit.oldText.match(/\r\n|\r|\n/g)?.length ?? 0;
+    const newLines = edit.newText.match(/\r\n|\r|\n/g)?.length ?? 0;
+    return oldLines === newLines;
+  });
+}
+
+function readCoverage(argumentsValue: JsonObject, details: unknown, blocks: TextBlock[]): ReadCoverage | undefined {
+  if (blocks.length !== 1) return undefined;
+  const start = argumentsValue.offset === undefined ? 1 : positiveInteger(argumentsValue.offset);
+  const limit = argumentsValue.limit === undefined ? undefined : positiveInteger(argumentsValue.limit);
+  if (start === undefined || (argumentsValue.limit !== undefined && limit === undefined)) return undefined;
+
+  const detailFields = jsonObject(details);
+  const rawTruncation = detailFields?.truncation;
+  const truncation = rawTruncation === undefined ? undefined : jsonObject(rawTruncation);
+  if (rawTruncation !== undefined && !truncation) return undefined;
+  if (truncation?.truncated === true) {
+    if (truncation.firstLineExceedsLimit === true) return undefined;
+    const outputLines = positiveInteger(truncation.outputLines);
+    const end = outputLines === undefined ? undefined : safeRangeEnd(start, outputLines);
+    return end === undefined ? undefined : { start, end };
+  }
+  if (truncation && truncation.truncated !== false) return undefined;
+  if (limit === undefined) return { start, end: Number.POSITIVE_INFINITY };
+  // Built-in limited reads append a continuation notice when more lines exist; min() still yields the requested limit.
+  // At EOF the output is shorter, so counting returned lines avoids overstating coverage.
+  const returnedLines = Math.min(limit, blocks[0].text.split("\n").length);
+  const end = safeRangeEnd(start, returnedLines);
+  return end === undefined ? undefined : { start, end };
+}
+
+function staleReadReplacements<T extends ContextMessage>(messages: readonly T[], cwd: string) {
+  const calls: TrackedToolCall[] = [];
+  const callCounts = new Map<string, number>();
+  let assistantOrdinal = 0;
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "assistant" || !Array.isArray(fields.content)) continue;
+    assistantOrdinal++;
+    for (const part of fields.content) {
+      const call = jsonObject(part);
+      if (call?.type !== "toolCall" || typeof call.id !== "string" || !call.id || typeof call.name !== "string")
+        continue;
+      calls.push({
+        id: call.id,
+        name: call.name,
+        arguments: jsonObject(call.arguments) ?? {},
+        assistantOrdinal,
+        messageIndex,
+      });
+      callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+    }
+  }
+  const uniqueCalls = new Map(calls.filter((call) => callCounts.get(call.id) === 1).map((call) => [call.id, call]));
+
+  const results = new Map<string, TrackedToolResult>();
+  const resultCounts = new Map<string, number>();
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "toolResult" || typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
+    resultCounts.set(fields.toolCallId, (resultCounts.get(fields.toolCallId) ?? 0) + 1);
+    results.set(fields.toolCallId, { fields, messageIndex });
+  }
+
+  const reads: TrackedRead[] = [];
+  for (const [toolCallId, call] of uniqueCalls) {
+    const result = results.get(toolCallId);
+    if (
+      call.name !== READ_TOOL_NAME ||
+      resultCounts.get(toolCallId) !== 1 ||
+      !result ||
+      result.messageIndex <= call.messageIndex ||
+      result.fields.isError !== false
+    ) continue;
+    const path = normalizedToolPath(call.arguments, cwd);
+    const blocks = textOnlyBlocks(result.fields.content);
+    const coverage = blocks && readCoverage(call.arguments, result.fields.details, blocks);
+    if (!path || !blocks || !coverage) continue;
+    reads.push({
+      messageIndex: result.messageIndex,
+      assistantOrdinal: call.assistantOrdinal,
+      path,
+      displayPath: rawToolPath(call.arguments)!,
+      coverage,
+      sourceChars: blocks.reduce((length, block) => length + block.text.length, 0),
+    });
+  }
+
+  const mutations: TrackedMutation[] = [];
+  for (const call of calls) {
+    if (call.name !== "edit" && call.name !== "write") continue;
+    const path = normalizedToolPath(call.arguments, cwd);
+    if (!path) continue;
+    const result = callCounts.get(call.id) === 1 && resultCounts.get(call.id) === 1
+      ? results.get(call.id)
+      : undefined;
+    const successful = !!result && result.messageIndex > call.messageIndex && result.fields.isError === false;
+    mutations.push({
+      assistantOrdinal: call.assistantOrdinal,
+      callMessageIndex: call.messageIndex,
+      resultMessageIndex: result?.messageIndex,
+      path,
+      successful,
+      preservesLineNumbers: successful && call.name === "edit" && editPreservesLineNumbers(call.arguments),
+    });
+  }
+
+  const replacements = new Map<number, T>();
+  let omittedChars = 0;
+  let netCharsSaved = 0;
+  for (const oldRead of reads) {
+    const superseded = reads.some((newRead) => {
+      if (
+        newRead.path !== oldRead.path ||
+        newRead.assistantOrdinal <= oldRead.assistantOrdinal ||
+        newRead.messageIndex <= oldRead.messageIndex
+      ) return false;
+      const interveningMutations = mutations.filter((mutation) =>
+        mutation.path === oldRead.path &&
+        mutation.assistantOrdinal > oldRead.assistantOrdinal &&
+        mutation.assistantOrdinal < newRead.assistantOrdinal &&
+        mutation.callMessageIndex > oldRead.messageIndex &&
+        mutation.callMessageIndex < newRead.messageIndex,
+      );
+      const confirmedMutation = interveningMutations.some((mutation) =>
+        mutation.successful &&
+        mutation.resultMessageIndex !== undefined &&
+        mutation.resultMessageIndex > oldRead.messageIndex &&
+        mutation.resultMessageIndex < newRead.messageIndex,
+      );
+      if (!confirmedMutation) return false;
+      const currentWholeFile = newRead.coverage.start === 1 && newRead.coverage.end === Number.POSITIVE_INFINITY;
+      return currentWholeFile || (
+        interveningMutations.every((mutation) =>
+          mutation.successful &&
+          mutation.preservesLineNumbers &&
+          mutation.resultMessageIndex !== undefined &&
+          mutation.resultMessageIndex < newRead.messageIndex,
+        ) &&
+        newRead.coverage.start <= oldRead.coverage.start &&
+        newRead.coverage.end >= oldRead.coverage.end
+      );
+    });
+    if (!superseded) continue;
+    const marker = staleReadMarker(oldRead.displayPath, oldRead.sourceChars);
+    if (marker.length >= oldRead.sourceChars) continue;
+    replacements.set(oldRead.messageIndex, replaceWithMarker(messages[oldRead.messageIndex], marker));
+    omittedChars += oldRead.sourceChars;
+    netCharsSaved += oldRead.sourceChars - marker.length;
+  }
+  return { replacements, omittedChars, netCharsSaved };
+}
+
 /**
  * Creates an outbound-only context view. The supplied session messages and all
  * ineligible message objects remain untouched. The optional threshold keeps
@@ -469,7 +698,13 @@ export function sieveMessages<T extends ContextMessage>(
   }
 
   const stats = emptyTransformStats();
-  const replacements = new Map<number, T>();
+  const staleReads = staleReadReplacements(messages, options.cwd ?? process.cwd());
+  const replacements = staleReads.replacements;
+  stats.scanned += replacements.size;
+  stats.transformed += replacements.size;
+  stats.transformedBy.staleRead += replacements.size;
+  stats.omittedChars += staleReads.omittedChars;
+  stats.netCharsSaved += staleReads.netCharsSaved;
   const recoverableActiveResults: RecoverableActiveResult[] = [];
   const activeToolCallIdCounts = new Map<string, number>();
   if (options.pruneActive) {
@@ -486,7 +721,7 @@ export function sieveMessages<T extends ContextMessage>(
   // Budget selection is deliberately newest-to-oldest, unlike outbound order.
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message.role !== "toolResult") continue;
+    if (message.role !== "toolResult" || replacements.has(index)) continue;
     const age = usersAfter[index];
     if (age === 0) {
       if (!options.pruneActive) {

@@ -45,7 +45,8 @@ import {
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext, shortlistFacts, type MemoryNotice } from "../src/context.ts";
-import { validateQuestion } from "../src/questions.ts";
+import { validateQuestions } from "../src/questions.ts";
+import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidence, classifyProjectFacts, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
 import {
   loadConfig,
@@ -62,6 +63,7 @@ import {
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
+import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
@@ -138,7 +140,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
     approvalSelectionOpen = false,
+    clarifyTimeoutSeconds: number | null | undefined,
     sessionGeneration = 0,
+    stateRevision = 0,
     releaseSessionLease: ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
     leasedSessionId = "",
     ephemeralSession = false,
@@ -171,14 +175,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
       .slice(0, callIndex)
       .some((part: any) => part?.type === "text" && part.text.trim());
   };
-  const hasUnsafeExecutionClarificationBatch = (ctx: any) => {
-    if (work?.mode !== "executing") return false;
+  const hasUnsafeClarificationBatch = (ctx: any) => {
     const calls = assistantContent(ctx).filter((part: any) => part?.type === "toolCall");
     return calls.length > 1 && calls.some(
       (part: any) =>
         part.name === "continuity_update" && part.arguments?.action === "clarify",
     );
   };
+  const disposeRuntimePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
+    if (event?.version !== 2) return;
+    const value = event.dialogTimeouts?.clarify;
+    if (value === null || Number.isInteger(value) && value >= 15 && value <= 86_400) {
+      clarifyTimeoutSeconds = value;
+    }
+  });
+  const clarifyDialogOptions = () => clarifyTimeoutSeconds === undefined
+    ? undefined
+    : { timeout: clarifyTimeoutSeconds === null ? 0 : clarifyTimeoutSeconds * 1_000 };
   const tripsCircuitBreaker = (params: unknown) => {
     const now = Date.now(), cutoff = now - 30_000;
     for (const [key, times] of recentCalls) {
@@ -269,6 +282,82 @@ export default function continuityExtension(pi: ExtensionAPI) {
       notices,
     };
   };
+  const projectMemory = () => project
+    ? memoryFacts.filter((fact) => fact.scope === "project" && fact.owner === project!.owner)
+    : [];
+  const stateSnapshot = (available = true) =>
+    continuityStateSnapshot(leasedSessionId, stateRevision, work, available, projectMemory());
+  const publishState = (available = true) => {
+    stateRevision++;
+    pi.events.emit("pi-continuity:state-change", stateSnapshot(available));
+  };
+  const disposeStateRequest = pi.events.on("pi-continuity:state-request", (request: any) => {
+    if (request?.version !== CONTINUITY_STATE_VERSION || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
+    try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Continuity. */ }
+  });
+  const disposeMemoryMutation = pi.events.on("pi-continuity:memory-mutation", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
+    const operation = (async () => {
+      if (request.action !== "update" && request.action !== "delete") throw new Error("invalid memory action");
+      if (typeof request.key !== "string" || !request.key.trim() || request.key.length > 200
+        || typeof request.expectedUpdatedAt !== "string") throw new Error("invalid memory target");
+      project = await resolveProject(currentCwd);
+      await withStateLock(memoryDirectory(), async () => {
+        const latest = await readMemory();
+        const index = latest.facts.findIndex((fact) =>
+          fact.scope === "project" && fact.owner === project!.owner && fact.key === request.key,
+        );
+        if (index < 0) {
+          memoryFacts = latest.facts;
+          facts = memoryFacts;
+          publishState();
+          throw new Error("memory fact is unavailable");
+        }
+        const existing = latest.facts[index]!;
+        if (existing.updatedAt !== request.expectedUpdatedAt) {
+          memoryFacts = latest.facts;
+          facts = memoryFacts;
+          publishState();
+          throw new Error("memory fact changed; review the latest value");
+        }
+        if (request.action === "delete") {
+          latest.facts.splice(index, 1);
+        } else {
+          const checked = candidate({
+            action: "replace",
+            scope: "project",
+            key: existing.key,
+            kind: request.kind,
+            text: request.text,
+            source: existing.source,
+            confidence: existing.confidence,
+          }, {
+            owner: existing.owner,
+            scope: "project",
+            captureCommit: existing.captureCommit,
+            branchAtCapture: existing.branchAtCapture,
+            evidencePaths: existing.evidencePaths,
+          });
+          latest.facts[index] = {
+            ...existing,
+            kind: checked.kind!,
+            text: checked.text!,
+            updatedAt: new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString(),
+          };
+        }
+        memoryFacts = latest.facts;
+        facts = memoryFacts;
+        await writeJson(paths().memory, {
+          schemaVersion: MEMORY_SCHEMA_VERSION,
+          facts: memoryFacts,
+          updatedAt: new Date().toISOString(),
+        });
+      });
+      publishState();
+      return { updated: true };
+    })();
+    request.respond(operation);
+  });
   const saveWork = async () => {
     if (work) {
       assertSafe(
@@ -280,6 +369,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ...work.todos.map((t) => t.text),
       );
       await writeJson(paths().work, work);
+      publishState();
     }
   };
   const refresh = (ctx: any) => {
@@ -530,15 +620,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
     gate(work?.mode === "planning");
     tasksVisible = true;
     refresh(ctx);
+    publishState();
   });
   pi.on("session_shutdown", async () => {
     sessionGeneration++;
     pendingApproval = undefined;
     approvalContext = undefined;
+    publishState(false);
+    disposeStateRequest();
+    disposeMemoryMutation();
     disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();
     disposeWorktreeChange();
+    disposeRuntimePolicy?.();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
@@ -578,10 +673,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Ask the pending clarification in prose and stop. Do not call more tools until the user answers.",
       };
-    if (hasUnsafeExecutionClarificationBatch(ctx))
+    if (hasUnsafeClarificationBatch(ctx))
       return {
         block: true,
-        reason: "Execution clarification must be the only tool call in its assistant message. Retry it alone at a safe checkpoint.",
+        reason: "Clarification must be the only tool call at a safe checkpoint. Retry it alone.",
       };
     if (blocked(work?.mode === "planning", event.toolName))
       return {
@@ -646,25 +741,34 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("context", (event) => {
     const active = activeWork();
+    let boundary = -1;
+    for (let index = event.messages.length - 1; index >= 0; index--) {
+      const message = event.messages[index] as any;
+      if (message.role === "custom" && message.customType === HANDOFF_ENTRY_TYPE) {
+        boundary = index;
+        break;
+      }
+    }
+    const messages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
     const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
-    if (text)
-      return {
-        messages: [
-          ...event.messages,
-          {
-            role: "custom",
-            customType: "pi-continuity",
-            content:
-              text +
-              (work?.mode === "planning"
-                ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
-                : ""),
-            display: false,
-            timestamp: Date.now(),
-          },
-        ],
-      };
+    if (!text) return boundary >= 0 ? { messages } : undefined;
+    return {
+      messages: [
+        ...messages,
+        {
+          role: "custom",
+          customType: "pi-continuity",
+          content:
+            text +
+            (work?.mode === "planning"
+              ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
+              : ""),
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
   });
   pi.registerTool({
     name: "memory",
@@ -834,6 +938,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
             }),
           ),
         ),
+        questions: Type.Optional(Type.Array(Type.Object({
+          question: Type.String({ maxLength: 500 }),
+          options: Type.Array(Type.Object({
+            label: Type.String({ maxLength: 120 }),
+            description: Type.Optional(Type.String({ maxLength: 240 })),
+          }), { minItems: 2, maxItems: 4 }),
+        }), { minItems: 2, maxItems: 6 })),
         goal: Type.Optional(Type.String({ maxLength: 2000 })),
         constraints: Type.Optional(
           Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 }),
@@ -880,65 +991,54 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (p.action === "clarify") {
         const executing = work?.mode === "executing";
-        if (work?.mode !== "planning" && !executing)
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Clarification requires active planning or execution work.",
-              },
-            ],
-          };
-        validateQuestion(p.question || "", p.options || []);
+        if (p.questions !== undefined && (p.question !== undefined || p.options !== undefined))
+          throw Error("Use either questions or question/options, not both.");
+        const questions = p.questions ?? [{ question: p.question || "", options: p.options || [] }];
+        validateQuestions(questions);
         if (!ctx.hasUI) {
           if (executing) awaitingClarificationProse = true;
-          const options = (p.options || []).map((o, index) =>
-            `${index + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`,
-          );
+          const prose = questions.map((item, questionIndex) => {
+            const options = item.options.map((option, optionIndex) =>
+              `${optionIndex + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`,
+            );
+            return questions.length === 1
+              ? `${item.question}\n${options.join("\n")}`
+              : `Question ${questionIndex + 1}: ${item.question}\n${options.join("\n")}`;
+          }).join("\n\n");
           return {
-            content: [
-              {
-                type: "text",
-                text: `Ask user in prose and wait: ${p.question}\n${options.join("\n")}`,
-              },
-            ],
+            content: [{ type: "text", text: `Ask user in prose and wait: ${prose}` }],
           };
         }
-        const labels = [
-          ...(p.options || []).map((o) =>
-            o.description ? `${o.label} — ${o.description}` : o.label,
-          ),
-          "Write a different answer…",
-        ];
-        const choice = await ctx.ui.select(p.question!, labels);
-        if (!choice) {
+        const answers = await askQuestionnaire(
+          ctx.ui,
+          ctx.mode,
+          questions,
+          clarifyDialogOptions(),
+        );
+        if (!answers) {
           if (executing) {
             ctx.abort();
             return {
-              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
+              content: [{ type: "text", text: "No answers submitted. Execution stopped." }],
               terminate: true,
             };
           }
-          return { content: [{ type: "text", text: "No answer selected." }] };
+          return { content: [{ type: "text", text: "No answers submitted." }] };
         }
-        if (choice === "Write a different answer…") {
-          const answer = (await ctx.ui.editor("Custom answer", ""))?.trim();
-          if (!answer && executing) {
-            ctx.abort();
-            return {
-              content: [{ type: "text", text: "No answer selected. Execution stopped." }],
-              terminate: true,
-            };
-          }
-          const selected = answer || "No answer selected.";
+        if (questions.length === 1) {
+          const [answer] = answers;
           return {
-            content: [{ type: "text", text: selected }],
-            details: { clarification: { question: p.question, answer: selected } },
+            content: [{ type: "text", text: answer.answer }],
+            details: { clarification: answer },
           };
         }
         return {
-          content: [{ type: "text", text: choice }],
-          details: { clarification: { question: p.question, answer: choice } },
+          content: [{
+            type: "text",
+            text: answers.map((answer, index) =>
+              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n"),
+          }],
+          details: { clarifications: answers },
         };
       }
       if (p.action === "set_plan") {
@@ -1150,63 +1250,54 @@ export default function continuityExtension(pi: ExtensionAPI) {
         );
         if (!executor)
           return void ctx.ui.notify("Executor model unavailable.", "error");
-        const sourceSessionId = ctx.sessionManager.getSessionId();
-        const sourceSessionFile = ctx.sessionManager.getSessionFile();
-        const sourceWorkFile = workFile;
+        if (!(await pi.setModel(executor)))
+          return void ctx.ui.notify("Executor model unavailable.", "error");
         const now = new Date().toISOString();
         pendingApproval = undefined;
-        const childWork: Work = {
+        const executorWork: Work = {
           ...work,
           mode: "executing",
           approved: true,
           updatedAt: now,
         };
-        const runId = childWork.runId ?? randomUUID();
+        const runId = executorWork.runId ?? randomUUID();
         const run: RunEntry = {
           version: 1,
           runId,
-          timelineId: childWork.timelineId ?? childWork.runId ?? runId,
+          timelineId: executorWork.timelineId ?? executorWork.runId ?? runId,
           role: "executor",
-          parentSessionId: sourceSessionId,
+          parentSessionId: ctx.sessionManager.getSessionId(),
           createdAt: now,
         };
-        childWork.runId = run.runId;
-        childWork.timelineId = run.timelineId;
+        executorWork.runId = run.runId;
+        executorWork.timelineId = run.timelineId;
         const thinking = config.executor?.thinking ?? work.baseThinking;
-        const result = await ctx.newSession({
-          parentSession: sourceSessionFile,
-          setup: async (sessionManager: any) => {
-            sessionManager.appendModelChange(executor.provider, executor.id);
-            if (thinking) sessionManager.appendThinkingLevelChange(thinking);
-            sessionManager.appendCustomEntry(RUN_ENTRY_TYPE, run);
-            sessionManager.appendCustomEntry(HANDOFF_ENTRY_TYPE, {
-              version: 1,
-              work: childWork,
-              model: { provider: executor.provider, id: executor.id },
-              ...(thinking ? { thinking } : {}),
-            });
+        if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
+        work = executorWork;
+        await saveWork();
+        pi.appendEntry(RUN_ENTRY_TYPE, run);
+        pi.sendMessage({
+          customType: HANDOFF_ENTRY_TYPE,
+          content: [
+            "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
+            buildContext({ ...executorWork, mode: "planning" }, [], "", 600),
+          ].filter(Boolean).join("\n"),
+          display: false,
+          details: {
+            version: 1,
+            runId,
+            model: { provider: executor.provider, id: executor.id },
+            ...(thinking ? { thinking } : {}),
           },
-          withSession: async (fresh: any) => {
-            if (
-              fresh.model?.provider !== executor.provider ||
-              fresh.model?.id !== executor.id
-            )
-              throw new Error("Executor model was not selected in child session.");
-            await fresh.sendUserMessage(
-              "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
-            );
-          },
+        }, {
+          triggerTurn: false,
         });
-        if (!result.cancelled) {
-          const plannerWork: Work = {
-            ...work,
-            mode: "handed_off",
-            approved: true,
-            runId: run.runId,
-            updatedAt: new Date().toISOString(),
-          };
-          await writeJson(sourceWorkFile, plannerWork);
-        }
+        gate(false);
+        tasksVisible = true;
+        refresh(ctx);
+        pi.sendUserMessage(
+          "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
+        );
         return;
       }
       if (value === "cancel") {
@@ -1301,12 +1392,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.offeredPlanRevision = token.revision;
         await saveWork();
         const choice = await settledCtx.ui.select("Plan ready — review structured plan above", [
-          "Approve — fresh executor session",
+          "Approve — reset context",
           "Approve — continue current session",
           "Request changes",
         ]);
         if (sessionGeneration !== generation) return;
-        if (choice === "Approve — fresh executor session")
+        if (choice === "Approve — reset context")
           await planCommand.handler("approve", actionCtx);
         else if (choice === "Approve — continue current session")
           await planCommand.handler("approve-current", actionCtx);
@@ -1368,7 +1459,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         selected =
           (await ctx.ui.select(
             `${role} model`,
-            ctx.modelRegistry.getAvailable().map(modelName),
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
           )) ?? "";
       if (!selected) {
         ctx.ui.notify(

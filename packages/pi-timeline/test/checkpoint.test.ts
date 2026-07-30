@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -6,10 +6,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import extension from "../extensions/pi-timeline.ts";
-import { capture } from "../src/snapshot.ts";
+import { capture, makePortable } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 
 const exec = promisify(execFile);
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-checkpoint-agent-"));
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
+after(async () => {
+  try {
+    await rm(isolatedAgentDir, { recursive: true, force: true });
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
 
 async function repository() {
   const root = await mkdtemp(join(tmpdir(), "pi-timeline-test-"));
@@ -24,6 +35,31 @@ async function repository() {
   await git("commit", "-qm", "base");
   return { root, git };
 }
+
+test("version 4 checkpoints restore across linked worktrees and v3 migrates only at origin", async () => {
+  const { root, git } = await repository();
+  const linked = `${root}-linked`;
+  try {
+    await writeFile(join(root, "tracked.txt"), "checkpoint\n");
+    const snapshot = await capture(root, "portable-session");
+    await git("worktree", "add", "--detach", linked, "HEAD");
+    await restore(snapshot, linked);
+    assert.equal((await readFile(join(linked, "tracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "checkpoint\n");
+
+    const legacy = {
+      ...snapshot,
+      commonDir: undefined,
+      nested: snapshot.nested?.map((repository) => ({ ...repository, commonDir: undefined })),
+    };
+    const migrated = await makePortable(legacy, root);
+    assert.ok(migrated.commonDir);
+    await assert.rejects(() => makePortable(legacy, linked), /original checkout/);
+  } finally {
+    await exec("git", ["worktree", "remove", "--force", linked], { cwd: root, windowsHide: true }).catch(() => {});
+    await rm(linked, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("automatic checkpoints skip read-only turns and unchanged bash", async () => {
   const { root } = await repository();
@@ -92,7 +128,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
           customType: "pi-prompt-checkpoint",
           id: "checkpoint-1",
           data: {
-            version: 3,
+            version: 4,
             kind: "pi-prompt-checkpoint",
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
@@ -113,7 +149,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
           customType: "pi-prompt-checkpoint",
           id: "checkpoint-unsupported",
           data: {
-            version: 3,
+            version: 4,
             kind: "pi-prompt-checkpoint",
             promptEntryId: "user-1",
             ownerSessionId: "test-session",
@@ -173,6 +209,128 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     assert.equal(appended, 0);
     assert.match(notices.at(-1)!, /HEAD commit differs/);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("web prompt editing restores the nearest earlier checkpoint and can roll back", async () => {
+  const { root } = await repository();
+  const artifactRoot = join(root, "timeline-artifacts");
+  let checkpoint: Awaited<ReturnType<typeof capture>> | undefined;
+  try {
+    await writeFile(join(root, "tracked.txt"), "after first turn\n");
+    checkpoint = await capture(root, "edit-session");
+    await writeFile(join(root, "tracked.txt"), "current work\n");
+    const entries = [
+      { type: "message", id: "user-1", parentId: null, message: { role: "user", content: "First prompt" } },
+      { type: "message", id: "assistant-1", parentId: "user-1", message: { role: "assistant", content: "First answer" } },
+      {
+        type: "custom",
+        customType: "pi-prompt-checkpoint",
+        id: "checkpoint-1",
+        parentId: "assistant-1",
+        data: {
+          version: 4,
+          kind: "pi-prompt-checkpoint",
+          promptEntryId: "user-1",
+          ownerSessionId: "edit-session",
+          continuationEntryId: "assistant-1",
+          createdAt: new Date(0).toISOString(),
+          ...checkpoint,
+        },
+      },
+      { type: "message", id: "user-2", parentId: "checkpoint-1", message: { role: "user", content: "Second prompt" } },
+      { type: "message", id: "assistant-2", parentId: "user-2", message: { role: "assistant", content: "Second answer" } },
+    ];
+    const sessionHandlers = new Map<string, Function[]>();
+    const eventHandlers = new Map<string, Function>();
+    const commands = new Map<string, any>();
+    const notices: string[] = [];
+    let confirmations = 0;
+    let forks = 0;
+    const pi: any = {
+      events: {
+        on: (name: string, handler: Function) => {
+          eventHandlers.set(name, handler);
+          return () => eventHandlers.delete(name);
+        },
+        emit() {},
+      },
+      on: (name: string, handler: Function) =>
+        sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
+      registerCommand: (name: string, command: any) => commands.set(name, command),
+      appendEntry() {},
+      setSessionName() {},
+    };
+    extension(pi, undefined, { artifactRoot });
+    const ctx: any = {
+      cwd: root,
+      hasUI: true,
+      mode: "rpc",
+      waitForIdle: async () => {},
+      sessionManager: {
+        getBranch: () => entries,
+        getEntries: () => entries,
+        getLeafId: () => "assistant-2",
+        getSessionFile: () => undefined,
+        getSessionId: () => "edit-session",
+      },
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setStatus() {},
+        confirm: async () => {
+          confirmations++;
+          return false;
+        },
+      },
+      fork: async (_entryId: string, options: any) => {
+        forks++;
+        await options.withSession({
+          cwd: root,
+          sendMessage: async () => {},
+          ui: { notify: (message: string) => notices.push(message) },
+        });
+      },
+    };
+    await sessionHandlers.get("session_start")![0]({}, ctx);
+    let state: any;
+    eventHandlers.get("pi-timeline:state-request")!({
+      version: 4,
+      sessionId: "edit-session",
+      respond: (value: unknown) => { state = value; },
+    });
+    assert.deepEqual(state.undoPromptEntryIds, ["user-2"]);
+    const timelineCheckpointId = state.checkpoints[0].id;
+
+    let operation: Promise<any> | undefined;
+    eventHandlers.get("pi-timeline:edit-navigation")!({
+      version: 1,
+      sessionId: "edit-session",
+      targetEntryId: "user-2",
+      rollbackFiles: true,
+      respond: (value: Promise<any>) => { operation = value; },
+    });
+    const transaction = await operation;
+    await sessionHandlers.get("session_tree")![0]({}, ctx);
+    assert.deepEqual(notices, []);
+    await transaction.apply();
+    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "after first turn\n");
+    await transaction.rollback();
+    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "current work\n");
+
+    let forkAvailability: any;
+    eventHandlers.get("pi-timeline:prompt-fork")!({
+      version: 1,
+      sessionId: "edit-session",
+      checkpointId: timelineCheckpointId,
+      respond: (value: unknown) => { forkAvailability = value; },
+    });
+    assert.deepEqual(forkAvailability, { version: 1, available: true });
+    await commands.get("timeline").handler(`fork ${timelineCheckpointId}`, ctx);
+    assert.equal(confirmations, 0);
+    assert.equal(forks, 1);
+  } finally {
+    if (checkpoint) await deleteRefs(root, [checkpoint.worktreeRef, checkpoint.indexRef]);
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 export type GitState = {
   gitRoot: string;
+  commonDir?: string;
   head: string;
   headRef: string | null;
 };
@@ -24,7 +25,9 @@ export function classifyCompatibility(
   target: GitState,
   current: GitState,
 ): Compatibility {
-  if (canonical(target.gitRoot) !== canonical(current.gitRoot))
+  if (target.commonDir && current.commonDir
+    ? canonical(target.commonDir) !== canonical(current.commonDir)
+    : canonical(target.gitRoot) !== canonical(current.gitRoot))
     return { allowed: false, reason: "repository-mismatch" };
   if (target.head !== current.head)
     return { allowed: false, reason: "head-mismatch" };
