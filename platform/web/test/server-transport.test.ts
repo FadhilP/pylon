@@ -185,6 +185,9 @@ class FakeDriver implements PiDriver {
   emitRuntime(runtime: RuntimeSnapshot): void {
     this.emit({ type: "session.replaced", sessionId: runtime.sessionId, sessionGeneration: runtime.sessionGeneration, runtime });
   }
+  emitStatus(sessionId: string, state: "sleeping" | "idle" | "running" | "attention"): void {
+    this.emit({ type: "session.status", sessionId, sessionGeneration: this.current.sessionGeneration, state });
+  }
   dispose(): Promise<void> { return Promise.resolve(); }
   private replace(sessionId: string, cwdLabel: string): ReplacementResult {
     this.current = { ...structuredClone(snapshot), sessionId, cwdLabel, sessionGeneration: this.current.sessionGeneration + 1 };
@@ -244,6 +247,52 @@ test("terminal upgrade rejects unauthenticated and stale sessions before spawnin
     url.searchParams.set("generation", "1");
     assert.equal(await upgradeStatus(url), 403);
   } finally {
+    await running.close();
+  }
+});
+
+test("terminals stay attached per session until that session deactivates", { timeout: 15_000 }, async () => {
+  const driver = new FakeDriver();
+  const running = await startPylonServer({ port: 0, development: false, driver });
+  const port = (running.server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  const tab = "terminal-retention-tab";
+  let first: WebSocket | undefined;
+  let second: WebSocket | undefined;
+  const connect = (generation: number, cookie: string, csrf: string) => new Promise<WebSocket>((resolve, reject) => {
+    const url = new URL(origin.replace("http:", "ws:") + "/api/v1/terminal");
+    url.search = new URLSearchParams({ tabId: tab, generation: String(generation), csrf }).toString();
+    const socket = new WebSocket(url, { headers: { cookie, origin } });
+    socket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      reject(new Error(`terminal upgrade failed (${response.statusCode ?? 0})`));
+    });
+    socket.once("error", reject);
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as { type?: string };
+      if (message.type === "ready") resolve(socket);
+    });
+  });
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
+    const csrf = String((await body(bootstrap)).csrfToken);
+    first = await connect(1, cookie, csrf);
+    const replacement = await driver.switchSession({ sessionId: "session-2" });
+    second = await connect(replacement.sessionGeneration, cookie, csrf);
+    assert.equal(first.readyState, WebSocket.OPEN);
+    assert.equal(second.readyState, WebSocket.OPEN);
+    await driver.switchSession({ sessionId: "session-1" });
+    assert.equal(first.readyState, WebSocket.OPEN);
+    assert.equal(second.readyState, WebSocket.OPEN);
+
+    const firstClosed = new Promise<void>((resolve) => first!.once("close", () => resolve()));
+    driver.emitStatus("session-1", "sleeping");
+    await firstClosed;
+    assert.equal(second.readyState, WebSocket.OPEN);
+  } finally {
+    first?.close();
+    second?.close();
     await running.close();
   }
 });

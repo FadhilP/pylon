@@ -42,6 +42,17 @@ function ui(method: string, payload: Record<string, unknown>, requestId = method
   return { type: "ui.event" as const, sessionId: "session", sessionGeneration: 1, payload: { kind: "request", requestId, method, payload, createdAt: new Date().toISOString() } };
 }
 
+test("session status projects completion as a separate pulse", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", completed: true });
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "running" });
+  assert.deepEqual(published, [
+    { type: "session.status", payload: { sessionId: "background", state: "idle", completed: true } },
+    { type: "session.status", payload: { sessionId: "background", state: "running" } },
+  ]);
+});
+
 test("projection maps SDK event names and retains active messages", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));

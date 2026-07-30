@@ -22,6 +22,7 @@ export interface RuntimeStoreSnapshot {
   agentActive?: boolean;
   sessionRevision?: number;
   sessionStatuses?: Record<string, SessionRuntimeState>;
+  unseenCompletions?: Record<string, true>;
   error?: string;
   errorRevision?: number;
   notification?: UiNotificationReadModel;
@@ -124,6 +125,12 @@ export class RuntimeEventStore {
     const consumed = new Set(ids);
     const audioCues = this.snapshot.audioCues.filter((cue) => !consumed.has(cue.id));
     if (audioCues.length !== this.snapshot.audioCues.length) this.set({ ...this.snapshot, audioCues });
+  }
+  markSessionSeen(sessionId: string): void {
+    if (!this.snapshot.unseenCompletions?.[sessionId]) return;
+    const unseenCompletions = { ...this.snapshot.unseenCompletions };
+    delete unseenCompletions[sessionId];
+    this.set({ ...this.snapshot, unseenCompletions });
   }
 
   async sendMessage(message: string, images?: PromptImage[], files?: PromptTextFile[], planMode = false): Promise<void> {
@@ -390,8 +397,8 @@ export class RuntimeEventStore {
     return inventory;
   }
 
-  terminalUrl(): string {
-    return this.api.terminalUrl(this.requireReadyRuntime().sessionGeneration);
+  terminalUrl(generation: number): string {
+    return this.api.terminalUrl(generation);
   }
 
   async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
@@ -982,9 +989,13 @@ export class RuntimeEventStore {
     if (event.type === "session.status") {
       const status = asRecord(event.payload);
       if (typeof status.sessionId === "string" && ["sleeping", "idle", "running", "attention"].includes(String(status.state))) {
+        const unseenCompletions = { ...current.unseenCompletions };
+        if (status.state === "sleeping") delete unseenCompletions[status.sessionId];
+        else if (status.completed === true && current.runtime?.sessionId !== status.sessionId) unseenCompletions[status.sessionId] = true;
         this.set({
           ...current,
           sessionStatuses: { ...current.sessionStatuses, [status.sessionId]: status.state as SessionRuntimeState },
+          unseenCompletions,
           sequence: event.sequence,
         }, true);
       }
@@ -1050,6 +1061,7 @@ export class RuntimeEventStore {
       historyWindow: clearRuntime ? undefined : this.snapshot.historyWindow,
       pendingUi: undefined,
       agentActive: false,
+      sessionStatuses: clearRuntime ? undefined : this.snapshot.sessionStatuses,
       audioCues: [],
       error: undefined,
     });

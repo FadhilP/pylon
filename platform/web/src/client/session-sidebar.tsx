@@ -18,6 +18,7 @@ export function sessionTitle(session: SessionSummary): string {
 
 interface SidebarProps {
   activeSessions: SessionSummary[];
+  unseenCompletions?: Record<string, true>;
   projects: SessionProject[];
   pages: SessionProjectPage[];
   query: string;
@@ -56,7 +57,7 @@ interface SidebarProps {
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, unseenCompletions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
@@ -226,6 +227,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 menuOpen={openMenu === `active-${session.id}`}
                 busy={busy}
                 deleting={deleting}
+                completed={Boolean(unseenCompletions?.[session.id])}
                 showProject
                 now={now}
                 onSelect={selectSession}
@@ -313,6 +315,7 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
                 menuOpen={openMenu === `project-${project.id}-${session.id}`}
                 busy={busy}
                 deleting={deleting}
+                completed={Boolean(unseenCompletions?.[session.id])}
                 now={now}
                 onSelect={selectSession}
                 onDelete={onDeleteSession}
@@ -346,12 +349,13 @@ export function SessionSidebar({ activeSessions, projects, pages, query, searchR
   );
 }
 
-function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu }: {
+function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu }: {
   session: SessionSummary;
   menuId: string;
   menuOpen: boolean;
   busy: string;
   deleting: string;
+  completed: boolean;
   now: number;
   showProject?: boolean;
   reorderKind?: "active";
@@ -396,7 +400,11 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, now, showProjec
       </span>
       {(busy === session.id || deleting === session.id)
         ? <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
-        : !sleeping && <span className={`session-runtime-state is-${session.runtimeState}`} aria-label={session.runtimeState} title={session.runtimeState} />}
+        : !sleeping && <span
+            className={`session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
+            aria-label={completed ? "New response" : session.runtimeState}
+            title={completed ? "New response" : session.runtimeState}
+          />}
     </button>
     <details className="session-menu" data-menu-id={menuId} open={menuOpen}>
       <summary

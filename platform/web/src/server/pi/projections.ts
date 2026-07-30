@@ -477,7 +477,11 @@ export class RuntimeProjection {
       return;
     }
     if (event.type === "session.status") {
-      this.publish("session.status", { sessionId: event.sessionId.slice(0, 128), state: event.state });
+      this.publish("session.status", {
+        sessionId: event.sessionId.slice(0, 128),
+        state: event.state,
+        ...(event.completed ? { completed: true } : {}),
+      });
       return;
     }
     if (event.type === "queue.changed") {

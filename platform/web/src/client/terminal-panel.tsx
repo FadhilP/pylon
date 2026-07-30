@@ -1,4 +1,4 @@
-import { IconTerminal2, IconX } from "@tabler/icons-react";
+import { IconPower, IconTerminal2, IconX } from "@tabler/icons-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -51,7 +51,7 @@ function terminalTheme() {
   };
 }
 
-export function TerminalPanel({ open, cwdLabel, onClose }: { open: boolean; cwdLabel?: string; onClose: () => void }) {
+export function TerminalPanel({ open, generation, cwdLabel, onClose, onShutdown }: { open: boolean; generation: number; cwdLabel?: string; onClose: () => void; onShutdown: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -74,7 +74,7 @@ export function TerminalPanel({ open, cwdLabel, onClose }: { open: boolean; cwdL
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
-    const socket = new WebSocket(runtimeStore.terminalUrl());
+    const socket = new WebSocket(runtimeStore.terminalUrl(generation));
     let disposed = false;
     let ready = false;
     const send = (value: object) => {
@@ -129,7 +129,7 @@ export function TerminalPanel({ open, cwdLabel, onClose }: { open: boolean; cwdL
       terminalRef.current = null;
       fitRef.current = null;
     };
-  }, []);
+  }, [generation]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,7 +144,16 @@ export function TerminalPanel({ open, cwdLabel, onClose }: { open: boolean; cwdL
     <header>
       <span><IconTerminal2 size={15} /><strong>Terminal</strong>{cwdLabel && <small title={cwdLabel}>{cwdLabel}</small>}</span>
       <span className="terminal-status" role="status">{status}</span>
-      <button className="icon-button" type="button" onClick={onClose} aria-label="Close terminal"><IconX size={16} /></button>
+      <span className="terminal-actions">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => window.confirm("Shut down this terminal and stop any running process?") && onShutdown()}
+          aria-label="Shut down terminal"
+          title="Shut down terminal"
+        ><IconPower size={15} /></button>
+        <button className="icon-button" type="button" onClick={onClose} aria-label="Close terminal drawer" title="Close terminal drawer"><IconX size={16} /></button>
+      </span>
     </header>
     <div ref={hostRef} className="terminal-host" />
   </section>;

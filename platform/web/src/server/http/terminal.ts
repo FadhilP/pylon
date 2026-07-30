@@ -40,19 +40,21 @@ interface Connection {
 export class TerminalServer {
   private readonly webSockets = new WebSocketServer({ noServer: true, clientTracking: false, perMessageDeflate: false, maxPayload: MAX_INPUT_BYTES + 1024 });
   private readonly connections = new Set<Connection>();
-  private owner?: symbol;
+  private readonly owners = new Map<string, symbol>();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly driver: PiDriver, private readonly sessions: SessionStore, private readonly options: SecurityOptions) {
     this.unsubscribe = driver.subscribe((event) => {
-      if (event.type !== "session.replaced" && event.type !== "session.unavailable") return;
-      this.owner = undefined;
-      for (const connection of [...this.connections]) this.close(connection, 1012, "Session changed");
+      if (event.type === "session.status" && event.state === "sleeping") {
+        this.closeSession(event.sessionId, "Session deactivated");
+      } else if (event.type === "session.unavailable") {
+        this.closeSession(event.sessionId, "Session unavailable");
+      }
     });
   }
 
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    let reservation: symbol | undefined;
+    let reservation: { sessionId: string; owner: symbol } | undefined;
     try {
       if (!requestAllowed(request, this.options)) return reject(socket, 403, "Forbidden");
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
@@ -64,23 +66,23 @@ export class TerminalServer {
         return reject(socket, 403, "Forbidden");
       }
       if (!Number.isSafeInteger(generation) || generation < 1) return reject(socket, 400, "Invalid generation");
-      if (this.owner) return reject(socket, 409, "Terminal is already open");
       if (!this.driver.terminalTarget) return reject(socket, 501, "Terminal unavailable");
       const target = this.driver.terminalTarget();
       if (target.sessionGeneration !== generation) return reject(socket, 409, "Stale session generation");
-      reservation = Symbol(tabId);
-      this.owner = reservation;
+      if (this.owners.has(target.sessionId)) return reject(socket, 409, "Terminal is already open");
+      const owner = Symbol(tabId);
+      reservation = { sessionId: target.sessionId, owner };
+      this.owners.set(target.sessionId, owner);
       const cwd = await realpath(target.cwd);
       const current = this.driver.terminalTarget();
       if (current.sessionId !== target.sessionId || current.sessionGeneration !== generation || current.cwd !== target.cwd) {
-        if (this.owner === reservation) this.owner = undefined;
+        if (this.owners.get(target.sessionId) === owner) this.owners.delete(target.sessionId);
         return reject(socket, 409, "Session changed while opening terminal");
       }
-      const owner = reservation;
       this.webSockets.handleUpgrade(request, socket, head, (webSocket) => this.connect(webSocket, owner, target.sessionId, generation, cwd));
       reservation = undefined;
     } catch {
-      if (this.owner === reservation) this.owner = undefined;
+      if (reservation && this.owners.get(reservation.sessionId) === reservation.owner) this.owners.delete(reservation.sessionId);
       reject(socket, 500, "Terminal unavailable");
     }
   }
@@ -102,7 +104,7 @@ export class TerminalServer {
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
       });
     } catch (error) {
-      if (this.owner === owner) this.owner = undefined;
+      if (this.owners.get(sessionId) === owner) this.owners.delete(sessionId);
       try {
         socket.send(JSON.stringify({ type: "error", message: error instanceof Error ? error.message : "Unable to start terminal" }), () => socket.close(1011, "Unable to start terminal"));
       } catch { socket.terminate(); }
@@ -145,12 +147,18 @@ export class TerminalServer {
     }
   }
 
+  private closeSession(sessionId: string, reason: string): void {
+    for (const connection of [...this.connections]) {
+      if (connection.sessionId === sessionId) this.close(connection, 1012, reason);
+    }
+  }
+
   private close(connection: Connection, code?: number, reason?: string, killTerminal = true): void {
     if (!this.connections.delete(connection)) return;
     if (killTerminal) try { connection.terminal.kill(); } catch { /* Process already exited. */ }
     if (connection.socket.readyState === WebSocket.OPEN && code) connection.socket.close(code, reason);
     else if (connection.socket.readyState !== WebSocket.CLOSED) connection.socket.terminate();
-    if (this.owner === connection.owner) this.owner = undefined;
+    if (this.owners.get(connection.sessionId) === connection.owner) this.owners.delete(connection.sessionId);
   }
 }
 

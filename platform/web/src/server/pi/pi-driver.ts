@@ -248,6 +248,7 @@ export type DriverEvent =
       sessionId: string;
       sessionGeneration: number;
       state: SessionRuntimeState;
+      completed?: boolean;
     }
   | {
       type: "projects.changed";

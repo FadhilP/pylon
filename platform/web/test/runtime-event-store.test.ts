@@ -23,6 +23,16 @@ test("retryable agent events preserve active work while terminal errors settle i
   assert.match(source, /case "agent\.error":[\s\S]*?agentError: willRetry \|\| typeof info\.message !== "string"/);
 });
 
+test("completed background sessions stay unread until selected", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /status\.completed === true && current\.runtime\?\.sessionId !== status\.sessionId/);
+  assert.match(source, /unseenCompletions\[status\.sessionId\] = true/);
+  assert.match(source, /markSessionSeen\(sessionId: string\)[\s\S]*?delete unseenCompletions\[sessionId\]/);
+  assert.match(source, /status\.state === "sleeping"[\s\S]*?delete unseenCompletions\[status\.sessionId\]/);
+  assert.match(source, /sessionStatuses: clearRuntime \? undefined : this\.snapshot\.sessionStatuses/);
+});
+
 test("files wait for replacement runtime to reconnect before loading", async () => {
   const source = await readFile(new URL("../src/client/files-panel.tsx", import.meta.url), "utf8");
 

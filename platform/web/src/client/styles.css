@@ -652,6 +652,7 @@
   .session-runtime-state { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
   .session-runtime-state.is-running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: breathe 1.5s ease-in-out infinite; }
   .session-runtime-state.is-attention { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+  .session-runtime-state.is-complete { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
   .session-runtime-state.is-idle { opacity: .6; }
   .session-list-controls {
     display: flex;
@@ -878,6 +879,7 @@
   .terminal-drawer > header strong { font-size: 12px; font-weight: 600; }
   .terminal-drawer > header small { overflow: hidden; color: var(--text-muted); font: 12px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
   .terminal-status { color: var(--text-muted); font-size: 12px; }
+  .terminal-actions { display: flex; align-items: center; gap: 2px; }
   .terminal-host { min-width: 0; min-height: 0; flex: 1; padding: 6px 8px; overflow: hidden; }
   .terminal-host .xterm { height: 100%; }
   .terminal-resizer { position: absolute; z-index: 43; right: 0; bottom: calc(var(--terminal-height) - 4px); left: 0; height: 8px; cursor: row-resize; touch-action: none; }

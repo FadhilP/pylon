@@ -2068,7 +2068,11 @@ export class RuntimeCoordinator implements PiDriver {
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
         this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
-        queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true));
+        const completed = payload.stopped !== true && payload.willRetry !== true;
+        queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true).then(
+          () => this.publishStatus(slot.id, completed),
+          () => this.publishStatus(slot.id),
+        ));
       } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
         this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
@@ -2077,18 +2081,19 @@ export class RuntimeCoordinator implements PiDriver {
     this.publishStatus(slot.id);
   }
 
-  private publishStatus(sessionId: string): void {
+  private publishStatus(sessionId: string, completed = false): void {
     const slot = this.slots.get(sessionId);
     if (!slot) return;
     const state = slot.driver.runtimeState();
-    if (state === slot.lastState) return;
+    completed = completed && state === "idle";
+    if (state === slot.lastState && !completed) return;
     slot.lastState = state;
-    this.emitStatus(sessionId, state);
+    this.emitStatus(sessionId, state, completed);
   }
 
-  private emitStatus(sessionId: string, state: SessionRuntimeState): void {
+  private emitStatus(sessionId: string, state: SessionRuntimeState, completed = false): void {
     if (!this.generation || !this.selectedId) return;
-    this.emit({ type: "session.status", sessionId, sessionGeneration: this.generation, state });
+    this.emit({ type: "session.status", sessionId, sessionGeneration: this.generation, state, ...(completed ? { completed: true } : {}) });
   }
 
   private async selectedSnapshot(): Promise<RuntimeSnapshot> {

@@ -30,6 +30,7 @@ import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 type Theme = "light" | "dark";
 type RightPanel = "inspector" | "agents" | "files" | "browser" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
+type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
 type SidebarAction = {
   key: string;
   title: string;
@@ -50,6 +51,7 @@ const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
 const DEFAULT_RIGHT_PANEL_WIDTH = 380;
 const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
 const DEFAULT_TERMINAL_HEIGHT = 280;
+const MAX_RETAINED_TERMINALS = 8;
 
 function runtimeRequestStillCurrent(snapshot: RuntimeStoreSnapshot, sessionId: string, sessionGeneration: number): boolean {
   return snapshot.connection === "connected"
@@ -120,7 +122,8 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("packages");
   const [settingsProviderQuery, setSettingsProviderQuery] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [terminalSessionKey, setTerminalSessionKey] = useState<string>();
+  const [terminalSessionId, setTerminalSessionId] = useState<string>();
+  const [retainedTerminals, setRetainedTerminals] = useState<RetainedTerminal[]>([]);
   const [terminalDrawerHeight, setTerminalDrawerHeight] = useState(initialTerminalHeight);
   const [toast, setToast] = useState<{ id: number; message: string }>();
   const [sidebarAction, setSidebarAction] = useState<SidebarAction>();
@@ -154,9 +157,6 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
-  const terminalTargetKey = live.runtime?.ready
-    ? `${live.runtime.sessionId}:${live.runtime.sessionGeneration}`
-    : undefined;
   const projects = useMemo<SessionProject[]>(() => sessionPages.map((page) => ({
     id: page.id,
     label: page.label,
@@ -235,10 +235,23 @@ export function App() {
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
   useEffect(() => { setSelectedAgentId(undefined); }, [live.runtime?.sessionId]);
   useEffect(() => {
-    if (!terminalSessionKey || terminalSessionKey === terminalTargetKey) return;
+    const sessionId = live.runtime?.sessionId;
+    if (sessionId) runtimeStore.markSessionSeen(sessionId);
+    if (!terminalSessionId || terminalSessionId === sessionId) return;
     setTerminalOpen(false);
-    setTerminalSessionKey(undefined);
-  }, [terminalSessionKey, terminalTargetKey]);
+    setTerminalSessionId(undefined);
+  }, [live.runtime?.sessionId, terminalSessionId]);
+  useEffect(() => {
+    const sleeping = new Set(Object.entries(live.sessionStatuses ?? {})
+      .filter(([, state]) => state === "sleeping")
+      .map(([sessionId]) => sessionId));
+    if (!sleeping.size) return;
+    setRetainedTerminals((current) => current.filter((terminal) => !sleeping.has(terminal.sessionId)));
+    if (terminalSessionId && sleeping.has(terminalSessionId)) {
+      setTerminalOpen(false);
+      setTerminalSessionId(undefined);
+    }
+  }, [live.sessionStatuses, terminalSessionId]);
 
   useEffect(() => {
     if (mobile && previousSidebarOpen.current && !sidebarOpen) navigationToggleRef.current?.focus();
@@ -676,6 +689,7 @@ export function App() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <SessionSidebar
         activeSessions={activeSessions}
+        unseenCompletions={live.unseenCompletions}
         projects={projects}
         pages={sessionPages}
         query={query}
@@ -729,8 +743,18 @@ export function App() {
         terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
         onToggleTerminal={() => {
           if (terminalOpen) setTerminalOpen(false);
-          else if (terminalTargetKey) {
-            setTerminalSessionKey(terminalTargetKey);
+          else if (live.runtime?.ready) {
+            const terminal = {
+              sessionId: live.runtime.sessionId,
+              generation: live.runtime.sessionGeneration,
+              cwdLabel: live.runtime.cwdLabel,
+            };
+            setRetainedTerminals((current) => {
+              const existing = current.find((item) => item.sessionId === terminal.sessionId);
+              return [...current.filter((item) => item.sessionId !== terminal.sessionId), existing ?? terminal]
+                .slice(-MAX_RETAINED_TERMINALS);
+            });
+            setTerminalSessionId(terminal.sessionId);
             setTerminalOpen(true);
           }
           if (mobile) setSidebarOpen(false);
@@ -907,12 +931,18 @@ export function App() {
             catch { /* Resizing still works for the current page. */ }
           }}
         />}
-        {terminalTargetKey && terminalSessionKey === terminalTargetKey && <TerminalPanel
-          key={`terminal:${terminalTargetKey}`}
-          open={terminalOpen}
-          cwdLabel={live.runtime?.cwdLabel}
+        {retainedTerminals.map((terminal) => <TerminalPanel
+          key={`terminal:${terminal.sessionId}`}
+          open={terminalOpen && terminalSessionId === terminal.sessionId}
+          generation={terminal.generation}
+          cwdLabel={terminal.cwdLabel}
           onClose={() => setTerminalOpen(false)}
-        />}
+          onShutdown={() => {
+            setRetainedTerminals((current) => current.filter((item) => item.sessionId !== terminal.sessionId));
+            setTerminalOpen(false);
+            setTerminalSessionId(undefined);
+          }}
+        />)}
         {(sessionTransition || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
       </main>
 
