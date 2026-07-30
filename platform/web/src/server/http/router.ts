@@ -534,6 +534,15 @@ export class ServerTransport {
           this.projection.refresh(await this.driver.snapshot());
           return accepted(command.expectedGeneration);
         });
+      case "startProviderLogin":
+        if (!this.driver.startProviderLogin) return Promise.reject(httpError(409, "provider authentication is unavailable"));
+        return this.driver.startProviderLogin(command).then(() => accepted(command.expectedGeneration));
+      case "cancelProviderLogin":
+        if (!this.driver.cancelProviderLogin) return Promise.reject(httpError(409, "provider authentication is unavailable"));
+        return this.driver.cancelProviderLogin(command.expectedGeneration).then(() => accepted(command.expectedGeneration));
+      case "logoutProvider":
+        if (!this.driver.logoutProvider) return Promise.reject(httpError(409, "provider authentication is unavailable"));
+        return this.driver.logoutProvider(command.provider, command.expectedGeneration).then(() => accepted(command.expectedGeneration));
       case "updateContinuityMemory":
         return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "deleteContinuityMemory":
@@ -578,7 +587,7 @@ export class ServerTransport {
     if (event.type === "ui.closed" && this.dialogOwner?.requestId === event.requestId) this.clearDialogOwner();
     if (event.type === "session.event") {
       const payload = event.payload && typeof event.payload === "object" ? event.payload as { type?: unknown } : {};
-      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed", "runtime_policy_changed"].includes(String(payload.type))) {
+      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed", "provider_auth_changed", "runtime_policy_changed"].includes(String(payload.type))) {
         void this.driver.snapshot().then((snapshot) => this.projection.refresh(snapshot)).catch(() => undefined);
       }
     }

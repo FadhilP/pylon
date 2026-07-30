@@ -5,7 +5,7 @@ import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport }
 import { formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
-import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../shared/composer-input";
+import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
@@ -59,12 +59,14 @@ export function ConversationPanel({
   initialDraft = "",
   onDraftChange,
   onSelectAgent,
+  onOpenLogin,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
   initialDraft?: string;
   onDraftChange?: (draft: string) => void;
   onSelectAgent?: (id: string) => void;
+  onOpenLogin?: (provider?: string) => void;
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -247,7 +249,8 @@ export function ConversationPanel({
   );
   const slashMatch = /^\/([^\s]*)$/.exec(message);
   const suggestions = slashMatch && !suggestionsDismissed
-    ? (controls?.commands ?? [])
+    ? [{ name: "login", description: "Connect an AI provider", source: "extension" as const }, ...(controls?.commands ?? [])]
+        .filter((command, index, commands) => commands.findIndex((candidate) => candidate.name === command.name) === index)
         .filter((command) => command.name.toLowerCase().startsWith(slashMatch[1]!.toLowerCase()))
         .slice(0, 8)
     : [];
@@ -301,6 +304,12 @@ export function ConversationPanel({
     event.preventDefault();
     const value = message.trim();
     if ((!value && images.length === 0 && files.length === 0) || !connected || queued || composerBlocked) return;
+    const loginProvider = !images.length && !files.length ? loginCommandProvider(value) : null;
+    if (loginProvider !== null) {
+      onOpenLogin?.(loginProvider);
+      updateMessage("");
+      return;
+    }
     setSubmitting(true);
     try {
       await runtimeStore.sendMessage(
@@ -834,7 +843,7 @@ function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingU
     return () => window.clearTimeout(timer);
   }, [request, displayed]);
 
-  if (!displayed) return null;
+  if (!displayed || displayed.payload.context === "provider-auth") return null;
   return <div className={exiting ? "ui-request-motion is-exiting" : "ui-request-motion"}>
     <UiDialog key={displayed.requestId} request={displayed} />
   </div>;

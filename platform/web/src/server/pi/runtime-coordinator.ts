@@ -1,6 +1,6 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
@@ -31,6 +31,7 @@ import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, Co
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
+import { createPylonModelRuntime } from "./runtime-factory.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
@@ -63,6 +64,7 @@ import type {
   SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
+  StartProviderLoginInput,
   SessionArchiveInput,
   SwitchSessionInput,
   TimelineCheckpointDiffInput,
@@ -201,6 +203,7 @@ export class RuntimeCoordinator implements PiDriver {
   private selectedId = "";
   private generation = 0;
   private target?: RuntimeTarget;
+  private modelRuntime?: ModelRuntime;
   private sleepTimer?: NodeJS.Timeout;
   private lifecycleBusy = false;
   private pickerBusy = false;
@@ -214,6 +217,7 @@ export class RuntimeCoordinator implements PiDriver {
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.target || this.disposed) throw new Error("driver cannot be started twice");
     this.target = target;
+    this.modelRuntime = this.options.modelRuntime ?? await createPylonModelRuntime(target.agentDir);
     this.projectRegistry = ProjectRegistry.forAgentDir(target.agentDir);
     await this.projectRegistry.load(async () => {
       const knownSessions = await SessionManager.listAll();
@@ -1274,6 +1278,24 @@ export class RuntimeCoordinator implements PiDriver {
     slot.pendingControls = unchanged ? undefined : { input: { ...input }, model };
   }
 
+  async startProviderLogin(input: StartProviderLoginInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    await slot.driver.startProviderLogin({ ...input, expectedGeneration: slot.innerGeneration });
+  }
+
+  async cancelProviderLogin(expectedGeneration: number): Promise<void> {
+    this.assertGeneration(expectedGeneration);
+    const slot = this.selected();
+    await slot.driver.cancelProviderLogin(slot.innerGeneration);
+  }
+
+  async logoutProvider(provider: string, expectedGeneration: number): Promise<void> {
+    this.assertGeneration(expectedGeneration);
+    const slot = this.selected();
+    await slot.driver.logoutProvider(provider, slot.innerGeneration);
+  }
+
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
@@ -1324,7 +1346,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async createSlot(target: RuntimeTarget): Promise<RuntimeSlot> {
-    const driver = new SessionRuntime({ ...this.options, projectRegistry: this.registry() });
+    const driver = new SessionRuntime({ ...this.options, modelRuntime: this.modelRuntime, projectRegistry: this.registry() });
     const handle = await driver.start(target);
     const slot: RuntimeSlot = {
       id: handle.sessionId,

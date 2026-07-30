@@ -165,6 +165,39 @@ export interface SlashCommandReadModel {
   source: "extension" | "prompt" | "skill";
 }
 
+export type ProviderAuthType = "api_key" | "oauth";
+
+export interface ProviderAuthReadModel {
+  providers: Array<{
+    id: string;
+    name: string;
+    configured: boolean;
+    stored: boolean;
+    credentialType?: ProviderAuthType;
+    methods: Array<{
+      type: ProviderAuthType;
+      name: string;
+      interactive: boolean;
+    }>;
+  }>;
+  flow?: {
+    id: string;
+    providerId: string;
+    providerName: string;
+    authType: ProviderAuthType;
+    status: "running" | "succeeded" | "failed" | "cancelled";
+    message?: string;
+    authUrl?: string;
+    instructions?: string;
+    links?: Array<{ url: string; label?: string }>;
+    deviceCode?: {
+      userCode: string;
+      verificationUri: string;
+      expiresAt?: string;
+    };
+  };
+}
+
 export interface UiRequestReadModel {
   requestId: string;
   method: "select" | "confirm" | "input" | "editor" | "questionnaire";

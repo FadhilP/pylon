@@ -183,6 +183,12 @@ export interface SetSessionControlsInput extends SetModelInput {
   thinkingLevel: SetThinkingLevelInput["level"];
 }
 
+export interface StartProviderLoginInput {
+  expectedGeneration: number;
+  provider: string;
+  authType: "api_key" | "oauth";
+}
+
 export interface UpdateContinuityMemoryInput {
   expectedGeneration?: number;
   key: string;
@@ -319,6 +325,9 @@ export interface PiDriver {
   setModel(input: SetModelInput): Promise<void>;
   setThinkingLevel(input: SetThinkingLevelInput): void;
   setSessionControls(input: SetSessionControlsInput): Promise<void>;
+  startProviderLogin?(input: StartProviderLoginInput): Promise<void>;
+  cancelProviderLogin?(expectedGeneration: number): Promise<void>;
+  logoutProvider?(provider: string, expectedGeneration: number): Promise<void>;
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;

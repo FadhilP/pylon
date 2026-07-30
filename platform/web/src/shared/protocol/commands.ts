@@ -33,6 +33,9 @@ export const COMMAND_NAMES = [
   "setModel",
   "setThinkingLevel",
   "setSessionControls",
+  "startProviderLogin",
+  "cancelProviderLogin",
+  "logoutProvider",
   "updateContinuityMemory",
   "deleteContinuityMemory",
   "handoffSession",
@@ -102,6 +105,9 @@ export type WebCommand =
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({ type: "setSessionControls"; provider: string; modelId: string; thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
+  | ({ type: "startProviderLogin"; provider: string; authType: "api_key" | "oauth" } & CommandBase)
+  | ({ type: "cancelProviderLogin" } & CommandBase)
+  | ({ type: "logoutProvider"; provider: string } & CommandBase)
   | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)

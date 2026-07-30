@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
@@ -14,6 +15,7 @@ import {
 import {
   createAgentSessionRuntime,
   createEventBus,
+  ModelRuntime,
   SessionManager,
   sessionEntryToContextMessages,
   type AgentSession,
@@ -26,7 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { ChangedFileReadModel, ModelOptionReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
@@ -58,6 +60,7 @@ import type {
   SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
+  StartProviderLoginInput,
   SessionArchiveInput,
   SwitchSessionInput,
   TimelineCheckpointDiffInput,
@@ -66,7 +69,7 @@ import type {
   UpdatePackageSettingsInput,
   UpdateRuntimePolicyInput,
 } from "./pi-driver.ts";
-import { RemoteUiBridge, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
+import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
 import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
@@ -203,6 +206,7 @@ const OPTIONAL_TOOLS = [
   "heartbeat_cancel",
 ] as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const ACTIVE_AUTH_RUNTIMES = new WeakSet<ModelRuntime>();
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 function supportedThinkingLevels(model: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }): readonly ThinkingLevel[] {
@@ -214,6 +218,7 @@ function supportedThinkingLevels(model: { reasoning?: boolean; thinkingLevelMap?
 export interface SessionRuntimeOptions {
   dialogTimeoutMs?: number;
   extensionFactories?: InlineExtension[];
+  modelRuntime?: ModelRuntime;
   onShutdownRequested?: () => void;
   projectRegistry?: ProjectRegistry;
 }
@@ -236,6 +241,11 @@ export class SessionRuntime implements PiDriver {
   private lastSnapshot?: RuntimeSnapshot;
   private target?: RuntimeTarget;
   private createRuntime?: CreateAgentSessionRuntimeFactory;
+  private modelRuntime?: ModelRuntime;
+  private authAbort?: AbortController;
+  private authGeneration?: number;
+  private authFlow?: ProviderAuthReadModel["flow"];
+  private storedProviderIds = new Set<string>();
   private packageCatalog?: PackageCatalog;
   private packageState?: PackageCatalogState;
   private packageUpdate = false;
@@ -297,9 +307,11 @@ export class SessionRuntime implements PiDriver {
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
     const [packageState, modelRuntime] = await Promise.all([
       this.packageCatalog.scan(),
-      createPylonModelRuntime(target.agentDir),
+      this.options.modelRuntime ?? createPylonModelRuntime(target.agentDir),
     ]);
     this.packageState = packageState;
+    this.modelRuntime = modelRuntime;
+    this.storedProviderIds = new Set((await modelRuntime.listCredentials()).map((credential) => credential.providerId));
     const generation = this.gate.start();
     this.installBusHooks(generation);
     const createRuntime = await createPylonRuntimeFactory({
@@ -1169,6 +1181,205 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
+  async startProviderLogin(input: StartProviderLoginInput): Promise<void> {
+    const session = this.sessionFor(input.expectedGeneration);
+    const modelRuntime = this.modelRuntime;
+    if (!modelRuntime) throw new Error("provider authentication is unavailable");
+    if (this.authFlow?.status === "running" || ACTIVE_AUTH_RUNTIMES.has(modelRuntime)) {
+      throw new Error("provider authentication is already in progress");
+    }
+    const provider = modelRuntime.getProvider(input.provider);
+    if (!provider) throw new Error("unknown provider");
+    const method = input.authType === "oauth" ? provider.auth.oauth : provider.auth.apiKey;
+    if (!method) throw new Error("authentication method is unavailable for this provider");
+    if (input.authType === "api_key" && !method.login) {
+      throw new Error("this provider is configured outside Pylon");
+    }
+
+    const id = randomUUID();
+    const authGeneration = this.gate.generation;
+    const abort = new AbortController();
+    this.authAbort = abort;
+    this.authGeneration = authGeneration;
+    this.authFlow = {
+      id,
+      providerId: provider.id,
+      providerName: provider.name,
+      authType: input.authType,
+      status: "running",
+      message: `Starting ${method.name}`,
+    };
+    ACTIVE_AUTH_RUNTIMES.add(modelRuntime);
+    this.publishProviderAuth();
+
+    void modelRuntime.login(provider.id, input.authType, {
+      signal: abort.signal,
+      prompt: async (prompt) => {
+        this.updateAuthFlow(id, { message: prompt.message });
+        const safePrompt: ProviderAuthPrompt = prompt.type === "select"
+          ? {
+              type: "select",
+              message: prompt.message,
+              options: prompt.options.map((option) => ({
+                id: option.id,
+                label: option.label,
+                ...(option.description ? { description: option.description } : {}),
+              })),
+              ...(prompt.signal ? { signal: prompt.signal } : {}),
+            }
+          : {
+              type: prompt.type,
+              message: prompt.message,
+              ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+              ...(prompt.signal ? { signal: prompt.signal } : {}),
+            };
+        const value = await this.ui.authPrompt(
+          session.sessionId,
+          authGeneration,
+          safePrompt,
+          abort.signal,
+        );
+        if (value === undefined) throw new Error("Login cancelled");
+        return value;
+      },
+      notify: (event) => {
+        if (event.type === "auth_url") {
+          const authUrl = this.safeProviderUrl(event.url);
+          this.updateAuthFlow(id, {
+            message: authUrl ? event.instructions ?? "Continue authentication in your browser." : "The provider returned an invalid sign-in URL.",
+            authUrl,
+            instructions: event.instructions,
+          });
+        } else if (event.type === "device_code") {
+          const verificationUri = this.safeProviderUrl(event.verificationUri);
+          this.updateAuthFlow(id, {
+            message: verificationUri ? "Enter the code on the provider sign-in page." : "The provider returned an invalid verification URL.",
+            ...(verificationUri ? {
+              deviceCode: {
+                userCode: event.userCode,
+                verificationUri,
+                ...(event.expiresInSeconds ? { expiresAt: new Date(Date.now() + event.expiresInSeconds * 1_000).toISOString() } : {}),
+              },
+            } : {}),
+          });
+        } else if (event.type === "info") {
+          this.updateAuthFlow(id, {
+            message: event.message,
+            links: event.links?.flatMap((link) => {
+              const url = this.safeProviderUrl(link.url);
+              return url ? [{ url, ...(link.label ? { label: link.label } : {}) }] : [];
+            }),
+          });
+        } else {
+          this.updateAuthFlow(id, { message: event.message });
+        }
+      },
+    }).then(() => {
+      this.storedProviderIds.add(provider.id);
+      this.updateAuthFlow(id, {
+        status: "succeeded",
+        message: `Connected ${provider.name}.`,
+        authUrl: undefined,
+        instructions: undefined,
+        links: undefined,
+        deviceCode: undefined,
+      });
+    }).catch((error) => {
+      const cancelled = abort.signal.aborted || (error instanceof Error && error.message === "Login cancelled");
+      this.updateAuthFlow(id, {
+        status: cancelled ? "cancelled" : "failed",
+        message: cancelled ? "Authentication cancelled." : "Authentication failed. Try again.",
+        authUrl: undefined,
+        instructions: undefined,
+        links: undefined,
+        deviceCode: undefined,
+      });
+    }).finally(() => {
+      ACTIVE_AUTH_RUNTIMES.delete(modelRuntime);
+      if (this.authFlow?.id === id) {
+        this.authAbort = undefined;
+        this.authGeneration = undefined;
+      }
+    });
+  }
+
+  async cancelProviderLogin(expectedGeneration: number): Promise<void> {
+    this.sessionFor(expectedGeneration);
+    if (this.authFlow?.status !== "running" || !this.authAbort) return;
+    this.authAbort.abort();
+  }
+
+  async logoutProvider(provider: string, expectedGeneration: number): Promise<void> {
+    this.sessionFor(expectedGeneration);
+    const modelRuntime = this.modelRuntime;
+    if (!modelRuntime) throw new Error("provider authentication is unavailable");
+    if (this.authFlow?.status === "running" || ACTIVE_AUTH_RUNTIMES.has(modelRuntime)) {
+      throw new Error("provider authentication is already in progress");
+    }
+    if (!modelRuntime.getProvider(provider)) throw new Error("unknown provider");
+    await modelRuntime.logout(provider);
+    this.storedProviderIds.delete(provider);
+    this.authFlow = undefined;
+    this.publishProviderAuth();
+  }
+
+  private updateAuthFlow(id: string, patch: Partial<NonNullable<ProviderAuthReadModel["flow"]>>): void {
+    if (this.authFlow?.id !== id || this.authGeneration !== this.gate.generation) return;
+    this.authFlow = { ...this.authFlow, ...patch };
+    this.publishProviderAuth();
+  }
+
+  private publishProviderAuth(): void {
+    if (!this.runtime || !this.gate.ready) return;
+    this.refreshSnapshot();
+    this.emit({
+      type: "session.event",
+      sessionId: this.runtime.session.sessionId,
+      sessionGeneration: this.gate.generation,
+      payload: { type: "provider_auth_changed" },
+    });
+  }
+
+  private safeProviderUrl(value: string): string | undefined {
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:") return url.toString();
+      if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]")) return url.toString();
+    } catch { /* Invalid provider URL. */ }
+    return undefined;
+  }
+
+  private providerAuthSnapshot(): ProviderAuthReadModel {
+    const providers = (this.modelRuntime?.getProviders() ?? []).slice(0, 200).map((provider) => {
+      const status = this.modelRuntime!.getProviderAuthStatus(provider.id);
+      const methods: ProviderAuthReadModel["providers"][number]["methods"] = [];
+      if (provider.auth.oauth) methods.push({ type: "oauth", name: provider.auth.oauth.name, interactive: true });
+      if (provider.auth.apiKey) methods.push({
+        type: "api_key",
+        name: provider.auth.apiKey.name,
+        interactive: Boolean(provider.auth.apiKey.login),
+      });
+      return {
+        id: provider.id,
+        name: provider.name,
+        configured: status.configured,
+        stored: this.storedProviderIds.has(provider.id),
+        ...(status.configured ? { credentialType: this.modelRuntime!.isUsingOAuth(provider.id) ? "oauth" as const : "api_key" as const } : {}),
+        methods,
+      };
+    }).sort((left, right) => left.name.localeCompare(right.name));
+    return {
+      providers,
+      ...(this.authFlow ? {
+        flow: {
+          ...this.authFlow,
+          ...(this.authFlow.links ? { links: this.authFlow.links.map((link) => ({ ...link })) } : {}),
+          ...(this.authFlow.deviceCode ? { deviceCode: { ...this.authFlow.deviceCode } } : {}),
+        },
+      } : {}),
+    };
+  }
+
   validateSessionControls(input: SetSessionControlsInput): ModelOptionReadModel {
     const model = this.requireRuntime().services.modelRuntime.getAvailableSnapshot()
       .find((item) => item.provider === input.provider && item.id === input.modelId);
@@ -1263,6 +1474,10 @@ export class SessionRuntime implements PiDriver {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.authAbort?.abort();
+    this.authAbort = undefined;
+    this.authGeneration = undefined;
+    this.authFlow = undefined;
     this.ui.cancelAll();
     this.detachSession();
     this.detachBus();
@@ -1280,6 +1495,10 @@ export class SessionRuntime implements PiDriver {
     runtime.setBeforeSessionInvalidate(() => {
       if (this.sessionMutation === "delete") throw new Error("session cannot change while deletion is in progress");
       const oldGeneration = this.gate.generation;
+      this.authAbort?.abort();
+      this.authAbort = undefined;
+      this.authGeneration = undefined;
+      this.authFlow = undefined;
       this.ui.cancelGeneration(oldGeneration);
       this.detachSession();
       this.detachBus();
@@ -1791,6 +2010,7 @@ export class SessionRuntime implements PiDriver {
         thinkingLevels: session.getAvailableThinkingLevels(),
         commands,
       },
+      providerAuth: this.providerAuthSnapshot(),
       operational: this.operational,
       metrics: {
         model: model?.name ?? "No model",

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fileMentionAtCaret, isNearTranscriptBottom, replaceFileMention } from "../src/shared/composer-input.ts";
+import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../src/shared/composer-input.ts";
 
 test("file mentions follow the caret and quote paths containing spaces", () => {
   const value = "Compare @src/fo with @ignored";
@@ -13,6 +13,13 @@ test("file mentions follow the caret and quote paths containing spaces", () => {
   assert.equal(fileMentionAtCaret("mail@example.com", 16), undefined);
   assert.equal(fileMentionAtCaret("Read @\"src/foo bar", 18)?.query, "src/foo bar");
   assert.equal(fileMentionAtCaret("Read (@src", 10)?.query, "src");
+});
+
+test("login command parsing only intercepts the exact local command", () => {
+  assert.equal(loginCommandProvider("/login"), undefined);
+  assert.equal(loginCommandProvider(" /LOGIN anthropic "), "anthropic");
+  assert.equal(loginCommandProvider("please /login"), null);
+  assert.equal(loginCommandProvider("/login anthropic now\nextra"), null);
 });
 
 test("transcript bottom detection uses the requested follow threshold", () => {

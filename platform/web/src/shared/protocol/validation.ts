@@ -258,6 +258,13 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
       || !thinkingLevels.has(String(value.thinkingLevel)))) {
     return { ok: false, error: "invalid session controls" };
   }
+  if ((value.type === "startProviderLogin" || value.type === "logoutProvider")
+    && !boundedString(value.provider, 200)) {
+    return { ok: false, error: "invalid provider" };
+  }
+  if (value.type === "startProviderLogin" && value.authType !== "api_key" && value.authType !== "oauth") {
+    return { ok: false, error: "invalid provider authentication type" };
+  }
   if (value.type === "updateContinuityMemory" || value.type === "deleteContinuityMemory") {
     if (!boundedString(value.key, 200) || typeof value.expectedUpdatedAt !== "string"
       || Number.isNaN(Date.parse(value.expectedUpdatedAt))) return { ok: false, error: "invalid memory target" };
@@ -524,6 +531,28 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       && boundedString(check.id, 100)
       && boundedString(check.label, 200)
       && boundedString(check.command, 500))) return false;
+  if (value.providerAuth !== undefined) {
+    const auth = value.providerAuth;
+    if (!record(auth) || !Array.isArray(auth.providers) || auth.providers.length > 200
+      || !auth.providers.every((provider) => record(provider)
+        && boundedString(provider.id, 200) && boundedString(provider.name, 200)
+        && typeof provider.configured === "boolean" && typeof provider.stored === "boolean"
+        && (provider.credentialType === undefined || provider.credentialType === "api_key" || provider.credentialType === "oauth")
+        && Array.isArray(provider.methods) && provider.methods.length <= 2
+        && provider.methods.every((method) => record(method)
+          && (method.type === "api_key" || method.type === "oauth")
+          && boundedString(method.name, 200) && typeof method.interactive === "boolean"))) return false;
+    if (auth.flow !== undefined) {
+      const flow = auth.flow;
+      if (!record(flow) || !identifier(flow.id)
+        || !boundedString(flow.providerId, 200) || !boundedString(flow.providerName, 200)
+        || !["api_key", "oauth"].includes(String(flow.authType))
+        || !["running", "succeeded", "failed", "cancelled"].includes(String(flow.status))
+        || (flow.message !== undefined && !boundedString(flow.message, 2_000))
+        || (flow.authUrl !== undefined && !boundedString(flow.authUrl, 8_000))
+        || (flow.instructions !== undefined && !boundedString(flow.instructions, 2_000))) return false;
+    }
+  }
   if (value.commandResult !== undefined && (!record(value.commandResult)
     || !identifier(value.commandResult.id)
     || !boundedString(value.commandResult.command, 120)

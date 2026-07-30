@@ -402,6 +402,7 @@ export class RuntimeProjection {
         delegatedRuns: [...this.delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS).map((run) => structuredClone(run)),
       },
       operational: cloneOperational(this.runtime.operational),
+      ...(this.runtime.providerAuth ? { providerAuth: structuredClone(this.runtime.providerAuth) } : {}),
       extensionUi: {
         ...this.runtime.extensionUi,
         notifications: this.runtime.extensionUi.notifications.map((item) => ({ ...item })),
@@ -424,6 +425,7 @@ export class RuntimeProjection {
       optionalCapabilities: { ...runtime.optionalCapabilities },
       diagnostics: [...runtime.diagnostics],
       sessionControls: structuredClone(runtime.sessionControls),
+      providerAuth: runtime.providerAuth ? structuredClone(runtime.providerAuth) : undefined,
       runtimePolicy: structuredClone(runtime.runtimePolicy),
       metrics: { ...runtime.metrics },
       discoverIndex: runtime.discoverIndex ? { ...runtime.discoverIndex } : undefined,
@@ -441,6 +443,7 @@ export class RuntimeProjection {
       operational: cloneOperational(runtime.operational),
     };
     this.publish("session.controls", this.runtime.sessionControls);
+    if (this.runtime.providerAuth) this.publish("provider.auth", this.runtime.providerAuth);
     this.publish("runtime.policy", this.runtime.runtimePolicy);
     this.publish("metrics.update", this.runtime.metrics);
   }

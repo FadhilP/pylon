@@ -1,16 +1,20 @@
-import { IconChevronRight, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
+import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import type { ThinkingLevelReadModel } from "../shared/protocol/events";
-import type { ModelOptionReadModel } from "../shared/protocol/events";
+import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, UiRequestReadModel } from "../shared/protocol/events";
 import type { PackageSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
+import { UiDialog } from "./ui-dialog";
 
-type SettingsTab = "packages" | "notifications" | "appearance";
+export type SettingsTab = "providers" | "packages" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = ["packages", "notifications", "appearance"];
+const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "notifications", "appearance"];
 
 interface SettingsDialogProps {
+  initialTab?: SettingsTab;
+  initialProviderQuery?: string;
+  providerAuth?: ProviderAuthReadModel;
+  pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
   loading: boolean;
   busy: string;
@@ -20,16 +24,24 @@ interface SettingsDialogProps {
   theme: SettingsTheme;
   onThemeChange: (theme: SettingsTheme) => void;
   onClose: () => void;
+  onProviderLogin: (provider: string, authType: ProviderAuthType) => void;
+  onProviderLogout: (provider: string) => void;
+  onProviderCancel: () => void;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
 }
 
-export function SettingsDialog({ packages, loading, busy, disabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onSetEnabled, onUpdate }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, loading, busy, disabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("packages");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
   const [packageQuery, setPackageQuery] = useState("");
   const [expandedPackage, setExpandedPackage] = useState<string | null | undefined>();
   const filteredPackages = packages.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()));
+  const providers = providerAuth?.providers ?? [];
+  const filteredProviders = providers.filter((provider) => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()));
+  const authFlow = providerAuth?.flow;
+  const authRunning = authFlow?.status === "running";
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -104,6 +116,44 @@ export function SettingsDialog({ packages, loading, busy, disabled, models, sess
         </nav>
 
         <div className="settings-content">
+          <section id="settings-panel-providers" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-providers" hidden={activeTab !== "providers"}>
+            <div className="settings-pane-header">
+              <div><h2>Providers</h2><p>Connect accounts and API keys used by Pi. Credentials stay on this machine.</p></div>
+              <input type="search" value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="Filter providers" aria-label="Filter providers" />
+            </div>
+            {authFlow && <div className={`provider-auth-flow is-${authFlow.status}`} role="status">
+              <div><strong>{authFlow.providerName}</strong><span>{authFlow.message ?? "Authentication in progress."}</span></div>
+              {authFlow.authUrl && <a href={authFlow.authUrl} target="_blank" rel="noopener noreferrer">Open sign-in page <IconExternalLink size={14} /></a>}
+              {authFlow.deviceCode && <div className="provider-device-code">
+                <code>{authFlow.deviceCode.userCode}</code>
+                <a href={authFlow.deviceCode.verificationUri} target="_blank" rel="noopener noreferrer">Open verification page <IconExternalLink size={14} /></a>
+              </div>}
+              {authFlow.links?.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">{link.label ?? "Open provider page"} <IconExternalLink size={14} /></a>)}
+              {authRunning && <button type="button" className="secondary-button" onClick={onProviderCancel}>Cancel</button>}
+            </div>}
+            {pendingUi?.payload.context === "provider-auth" && <div className="provider-auth-prompt"><UiDialog request={pendingUi} /></div>}
+            {providers.length === 0 && <div className="settings-empty"><IconKey size={22} /><strong>No providers available</strong></div>}
+            {providers.length > 0 && filteredProviders.length === 0 && <div className="settings-empty"><strong>No matching providers</strong><span>Try a different filter.</span></div>}
+            {filteredProviders.length > 0 && <div className="settings-provider-list">{filteredProviders.map((provider) => <section className="settings-provider" key={provider.id}>
+              <div className="settings-provider-copy">
+                <span className="provider-mark" aria-hidden="true">{packageInitials(provider.name)}</span>
+                <span><strong>{provider.name}</strong><small>{provider.id}</small></span>
+              </div>
+              <span className={`provider-state${provider.configured ? " is-connected" : ""}`}>{provider.configured ? provider.stored ? "Connected" : "External" : "Not connected"}</span>
+              <div className="provider-actions">
+                {!provider.configured && provider.methods.map((method) => <button
+                  key={method.type}
+                  type="button"
+                  disabled={disabled || authRunning || !method.interactive}
+                  title={method.interactive ? undefined : "Configured outside Pylon"}
+                  onClick={() => onProviderLogin(provider.id, method.type)}
+                >{method.type === "oauth" ? "Sign in" : "Add key"}</button>)}
+                {provider.configured && provider.stored && <button className="provider-disconnect" type="button" disabled={disabled || authRunning} onClick={() => onProviderLogout(provider.id)}><IconLogout size={14} /> Disconnect</button>}
+              </div>
+            </section>)}</div>}
+            {disabled && <p className="settings-note" role="status">Provider settings are available when every active session is idle.</p>}
+          </section>
+
           <section id="settings-panel-packages" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-packages" hidden={activeTab !== "packages"}>
             <div className="settings-pane-header">
               <div><h2>Packages</h2><p>Enable local Pi packages and tune how each one runs. Expand a package to edit its defaults.</p></div>

@@ -26,6 +26,18 @@ export interface UiRequest {
   expiresAt?: string;
 }
 
+export type ProviderAuthPrompt = {
+  signal?: AbortSignal;
+} & ({
+  type: "text" | "secret" | "manual_code";
+  message: string;
+  placeholder?: string;
+} | {
+  type: "select";
+  message: string;
+  options: readonly { id: string; label: string; description?: string }[];
+});
+
 export interface UiResponse {
   requestId: string;
   sessionGeneration: number;
@@ -184,6 +196,44 @@ export class RemoteUiBridge {
       }
       this.pending.set(requestId, pending);
       this.publish(request);
+    });
+  }
+
+  authPrompt(
+    sessionId: string,
+    sessionGeneration: number,
+    prompt: ProviderAuthPrompt,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const combinedSignal = prompt.signal ? AbortSignal.any([signal, prompt.signal]) : signal;
+    if (prompt.type === "select") {
+      const options = prompt.options.slice(0, MAX_OPTIONS).map((option) => ({
+        value: bounded(option.id, 500),
+        label: bounded(option.label, 500),
+        ...(option.description ? { description: bounded(option.description, 1_000) } : {}),
+      }));
+      return this.dialog({
+        sessionId,
+        sessionGeneration,
+        method: "select",
+        payload: { context: "provider-auth", title: bounded(prompt.message), options },
+        neutral: undefined,
+        options: options.map((option) => option.value),
+        dialogOptions: { signal: combinedSignal, timeout: 0 },
+      });
+    }
+    return this.dialog({
+      sessionId,
+      sessionGeneration,
+      method: "input",
+      payload: {
+        context: "provider-auth",
+        title: bounded(prompt.message),
+        placeholder: prompt.placeholder && bounded(prompt.placeholder),
+        inputType: prompt.type === "secret" ? "password" : "text",
+      },
+      neutral: undefined,
+      dialogOptions: { signal: combinedSignal, timeout: 0 },
     });
   }
 

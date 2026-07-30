@@ -1,5 +1,5 @@
 import type { PROTOCOL_VERSION } from "./envelope.ts";
-import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, SlashCommandResultReadModel, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
+import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, SlashCommandResultReadModel, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -23,6 +23,7 @@ export interface RuntimeSnapshot {
   diagnostics: RuntimeDiagnostic[];
   conversation: ConversationReadModel;
   sessionControls: SessionControlsReadModel;
+  providerAuth?: ProviderAuthReadModel;
   metrics: SessionMetricsReadModel;
   discoverIndex?: DiscoverIndexReadModel;
   operational: OperationalReadModel;

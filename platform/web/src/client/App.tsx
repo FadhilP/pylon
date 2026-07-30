@@ -21,7 +21,7 @@ import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
-import { SettingsDialog } from "./settings-dialog";
+import { SettingsDialog, type SettingsTab } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
@@ -115,6 +115,8 @@ export function App() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("packages");
+  const [settingsProviderQuery, setSettingsProviderQuery] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalSessionKey, setTerminalSessionKey] = useState<string>();
   const [terminalDrawerHeight, setTerminalDrawerHeight] = useState(initialTerminalHeight);
@@ -729,6 +731,8 @@ export function App() {
           if (mobile) setSidebarOpen(false);
         }}
         onOpenSettings={() => {
+          setSettingsTab("packages");
+          setSettingsProviderQuery("");
           setSettingsOpen(true);
           if (mobile) setSidebarOpen(false);
         }}
@@ -839,6 +843,11 @@ export function App() {
               setSelectedAgentId(id);
               setRightPanel("agents");
             }}
+            onOpenLogin={(provider) => {
+              setSettingsTab("providers");
+              setSettingsProviderQuery(provider ?? "");
+              setSettingsOpen(true);
+            }}
           />
           {rightPanel && inspectorOverlay && <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />}
           {rightPanel && <PanelResizer
@@ -912,6 +921,10 @@ export function App() {
       />}
       {archivesOpen && <ArchiveDialog revision={live.sessionRevision ?? 0} onClose={() => setArchivesOpen(false)} onError={reportError} />}
       {settingsOpen && <SettingsDialog
+        initialTab={settingsTab}
+        initialProviderQuery={settingsProviderQuery}
+        providerAuth={live.runtime?.providerAuth}
+        pendingUi={live.pendingUi}
         packages={packages}
         loading={packagesLoading}
         busy={packageBusy}
@@ -920,7 +933,13 @@ export function App() {
         sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
         theme={theme}
         onThemeChange={setTheme}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
+          setSettingsOpen(false);
+        }}
+        onProviderLogin={(provider, authType) => void runtimeStore.startProviderLogin(provider, authType)}
+        onProviderLogout={(provider) => void runtimeStore.logoutProvider(provider)}
+        onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
       />}

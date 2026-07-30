@@ -31,6 +31,21 @@ test("remote UI correlates every RPC dialog and validates responses", async () =
   }), /unknown or expired/);
 });
 
+test("provider auth prompts mark secrets without publishing their value", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge((request) => requests.push(request));
+  bridge.context("session-1", 3);
+  const controller = new AbortController();
+  const pending = bridge.authPrompt("session-1", 3, { type: "secret", message: "API key" }, controller.signal);
+  const request = requests.at(-1)!;
+  assert.equal(request.payload.inputType, "password");
+  assert.equal(request.payload.context, "provider-auth");
+  assert.equal(JSON.stringify(request.payload).includes("sk-test"), false);
+  bridge.answer({ requestId: request.requestId, sessionGeneration: 3, method: "input", value: "sk-test" });
+  assert.equal(await pending, "sk-test");
+  assert.equal(JSON.stringify(request.payload).includes("sk-test"), false);
+});
+
 test("remote UI fails closed on abort, timeout, and generation cancellation", async () => {
   const requests: UiRequest[] = [];
   const bridge = new RemoteUiBridge((request) => requests.push(request), 10);

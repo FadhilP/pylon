@@ -1,3 +1,8 @@
+export function loginCommandProvider(value: string): string | undefined | null {
+  const match = /^\/login(?:\s+(.+?))?\s*$/i.exec(value.trim());
+  return match ? match[1]?.trim() || undefined : null;
+}
+
 export interface FileMention {
   start: number;
   end: number;

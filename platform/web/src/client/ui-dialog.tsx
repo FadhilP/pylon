@@ -84,6 +84,7 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
 
   const respond = async (body: Record<string, unknown>) => {
     if (actionLock.current) return;
+    if (payload.inputType === "password") setValue("");
     actionLock.current = true;
     setBusy(true);
     setError("");
@@ -304,6 +305,9 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     })()}
     {request.method === "input" && <input
       data-autofocus
+      type={payload.inputType === "password" ? "password" : "text"}
+      autoComplete={payload.inputType === "password" ? "off" : undefined}
+      spellCheck={payload.inputType === "password" ? false : undefined}
       value={value}
       placeholder={typeof payload.placeholder === "string" ? payload.placeholder : undefined}
       onChange={(event) => setValue(event.target.value)}
