@@ -154,6 +154,7 @@ interface RuntimeSlot {
   receivedInput: boolean;
   pinned: boolean;
   lastState: SessionRuntimeState;
+  lastWorkStartedAt?: string;
   pendingUi?: UiRequest;
   nativeQueue: { steering: number; followUp: number };
   queuedPrompt?: {
@@ -285,6 +286,7 @@ export class RuntimeCoordinator implements PiDriver {
         activeFor: (sessionId) => this.slots.has(sessionId) && activeIds.has(sessionId),
         pinnedFor: (sessionId) => this.registry().isSessionPinned(sessionId),
         userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
+        workStartedAtFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt,
         fallbacks: [...this.slots.values()].map((slot) => {
           const details = slot.driver.runtimeDetails();
           return {
@@ -1394,6 +1396,7 @@ export class RuntimeCoordinator implements PiDriver {
       receivedInput: false,
       pinned: this.registry().isSessionPinned(handle.sessionId),
       lastState: driver.runtimeState(),
+      lastWorkStartedAt: driver.runtimeDetails().workStartedAt,
       nativeQueue: { steering: 0, followUp: 0 },
       unsubscribe: () => undefined,
     };
@@ -2112,15 +2115,25 @@ export class RuntimeCoordinator implements PiDriver {
     const slot = this.slots.get(sessionId);
     if (!slot) return;
     const state = slot.driver.runtimeState();
+    const workStartedAt = slot.driver.runtimeDetails().workStartedAt;
     completed = completed && state === "idle";
-    if (state === slot.lastState && !completed) return;
+    if (state === slot.lastState && workStartedAt === slot.lastWorkStartedAt && !completed) return;
     slot.lastState = state;
+    slot.lastWorkStartedAt = workStartedAt;
     this.emitStatus(sessionId, state, completed);
   }
 
   private emitStatus(sessionId: string, state: SessionRuntimeState, completed = false): void {
     if (!this.generation || !this.selectedId) return;
-    this.emit({ type: "session.status", sessionId, sessionGeneration: this.generation, state, ...(completed ? { completed: true } : {}) });
+    const workStartedAt = this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt;
+    this.emit({
+      type: "session.status",
+      sessionId,
+      sessionGeneration: this.generation,
+      state,
+      workStartedAt: workStartedAt ?? null,
+      ...(completed ? { completed: true } : {}),
+    });
   }
 
   private async selectedSnapshot(): Promise<RuntimeSnapshot> {

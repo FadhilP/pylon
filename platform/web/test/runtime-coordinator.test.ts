@@ -69,10 +69,12 @@ test("session index pages projects, counts user messages, and searches unloaded 
 
   try {
     const index = new SessionIndex();
+    const workStartedAt = "2026-07-30T10:00:00.000Z";
     const options = {
       activeId: first.getSessionId(),
       generation: 7,
       stateFor: () => "sleeping" as const,
+      workStartedAtFor: (id: string) => id === second.getSessionId() ? workStartedAt : undefined,
     };
     const page = await index.list({ projectId: projectIdForCwd(cwd), limit: 1 }, options);
     assert.equal(page.projects[0]?.sessions.length, 1);
@@ -81,6 +83,7 @@ test("session index pages projects, counts user messages, and searches unloaded 
 
     const search = await index.list({ query: "Second searchable" }, options);
     assert.equal(search.projects[0]?.sessions[0]?.id, second.getSessionId());
+    assert.equal(search.projects[0]?.sessions[0]?.workStartedAt, workStartedAt);
 
     const draft = {
       id: "draft-session",
@@ -106,6 +109,45 @@ test("session index pages projects, counts user messages, and searches unloaded 
     await Promise.all([first.getSessionFile(), second.getSessionFile()].map((path) => path ? rm(path, { force: true }) : undefined));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("session status publishes work timer changes even when runtime state is unchanged", () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: Array<{ workStartedAt?: string | null }> = [];
+  coordinator.subscribe((event) => {
+    if (event.type === "session.status") events.push(event);
+  });
+  let workStartedAt: string | undefined;
+  let state = "running";
+  const slot = {
+    driver: {
+      runtimeState: () => state,
+      runtimeDetails: () => ({ workStartedAt }),
+    },
+    lastState: "running",
+    lastWorkStartedAt: undefined,
+  };
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.selectedId = "session";
+  internal.slots.set("session", slot);
+
+  internal.publishStatus("session");
+  workStartedAt = "2026-07-30T10:00:00.000Z";
+  internal.publishStatus("session");
+  state = "attention";
+  internal.publishStatus("session");
+  state = "running";
+  internal.publishStatus("session");
+  workStartedAt = undefined;
+  internal.publishStatus("session");
+
+  assert.deepEqual(events.map((event) => event.workStartedAt), [
+    "2026-07-30T10:00:00.000Z",
+    "2026-07-30T10:00:00.000Z",
+    "2026-07-30T10:00:00.000Z",
+    null,
+  ]);
 });
 
 test("runtime pool warm-switches without rebuilding and wakes sleeping sessions", { timeout: 45_000 }, async () => {

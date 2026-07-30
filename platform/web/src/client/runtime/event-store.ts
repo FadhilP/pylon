@@ -22,6 +22,7 @@ export interface RuntimeStoreSnapshot {
   agentActive?: boolean;
   sessionRevision?: number;
   sessionStatuses?: Record<string, SessionRuntimeState>;
+  sessionWorkStartedAts?: Record<string, string | null>;
   unseenCompletions?: Record<string, true>;
   error?: string;
   errorRevision?: number;
@@ -929,7 +930,18 @@ export class RuntimeEventStore {
       this.bootstrapRetry = undefined;
       const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));
       const connection = this.snapshot.connection === "loading" ? "loading" : "disconnected";
-      this.set({ connection, runtime, pendingUi: boot.pendingUi, sequence: boot.sequence, generation: runtime.sessionGeneration, recovery: undefined, audioCues: [] });
+      this.set({
+        connection,
+        runtime,
+        pendingUi: boot.pendingUi,
+        sequence: boot.sequence,
+        generation: runtime.sessionGeneration,
+        sessionStatuses: this.snapshot.sessionStatuses,
+        unseenCompletions: this.snapshot.unseenCompletions,
+        sessionWorkStartedAts: undefined,
+        recovery: undefined,
+        audioCues: [],
+      });
       this.openEvents(`${boot.runtime.sessionGeneration}:${boot.sequence}`);
     } catch (error) {
       if (epoch !== this.bootstrapEpoch) return;
@@ -1009,13 +1021,21 @@ export class RuntimeEventStore {
       const status = asRecord(event.payload);
       if (typeof status.sessionId === "string" && ["sleeping", "idle", "running", "attention"].includes(String(status.state))) {
         const unseenCompletions = { ...current.unseenCompletions };
+        const sessionWorkStartedAts = { ...current.sessionWorkStartedAts };
+        if (status.workStartedAt === null) {
+          sessionWorkStartedAts[status.sessionId] = null;
+        } else if (typeof status.workStartedAt === "string" && !Number.isNaN(Date.parse(status.workStartedAt))) {
+          sessionWorkStartedAts[status.sessionId] = status.workStartedAt;
+        }
         if (status.state === "sleeping") delete unseenCompletions[status.sessionId];
         else if (status.completed === true && current.runtime?.sessionId !== status.sessionId) unseenCompletions[status.sessionId] = true;
         this.set({
           ...current,
           sessionStatuses: { ...current.sessionStatuses, [status.sessionId]: status.state as SessionRuntimeState },
+          sessionWorkStartedAts,
           unseenCompletions,
           sequence: event.sequence,
+          audioCues: appendWebAudioCue(current.audioCues, event),
         }, true);
       }
       return;
@@ -1051,6 +1071,7 @@ export class RuntimeEventStore {
       if (event.type === "ui.closed") pendingUi = undefined;
     }
     const sessionChanged = event.type === "agent.start" || event.type === "agent.end" || event.type === "agent.error" || event.type === "session.info" || event.type === "projects.changed";
+    const batchNotification = event.type !== "agent.end" && event.type !== "agent.error";
     const audioCues = appendWebAudioCue(current.audioCues, event);
     this.set({
       ...current,
@@ -1065,7 +1086,7 @@ export class RuntimeEventStore {
       notification,
       notificationRevision: (current.notificationRevision ?? 0) + (event.type === "ui.notify" ? 1 : 0),
       audioCues,
-    }, true);
+    }, batchNotification);
   }
 
   private reset(connection: "loading" | "disconnected" = "disconnected", clearRuntime = false): void {
@@ -1081,6 +1102,7 @@ export class RuntimeEventStore {
       pendingUi: undefined,
       agentActive: false,
       sessionStatuses: clearRuntime ? undefined : this.snapshot.sessionStatuses,
+      sessionWorkStartedAts: undefined,
       audioCues: [],
       error: undefined,
     });
@@ -1107,7 +1129,12 @@ export class RuntimeEventStore {
       }
     }
     this.snapshot = next;
-    if (!batched) { this.notify(); return; }
+    if (!batched) {
+      if (this.frame !== undefined) cancelAnimationFrame(this.frame);
+      this.frame = undefined;
+      this.notify();
+      return;
+    }
     if (this.frame !== undefined) return;
     this.frame = requestAnimationFrame(() => { this.frame = undefined; this.notify(); });
   }

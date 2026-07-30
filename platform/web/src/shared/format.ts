@@ -26,6 +26,13 @@ export function formatRelativeTime(value: string, now = Date.now()): string {
   return `${Math.floor(days / 365)}y`;
 }
 
+export function formatSessionActivity(modifiedAt: string, workStartedAt?: string, now = Date.now()): string {
+  const startedAt = workStartedAt ? Date.parse(workStartedAt) : Number.NaN;
+  if (!Number.isNaN(startedAt)) return `Working for ${formatWorkDuration(now - startedAt)}`;
+  const relativeTime = formatRelativeTime(modifiedAt, now);
+  return relativeTime === "Unknown" ? "Unknown" : `${relativeTime} ago`;
+}
+
 export function formatCompactNumber(value: number): string {
   if (!Number.isFinite(value)) return "—";
   const absolute = Math.abs(value);

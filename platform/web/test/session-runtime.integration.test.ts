@@ -591,11 +591,12 @@ test("existing long sessions keep the latest user turn and every tool result", {
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.conversation.messages[0]?.role, "user");
     assert.equal(snapshot.conversation.messages[0]?.text, "Run every check");
-    assert.equal(snapshot.conversation.messages.length, 241);
+    assert.equal(snapshot.conversation.messages.length, 242);
     assert.deepEqual(
       snapshot.conversation.messages.filter((message) => message.role === "tool").map((message) => message.text),
       Array.from({ length: 120 }, (_, index) => `result ${index}`),
     );
+    assert.equal(snapshot.conversation.messages.at(-1)?.systemSource, "pylon-session-start-hook");
     assert.equal(snapshot.conversation.historyRemaining, 30);
     assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
     const earlier = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
@@ -642,9 +643,10 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.conversation.messages.length, 100);
-    assert.equal(snapshot.conversation.messages[0]?.text, "message-55");
-    assert.equal(snapshot.conversation.messages[0]?.entryId, messageIds[55]);
-    assert.equal(snapshot.conversation.historyRemaining, 55);
+    assert.equal(snapshot.conversation.messages[0]?.text, "message-56");
+    assert.equal(snapshot.conversation.messages[0]?.entryId, messageIds[56]);
+    assert.equal(snapshot.conversation.messages.at(-1)?.systemSource, "pylon-session-start-hook");
+    assert.equal(snapshot.conversation.historyRemaining, 56);
 
     const earlier: string[] = [];
     let cursor = snapshot.conversation.historyCursor;
@@ -653,9 +655,9 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
       earlier.unshift(...page.messages.map((message) => message.text));
       cursor = page.nextCursor;
     }
-    assert.equal(earlier.length, 55);
+    assert.equal(earlier.length, 56);
     assert.equal(earlier[0], "message-0");
-    assert.equal(earlier.at(-1), "message-54");
+    assert.equal(earlier.at(-1), "message-55");
     const firstPage = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
     assert.equal(firstPage.messages[0]?.entryId, messageIds[0]);
     const laterPage = await driver.conversationHistory({

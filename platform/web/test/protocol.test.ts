@@ -21,7 +21,7 @@ test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
 });
 
-test("command validation allowlists bounded v23 commands and attachments", () => {
+test("command validation allowlists bounded v24 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -316,6 +316,8 @@ test("event and snapshot validators reject incompatible versions", () => {
   const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, pinned: false, runtimeState: "idle" };
   const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", totalCount: 1, sessions: [session] }] };
   assert.equal(isSessionListSnapshot(sessions), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: new Date(1).toISOString() }] }), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: "invalid" }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", totalCount: 0, sessions: [] }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], projectId: "" }] }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], preview: "x".repeat(501) }] }] }), false);

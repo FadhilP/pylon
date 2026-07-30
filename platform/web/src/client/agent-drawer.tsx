@@ -1,4 +1,4 @@
-import { IconArrowLeft, IconRobot, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowLeft, IconBotId, IconTool, IconX } from "@tabler/icons-react";
 import { useMemo } from "react";
 import { formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
@@ -22,7 +22,7 @@ export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
       <header>
         <div>
           {selected && <button className="icon-button" type="button" onClick={() => onSelect(undefined)} aria-label="Back to agents"><IconArrowLeft size={17} /></button>}
-          <IconRobot size={18} />
+          <IconBotId size={18} />
           <strong id="agents-title">{selected ? `${selected.agentName ? `${selected.agentName} · ` : ""}${agentLabel(selected.kind)}` : "Agents"}</strong>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="Close agents"><IconX size={17} /></button>
@@ -33,7 +33,7 @@ export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
 }
 
 function AgentList({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; onSelect: (id: string) => void }) {
-  if (!runs.length) return <div className="agents-empty"><IconRobot size={24} /><strong>No delegated runs</strong><span>Advisor, Grunt, and Scout activity will appear here.</span></div>;
+  if (!runs.length) return <div className="agents-empty"><IconBotId size={24} /><strong>No delegated runs</strong><span>Advisor, Grunt, and Scout activity will appear here.</span></div>;
   const turns = new Map<number, DelegatedAgentRunReadModel[]>();
   for (const run of runs) turns.set(run.turn, [...(turns.get(run.turn) ?? []), run]);
   return <div className="agents-list">

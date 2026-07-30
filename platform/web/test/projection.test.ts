@@ -45,11 +45,12 @@ function ui(method: string, payload: Record<string, unknown>, requestId = method
 test("session status projects completion as a separate pulse", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
-  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", completed: true });
-  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "running" });
+  const workStartedAt = "2026-07-30T10:00:00.000Z";
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", workStartedAt: null, completed: true });
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "running", workStartedAt });
   assert.deepEqual(published, [
-    { type: "session.status", payload: { sessionId: "background", state: "idle", completed: true } },
-    { type: "session.status", payload: { sessionId: "background", state: "running" } },
+    { type: "session.status", payload: { sessionId: "background", state: "idle", workStartedAt: null, completed: true } },
+    { type: "session.status", payload: { sessionId: "background", state: "running", workStartedAt } },
   ]);
 });
 

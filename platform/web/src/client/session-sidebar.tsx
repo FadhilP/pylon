@@ -1,7 +1,7 @@
 import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
-import { formatRelativeTime } from "../shared/format";
+import { formatSessionActivity } from "../shared/format";
 import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { displayDate, displayTime } from "./format";
 
@@ -67,11 +67,14 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
   const [announcement, setAnnouncement] = useState("");
   const visibleProjects = useMemo(() => orderByIds(projects, preview?.kind === "project" ? preview.ids : undefined), [preview, projects]);
   const visibleActiveSessions = useMemo(() => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined), [activeSessions, preview]);
+  const working = activeSessions.some((session) => session.workStartedAt)
+    || projects.some((project) => project.sessions.some((session) => session.workStartedAt));
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), working ? 1_000 : 60_000);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [working]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -373,10 +376,9 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
 }) {
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
-  const relativeTime = formatRelativeTime(session.modifiedAt, now);
-  const activity = relativeTime === "Unknown"
-    ? "Unknown"
-    : `${relativeTime} ago`;
+  const workStartedAt = session.workStartedAt ? Date.parse(session.workStartedAt) : Number.NaN;
+  const working = !Number.isNaN(workStartedAt);
+  const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
 
   return <div className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`} data-reorder-kind={reorderKind} data-reorder-id={reorderKind ? session.id : undefined}>
     <button
@@ -395,7 +397,10 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
           {showProject ? `${session.cwdLabel} · ` : ""}
           <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>{displayDate(session.createdAt)}</time>
           {" · "}
-          <time dateTime={session.modifiedAt} title={`Last active ${displayTime(session.modifiedAt)}`}>{activity}</time>
+          <time
+            dateTime={working ? session.workStartedAt : session.modifiedAt}
+            title={working ? `Working since ${displayTime(session.workStartedAt!)}` : `Last active ${displayTime(session.modifiedAt)}`}
+          >{activity}</time>
         </small>
       </span>
       {(busy === session.id || deleting === session.id)

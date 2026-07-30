@@ -30,7 +30,11 @@ test("completed background sessions stay unread until selected", async () => {
   assert.match(source, /unseenCompletions\[status\.sessionId\] = true/);
   assert.match(source, /markSessionSeen\(sessionId: string\)[\s\S]*?delete unseenCompletions\[sessionId\]/);
   assert.match(source, /status\.state === "sleeping"[\s\S]*?delete unseenCompletions\[status\.sessionId\]/);
+  assert.match(source, /status\.workStartedAt === null[\s\S]*?sessionWorkStartedAts\[status\.sessionId\] = null/);
+  assert.match(source, /typeof status\.workStartedAt === "string"[\s\S]*?!Number\.isNaN\(Date\.parse\(status\.workStartedAt\)\)/);
+  assert.doesNotMatch(source, /else \{\s*sessionWorkStartedAts\[status\.sessionId\] = null/);
   assert.match(source, /sessionStatuses: clearRuntime \? undefined : this\.snapshot\.sessionStatuses/);
+  assert.match(source, /sessionStatuses: this\.snapshot\.sessionStatuses,[\s\S]*?unseenCompletions: this\.snapshot\.unseenCompletions/);
 });
 
 test("files wait for replacement runtime to reconnect before loading", async () => {
@@ -38,4 +42,12 @@ test("files wait for replacement runtime to reconnect before loading", async () 
 
   assert.match(source, /useEffect\(\(\) => \{\s*if \(live\.connection !== "connected" \|\| !runtime\?\.ready\) \{\s*setInventoryLoading\(false\);\s*return;/);
   assert.match(source, /\[live\.connection, runtime\?\.ready, runtime\?\.sessionId, runtime\?\.workspace\?\.revision\]/);
+});
+
+test("agent completion bypasses frame batching and flushes pending notifications", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /const batchNotification = event\.type !== "agent\.end" && event\.type !== "agent\.error"/);
+  assert.match(source, /audioCues,\s*\}, batchNotification\)/);
+  assert.match(source, /if \(!batched\) \{\s*if \(this\.frame !== undefined\) cancelAnimationFrame\(this\.frame\);\s*this\.frame = undefined;\s*this\.notify\(\)/);
 });

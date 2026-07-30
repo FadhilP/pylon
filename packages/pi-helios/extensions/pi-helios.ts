@@ -72,6 +72,10 @@ async function embeddedBrowserRequest(manager: BrowserSessionManager, request: E
     await manager.close(id, "close", signal, owner);
     return embeddedState(manager, id, owner);
   }
+  if (request.action === "resize" && !manager.state(id, owner).controlled) {
+    await manager.operate(id, { kind: "resize", width: request.width!, height: request.height! }, signal);
+    return embeddedState(manager, id, owner);
+  }
 
   if (request.action === "frame" && !manager.state(id, owner).controlled) {
     const result = await manager.observeFrame(id, signal);

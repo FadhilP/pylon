@@ -21,15 +21,19 @@ export function soundPattern(kind: WebAudioCueKind): readonly SoundTone[] {
 
 export function appendWebAudioCue(
   cues: WebAudioCue[],
-  event: { eventId: string; type: string; payload: unknown },
+  event: { eventId: string; sessionId: string; type: string; payload: unknown },
 ): WebAudioCue[] {
   const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, unknown>
     : {};
-  const kind: WebAudioCueKind | undefined = event.type === "ui.request"
+  const backgroundStatus = event.type === "session.status"
+    && typeof payload.sessionId === "string"
+    && payload.sessionId !== event.sessionId;
+  const attention = event.type === "ui.request" || (backgroundStatus && payload.state === "attention");
+  const completed = (event.type === "agent.end" && payload.stopped !== true && payload.willRetry !== true)
+    || (backgroundStatus && payload.completed === true);
+  const kind: WebAudioCueKind | undefined = attention
     ? "attention"
-    : event.type === "agent.end" && payload.stopped !== true && payload.willRetry !== true
-      ? "turn-complete"
-      : undefined;
+    : completed ? "turn-complete" : undefined;
   return kind ? [...cues, { id: event.eventId, kind }].slice(-MAX_AUDIO_CUES) : cues;
 }

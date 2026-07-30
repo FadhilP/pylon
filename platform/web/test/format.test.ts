@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCompactNumber, formatRelativeTime, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
+import { formatCompactNumber, formatRelativeTime, formatSessionActivity, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
 import { highlightSource, renderMarkdown } from "../src/shared/markdown.ts";
 
 test("work duration uses compact Codex-style units", () => {
@@ -18,6 +18,13 @@ test("session activity uses compact relative units", () => {
   assert.equal(formatRelativeTime("2026-07-21T12:00:00.000Z", now), "5d");
   assert.equal(formatRelativeTime("2026-06-26T12:00:00.000Z", now), "1mo");
   assert.equal(formatRelativeTime("invalid", now), "Unknown");
+});
+
+test("session activity shows current work before falling back to last activity", () => {
+  const now = Date.parse("2026-07-26T12:00:00.000Z");
+  assert.equal(formatSessionActivity("2026-07-26T11:45:00.000Z", "2026-07-26T11:57:51.000Z", now), "Working for 2m 9s");
+  assert.equal(formatSessionActivity("2026-07-26T11:45:00.000Z", undefined, now), "15m ago");
+  assert.equal(formatSessionActivity("invalid", "invalid", now), "Unknown");
 });
 
 test("usage counters use compact readable units", () => {

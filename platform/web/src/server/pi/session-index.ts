@@ -32,6 +32,7 @@ export interface SessionIndexOptions {
   activeFallback?: SessionInfo;
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
+  workStartedAtFor?: (sessionId: string) => string | undefined;
 }
 
 export class SessionIndex {
@@ -195,6 +196,7 @@ export class SessionIndex {
       this.userCounts.set(session.id, userMessageCount);
     }
     const project = this.registry?.projectForSession(session.id, session.cwd);
+    const workStartedAt = options.workStartedAtFor?.(session.id);
     return {
       id: session.id.slice(0, 128),
       projectId: this.projectId(session),
@@ -202,6 +204,7 @@ export class SessionIndex {
       cwdLabel: project?.label ?? (basename(session.cwd) || "Workspace"),
       createdAt: session.created.toISOString(),
       modifiedAt: session.modified.toISOString(),
+      ...(workStartedAt ? { workStartedAt } : {}),
       userMessageCount,
       preview: session.firstMessage.slice(0, 500),
       active: session.id === options.activeId,

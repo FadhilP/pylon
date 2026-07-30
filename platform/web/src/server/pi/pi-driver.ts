@@ -252,6 +252,7 @@ export type DriverEvent =
       sessionId: string;
       sessionGeneration: number;
       state: SessionRuntimeState;
+      workStartedAt?: string | null;
       completed?: boolean;
     }
   | {

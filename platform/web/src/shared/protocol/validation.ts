@@ -402,6 +402,7 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     && typeof value.cwdLabel === "string" && value.cwdLabel.length <= 500
     && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
     && typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt))
+    && (value.workStartedAt === undefined || typeof value.workStartedAt === "string" && !Number.isNaN(Date.parse(value.workStartedAt)))
     && Number.isSafeInteger(value.userMessageCount) && (value.userMessageCount as number) >= 0
     && typeof value.preview === "string" && value.preview.length <= 500
     && typeof value.active === "boolean"

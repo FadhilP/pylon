@@ -227,6 +227,7 @@ export interface SessionSummary {
   cwdLabel: string;
   createdAt: string;
   modifiedAt: string;
+  workStartedAt?: string;
   userMessageCount: number;
   preview: string;
   active: boolean;

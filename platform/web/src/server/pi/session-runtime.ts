@@ -1568,6 +1568,7 @@ export class SessionRuntime implements PiDriver {
     cwd: string;
     sessionPath?: string;
     name?: string;
+    workStartedAt?: string;
     userMessageCount: number;
   } {
     const runtime = this.requireRuntime();
@@ -1577,6 +1578,7 @@ export class SessionRuntime implements PiDriver {
       cwd: runtime.cwd,
       sessionPath: runtime.session.sessionFile,
       name: runtime.session.sessionManager.getSessionName(),
+      workStartedAt: this.workStartedAt,
       userMessageCount: runtime.session.getSessionStats().userMessages,
     };
   }

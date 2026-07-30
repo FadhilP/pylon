@@ -481,6 +481,7 @@ export class RuntimeProjection {
       this.publish("session.status", {
         sessionId: event.sessionId.slice(0, 128),
         state: event.state,
+        ...(Object.hasOwn(event, "workStartedAt") ? { workStartedAt: event.workStartedAt } : {}),
         ...(event.completed ? { completed: true } : {}),
       });
       return;

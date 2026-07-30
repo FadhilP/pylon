@@ -34,7 +34,7 @@ function navigableUrl(value: string): string {
   return `https://${trimmed}`;
 }
 
-export function BrowserPanel({ mirrorRequest, onClose, onError }: { mirrorRequest: string; onClose: () => void; onError: (cause: unknown, fallback: string) => void }) {
+export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }: { mirrorRequest: string; onActiveChange: (active: boolean) => void; onClose: () => void; onError: (cause: unknown, fallback: string) => void }) {
   const [browser, setBrowser] = useState<HeliosBrowserResult>();
   const [frame, setFrame] = useState("");
   const [address, setAddress] = useState("about:blank");
@@ -68,6 +68,7 @@ export function BrowserPanel({ mirrorRequest, onClose, onError }: { mirrorReques
       if (sequence >= appliedStateSequence.current) {
         appliedStateSequence.current = sequence;
         setBrowser(result);
+        onActiveChange(result.active);
         if (result.page?.url && document.activeElement !== addressRef.current) setAddress(result.page.url);
         setError("");
       }
@@ -200,7 +201,7 @@ export function BrowserPanel({ mirrorRequest, onClose, onError }: { mirrorReques
   }, [browser?.active, browser?.controlled, browser?.ownership, browser?.state]);
 
   useEffect(() => {
-    if (!browser?.controlled || !viewportRef.current) return;
+    if (!browser?.active || browser.ownership !== "owned" || browser.state !== "ready" || !viewportRef.current) return;
     let timer: number | undefined;
     const observer = new ResizeObserver(() => {
       if (timer !== undefined) window.clearTimeout(timer);
@@ -208,7 +209,7 @@ export function BrowserPanel({ mirrorRequest, onClose, onError }: { mirrorReques
     });
     observer.observe(viewportRef.current);
     return () => { observer.disconnect(); if (timer !== undefined) window.clearTimeout(timer); };
-  }, [browser?.controlled]);
+  }, [browser?.active, browser?.ownership, browser?.state]);
 
   const run = async (label: string, action: Action) => {
     if (busy) return;

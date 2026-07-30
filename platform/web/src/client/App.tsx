@@ -113,6 +113,7 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
   const [browserMirrorRequest, setBrowserMirrorRequest] = useState("");
+  const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
@@ -173,6 +174,11 @@ export function App() {
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
+  const browserAvailable = activePackages.has("pi-helios");
+  const browserToolRevision = useMemo(() => (live.runtime?.conversation.tools ?? [])
+    .filter((tool) => tool.name === "helios_browser")
+    .map((tool) => `${tool.id}:${tool.status}`)
+    .join("|"), [live.runtime?.conversation.tools]);
   const timelinePackageAvailable = activePackages.has("pi-timeline")
     || live.runtime?.operational.timeline.availability === "available";
   const timelineEnabled = timelinePackageAvailable
@@ -239,7 +245,23 @@ export function App() {
   }, [theme]);
 
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
-  useEffect(() => { setSelectedAgentId(undefined); }, [live.runtime?.sessionId]);
+  useEffect(() => {
+    setSelectedAgentId(undefined);
+    setBrowserActive(false);
+  }, [live.runtime?.sessionId]);
+  useEffect(() => {
+    if (live.connection !== "connected" || !live.runtime?.ready || !browserAvailable) {
+      setBrowserActive(false);
+      return;
+    }
+    let current = true;
+    const sessionId = live.runtime.sessionId;
+    const generation = live.runtime.sessionGeneration;
+    void runtimeStore.heliosBrowser({ action: "status" }).then((result) => {
+      if (current && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) setBrowserActive(result.active);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [browserAvailable, browserToolRevision, live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
   useEffect(() => {
     const sessionId = live.runtime?.sessionId;
     const tools = live.runtime?.conversation.tools ?? [];
@@ -400,21 +422,25 @@ export function App() {
   }, [availableViews, view]);
 
   useEffect(() => {
-    if (!live.sessionStatuses) return;
+    if (!live.sessionStatuses && !live.sessionWorkStartedAts) return;
+    const updateSession = (session: SessionSummary): SessionSummary => {
+      const next = {
+        ...session,
+        runtimeState: live.sessionStatuses?.[session.id] ?? session.runtimeState,
+      };
+      const workStartedAt = live.sessionWorkStartedAts?.[session.id];
+      if (workStartedAt === null) delete next.workStartedAt;
+      else if (workStartedAt !== undefined) next.workStartedAt = workStartedAt;
+      return next;
+    };
     updateSessionPages((pages) => pages.map((page) => ({
       ...page,
-      sessions: page.sessions.map((session) => ({
-        ...session,
-        runtimeState: live.sessionStatuses?.[session.id] ?? session.runtimeState,
-      })),
+      sessions: page.sessions.map(updateSession),
     })));
     setActiveSessions((sessions) => sessions
-      .map((session) => ({
-        ...session,
-        runtimeState: live.sessionStatuses?.[session.id] ?? session.runtimeState,
-      }))
+      .map(updateSession)
       .filter((session) => session.runtimeState !== "sleeping"));
-  }, [live.sessionStatuses]);
+  }, [live.sessionStatuses, live.sessionWorkStartedAts]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -900,7 +926,8 @@ export function App() {
           agentsButtonRef={agentsToggleRef}
           filesButtonRef={filesToggleRef}
           browserButtonRef={browserToggleRef}
-          browserAvailable={activePackages.has("pi-helios")}
+          browserAvailable={browserAvailable}
+          browserActive={browserActive}
           onToggleMenu={toggleSidebar}
           onToggleInspector={() => toggleRightPanel("inspector")}
           onToggleAgents={() => toggleRightPanel("agents")}
@@ -979,6 +1006,7 @@ export function App() {
           {rightPanel === "browser" && <BrowserPanel
             key={`browser:${live.runtime?.sessionId ?? "loading"}`}
             mirrorRequest={browserMirrorRequest}
+            onActiveChange={setBrowserActive}
             onClose={() => setRightPanel(null)}
             onError={reportError}
           />}
@@ -1238,7 +1266,7 @@ function RecoveryToast({ recovery, onAction }: {
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
+function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
   const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = live.runtime?.gitBranch || "No Git branch";
   const turn = live.runtime?.metrics.userMessages ?? 0;
@@ -1257,18 +1285,17 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
       </div>
       <div className="topbar-actions">
         <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
-        <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
+        <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>
           <small>{delegatedRuns.length}</small>
-          {activeAgents > 0 && <i aria-hidden="true" />}
         </button>
         <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
           <IconFiles size={16} />
           <span>Files</span>
           {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
         </button>
-        {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""}`} type="button" onClick={onToggleBrowser} aria-label="Helios browser" aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
+        {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""} ${browserActive ? "is-live" : ""}`} type="button" onClick={onToggleBrowser} aria-label={`Helios browser${browserActive ? ", active" : ""}`} aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
           <IconWorld size={16} />
           <span>Browser</span>
         </button>}

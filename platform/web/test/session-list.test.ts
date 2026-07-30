@@ -71,6 +71,8 @@ test("expanded project sessions can collapse to the initial three", async () => 
   assert.match(collapse, /limit: SESSION_LIST_INITIAL_LIMIT/);
   assert.match(sidebar, /page\.sessions\.length > SESSION_LIST_INITIAL_LIMIT/);
   assert.match(sidebar, /onShowLess\(project\)/);
+  assert.match(sidebar, /working \? 1_000 : 60_000/);
+  assert.match(sidebar, /formatSessionActivity\(session\.modifiedAt, session\.workStartedAt, now\)/);
 });
 
 test("pin and activation updates do not show a current-session transition", async () => {
