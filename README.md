@@ -29,7 +29,7 @@ pi install /absolute/path/to/pylon
 From the repository root, install dependencies and start the local web app:
 
 ```sh
-npm install
+npm run install:packages
 npm run web
 ```
 
