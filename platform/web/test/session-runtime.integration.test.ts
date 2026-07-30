@@ -345,7 +345,17 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-  const driver = new SessionRuntime();
+  let duplicateRefresh = false;
+  const duplicateRefreshProbe: InlineExtension = {
+    name: "duplicate-package-settings-refresh-probe",
+    factory(pi) {
+      const dispose = pi.events.on("pylon:package-settings-changed", (request: any) => {
+        if (duplicateRefresh && request?.packageId === "pi-grunt") request.acknowledge?.(async () => {});
+      });
+      pi.on("session_shutdown", dispose);
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [duplicateRefreshProbe] });
 
   try {
     await driver.start({ cwd, agentDir, repositoryRoot });
@@ -373,6 +383,46 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings,
       { ...sieve, threshold },
     );
+
+    const generation = configured.sessionGeneration;
+    for (const [packageId, settings] of [
+      ["pi-advisor", { kind: "advisor", mode: "session" }],
+      ["pi-scout", { kind: "scout", mode: "session" }],
+      ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic" }],
+    ] as const) {
+      const updated = await driver.updatePackageSettings({ packageId, settings });
+      assert.equal(updated.sessionGeneration, generation);
+      assert.deepEqual((await driver.listPackages()).packages.find((item) => item.id === packageId)?.settings, settings);
+    }
+    const hotApplied = await driver.snapshot();
+    assert.ok(hotApplied.activeTools.includes("repo_scout"));
+    assert.ok(hotApplied.activeTools.includes("grunt"));
+
+    const scoutDisabled = await driver.updatePackageSettings({
+      packageId: "pi-scout",
+      settings: { kind: "scout", mode: "disabled" },
+    });
+    const gruntDisabled = await driver.updatePackageSettings({
+      packageId: "pi-grunt",
+      settings: { kind: "grunt", mode: "disabled", executionMode: "dynamic" },
+    });
+    assert.equal(scoutDisabled.sessionGeneration, generation);
+    assert.equal(gruntDisabled.sessionGeneration, generation);
+    const disabledTools = await driver.snapshot();
+    assert.ok(!disabledTools.activeTools.includes("repo_scout"));
+    assert.ok(!disabledTools.activeTools.includes("grunt"));
+
+    duplicateRefresh = true;
+    await assert.rejects(driver.updatePackageSettings({
+      packageId: "pi-grunt",
+      settings: { kind: "grunt", mode: "session", executionMode: "direct" },
+    }), /ambiguous/);
+    duplicateRefresh = false;
+    assert.deepEqual(
+      (await driver.listPackages()).packages.find((item) => item.id === "pi-grunt")?.settings,
+      { kind: "grunt", mode: "disabled", executionMode: "dynamic" },
+    );
+
     await assert.rejects(driver.updatePackageSettings({
       packageId: "pi-advisor",
       settings: { kind: "advisor", mode: "model", model: "missing/model" },

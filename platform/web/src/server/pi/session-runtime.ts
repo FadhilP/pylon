@@ -101,6 +101,12 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
   return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
 }
 
+function hotPackageSettings(packageId: string, settings: PackageSettingsReadModel): boolean {
+  return packageId === "pi-advisor" && settings.kind === "advisor"
+    || packageId === "pi-scout" && settings.kind === "scout"
+    || packageId === "pi-grunt" && settings.kind === "grunt";
+}
+
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
@@ -1129,12 +1135,25 @@ export class SessionRuntime implements PiDriver {
     const catalog = this.packageCatalog;
     if (!catalog) throw new Error("runtime is not ready");
     this.assertPackageModels(input.settings);
-    return this.changePackages(async () => {
+    return this.changePackages(async (previous) => {
       const oldSettings = await catalog.updateSettings(input.packageId, input.settings);
-      return {
-        next: await catalog.scan(),
-        rollback: () => catalog.updateSettings(input.packageId, oldSettings).then(() => undefined),
-      };
+      const rollback = () => catalog.updateSettings(input.packageId, oldSettings).then(() => undefined);
+      if (hotPackageSettings(input.packageId, input.settings)) {
+        const refresh = () => this.refreshPackageSettings(input.packageId, previous.enabledIds.has(input.packageId));
+        try {
+          await refresh();
+        } catch (error) {
+          try {
+            await rollback();
+            await refresh();
+          } catch (rollbackError) {
+            this.recordError(rollbackError);
+          }
+          throw error;
+        }
+        return { next: previous, rollback, changed: false };
+      }
+      return { next: await catalog.scan(), rollback };
     });
   }
 
@@ -1219,6 +1238,26 @@ export class SessionRuntime implements PiDriver {
     } finally {
       this.packageUpdate = false;
     }
+  }
+
+  private refreshPackageSettings(packageId: string, required: boolean): Promise<void> {
+    const agentDir = this.target?.agentDir;
+    if (!agentDir) throw new Error("runtime is not ready");
+    const handlers: Array<() => Promise<void>> = [];
+    this.eventBus.emit("pylon:package-settings-changed", {
+      version: 1,
+      packageId,
+      agentDir,
+      acknowledge: (handler: unknown) => {
+        if (typeof handler === "function") handlers.push(handler as () => Promise<void>);
+      },
+    });
+    if (handlers.length === 0) {
+      if (required) throw new Error(`${packageId} settings refresh is unavailable`);
+      return Promise.resolve();
+    }
+    if (handlers.length !== 1) throw new Error(`${packageId} settings refresh is ambiguous`);
+    return handlers[0]!();
   }
 
   private assertPackageModels(settings: PackageSettingsReadModel): void {

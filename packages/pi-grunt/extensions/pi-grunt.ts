@@ -6,7 +6,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildWorkerContext, sanitizeFailureMessage } from "../src/context.ts";
 import {
-  gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntTimeoutMs,
+  configPath, gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntTimeoutMs,
   isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
 } from "../src/config.ts";
 import {
@@ -123,8 +123,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
       };
     })());
   });
-  const refreshTool = async () => {
-    const enabled = isGruntEnabled(await loadConfig());
+  const refreshTool = async (agentDir?: string) => {
+    const enabled = isGruntEnabled(await loadConfig(agentDir ? configPath(agentDir) : undefined));
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1, kind: "register", owner: "pi-grunt",
@@ -137,6 +137,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     pi.setActiveTools(active);
   };
 
+  const disposeSettingsRefresh = pi.events.on("pylon:package-settings-changed", (request: any) => {
+    if (request?.version !== 1 || request.packageId !== "pi-grunt" || typeof request.agentDir !== "string"
+      || typeof request.acknowledge !== "function") return;
+    request.acknowledge(() => refreshTool(request.agentDir));
+  });
   pi.on("session_start", async () => {
     stats = emptyStats();
     await pruneStalePatchArtifacts();
@@ -149,6 +154,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     await cleanupSessionPatchArtifacts(sessionPatchArtifacts);
     sessionPatchArtifacts.clear();
     disposeHealth();
+    disposeSettingsRefresh();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
   });
 

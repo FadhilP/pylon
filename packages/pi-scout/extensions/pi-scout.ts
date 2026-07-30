@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+  configPath,
   loadConfig,
   parseModelRef,
   repoTimeoutMs,
@@ -225,8 +226,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       };
     })());
   });
-  const refreshTool = async () => {
-    const enabled = isScoutEnabled(await loadConfig());
+  const refreshTool = async (agentDir?: string) => {
+    const enabled = isScoutEnabled(await loadConfig(agentDir ? configPath(agentDir) : undefined));
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -246,9 +247,15 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
     pi.setActiveTools(active);
   };
 
-  pi.on("session_start", refreshTool);
+  const disposeSettingsRefresh = pi.events.on("pylon:package-settings-changed", (request: any) => {
+    if (request?.version !== 1 || request.packageId !== "pi-scout" || typeof request.agentDir !== "string"
+      || typeof request.acknowledge !== "function") return;
+    request.acknowledge(() => refreshTool(request.agentDir));
+  });
+  pi.on("session_start", () => refreshTool());
   pi.on("session_shutdown", async () => {
     disposeHealth();
+    disposeSettingsRefresh();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",

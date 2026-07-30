@@ -13,6 +13,7 @@ import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
 import { ADVISOR_MAX_COST_USD, advisorBudget } from "../src/budget.ts";
 import { ADVISOR_PROMPT } from "../src/prompts.ts";
 import {
+  configPath,
   loadConfig,
   parseModelRef,
   resetConfig,
@@ -125,15 +126,15 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       releaseRun();
     }
   };
-  const configuredModel = async (ctx: any): Promise<Model<any> | undefined> => {
-    const config = await loadConfig();
+  const configuredModel = async (ctx: any, agentDir?: string): Promise<Model<any> | undefined> => {
+    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
     if (config.useMainModel) return ctx.model;
     if (!config.advisorModel) return;
     const ref = parseModelRef(config.advisorModel);
     return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
   };
-  const refreshTool = async (ctx: any) => {
-    const model = await configuredModel(ctx);
+  const refreshTool = async (ctx: any, agentDir?: string) => {
+    const model = await configuredModel(ctx, agentDir);
     const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
@@ -156,10 +157,21 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       previousAdvice = undefined;
     }
   });
+  let sessionContext: any;
+  const disposeSettingsRefresh = pi.events.on?.("pylon:package-settings-changed", (request: any) => {
+    if (request?.version !== 1 || request.packageId !== "pi-advisor" || typeof request.agentDir !== "string"
+      || typeof request.acknowledge !== "function") return;
+    request.acknowledge(() => sessionContext
+      ? refreshTool(sessionContext, request.agentDir)
+      : Promise.reject(new Error("Advisor session is unavailable")));
+  }) ?? (() => {});
   pi.on("session_start", async (_event, ctx) => {
+    sessionContext = ctx;
     await refreshTool(ctx);
   });
   pi.on("session_shutdown", () => {
+    sessionContext = undefined;
+    disposeSettingsRefresh();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",

@@ -745,6 +745,7 @@ export function App() {
     setPackageBusy(item.id);
     try {
       await runtimeStore.updatePackageSettings(item.id, settings);
+      setPackages((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, settings } : candidate));
     } catch (cause) {
       reportError(cause, `Unable to update ${item.name}`);
     } finally {

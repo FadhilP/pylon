@@ -4,26 +4,6 @@ Bundled workflow extensions and a low-noise theme for [Pi](https://pi.dev). Pylo
 
 ## Installation
 
-Install the complete bundle from GitHub:
-
-```sh
-pi install git:github.com/FadhilP/pylon
-```
-
-Then reload Pi:
-
-```text
-/reload
-```
-
-For local development, install the checkout instead:
-
-```sh
-pi install /absolute/path/to/pylon
-```
-
-> **Security:** Pi extensions run with your user permissions. Review package source before installation.
-
 ## Web Setup
 
 From the repository root, install dependencies and start the local web app:
@@ -41,7 +21,31 @@ npm run dev --workspace @pylon/web
 
 The web host binds only to loopback. `PYLON_CWD` selects the initial project directory; `PYLON_PORT` changes the default port (`3141`).
 
+Go to settings to setup your preferred provider. Choose your models for Advisor, Scout, Grunt. Recommended configuration for openAI subscriptions:
+- Main agent: GPT 5.6 Sol Medium
+- Advisor: GPT 5.6 Sol High
+- Scout: GPT 5.6 Luna Medium
+- Grunt: GPT 5.6 Terra (Thinking level will be decided by main agent)
+
 ## Terminal Setup
+
+Install the complete bundle from GitHub:
+
+```sh
+pi install git:github.com/FadhilP/pylon
+```
+
+Then reload Pi:
+
+```text
+/reload
+```
+
+For local development, install the checkout instead:
+
+```sh
+pi install /absolute/path/to/pylon
+```
 
 Select models for the child-agent tools after reloading. Replace the examples with models available through your configured Pi providers:
 
