@@ -11,6 +11,12 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../shared/protocol/helios";
+import {
+  ACTIVE_FRAME_INTERVAL_MS,
+  ACTIVE_FRAME_WINDOW_MS,
+  METADATA_INTERVAL_MS,
+  framePollingDelay,
+} from "../shared/browser-polling";
 import { runtimeStore } from "./runtime/event-store";
 
 type Action = Omit<HeliosBrowserCommand, "expectedGeneration">;
@@ -41,15 +47,32 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
   const moveSending = useRef(false);
   const wheelQueued = useRef<{ x: number; y: number; deltaX: number; deltaY: number } | undefined>(undefined);
   const wheelSending = useRef(false);
+  const activeUntil = useRef(0);
+  const wakePolling = useRef<() => void>(() => undefined);
+  const requestSequence = useRef(0);
+  const appliedStateSequence = useRef(0);
+  const appliedFrameSequence = useRef(0);
+
+  const markActive = () => {
+    activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
+    wakePolling.current();
+  };
 
   const request = async (action: Action, silent = false) => {
+    const sequence = ++requestSequence.current;
     try {
       const result = await runtimeStore.heliosBrowser(action);
       if (!active.current) return result;
-      setBrowser(result);
-      if (result.page?.url && document.activeElement !== addressRef.current) setAddress(result.page.url);
-      if (result.frame) setFrame(`data:${result.frame.mimeType};base64,${result.frame.data}`);
-      setError("");
+      if (sequence >= appliedStateSequence.current) {
+        appliedStateSequence.current = sequence;
+        setBrowser(result);
+        if (result.page?.url && document.activeElement !== addressRef.current) setAddress(result.page.url);
+        setError("");
+      }
+      if (result.frame && sequence >= appliedFrameSequence.current) {
+        appliedFrameSequence.current = sequence;
+        setFrame(`data:${result.frame.mimeType};base64,${result.frame.data}`);
+      }
       return result;
     } catch (cause) {
       if (!silent && active.current) setError(cause instanceof Error ? cause.message : "Browser request failed");
@@ -69,14 +92,84 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
   useEffect(() => {
     if (!browser?.controlled) return;
     let stopped = false;
+    let polling = false;
     let timer: number | undefined;
-    const poll = async () => {
-      try { await request({ action: "frame" }, true); }
-      catch { /* The visible error is updated by direct controls; polling retries. */ }
-      if (!stopped) timer = window.setTimeout(poll, 650);
+    let nextPollAt = 0;
+    let metadataDueAt = Date.now() + METADATA_INTERVAL_MS;
+    let release = Promise.resolve<unknown>(undefined);
+
+    const clearTimer = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+      nextPollAt = 0;
     };
-    void poll();
-    return () => { stopped = true; if (timer !== undefined) window.clearTimeout(timer); };
+    const schedule = (delay: number) => {
+      clearTimer();
+      if (stopped || document.hidden) return;
+      nextPollAt = Date.now() + delay;
+      timer = window.setTimeout(poll, delay);
+    };
+    const poll = async () => {
+      timer = undefined;
+      nextPollAt = 0;
+      if (stopped || polling || document.hidden) return;
+      polling = true;
+      const startedAt = Date.now();
+      const frameResult = await request({ action: "frame" }, true).catch(() => undefined);
+      if (!frameResult) {
+        const state = await request({ action: "status" }, true).catch(() => undefined);
+        if (state && !state.controlled) {
+          polling = false;
+          return;
+        }
+      }
+      if (!stopped && !document.hidden && Date.now() >= metadataDueAt) {
+        metadataDueAt = Date.now() + METADATA_INTERVAL_MS;
+        await request({ action: "tab-list" }, true).catch(() => undefined);
+      }
+      polling = false;
+      if (!stopped && !document.hidden) {
+        const delay = framePollingDelay(Date.now(), activeUntil.current) - (Date.now() - startedAt);
+        schedule(Math.max(0, delay));
+      }
+    };
+    const wake = () => {
+      if (stopped || polling || document.hidden) return;
+      const now = Date.now();
+      if (timer !== undefined && nextPollAt <= now + ACTIVE_FRAME_INTERVAL_MS) return;
+      schedule(0);
+    };
+    const suspend = () => {
+      clearTimer();
+      moveQueued.current = undefined;
+      wheelQueued.current = undefined;
+      release = runtimeStore.heliosBrowser({ action: "release" }).catch(() => undefined);
+    };
+    const resume = async () => {
+      await release;
+      if (stopped || document.hidden) return;
+      const result = await request({ action: "acquire" }, true).catch(async () => request({ action: "status" }, true).catch(() => undefined));
+      if (!stopped && !document.hidden && result?.controlled) {
+        activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
+        schedule(0);
+      }
+    };
+    const visibility = () => {
+      if (document.hidden) suspend();
+      else void resume();
+    };
+
+    activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
+    wakePolling.current = wake;
+    document.addEventListener("visibilitychange", visibility);
+    if (document.hidden) suspend();
+    else schedule(0);
+    return () => {
+      stopped = true;
+      clearTimer();
+      wakePolling.current = () => undefined;
+      document.removeEventListener("visibilitychange", visibility);
+    };
   }, [browser?.controlled]);
 
   useEffect(() => {
@@ -92,6 +185,7 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
 
   const run = async (label: string, action: Action) => {
     if (busy) return;
+    markActive();
     setBusy(label);
     try { await request(action); }
     catch (cause) { onError(cause, `Unable to ${label.toLowerCase()}`); }
@@ -129,6 +223,7 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
     if (!browser?.controlled) return;
     const position = point(event.clientX, event.clientY);
     if (!position) return;
+    markActive();
     if (phase === "move") return sendMove(position);
     event.preventDefault();
     if (phase === "down") event.currentTarget.setPointerCapture(event.pointerId);
@@ -140,6 +235,7 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
     if (!browser?.controlled) return;
     const position = point(event.clientX, event.clientY);
     if (!position) return;
+    markActive();
     event.preventDefault();
     const previous = wheelQueued.current;
     wheelQueued.current = {
@@ -175,7 +271,7 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
       <button type="button" disabled={!browser?.controlled || Boolean(busy)} onClick={() => void run("Go forward", { action: "forward" })} aria-label="Forward"><IconArrowRight size={15} /></button>
       <button type="button" disabled={!browser?.controlled || Boolean(busy)} onClick={() => void run("Reload", { action: "reload" })} aria-label="Reload"><IconRefresh className={busy === "Reload" ? "spin" : ""} size={15} /></button>
       <form onSubmit={navigate}><input ref={addressRef} aria-label="Address" value={address} onChange={(event) => setAddress(event.target.value)} disabled={!browser?.controlled} spellCheck={false} /></form>
-      {browser?.controlled && <button type="button" disabled={Boolean(busy)} onClick={() => void run("Close browser", { action: "close" })} aria-label="Close Helios browser"><IconPlayerStop size={15} /></button>}
+      {browser?.controlled && <button className="browser-stop" type="button" disabled={Boolean(busy)} onClick={() => void run("Close browser", { action: "close" })} aria-label="Close Helios browser"><IconPlayerStop size={15} /></button>}
     </div>
     {browser?.controlled && <div className="browser-tabs">
       <select aria-label="Browser tab" value={browser.page?.index ?? ""} onChange={(event) => void run("Switch tab", { action: "tab-select", tabIndex: Number(event.target.value) })}>
@@ -201,9 +297,13 @@ export function BrowserPanel({ onClose, onError }: { onClose: () => void; onErro
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => {
         if (event.key === "Tab") event.preventDefault();
+        markActive();
         if (!event.repeat) void request({ action: "key", phase: "down", key: event.key }, true).catch(() => undefined);
       }}
-      onKeyUp={(event) => void request({ action: "key", phase: "up", key: event.key }, true).catch(() => undefined)}
+      onKeyUp={(event) => {
+        markActive();
+        void request({ action: "key", phase: "up", key: event.key }, true).catch(() => undefined);
+      }}
     >
       {frame ? <img ref={imageRef} src={frame} alt="Helios browser viewport" draggable={false} /> : <span><IconLoader2 className="spin" size={22} />Loading viewport…</span>}
       <small>Direct control · agent browser actions paused</small>

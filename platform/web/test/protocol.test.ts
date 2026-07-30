@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ACTIVE_FRAME_INTERVAL_MS, IDLE_FRAME_INTERVAL_MS, framePollingDelay } from "../src/shared/browser-polling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+
+test("embedded browser polling is fast only during recent activity", () => {
+  assert.equal(framePollingDelay(1_000, 1_001), ACTIVE_FRAME_INTERVAL_MS);
+  assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
+});
 
 test("command validation allowlists bounded v23 commands and attachments", () => {
   const valid = validateCommand({

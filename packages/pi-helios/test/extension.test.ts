@@ -145,7 +145,9 @@ test("embedded browser bridge launches headless, returns an ephemeral frame, and
   const started = await call({ action: "start", url: "https://example.com", width: 900, height: 650 });
   assert.equal(started.controlled, true);
   assert.equal(commands.filter((command) => command === "open").length, 1);
+  const tabListsBeforeFrame = commands.filter((command) => command === "tab-list").length;
   const frame = await call({ action: "frame" });
+  assert.equal(commands.filter((command) => command === "tab-list").length, tabListsBeforeFrame);
   assert.equal(frame.frame.mimeType, "image/png");
   assert.equal(Buffer.from(frame.frame.data, "base64").equals(PNG), true);
   await call({ action: "close" });

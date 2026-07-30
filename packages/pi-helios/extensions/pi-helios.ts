@@ -75,7 +75,7 @@ async function embeddedBrowserRequest(manager: BrowserSessionManager, request: E
 
   let actions: BrowserAction[];
   switch (request.action) {
-    case "frame": actions = [{ kind: "tab-list" }, { kind: "screenshot" }]; break;
+    case "frame": actions = [{ kind: "screenshot" }]; break;
     case "navigate": actions = [{ kind: "navigate", url: request.url! }]; break;
     case "back": case "forward": case "reload": actions = [{ kind: request.action }]; break;
     case "resize": actions = [{ kind: "resize", width: request.width!, height: request.height! }]; break;

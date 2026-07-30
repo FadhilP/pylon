@@ -161,7 +161,8 @@ function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | 
       activityText = activityText
         .replace(/\bBearer\s+\S+/gi, "Bearer <redacted>")
         .replace(/\b((?:api[_-]?key|token|secret|password|cookie)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1<redacted>")
-        .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted>");
+        .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted>")
+        .slice(0, MAX_AGENT_ACTIVITY_TEXT);
     }
     result.push({
       kind: raw.kind,

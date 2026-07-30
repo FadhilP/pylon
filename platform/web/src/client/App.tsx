@@ -71,8 +71,7 @@ function initialLeftPanelWidth(): number {
   return leftPanelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_LEFT_PANEL_WIDTH);
 }
 function panelWidth(value: number): number {
-  const maximum = Math.min(720, window.innerWidth * .6);
-  return Math.round(Math.max(300, Math.min(maximum, value)));
+  return Math.round(Math.max(300, Math.min(window.innerWidth, value)));
 }
 function initialPanelWidth(): number {
   let stored = Number.NaN;
@@ -1078,7 +1077,7 @@ function PanelResizer({ container, width, onCommit }: {
     aria-label="Resize details panel"
     aria-orientation="vertical"
     aria-valuemin={300}
-    aria-valuemax={Math.floor(Math.min(720, window.innerWidth * .6))}
+    aria-valuemax={window.innerWidth}
     aria-valuenow={width}
     tabIndex={0}
     onPointerDown={onPointerDown}

@@ -315,6 +315,21 @@ test("history projection reconstructs bounded delegated runs from tool details",
   assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);
 });
 
+test("delegated activity remains bounded when redaction expands text", () => {
+  const projected = projectConversation([
+    { role: "assistant", content: [{ type: "toolCall", id: "scout-1", name: "repo_scout", arguments: {} }] },
+    {
+      role: "toolResult",
+      toolCallId: "scout-1",
+      toolName: "repo_scout",
+      details: { activity: [{ kind: "result", tool: "read", text: `password: x ${"x".repeat(1_988)}` }] },
+    },
+  ]);
+  const text = projected.delegatedRuns[0]?.activity[0]?.text ?? "";
+  assert.equal(text.length, 2_000);
+  assert.match(text, /password: <redacted>/);
+});
+
 test("projection publishes live delegated-run updates once per tool event", () => {
   const published: Array<{ type: string; payload: any }> = [];
   const initial = runtime();
