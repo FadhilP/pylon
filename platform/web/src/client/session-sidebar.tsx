@@ -1,8 +1,9 @@
-import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconHistory, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX, IconLibrary } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
 import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { ChangelogDialog } from "./changelog-dialog";
 import { displayDate, displayTime } from "./format";
 
 export interface SessionProject {
@@ -60,6 +61,7 @@ interface SidebarProps {
 
 export function SessionSidebar({ activeSessions, unseenCompletions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -201,11 +203,16 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
     void reorder(kind, id, reordered);
   };
 
-  return (
+  return <>
     <aside id="primary-navigation" className={`sidebar ${isOpen ? "is-open" : ""}`} aria-label="Projects and sessions" aria-hidden={mobile && !isOpen} inert={mobile && !isOpen}>
-      <div className="brand-row">
-        <div className="brand-mark" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></div>
-        <div className="brand-copy"><strong>Pylon</strong></div>
+      <div className="brand-row-shell">
+        <button className="brand-row" type="button" onClick={() => setChangelogOpen(true)} aria-label="Open changelog">
+          <span className="brand-row-identity">
+            <span className="brand-mark" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></span>
+            <span className="brand-copy"><strong>Pylon</strong></span>
+          </span>
+          <IconLibrary className="brand-changelog-icon" size={16} />
+        </button>
         <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation"><IconX size={18} /></button>
       </div>
 
@@ -360,7 +367,8 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
       </div>
       <div className="sr-only" aria-live="polite">{announcement}</div>
     </aside>
-  );
+    {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
+  </>;
 }
 
 function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu }: {

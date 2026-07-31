@@ -92,7 +92,12 @@
 @layer components {
   .app-shell { position: relative; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 100dvh; padding: 7px 7px 7px 0; transition: grid-template-columns 220ms cubic-bezier(.2,.75,.2,1); }
   .sidebar { position: relative; display: flex; min-width: 0; flex-direction: column; height: calc(100dvh - 14px); padding: 7px 9px 8px; overflow: hidden; background: var(--sidebar); }
-  .brand-row { display: flex; align-items: center; min-height: 38px; gap: 9px; padding: 0 4px; }
+  .brand-row-shell { display: flex; min-height: 38px; align-items: center; gap: 3px; padding: 0 4px; }
+  .brand-row { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 9px; padding: 4px; border-radius: var(--radius-control); text-align: left; }
+  .brand-row:hover { background: var(--surface-hover); }
+  .brand-row-identity { display: flex; min-width: 0; align-items: center; gap: 9px; }
+  .brand-changelog-icon { flex: 0 0 auto; margin-right: 3px; color: var(--text-muted); }
+  .brand-row:hover .brand-changelog-icon { color: var(--accent-text); }
   .brand-mark { display: grid; flex: 0 0 auto; width: 29px; height: 29px; place-items: center; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-raised); color: var(--accent); box-shadow: 0 2px 7px rgb(0 0 0 / 8%); }
   .brand-mark img { display: block; width: 16px; height: 22px; }
   .brand-copy { display: flex; min-width: 0; flex-direction: column; }
@@ -443,7 +448,7 @@
     transform: translateX(-100%);
   }
 
-  .brand-row { margin-bottom: 10px; }
+  .brand-row-shell { margin-bottom: 10px; }
   .navigation-toggle { display: grid; }
 
   .session-search {
@@ -860,6 +865,54 @@
   .archive-more:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
   .archive-empty { display: flex; min-height: 220px; align-items: center; justify-content: center; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: 12px; text-align: center; }
   .archive-empty strong { color: var(--text-soft); font-size: 13px; }
+
+  .changelog-backdrop {
+    position: fixed;
+    z-index: 60;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgb(7 9 12 / 58%);
+    backdrop-filter: blur(3px);
+    animation: backdrop-in var(--motion-standard) ease-out;
+  }
+  .changelog-dialog {
+    display: flex;
+    width: min(780px, 100%);
+    max-height: min(620px, calc(100dvh - 40px));
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: var(--surface-raised);
+    box-shadow: 0 24px 70px rgb(0 0 0 / 36%);
+    animation: modal-in var(--motion-standard) var(--motion-ease-out);
+  }
+  .changelog-dialog > header {
+    display: flex;
+    min-height: 52px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px 0 17px;
+    border-bottom: 1px solid var(--line);
+  }
+  .changelog-dialog > header > div { display: flex; align-items: center; gap: 9px; }
+  .changelog-dialog > header strong { font-size: 14px; }
+  .changelog-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 190px minmax(0, 1fr); }
+  .changelog-versions { min-height: 0; padding: 14px 10px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-subtle); }
+  .changelog-versions > span { display: block; padding: 5px 8px 9px; color: var(--text-muted); font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+  .changelog-versions button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 9px; border-radius: var(--radius-control); color: var(--text-soft); text-align: left; }
+  .changelog-versions button.is-active { background: var(--surface-active); color: var(--text); }
+  .changelog-versions strong { font: 12px ui-monospace, monospace; }
+  .changelog-versions small { color: var(--text-muted); font-size: 12px; }
+  .changelog-release { overflow: auto; padding: 38px 44px 42px; }
+  .changelog-meta { display: flex; gap: 10px; color: var(--text-muted); font: 12px ui-monospace, monospace; }
+  .changelog-release h2 { margin: 12px 0 8px; font-size: 28px; letter-spacing: -.035em; }
+  .changelog-release > p { max-width: 560px; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
+  .changelog-release section { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .changelog-release h3 { width: max-content; margin: 0 0 12px; padding: 4px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-text); font: 650 12px ui-monospace, monospace; }
+  .changelog-release ul { margin: 0; padding-left: 18px; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
 
   .workspace-layout {
     position: relative;
@@ -2281,8 +2334,13 @@
   }
 
   @media (max-width: 680px) {
-    .archive-backdrop, .settings-backdrop, .edit-confirm-backdrop { padding: 10px; }
-    .archive-dialog, .settings-dialog { max-height: calc(100dvh - 20px); }
+    .archive-backdrop, .changelog-backdrop, .settings-backdrop, .edit-confirm-backdrop { padding: 10px; }
+    .archive-dialog, .changelog-dialog, .settings-dialog { max-height: calc(100dvh - 20px); }
+    .changelog-layout { min-height: 0; grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+    .changelog-versions { display: flex; align-items: center; gap: 8px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); }
+    .changelog-versions > span { padding: 0 4px; }
+    .changelog-versions button { width: min(150px, 100%); flex: 0 0 auto; }
+    .changelog-release { padding: 28px 22px 34px; }
     .archive-row { align-items: flex-start; }
     .app-toast-stack { right: 12px; max-width: none; }
     .inspector { width: 100%; }
