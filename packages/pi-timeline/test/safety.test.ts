@@ -29,7 +29,7 @@ test("preflight refuses common untracked credential files", async () => {
     await writeFile(join(root, ".npmrc"), "//registry.example/:_authToken=secret\n");
     await assert.rejects(preflight(root), /Unsafe untracked path: \.npmrc/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -49,6 +49,6 @@ test("preflight scans initialized gitlinks without .gitmodules", async () => {
     await writeFile(join(child, ".npmrc"), "token=secret\n");
     await assert.rejects(preflight(root), /Unsafe untracked path: child\/\.npmrc/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

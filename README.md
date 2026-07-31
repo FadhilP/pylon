@@ -19,7 +19,7 @@ Then open [http://127.0.0.1:3141](http://127.0.0.1:3141). The web host binds onl
 Go to settings to setup your preferred provider. Choose your models for Advisor, Scout, Grunt. Recommended configuration for openAI subscriptions:
 - Main agent: GPT 5.6 Sol Medium
 - Advisor: GPT 5.6 Sol High
-- Scout: GPT 5.6 Luna Medium/High
+- Scout: GPT 5.6 Luna Medium
 - Grunt: GPT 5.6 Terra (Thinking level will be decided by main agent)
 
 ## Terminal Setup
