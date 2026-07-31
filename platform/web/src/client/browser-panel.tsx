@@ -142,13 +142,7 @@ export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }
       polling = true;
       const startedAt = Date.now();
       const frameResult = await request({ action: "frame" }, true).catch(() => undefined);
-      if (!frameResult) {
-        const state = await request({ action: "status" }, true).catch(() => undefined);
-        if (state && !state.controlled) {
-          polling = false;
-          return;
-        }
-      }
+      if (!frameResult) await request({ action: "status" }, true).catch(() => undefined);
       if (controlled && !stopped && !document.hidden && Date.now() >= metadataDueAt) {
         metadataDueAt = Date.now() + METADATA_INTERVAL_MS;
         await request({ action: "tab-list" }, true).catch(() => undefined);

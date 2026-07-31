@@ -6,6 +6,7 @@ import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClai
 test("repo scout prompt preserves core contracts", () => {
   assert.match(REPO_SCOUT_PROMPT, /path:start-end/);
   assert.match(REPO_SCOUT_PROMPT, /search_excerpt/i);
+  assert.match(REPO_SCOUT_PROMPT, /only the tools exposed to you/i);
   assert.match(REPO_SCOUT_PROMPT, /at most 8 lines/i);
   assert.match(REPO_SCOUT_PROMPT, /Keep the report compact/i);
   assert.match(REPO_SCOUT_PROMPT, /retained or omitted whole/i);

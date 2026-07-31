@@ -22,7 +22,7 @@ interface SettingsDialogProps {
   hookLoading: boolean;
   busy: string;
   hookBusy: boolean;
-  disabled: boolean;
+  providerLogoutDisabled: boolean;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
   theme: SettingsTheme;
@@ -36,7 +36,7 @@ interface SettingsDialogProps {
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, loading, hookLoading, busy, hookBusy, disabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
@@ -117,7 +117,6 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               onKeyDown={(event) => onTabKeyDown(event, index)}
             >{tab}</button>)}
           </div>
-          <p>Settings save immediately.<br />Press Esc to close.</p>
         </nav>
 
         <div className="settings-content">
@@ -149,14 +148,14 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                 {!provider.configured && provider.methods.map((method) => <button
                   key={method.type}
                   type="button"
-                  disabled={disabled || authRunning || !method.interactive}
+                  disabled={authRunning || !method.interactive}
                   title={method.interactive ? undefined : "Configured outside Pylon"}
                   onClick={() => onProviderLogin(provider.id, method.type)}
                 >{method.type === "oauth" ? "Sign in" : "Add key"}</button>)}
-                {provider.configured && provider.stored && <button className="provider-disconnect" type="button" disabled={disabled || authRunning} onClick={() => onProviderLogout(provider.id)}><IconLogout size={14} /> Disconnect</button>}
+                {provider.configured && provider.stored && <button className="provider-disconnect" type="button" disabled={providerLogoutDisabled || authRunning} onClick={() => onProviderLogout(provider.id)}><IconLogout size={14} /> Disconnect</button>}
               </div>
             </section>)}</div>}
-            {disabled && <p className="settings-note" role="status">Provider settings are available when every active session is idle.</p>}
+            {providerLogoutDisabled && <p className="settings-note" role="status">Providers can disconnect when every active session is idle.</p>}
           </section>
 
           <section id="settings-panel-packages" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-packages" hidden={activeTab !== "packages"}>
@@ -168,7 +167,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
             {!loading && packages.length === 0 && <div className="settings-empty"><IconStack2 size={22} /><strong>No local Pi packages</strong></div>}
             {!loading && packages.length > 0 && filteredPackages.length === 0 && <div className="settings-empty"><strong>No matching packages</strong><span>Try a different filter.</span></div>}
             {packages.length > 0 && <div className="settings-package-list">{packages.map((item) => {
-              const itemDisabled = disabled || Boolean(busy);
+              const itemDisabled = Boolean(busy);
               const matchesFilter = filteredPackages.some((candidate) => candidate.id === item.id);
               const state = item.error ? "failed" : item.active ? "active" : item.enabled ? "unavailable" : "disabled";
               const configurable = hasPackageFields(item.settings);
@@ -202,12 +201,11 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                 /></div>}
               </section>;
             })}</div>}
-            {disabled && !loading && <p className="settings-note" role="status">Settings are available when every active session is idle.</p>}
           </section>
 
           <section id="settings-panel-hooks" className="settings-pane hooks-pane" role="tabpanel" aria-labelledby="settings-tab-hooks" hidden={activeTab !== "hooks"}>
             <div className="settings-pane-header"><div><h2>Hooks</h2><p>Add workspace instructions at two predictable points in the agent lifecycle. Import Markdown or text snapshots, or write instructions directly.</p></div></div>
-            <HookSettingsFields settings={hookSettings} loading={hookLoading} disabled={disabled || hookBusy} onUpdate={onUpdateHooks} />
+            <HookSettingsFields settings={hookSettings} loading={hookLoading} disabled={hookBusy} onUpdate={onUpdateHooks} />
           </section>
 
           <section id="settings-panel-notifications" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden={activeTab !== "notifications"}>

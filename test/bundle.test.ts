@@ -11,6 +11,7 @@ import guard from "../packages/pi-guard/extensions/pi-guard.ts";
 import grunt from "../packages/pi-grunt/extensions/pi-grunt.ts";
 import heartbeat from "../packages/pi-heartbeat/extensions/pi-heartbeat.ts";
 import helios from "../packages/pi-helios/extensions/pi-helios.ts";
+import stateql from "../packages/pi-stateql/extensions/pi-stateql.ts";
 import discover from "../packages/pi-discover/extensions/pi-discover.ts";
 import scout from "../packages/pi-scout/extensions/pi-scout.ts";
 import sieve from "../packages/pi-sieve/extensions/pi-sieve.ts";
@@ -59,6 +60,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./packages/pi-grunt/extensions/pi-grunt.ts",
     "./packages/pi-heartbeat/extensions/pi-heartbeat.ts",
     "./packages/pi-helios/extensions/pi-helios.ts",
+    "./packages/pi-stateql/extensions/pi-stateql.ts",
     "./packages/pi-discover/extensions/pi-discover.ts",
     "./packages/pi-scout/extensions/pi-scout.ts",
     "./packages/pi-sieve/extensions/pi-sieve.ts",
@@ -66,10 +68,12 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./packages/pi-verify/extensions/pi-verify.ts",
   ]);
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousStateQLHome = process.env.STQL_HOME;
   const root = await mkdtemp(join(tmpdir(), "pylon-bundle-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  process.env.STQL_HOME = join(root, "stateql");
   try {
     const events = new Bus();
     const handlers = new Map<string, Function[]>();
@@ -95,14 +99,14 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, discover, scout, sieve, timeline, verify]
+    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, sieve, timeline, verify]
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
       "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "stateql", "symbol_search", "verify", "web_scout",
     ]);
     assert.ok(renderers.has("pi-scout-session"));
 
@@ -150,5 +154,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousStateQLHome === undefined) delete process.env.STQL_HOME;
+    else process.env.STQL_HOME = previousStateQLHome;
   }
 });

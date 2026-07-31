@@ -123,7 +123,9 @@ test("project approval survives extension replacement but is cwd and exact-comma
 
   const command = "rm -rf generated";
   const commandGuard = harness();
-  assert.equal(await commandGuard.tool({ type: "tool_call", toolName: "bash", input: { command } }, context(root, ["Always allow this session"])), undefined);
+  const commandPrompts: any[] = [];
+  assert.equal(await commandGuard.tool({ type: "tool_call", toolName: "bash", input: { command } }, context(root, ["Always allow this session"], commandPrompts)), undefined);
+  assert.equal(commandPrompts[0].title, `Pi-guard recursive deletion\n\`${command}\``);
   assert.equal(await commandGuard.user({ command }, context(root, [])), undefined, "agent and user bash share exact commands");
   assert.notEqual(await commandGuard.user({ command: "rm -rf different" }, context(root, ["Deny"])), undefined);
 });

@@ -40,6 +40,7 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
   const rootRef = useRef<HTMLDivElement>(null);
   const actionLock = useRef(false);
   const title = typeof payload.title === "string" ? payload.title : "Input requested";
+  const isStateQLCredential = payload.context === "stateql-credential" && payload.inputType === "password";
   const description = typeof payload.message === "string"
     ? payload.message
     : typeof payload.label === "string"
@@ -313,6 +314,12 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
       onChange={(event) => setValue(event.target.value)}
       disabled={busy}
     />}
+    {request.method === "input" && isStateQLCredential && <button
+      className="primary-button"
+      type="button"
+      disabled={busy || !value}
+      onClick={() => void respond({ value })}
+    >Allow temporary access</button>}
     {request.method === "editor" && <textarea
       data-autofocus
       value={value}
@@ -320,7 +327,11 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
       disabled={busy}
     />}
     {(request.method === "input" || request.method === "editor") && <small className="ui-request-hint">
-      {request.method === "editor" ? "Ctrl/Command + Enter to submit · Escape to cancel" : "Enter to submit · Escape to cancel"}
+      {request.method === "editor"
+        ? "Ctrl/Command + Enter to submit · Escape to cancel"
+        : isStateQLCredential
+          ? "Enter to approve once for this session · Escape to cancel"
+          : "Enter to submit · Escape to cancel"}
     </small>}
     {error && <p className="ui-request-error" role="alert">{error}</p>}
   </div>;

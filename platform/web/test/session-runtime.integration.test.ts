@@ -10,7 +10,7 @@ import { appendWorkDuration } from "pylon-core/src/work-duration.ts";
 import { deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
-import type { DialogMethod, UiRequest } from "../src/server/pi/remote-ui-context.ts";
+import type { DialogMethod, StateQLCredentialHost, StateQLCredentialRequest, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -136,6 +136,149 @@ test("completed work duration survives runtime restart", { timeout: 45_000 }, as
     const message = (await driver.snapshot()).conversation.messages.find((item) => item.entryId === assistantEntryId);
     assert.equal(message?.workDurationMs, 12_345);
   } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("StateQL snapshot bridge claims one bounded session-scoped response", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-stateql-bridge-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  let requests = 0;
+  const probe: InlineExtension = {
+    name: "pylon-stateql-probe",
+    factory(pi) {
+      pi.events.on("pylon:stateql-snapshot-request", (value: any) => {
+        if (value?.version !== 1 || !value.claim()) return;
+        requests++;
+        value.respond(Promise.resolve({
+          session: { session_id: "s_1", name: "shared-workspace", status: "active", ignored: "value" },
+          actor_id: value.sessionId,
+          connection: null,
+          transaction: null,
+          state_version: null,
+          state_confidence: null,
+          recent_results: [],
+          recent_operations: [],
+          history: [{
+            command_id: "cmd_1",
+            timestamp: "2026-07-30T10:00:00.000Z",
+            session_id: "s_1",
+            actor_id: value.sessionId,
+            command: "query",
+            handle: "q_1",
+            executed: true,
+            cached: false,
+            success: true,
+            error_code: null,
+            ignored: "value",
+          }],
+          ignored: "value",
+        }));
+      });
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [probe] });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const snapshot = await driver.stateqlSnapshot(20);
+    assert.equal(requests, 1);
+    assert.equal(snapshot.sessionGeneration, handle.sessionGeneration);
+    assert.equal(snapshot.session.name, "shared-workspace");
+    assert.equal(snapshot.actor_id, handle.sessionId);
+    assert.equal(snapshot.history[0]?.command, "query");
+    assert.equal("ignored" in snapshot, false);
+    assert.equal("ignored" in snapshot.session, false);
+    assert.equal("ignored" in snapshot.history[0]!, false);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Pylon credential host resumes the original command, reuses reads, escalates writes, and clears on replacement", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-stateql-credential-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const sentinel = "postgres://private:sentinel@localhost/app";
+  const observations: Array<string | undefined> = [];
+  const probe: InlineExtension = {
+    name: "pylon-stateql-credential-probe",
+    factory(pi) {
+      pi.registerCommand("stateql-credential-probe", {
+        handler: async (args, ctx) => {
+          const access = args === "write" ? "write" : "read";
+          const operation = args === "connect" ? "connect" : access === "write" ? "exec" : "query";
+          const request: StateQLCredentialRequest = {
+            reference: "APP_DATABASE_URL",
+            actorId: ctx.sessionManager.getSessionId(),
+            session: { id: "stateql-workspace", name: "workspace" },
+            operation,
+            access,
+            ...(operation === "connect"
+              ? { profile: { name: "app" }, requestedReadOnly: true }
+              : {
+                  connection: {
+                    id: "connection-1",
+                    name: "app",
+                    driver: "postgres",
+                    database: "app",
+                    readOnly: false,
+                  },
+                }),
+          };
+          const host = ctx.ui as typeof ctx.ui & StateQLCredentialHost;
+          observations.push(await host.requestStateQLCredential(request));
+        },
+      });
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [probe] });
+  const events: unknown[] = [];
+  const prompts: UiRequest[] = [];
+  const unsubscribe = driver.subscribe((event) => {
+    events.push(JSON.parse(JSON.stringify(event)));
+    if (event.type !== "ui.event") return;
+    const request = event.payload as UiRequest;
+    if (request.payload.context !== "stateql-credential") return;
+    prompts.push(structuredClone(request));
+    queueMicrotask(() => void driver.answerUiRequest({
+      requestId: request.requestId,
+      sessionGeneration: request.sessionGeneration,
+      method: "input",
+      value: sentinel,
+    }));
+  });
+
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    await driver.prompt({ commandId: "credential-connect", expectedGeneration: handle.sessionGeneration, message: "/stateql-credential-probe connect" });
+    assert.deepEqual(observations, [sentinel]);
+    assert.equal(prompts.length, 1);
+
+    await driver.prompt({ commandId: "credential-read", expectedGeneration: handle.sessionGeneration, message: "/stateql-credential-probe read" });
+    assert.deepEqual(observations, [sentinel, sentinel]);
+    assert.equal(prompts.length, 1);
+
+    await driver.prompt({ commandId: "credential-write", expectedGeneration: handle.sessionGeneration, message: "/stateql-credential-probe write" });
+    assert.deepEqual(observations, [sentinel, sentinel, sentinel]);
+    assert.equal(prompts.length, 2);
+    assert.deepEqual(prompts.map((request) => request.payload.access), ["read", "write"]);
+
+    const replacement = await driver.newSession();
+    assert.equal(replacement.cancelled, false);
+    await driver.prompt({ commandId: "credential-replaced", expectedGeneration: replacement.sessionGeneration, message: "/stateql-credential-probe read" });
+    assert.equal(observations.length, 4);
+    assert.equal(prompts.length, 3);
+
+    const snapshot = await driver.snapshot();
+    assert.equal(JSON.stringify({ prompts, events, snapshot }).includes(sentinel), false);
+    assert.equal(snapshot.diagnostics.some((item) => item.message.includes(sentinel)), false);
+  } finally {
+    unsubscribe();
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
@@ -345,17 +488,15 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-  let duplicateRefresh = false;
-  const duplicateRefreshProbe: InlineExtension = {
-    name: "duplicate-package-settings-refresh-probe",
+  let settingsRefreshObserved = false;
+  const settingsRefreshProbe: InlineExtension = {
+    name: "package-settings-refresh-probe",
     factory(pi) {
-      const dispose = pi.events.on("pylon:package-settings-changed", (request: any) => {
-        if (duplicateRefresh && request?.packageId === "pi-grunt") request.acknowledge?.(async () => {});
-      });
+      const dispose = pi.events.on("pylon:package-settings-changed", () => { settingsRefreshObserved = true; });
       pi.on("session_shutdown", dispose);
     },
   };
-  const driver = new SessionRuntime({ extensionFactories: [duplicateRefreshProbe] });
+  const driver = new SessionRuntime({ extensionFactories: [settingsRefreshProbe] });
 
   try {
     await driver.start({ cwd, agentDir, repositoryRoot });
@@ -369,16 +510,27 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.ok(first.operational.tools.policies.length > 0);
     assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && item.active));
 
+    const initialActiveTools = first.activeTools;
+    const initialHooks = (await driver.listHookSettings()).settings;
+    const futureHooks = {
+      sessionStart: { enabled: false, sources: [] },
+      beforeAgentStart: { enabled: true, sources: [{ id: "future", name: "Future", kind: "text" as const, content: "future sessions" }] },
+    };
+    await driver.updateHookSettings({ settings: futureHooks });
+    assert.deepEqual((await driver.listHookSettings()).settings, futureHooks);
+    assert.deepEqual((driver as any).hookInjection.settings, initialHooks);
+
+    await assert.rejects(driver.setPackageEnabled({ packageId: "pylon-core", enabled: false }), /required/);
     const disabled = await driver.setPackageEnabled({ packageId: "pi-timeline", enabled: false });
-    assert.equal(disabled.sessionGeneration, 2);
-    assert.equal((await driver.snapshot()).operational.timeline.availability, "unavailable");
-    assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && !item.enabled && !item.active));
+    assert.equal(disabled.sessionGeneration, 1);
+    assert.equal((await driver.snapshot()).operational.timeline.availability, "available");
+    assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && !item.enabled && item.active));
     const sieve = (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings;
     assert.equal(sieve?.kind, "sieve");
     if (sieve?.kind !== "sieve") throw new Error("pi-sieve settings are unavailable");
     const threshold = sieve.threshold === 1_000 ? 2_000 : 1_000;
     const configured = await driver.updatePackageSettings({ packageId: "pi-sieve", settings: { ...sieve, threshold } });
-    assert.equal(configured.sessionGeneration, 3);
+    assert.equal(configured.sessionGeneration, 1);
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-sieve")?.settings,
       { ...sieve, threshold },
@@ -394,9 +546,9 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       assert.equal(updated.sessionGeneration, generation);
       assert.deepEqual((await driver.listPackages()).packages.find((item) => item.id === packageId)?.settings, settings);
     }
-    const hotApplied = await driver.snapshot();
-    assert.ok(hotApplied.activeTools.includes("repo_scout"));
-    assert.ok(hotApplied.activeTools.includes("grunt"));
+    const unchangedRuntime = await driver.snapshot();
+    assert.deepEqual(unchangedRuntime.activeTools, initialActiveTools);
+    assert.equal(unchangedRuntime.operational.sieve.threshold, sieve.threshold);
 
     const scoutDisabled = await driver.updatePackageSettings({
       packageId: "pi-scout",
@@ -408,25 +560,32 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     });
     assert.equal(scoutDisabled.sessionGeneration, generation);
     assert.equal(gruntDisabled.sessionGeneration, generation);
-    const disabledTools = await driver.snapshot();
-    assert.ok(!disabledTools.activeTools.includes("repo_scout"));
-    assert.ok(!disabledTools.activeTools.includes("grunt"));
+    assert.deepEqual((await driver.snapshot()).activeTools, initialActiveTools);
 
-    duplicateRefresh = true;
-    await assert.rejects(driver.updatePackageSettings({
+    await driver.updatePackageSettings({
       packageId: "pi-grunt",
       settings: { kind: "grunt", mode: "session", executionMode: "direct" },
-    }), /ambiguous/);
-    duplicateRefresh = false;
+    });
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-grunt")?.settings,
-      { kind: "grunt", mode: "disabled", executionMode: "dynamic" },
+      { kind: "grunt", mode: "session", executionMode: "direct" },
     );
 
     await assert.rejects(driver.updatePackageSettings({
       packageId: "pi-advisor",
       settings: { kind: "advisor", mode: "model", model: "missing/model" },
     }), /unavailable/);
+    assert.equal(settingsRefreshObserved, false);
+
+    const next = new SessionRuntime();
+    try {
+      await next.start({ cwd, agentDir, repositoryRoot, inMemory: true });
+      assert.equal((await next.snapshot()).operational.timeline.availability, "unavailable");
+      assert.ok((await next.listPackages()).packages.some((item) => item.id === "pi-timeline" && !item.enabled && !item.active));
+      assert.deepEqual((next as any).hookInjection.settings, futureHooks);
+    } finally {
+      await next.dispose();
+    }
   } finally {
     await driver.dispose();
     const testSessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));

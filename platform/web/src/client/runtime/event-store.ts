@@ -4,9 +4,9 @@ import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope"
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -438,6 +438,14 @@ export class RuntimeEventStore {
     return result;
   }
 
+  async stateqlSnapshot(historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.stateqlSnapshot(runtime.sessionGeneration, historyLimit, signal);
+    if (!isStateQLSnapshot(result) || result.sessionGeneration !== runtime.sessionGeneration
+      || result.actor_id !== runtime.sessionId) throw new Error("StateQL status is stale or invalid");
+    return result;
+  }
+
   async handoffSession(destination: "checkout" | "worktree"): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "handoffSession", destination, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
@@ -729,6 +737,7 @@ export class RuntimeEventStore {
 
   async switchSession(sessionId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
+    this.historyCache.delete(sessionId);
     const accepted = await this.sendCommand({ type: "switchSession", sessionId, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
     await this.waitForRuntime(sessionId, accepted.sessionGeneration);
   }

@@ -46,10 +46,10 @@ test("session status projects completion as a separate pulse", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
   const workStartedAt = "2026-07-30T10:00:00.000Z";
-  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", workStartedAt: null, completed: true });
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", workStartedAt: null, completed: true, cue: "turn-complete" });
   projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "running", workStartedAt });
   assert.deepEqual(published, [
-    { type: "session.status", payload: { sessionId: "background", state: "idle", workStartedAt: null, completed: true } },
+    { type: "session.status", payload: { sessionId: "background", state: "idle", workStartedAt: null, completed: true, cue: "turn-complete" } },
     { type: "session.status", payload: { sessionId: "background", state: "running", workStartedAt } },
   ]);
 });
@@ -522,6 +522,7 @@ test("projection publishes live session names and agent timing metadata", () => 
     thinkingLevel: "high",
     gitBranch: "main",
     metrics: { userMessages: 1, cost: 0.25 },
+    assistantMessage: { id: "history-2", entryId: "assistant-entry", role: "assistant", text: "Done", streaming: false },
   }));
   projection.apply(session({
     type: "worktree_summary",
@@ -551,6 +552,91 @@ test("projection publishes live session names and agent timing metadata", () => 
   assert.ok(published.some((event) => event.type === "turn.changes"));
 });
 
+test("agent completion restores an assistant lost during session selection", () => {
+  const initial = runtime();
+  initial.conversation.streaming = true;
+  initial.conversation.messages = [
+    { id: "history-1", entryId: "earlier-assistant", role: "assistant", text: "Completed while switching sessions", streaming: false },
+  ];
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(initial, (type, payload) => published.push({ type, payload }));
+
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-1",
+    workDurationMs: 1_234,
+    modelName: "GPT-5",
+    thinkingLevel: "high",
+    assistantMessage: {
+      id: "history-3",
+      entryId: "final-assistant",
+      role: "assistant",
+      text: "Completed while switching sessions",
+      streaming: false,
+    },
+  }));
+
+  const messages = projection.snapshot().conversation.messages;
+  assert.deepEqual(messages.map((message) => message.id), ["history-1", "history-3"]);
+  assert.equal(messages.at(-1)?.entryId, "final-assistant");
+  assert.equal(messages.at(-1)?.workDurationMs, 1_234);
+  assert.equal(projection.snapshot().conversation.streaming, false);
+  assert.deepEqual(published.filter((event) => event.type.startsWith("message.")).map((event) => event.type), [
+    "message.start",
+    "message.end",
+  ]);
+  assert.equal((published.at(-1)?.payload as { messageId?: string }).messageId, "history-3");
+});
+
+test("agent completion does not duplicate live or snapshotted assistants", () => {
+  const canonical = {
+    id: "history-2",
+    entryId: "final-assistant",
+    role: "assistant" as const,
+    text: "Done",
+    streaming: false,
+  };
+  const liveEvents: string[] = [];
+  const live = new RuntimeProjection(runtime(), (type) => liveEvents.push(type));
+  live.apply(session({ type: "agent_start", turnId: "turn-live" }));
+  live.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  live.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  live.apply(session({ type: "agent_end", turnId: "turn-live", assistantMessage: canonical }));
+  assert.equal(live.snapshot().conversation.messages.length, 1);
+  assert.equal(live.snapshot().conversation.messages[0]?.entryId, "final-assistant");
+  assert.deepEqual(liveEvents.filter((type) => type.startsWith("message.")), ["message.start", "message.end"]);
+
+  const loaded = runtime();
+  loaded.conversation.messages = [canonical];
+  const loadedEvents: string[] = [];
+  const snapshotted = new RuntimeProjection(loaded, (type) => loadedEvents.push(type));
+  snapshotted.apply(session({ type: "agent_end", turnId: "turn-loaded", assistantMessage: canonical }));
+  assert.equal(snapshotted.snapshot().conversation.messages.length, 1);
+  assert.deepEqual(loadedEvents.filter((type) => type.startsWith("message.")), []);
+
+  const malformedRuntime = runtime();
+  malformedRuntime.conversation.messages = [
+    { id: "older-assistant", role: "assistant", text: "Earlier turn", streaming: false },
+  ];
+  const malformed = new RuntimeProjection(malformedRuntime, () => undefined);
+  malformed.apply(session({ type: "agent_end", turnId: "turn-malformed", workDurationMs: 500, assistantMessage: { role: "assistant" } }));
+  assert.equal(malformed.snapshot().conversation.messages[0]?.workDurationMs, undefined);
+});
+
+test("agent completion flushes pending text before its terminal event", () => {
+  const published: string[] = [];
+  const projection = new RuntimeProjection(runtime(), (type) => published.push(type));
+  projection.apply(session({ type: "agent_start", turnId: "turn-pending" }));
+  projection.apply(session({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-pending",
+    assistantMessage: { id: "history-2", entryId: "final-assistant", role: "assistant", text: "Done", streaming: false },
+  }));
+  assert.equal(projection.snapshot().conversation.messages.length, 1);
+  assert.deepEqual(published.slice(-3), ["message.update", "message.end", "agent.end"]);
+});
+
 test("projection keeps one active timer across retry attempts", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
@@ -569,7 +655,13 @@ test("projection keeps one active timer across retry attempts", () => {
 
   projection.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
   projection.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } }));
-  projection.apply(session({ type: "agent_end", turnId: "turn-1", workDurationMs: 12_000, willRetry: false }));
+  projection.apply(session({
+    type: "agent_end",
+    turnId: "turn-1",
+    workDurationMs: 12_000,
+    willRetry: false,
+    assistantMessage: { id: "history-4", entryId: "final-retry", role: "assistant", text: "Done", streaming: false },
+  }));
 
   assert.equal(projection.snapshot().conversation.workStartedAt, undefined);
   assert.equal(projection.snapshot().conversation.messages.at(-1)?.workDurationMs, 12_000);
@@ -607,7 +699,11 @@ test("projection persists terminal agent errors and clears them for retries and 
 });
 
 test("projection retains stopped tool-only run metadata without an assistant message", () => {
-  const projection = new RuntimeProjection(runtime(), () => undefined);
+  const initial = runtime();
+  initial.conversation.messages = [
+    { id: "older-assistant", role: "assistant", text: "Earlier turn", streaming: false },
+  ];
+  const projection = new RuntimeProjection(initial, () => undefined);
   projection.apply(session({
     type: "agent_start",
     turnId: "turn-stopped",
@@ -623,6 +719,7 @@ test("projection retains stopped tool-only run metadata without an assistant mes
     modelName: "GPT-5",
     thinkingLevel: "medium",
     stopped: true,
+    assistantMessage: null,
   }));
   assert.deepEqual(projection.snapshot().conversation.stoppedRun, {
     turnId: "turn-stopped",
@@ -631,6 +728,7 @@ test("projection retains stopped tool-only run metadata without an assistant mes
     modelName: "GPT-5",
     thinkingLevel: "medium",
   });
+  assert.equal(projection.snapshot().conversation.messages[0]?.workDurationMs, undefined);
   assert.equal(projection.snapshot().conversation.stopping, false);
 });
 

@@ -2,6 +2,7 @@ import {
   IconBrandGit,
   IconGitBranch,
   IconLayoutDashboard,
+  IconDatabase,
   IconFiles,
   IconMenu2,
   IconMoon,
@@ -19,6 +20,7 @@ import { AgentPanel } from "./agent-drawer";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
 import { BrowserPanel } from "./browser-panel";
+import { DatabasePanel } from "./database-panel";
 import { FilesPanel } from "./files-panel";
 import { Inspector, type ViewId } from "./inspector";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
@@ -29,7 +31,7 @@ import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "agents" | "files" | "browser" | null;
+type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
 type SidebarAction = {
@@ -145,6 +147,7 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
+  const databaseToggleRef = useRef<HTMLButtonElement>(null);
   const agentsToggleRef = useRef<HTMLButtonElement>(null);
   const filesToggleRef = useRef<HTMLButtonElement>(null);
   const browserToggleRef = useRef<HTMLButtonElement>(null);
@@ -167,6 +170,7 @@ export function App() {
   const projects = useMemo<SessionProject[]>(() => sessionPages.map((page) => ({
     id: page.id,
     label: page.label,
+    cwd: page.cwd,
     sessions: page.sessions,
     active: activeSessions.some((session) => session.projectId === page.id && session.active)
       || page.sessions.some((session) => session.active),
@@ -185,6 +189,7 @@ export function App() {
     && (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
   const memoryEnabled = activePackages.has("pi-continuity")
     || live.runtime?.operational.continuity.availability === "available";
+  const stateqlEnabled = activePackages.has("pi-stateql");
   const availableViews = useMemo(() => new Set<ViewId>([
     "overview",
     "policy",
@@ -313,13 +318,15 @@ export function App() {
       previousRightPanel.current = rightPanel;
       return;
     }
-    const trigger = previousRightPanel.current === "agents"
-      ? agentsToggleRef.current
-      : previousRightPanel.current === "files"
-        ? filesToggleRef.current
-        : previousRightPanel.current === "browser"
-          ? browserToggleRef.current
-          : inspectorToggleRef.current;
+    const trigger = previousRightPanel.current === "database"
+      ? databaseToggleRef.current
+      : previousRightPanel.current === "agents"
+        ? agentsToggleRef.current
+        : previousRightPanel.current === "files"
+          ? filesToggleRef.current
+          : previousRightPanel.current === "browser"
+            ? browserToggleRef.current
+            : inspectorToggleRef.current;
     trigger?.focus();
     previousRightPanel.current = rightPanel;
   }, [rightPanel]);
@@ -420,6 +427,10 @@ export function App() {
   useEffect(() => {
     if (!availableViews.has(view)) setView("overview");
   }, [availableViews, view]);
+
+  useEffect(() => {
+    if (!stateqlEnabled && rightPanel === "database") setRightPanel(null);
+  }, [rightPanel, stateqlEnabled]);
 
   useEffect(() => {
     if (!live.sessionStatuses && !live.sessionWorkStartedAts) return;
@@ -733,6 +744,7 @@ export function App() {
     setPackageBusy(item.id);
     try {
       await runtimeStore.setPackageEnabled(item.id, enabled);
+      setPackages((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, enabled } : candidate));
     } catch (cause) {
       reportError(cause, "Unable to update package");
     } finally {
@@ -924,13 +936,16 @@ export function App() {
           rightPanel={rightPanel}
           menuButtonRef={navigationToggleRef}
           inspectorButtonRef={inspectorToggleRef}
+          databaseButtonRef={databaseToggleRef}
           agentsButtonRef={agentsToggleRef}
           filesButtonRef={filesToggleRef}
           browserButtonRef={browserToggleRef}
           browserAvailable={browserAvailable}
+          databaseAvailable={stateqlEnabled}
           browserActive={browserActive}
           onToggleMenu={toggleSidebar}
           onToggleInspector={() => toggleRightPanel("inspector")}
+          onToggleDatabase={() => toggleRightPanel("database")}
           onToggleAgents={() => toggleRightPanel("agents")}
           onToggleFiles={() => toggleRightPanel("files")}
           onToggleBrowser={() => toggleRightPanel("browser")}
@@ -989,6 +1004,11 @@ export function App() {
               onClose={() => setRightPanel(null)}
               onNavigate={selectView}
             />}
+          {rightPanel === "database" && <DatabasePanel
+            key={`database:${live.runtime?.sessionId ?? "loading"}`}
+            live={live}
+            onClose={() => setRightPanel(null)}
+          />}
           {rightPanel === "agents" && <AgentPanel
             key={`agents:${live.runtime?.sessionId ?? "loading"}`}
             runs={live.runtime?.conversation.delegatedRuns ?? []}
@@ -1064,7 +1084,7 @@ export function App() {
         hookLoading={hooksLoading}
         busy={packageBusy}
         hookBusy={hooksBusy}
-        disabled={activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
+        providerLogoutDisabled={activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         models={live.runtime?.sessionControls.models ?? []}
         sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
         theme={theme}
@@ -1267,7 +1287,7 @@ function RecoveryToast({ recovery, onAction }: {
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
+function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, databaseButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, databaseAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleDatabase, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; databaseButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; databaseAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleDatabase: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
   const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = live.runtime?.gitBranch || "No Git branch";
   const turn = live.runtime?.metrics.userMessages ?? 0;
@@ -1286,6 +1306,10 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
       </div>
       <div className="topbar-actions">
         <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
+        {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
+          <IconDatabase size={16} />
+          <span>Database</span>
+        </button>}
         <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>

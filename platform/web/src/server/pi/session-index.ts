@@ -95,15 +95,16 @@ export class SessionIndex {
       ? registered
           .filter((project) => !input.projectId || project.id === input.projectId)
           .filter((project) => !query || `${project.label} ${project.cwd}`.toLowerCase().includes(query) || grouped.has(project.id))
-          .map((project) => [project.id, grouped.get(project.id) ?? [], project.label] as const)
-      : [...grouped].slice(0, 100).map(([id, sessions]) => [id, sessions, labels.get(id)] as const);
-    for (const [id, sessions, registeredLabel] of projectEntries) {
+          .map((project) => [project.id, grouped.get(project.id) ?? [], project.label, project.cwd] as const)
+      : [...grouped].slice(0, 100).map(([id, sessions]) => [id, sessions, labels.get(id), sessions[0]!.cwd] as const);
+    for (const [id, sessions, registeredLabel, cwd] of projectEntries) {
       const offset = cursorId ? sessions.findIndex((session) => session.id === cursorId) + 1 : 0;
       if (cursorId && offset === 0) continue;
       const page = sessions.slice(offset, offset + limit);
       projects.push({
         id,
         label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
+        cwd,
         totalCount: sessions.length,
         sessions: page.map((session) => this.summary(session, options)),
         ...(offset + page.length < sessions.length && page.length

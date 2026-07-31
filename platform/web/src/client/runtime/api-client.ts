@@ -1,6 +1,6 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -162,6 +162,15 @@ export class ApiClient {
     return json<HookSettingsSnapshot>(await fetch("/api/v1/hooks", {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
+    }));
+  }
+
+  async stateqlSnapshot(generation: number, historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
+    const query = new URLSearchParams({ generation: String(generation), historyLimit: String(historyLimit) });
+    return json<StateQLSnapshot>(await fetch(`/api/v1/stateql?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+      signal,
     }));
   }
 

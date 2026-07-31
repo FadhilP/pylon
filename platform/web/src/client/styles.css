@@ -133,7 +133,7 @@
   }
   .agents-trigger:hover,
   .agents-trigger.is-active { background: var(--surface-active); color: var(--text); }
-  .agents-trigger.is-live svg { color: var(--green); }
+  .agents-trigger.is-live svg { color: var(--accent); }
   .agents-trigger small { min-width: 15px; color: var(--text-soft); font-size: 12px; text-align: center; }
   .icon-button { display: grid; width: 29px; height: 29px; place-items: center; border-radius: var(--radius-control); color: var(--text-muted); transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease, transform 100ms ease; }
   .icon-button:hover { background: var(--surface-hover); color: var(--text); }
@@ -310,7 +310,7 @@
   .ui-request-inline { width: auto; margin: 0 15px 10px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); animation: request-in var(--motion-standard) var(--motion-ease-out); }
   .ui-request-motion.is-exiting { pointer-events: none; animation: request-out 140ms var(--motion-ease-out) forwards; }
   .ui-request-observer { width: auto; margin: 0 15px 15px; background: var(--surface-subtle); box-shadow: none; }
-  .ui-request strong { font-size: 12px; }
+  .ui-request strong { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; }
   .ui-request-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .ui-request-timer { flex: 0 0 auto; color: var(--text-muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; }
   .ui-request p { margin: 4px 0 9px; color: var(--text-muted); font-size: 12px; }

@@ -5,29 +5,23 @@ export type ConversationBlock = MessageReadModel | { id: string; tools: MessageR
 
 export function groupConversationMessages(messages: MessageReadModel[]): ConversationBlock[] {
   const blocks: ConversationBlock[] = [];
-  let turn: MessageReadModel[] = [];
+  let tools: MessageReadModel[] = [];
 
-  const flush = () => {
-    if (!turn.length) return;
-    const tools = turn.filter((message) => message.role === "tool");
-    let grouped = false;
-
-    for (const message of turn) {
-      if (message.role !== "tool") {
-        blocks.push(message);
-      } else if (!grouped) {
-        blocks.push({ id: `tools-${tools[0]!.tool?.id ?? tools[0]!.id}`, tools });
-        grouped = true;
-      }
-    }
-    turn = [];
+  const flushTools = () => {
+    if (!tools.length) return;
+    blocks.push({ id: `tools-${tools[0]!.tool?.id ?? tools[0]!.id}`, tools });
+    tools = [];
   };
 
   for (const message of messages) {
-    if (message.role === "user" && turn.length) flush();
-    turn.push(message);
+    if (message.role === "tool") {
+      tools.push(message);
+    } else {
+      flushTools();
+      blocks.push(message);
+    }
   }
-  flush();
+  flushTools();
   return blocks;
 }
 

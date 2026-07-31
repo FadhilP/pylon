@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ACTIVE_FRAME_INTERVAL_MS, IDLE_FRAME_INTERVAL_MS, framePollingDelay } from "../src/shared/browser-polling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
 
 test("hook settings protocol accepts bounded exact settings", () => {
   const settings = {
@@ -21,7 +21,7 @@ test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
 });
 
-test("command validation allowlists bounded v24 commands and attachments", () => {
+test("command validation allowlists bounded v25 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -314,11 +314,12 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...snapshot, optionalCapabilities: { verify: "maybe" } }), false);
 
   const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, pinned: false, runtimeState: "idle" };
-  const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", totalCount: 1, sessions: [session] }] };
+  const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", cwd: "/projects/repo", totalCount: 1, sessions: [session] }] };
   assert.equal(isSessionListSnapshot(sessions), true);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: new Date(1).toISOString() }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: "invalid" }] }), false);
-  assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", totalCount: 0, sessions: [] }] }), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", cwd: "/projects/empty", totalCount: 0, sessions: [] }] }), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], cwd: "" }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], projectId: "" }] }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ ...sessions.projects[0], sessions: [{ ...sessions.projects[0].sessions[0], preview: "x".repeat(501) }] }] }), false);
   const archived = {
@@ -361,6 +362,42 @@ test("conversation turn index validation keeps metadata bounded", () => {
   assert.equal(isConversationTurnIndexPage(page), true);
   assert.equal(isConversationTurnIndexPage({ ...page, turns: [{ ...page.turns[0], preview: "x".repeat(121) }] }), false);
   assert.equal(isConversationTurnIndexPage({ ...page, turns: Array(251).fill(page.turns[0]) }), false);
+});
+
+test("StateQL snapshot validation bounds safe session status and history", () => {
+  const entry = {
+    command_id: "cmd_1",
+    timestamp: "2026-07-30T10:00:00.000Z",
+    session_id: "s_1",
+    actor_id: "pi-session",
+    command: "query",
+    handle: "q_1",
+    executed: true,
+    cached: false,
+    success: true,
+    error_code: null,
+  };
+  const snapshot = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    session: { session_id: "s_1", name: "shared-workspace", status: "active" },
+    actor_id: "pi-session",
+    connection: { connection_id: "conn_1", name: "local", status: "connected", driver: "sqlite", database: "app.sqlite", read_only: true },
+    transaction: { transaction_id: "tx_1", owner_actor_id: "pi-session", state: "active" },
+    state_version: "sv_1",
+    state_confidence: "database_reported",
+    recent_results: [{ alias: "users", handle: "q_1", rows: 3 }],
+    recent_operations: [{ handle: "op_1", actor_id: "pi-session", type: "insert", affected_rows: 1, status: "committed" }],
+    history: [entry],
+  };
+  assert.equal(isStateQLSnapshot(snapshot), true);
+  assert.equal(isStateQLSnapshot({ ...snapshot, actor_id: undefined }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: Array(101).fill(entry) }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, timestamp: "invalid" }] }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, timestamp: `${entry.timestamp}${"0".repeat(65)}` }] }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, recent_results: [{ ...snapshot.recent_results[0], rows: 10_001 }] }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, session: { ...snapshot.session, status: "closed" } }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, session: { ...snapshot.session, status: "closed" }, connection: null, transaction: null }), true);
 });
 
 test("file suggestion validation confines bounded relative paths", () => {

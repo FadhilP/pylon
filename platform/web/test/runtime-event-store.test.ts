@@ -13,6 +13,12 @@ test("expected session replacement clears stale runtime while staying loading", 
   assert.match(source, /source\.onerror = \(\) => \{[\s\S]*?connection: "disconnected"/);
 });
 
+test("switching sessions drops history cached for a potentially different branch", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /async switchSession\(sessionId: string\)[\s\S]*?this\.historyCache\.delete\(sessionId\)[\s\S]*?type: "switchSession"/);
+});
+
 test("retryable agent events preserve active work while terminal errors settle it", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
   assert.match(source, /"agent\.start", "agent\.end", "agent\.error"/);

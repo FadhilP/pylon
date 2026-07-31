@@ -28,7 +28,7 @@ import {
 } from "pylon-core/src/worktree.ts";
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -440,6 +440,15 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: generation };
   }
 
+  async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.stateqlSnapshot) throw new Error("StateQL snapshot is unavailable");
+    const result = await slot.driver.stateqlSnapshot(historyLimit);
+    this.assertSelected(slot, generation, "loading StateQL status");
+    return { ...result, sessionGeneration: generation };
+  }
+
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
     return this.withLifecycle(() => this.messageCommand("prompt", input));
   }
@@ -519,11 +528,11 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async steer(input: PromptInput): Promise<AcceptedCommand> {
-    return this.messageCommand("steer", input);
+    return this.withLifecycle(() => this.messageCommand("steer", input));
   }
 
   async followUp(input: PromptInput): Promise<AcceptedCommand> {
-    return this.messageCommand("followUp", input);
+    return this.withLifecycle(() => this.messageCommand("followUp", input));
   }
 
   async editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
@@ -1234,58 +1243,20 @@ export class RuntimeCoordinator implements PiDriver {
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
-      for (const slot of this.slots.values()) {
-        if (!this.slotCanSleep(slot)) throw new Error("packages can only change while every session is idle");
-      }
-      const selected = this.selected();
-      await selected.driver.setPackageEnabled(input);
-      for (const slot of [...this.slots.values()]) {
-        if (slot.id !== this.selectedId) {
-          await this.registry().deactivateSession(slot.id);
-          await this.disposeSlot(slot);
-        }
-      }
-      this.sessionIndex.invalidate();
-      this.emitProjectsChanged();
+      await this.selected().driver.setPackageEnabled(input);
       return this.replacement(false);
     });
   }
 
   async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
-      for (const slot of this.slots.values()) {
-        if (!this.slotCanSleep(slot)) throw new Error("packages can only change while every session is idle");
-      }
-      const selected = this.selected();
-      await selected.driver.updatePackageSettings(input);
-      for (const slot of [...this.slots.values()]) {
-        if (slot.id !== this.selectedId) {
-          await this.registry().deactivateSession(slot.id);
-          await this.disposeSlot(slot);
-        }
-      }
-      this.sessionIndex.invalidate();
-      this.emitProjectsChanged();
+      await this.selected().driver.updatePackageSettings(input);
       return this.replacement(false);
     });
   }
 
   async updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
-    await this.withLifecycle(async () => {
-      for (const slot of this.slots.values()) {
-        if (!this.slotCanSleep(slot)) throw new Error("hook settings can only change while every session is idle");
-      }
-      const selected = this.selected();
-      await selected.driver.updateHookSettings(input);
-      for (const slot of [...this.slots.values()]) {
-        if (slot.id !== this.selectedId) {
-          await this.registry().deactivateSession(slot.id);
-          await this.disposeSlot(slot);
-        }
-      }
-      this.sessionIndex.invalidate();
-      this.emitProjectsChanged();
-    });
+    await this.withLifecycle(() => this.selected().driver.updateHookSettings(input));
   }
 
   async rebuildDiscoverIndex(): Promise<void> {
@@ -1318,21 +1289,30 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async startProviderLogin(input: StartProviderLoginInput): Promise<void> {
-    this.assertGeneration(input.expectedGeneration);
-    const slot = this.selected();
-    await slot.driver.startProviderLogin({ ...input, expectedGeneration: slot.innerGeneration });
+    await this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      await slot.driver.startProviderLogin({ ...input, expectedGeneration: slot.innerGeneration });
+    });
   }
 
   async cancelProviderLogin(expectedGeneration: number): Promise<void> {
-    this.assertGeneration(expectedGeneration);
-    const slot = this.selected();
-    await slot.driver.cancelProviderLogin(slot.innerGeneration);
+    await this.withLifecycle(async () => {
+      this.assertGeneration(expectedGeneration);
+      const slot = this.selected();
+      await slot.driver.cancelProviderLogin(slot.innerGeneration);
+    });
   }
 
   async logoutProvider(provider: string, expectedGeneration: number): Promise<void> {
-    this.assertGeneration(expectedGeneration);
-    const slot = this.selected();
-    await slot.driver.logoutProvider(provider, slot.innerGeneration);
+    await this.withLifecycle(async () => {
+      this.assertGeneration(expectedGeneration);
+      for (const slot of this.slots.values()) {
+        if (!this.slotCanSleep(slot)) throw new Error("providers can only disconnect while every session is idle");
+      }
+      const slot = this.selected();
+      await slot.driver.logoutProvider(provider, slot.innerGeneration);
+    });
   }
 
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
@@ -2083,9 +2063,13 @@ export class RuntimeCoordinator implements PiDriver {
         return;
       }
     }
+    let statusCue: "turn-complete" | "attention" | undefined;
     if (event.type === "ui.event") {
       const request = event.payload as UiRequest;
-      if (["select", "confirm", "input", "editor", "questionnaire"].includes(request.method)) slot.pendingUi = request;
+      if (["select", "confirm", "input", "editor", "questionnaire"].includes(request.method)) {
+        slot.pendingUi = request;
+        if (slot.id !== this.selectedId) statusCue = "attention";
+      }
     }
     if (event.type === "ui.closed" && slot.pendingUi?.requestId === event.requestId) slot.pendingUi = undefined;
     if (slot.id === this.selectedId) {
@@ -2099,8 +2083,9 @@ export class RuntimeCoordinator implements PiDriver {
         this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
         const completed = payload.stopped !== true && payload.willRetry !== true;
+        const completionCue = completed && slot.id !== this.selectedId ? "turn-complete" : undefined;
         queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true).then(
-          () => this.publishStatus(slot.id, completed),
+          () => this.publishStatus(slot.id, completed, completionCue),
           () => this.publishStatus(slot.id),
         ));
       } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
@@ -2108,22 +2093,23 @@ export class RuntimeCoordinator implements PiDriver {
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
       }
     }
-    this.publishStatus(slot.id);
+    this.publishStatus(slot.id, false, statusCue);
   }
 
-  private publishStatus(sessionId: string, completed = false): void {
+  private publishStatus(sessionId: string, completed = false, cue?: "turn-complete" | "attention"): void {
     const slot = this.slots.get(sessionId);
     if (!slot) return;
     const state = slot.driver.runtimeState();
     const workStartedAt = slot.driver.runtimeDetails().workStartedAt;
     completed = completed && state === "idle";
-    if (state === slot.lastState && workStartedAt === slot.lastWorkStartedAt && !completed) return;
+    if ((cue === "turn-complete" && !completed) || (cue === "attention" && state !== "attention")) cue = undefined;
+    if (state === slot.lastState && workStartedAt === slot.lastWorkStartedAt && !completed && !cue) return;
     slot.lastState = state;
     slot.lastWorkStartedAt = workStartedAt;
-    this.emitStatus(sessionId, state, completed);
+    this.emitStatus(sessionId, state, completed, cue);
   }
 
-  private emitStatus(sessionId: string, state: SessionRuntimeState, completed = false): void {
+  private emitStatus(sessionId: string, state: SessionRuntimeState, completed = false, cue?: "turn-complete" | "attention"): void {
     if (!this.generation || !this.selectedId) return;
     const workStartedAt = this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt;
     this.emit({
@@ -2133,6 +2119,7 @@ export class RuntimeCoordinator implements PiDriver {
       state,
       workStartedAt: workStartedAt ?? null,
       ...(completed ? { completed: true } : {}),
+      ...(cue ? { cue } : {}),
     });
   }
 

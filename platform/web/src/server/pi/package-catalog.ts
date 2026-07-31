@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 import type { PackageSettingsReadModel } from "../../shared/protocol/snapshots.ts";
 import { validPackageSettings } from "../../shared/protocol/validation.ts";
 
@@ -34,6 +35,7 @@ export interface PackageCatalogState {
 
 const PACKAGE_ID = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/;
 const MAX_ID_LENGTH = 128;
+const importTypeScript = createJiti(import.meta.url);
 
 interface PackageSettingsAdapter {
   readSettings(context: { agentDir: string }): Promise<unknown>;
@@ -189,7 +191,7 @@ export class PackageCatalog {
   private adapter(path: string): Promise<PackageSettingsAdapter> {
     let adapter = this.adapters.get(path);
     if (adapter) return adapter;
-    adapter = import(pathToFileURL(path).href).then((module: Record<string, unknown>) => {
+    adapter = importTypeScript.import<Record<string, unknown>>(path).then((module) => {
       if (typeof module.readSettings !== "function" || typeof module.updateSettings !== "function") {
         throw new Error("package settings adapter is invalid");
       }

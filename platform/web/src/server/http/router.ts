@@ -86,6 +86,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/hooks") return await this.hookSettings(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/stateql") return await this.stateqlSnapshot(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-browser") return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
@@ -248,6 +249,22 @@ export class ServerTransport {
     if (!this.driver.listHookSettings) throw httpError(409, "hook settings are unavailable");
     const result = await this.driver.listHookSettings();
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing hook settings");
+    this.send(response, 200, result);
+  }
+
+  private async stateqlSnapshot(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = header(request.headers["x-pylon-tab-id"]);
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const generation = Number(url.searchParams.get("generation"));
+    const historyLimit = Number(url.searchParams.get("historyLimit") ?? 50);
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 100) throw httpError(400, "invalid StateQL history limit");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.stateqlSnapshot) throw httpError(409, "StateQL snapshot is unavailable");
+    const result = await this.driver.stateqlSnapshot(historyLimit);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading StateQL status");
+    response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }
 
@@ -538,15 +555,12 @@ export class ServerTransport {
         return this.driver.prompt({ commandId: command.commandId, expectedGeneration: command.expectedGeneration, message });
       }
       case "setPackageEnabled":
-        if (this.projection.pendingUi) return Promise.reject(httpError(409, "packages cannot change while a UI request is pending"));
         return this.driver.setPackageEnabled({ packageId: command.packageId, enabled: command.enabled })
           .then((result) => accepted(result.sessionGeneration));
       case "updatePackageSettings":
-        if (this.projection.pendingUi) return Promise.reject(httpError(409, "packages cannot change while a UI request is pending"));
         return this.driver.updatePackageSettings({ packageId: command.packageId, settings: command.settings })
           .then((result) => accepted(result.sessionGeneration));
       case "updateHookSettings":
-        if (this.projection.pendingUi) return Promise.reject(httpError(409, "hook settings cannot change while a UI request is pending"));
         if (!this.driver.updateHookSettings) return Promise.reject(httpError(409, "hook settings are unavailable"));
         return this.driver.updateHookSettings({ settings: command.settings })
           .then(() => accepted(command.expectedGeneration));
@@ -668,8 +682,8 @@ export class ServerTransport {
   }
   private openDialog(requestId: string, sessionGeneration: number, tabId: string | undefined): void {
     this.clearDialogOwner();
-    const connectedOwner = tabId && [...this.clients].some((client) => client.tabId === tabId) ? tabId : undefined;
-    this.dialogOwner = { requestId, sessionGeneration, tabId: connectedOwner };
+    this.dialogOwner = { requestId, sessionGeneration, tabId };
+    this.startDialogOwnerLossGrace(this.dialogOwner);
   }
   private renew(tabId: string): void {
     const owner = this.dialogOwner;
@@ -681,15 +695,17 @@ export class ServerTransport {
     if (!this.clients.delete(client)) return;
     clearInterval(client.heartbeat);
     const owner = this.dialogOwner;
-    if (owner?.tabId === client.tabId && ![...this.clients].some((item) => item.tabId === client.tabId)) {
-      const expected = owner;
-      owner.lossTimer = setTimeout(() => {
-        if (this.dialogOwner !== expected || expected.tabId !== client.tabId) return;
-        this.releaseDialogOwner(expected);
-        this.publishOwnership(expected.requestId);
-      }, this.options.dialogReconnectGraceMs ?? 10_000);
-      owner.lossTimer.unref?.();
-    }
+    if (owner?.tabId === client.tabId) this.startDialogOwnerLossGrace(owner);
+  }
+  private startDialogOwnerLossGrace(owner: DialogOwner): void {
+    const tabId = owner.tabId;
+    if (!tabId || owner.lossTimer || [...this.clients].some((client) => client.tabId === tabId)) return;
+    owner.lossTimer = setTimeout(() => {
+      if (this.dialogOwner !== owner || owner.tabId !== tabId) return;
+      this.releaseDialogOwner(owner);
+      this.publishOwnership(owner.requestId);
+    }, this.options.dialogReconnectGraceMs ?? 10_000);
+    owner.lossTimer.unref?.();
   }
   private releaseDialogOwner(owner: DialogOwner): void {
     if (owner.lossTimer) clearTimeout(owner.lossTimer);

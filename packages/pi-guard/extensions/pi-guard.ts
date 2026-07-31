@@ -186,7 +186,7 @@ export default function guardExtension(pi: ExtensionAPI) {
         ? `\n\nSession/project approval remembers directory:\n${scope.directory}`
         : "";
       selected = await ctx.ui.select(
-        `Pi Guard confirmation\n\n${reason}.\n\n${detail.slice(0, 2000)}${remembered}`,
+        `Pi-guard ${reason}\n\`${detail.slice(0, 2000)}\`${remembered}`,
         choices,
         dialogOptions(signal),
       );

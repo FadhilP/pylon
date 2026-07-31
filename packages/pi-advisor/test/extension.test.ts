@@ -69,6 +69,9 @@ test("parallel Advisor calls serialize and report running duration", async () =>
   assert.match(guidance, /Reserve a third advisor call for material contradictions, failures, or unresolved risks/);
   assert.match(guidance, /concrete decision, risk, or approach to review/);
   assert.match(guidance, /only the highest-priority cited file ranges/);
+  assert.match(guidance, /Usually provide 3–5 concise, non-overlapping ranges/);
+  assert.match(guidance, /use up to 8 only when each range is independently necessary/);
+  assert.match(guidance, /avoid redundant evidence/);
   assert.match(guidance, /complete decisive definitions, callers, and checks over broad file slices/);
   assert.match(guidance, /150–300 total evidence lines is a selection signal, not a hard cap/);
   assert.match(guidance, /main model decides, verifies evidence, and performs tools/);
@@ -322,5 +325,8 @@ test("advisor call renders the executor request instead of the user prompt", () 
 
   assert.ok(tool.parameters.required.includes("request"));
   assert.equal(tool.parameters.properties.request.maxLength, 8_192);
+  assert.equal(tool.parameters.properties.evidence.maxItems, 8);
+  assert.match(tool.parameters.properties.evidence.description, /Usually 3–5 concise, non-overlapping decisive ranges/);
+  assert.match(tool.parameters.properties.evidence.description, /use up to 8 only when independently necessary/);
   assert.match(tool.parameters.properties.evidence.description, /150–300 total lines/);
 });

@@ -14,17 +14,19 @@ import {
   IconLoader2,
   IconSearch,
   IconRestore,
+  IconRefresh,
   IconTimeline,
   IconTool,
   IconTrash,
   IconX,
+  IconThinkingMedium
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import type { JobReadModel, VerificationReadModel } from "../shared/protocol/events";
-import type { DialogTimeoutSeconds, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -36,7 +38,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
   { id: "overview", label: "Overview", icon: IconLayoutDashboard },
   { id: "policy", label: "Policy", icon: IconAdjustmentsHorizontal },
   { id: "timeline", label: "Timeline", icon: IconTimeline },
-  { id: "memory", label: "Memory", icon: IconDatabase },
+  { id: "memory", label: "Memory", icon: IconThinkingMedium },
   { id: "tools", label: "Tools", icon: IconTool },
 ];
 
@@ -495,9 +497,95 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
           <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(fact)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => void remove(fact)}><IconTrash size={13} />Delete</button></footer>
         </>}
       </article>)}
-      {memory.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
+      {memory.length === 0 && <div className="empty-state"><IconThinkingMedium size={20} /><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
       {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
       {error && <p className="ui-request-error" role="alert">{error}</p>}
+    </InspectorSection>
+  </div>;
+}
+
+export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
+  const [snapshot, setSnapshot] = useState<StateQLSnapshot>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const toolRevision = useMemo(() => (live.runtime?.conversation.tools ?? [])
+    .filter((tool) => tool.name === "stateql" && tool.status !== "running")
+    .map((tool) => `${tool.id}:${tool.status}`)
+    .join("|"), [live.runtime?.conversation.tools]);
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    const controller = new AbortController();
+    let active = true;
+    void runtimeStore.stateqlSnapshot(50, controller.signal)
+      .then((value) => { if (active) setSnapshot(value); })
+      .catch((cause) => {
+        if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "StateQL status failed to load");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, refresh, toolRevision]);
+
+  if (!snapshot && loading) return <div className="empty-state"><IconLoader2 className="spin" size={20} /><strong>Loading StateQL</strong><span>Reading bounded local status and history.</span></div>;
+  if (!snapshot) return <div className="empty-state"><IconDatabase size={20} /><strong>StateQL unavailable</strong><span>{error || "No StateQL snapshot is available for this actor."}</span></div>;
+  const connection = snapshot.connection;
+  return <div className="page-grid">
+    <InspectorSection title="Database status" meta={snapshot.session.status}>
+      <div className="table-toolbar">
+        <div><p className="mono">{snapshot.session.name}</p><small className="mono">Actor {oneLine(snapshot.actor_id, 24)}</small></div>
+        <button className="text-button" type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>
+          {loading ? <IconLoader2 className="spin" size={13} /> : <IconRefresh size={13} />}Refresh
+        </button>
+      </div>
+      <div className="usage-strip" aria-label="StateQL database status">
+        <div><small>Connection</small><strong>{connection?.driver ?? "None"}</strong><span>{connection ? connection.read_only ? "read-only" : "read-write" : "disconnected"}</span></div>
+        <div><small>Database</small><strong title={connection?.database}>{connection ? oneLine(connection.database, 24) : "—"}</strong><span>{connection?.name ?? "No active connection"}</span></div>
+        <div><small>Transaction</small><strong>{snapshot.transaction?.state ?? "None"}</strong><span>{snapshot.transaction ? `owner ${oneLine(snapshot.transaction.owner_actor_id, 18)}` : "no staged writes"}</span></div>
+        <div><small>State</small><strong>{snapshot.state_version ?? "—"}</strong><span>{snapshot.state_confidence ?? "unavailable"}</span></div>
+      </div>
+      {error && <p className="ui-request-error" role="alert">{error}</p>}
+    </InspectorSection>
+
+    <InspectorSection title="Recent results" meta={`${snapshot.recent_results.length}`} className="tool-table-panel">
+      <div className="tool-table" role="table" aria-label="Recent StateQL results">
+        <div className="tool-table-head" role="row"><span role="columnheader">Handle</span><span role="columnheader">Alias</span><span role="columnheader">Rows</span><span role="columnheader">State</span></div>
+        {snapshot.recent_results.map((result) => <div className="tool-table-row" role="row" key={result.handle}>
+          <span className="tool-name mono" role="cell">{result.handle}</span>
+          <span role="cell">{result.alias ?? "—"}</span>
+          <span className="mono" role="cell">{result.rows}</span>
+          <span role="cell"><Status tone="neutral">materialized</Status></span>
+        </div>)}
+        {snapshot.recent_results.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No result handles</strong><span>StateQL queries will appear here.</span></div>}
+      </div>
+    </InspectorSection>
+
+    <InspectorSection title="Recent operations" meta={`${snapshot.recent_operations.length}`} className="tool-table-panel">
+      <div className="tool-table" role="table" aria-label="Recent StateQL operations">
+        <div className="tool-table-head" role="row"><span role="columnheader">Handle</span><span role="columnheader">Type</span><span role="columnheader">Rows</span><span role="columnheader">State</span></div>
+        {snapshot.recent_operations.map((operation) => <div className="tool-table-row" role="row" key={operation.handle}>
+          <span className="tool-name mono" role="cell">{operation.handle}</span>
+          <span className="tool-name" role="cell"><span><strong>{operation.type}</strong><small className="mono">{oneLine(operation.actor_id, 18)}</small></span></span>
+          <span className="mono" role="cell">{operation.affected_rows ?? "—"}</span>
+          <span role="cell"><Status tone={operation.status === "committed" ? "success" : operation.status === "failed" || operation.status === "outcome_unknown" ? "danger" : "active"}>{operation.status}</Status></span>
+        </div>)}
+        {snapshot.recent_operations.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No database writes</strong><span>Confirmed write operations will appear here.</span></div>}
+      </div>
+    </InspectorSection>
+
+    <InspectorSection title="Command history" meta={`${snapshot.history.length}`} className="tool-table-panel">
+      <div className="tool-table" role="table" aria-label="StateQL command history">
+        <div className="tool-table-head" role="row"><span role="columnheader">Command</span><span role="columnheader">Handle</span><span role="columnheader">Result</span><span role="columnheader">Time</span></div>
+        {snapshot.history.map((entry) => <div className="tool-table-row" role="row" key={entry.command_id}>
+          <span className="tool-name" role="cell"><span><strong>{entry.command}</strong><small className="mono">{oneLine(entry.actor_id, 18)}</small></span></span>
+          <span className="mono" role="cell">{entry.handle ?? "—"}</span>
+          <span role="cell"><Status tone={!entry.success ? "danger" : entry.cached ? "neutral" : "success"}>{entry.success ? entry.cached ? "cached" : entry.executed ? "executed" : "ok" : entry.error_code ?? "failed"}</Status></span>
+          <time role="cell" dateTime={entry.timestamp}>{displayTime(entry.timestamp)}</time>
+        </div>)}
+        {snapshot.history.length === 0 && <div className="empty-state"><IconClock size={20} /><strong>No StateQL history</strong><span>Commands run in this shared workspace will appear here.</span></div>}
+      </div>
     </InspectorSection>
   </div>;
 }

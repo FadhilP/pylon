@@ -150,6 +150,113 @@ test("session status publishes work timer changes even when runtime state is unc
   ]);
 });
 
+test("background completion preserves its sound cue when selection changes during settlement", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.selectedId = "selected";
+  const slot = {
+    id: "background",
+    driver: {
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+    },
+    lastState: "running",
+    lastWorkStartedAt: "2026-07-30T10:00:00.000Z",
+    lastActivityAt: Date.now(),
+  };
+  internal.slots.set(slot.id, slot);
+  internal.invalidateWorkspaceInventory = () => {};
+  internal.refreshWorkspace = async () => {};
+  let releaseSettlement!: () => void;
+  internal.settleAgentRun = () => new Promise<void>((resolve) => { releaseSettlement = resolve; });
+
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    sessionId: slot.id,
+    sessionGeneration: 1,
+    payload: { type: "agent_end", stopped: false },
+  });
+  await Promise.resolve();
+  internal.selectedId = slot.id;
+  releaseSettlement();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const completion = events.find((event) => event.type === "session.status" && event.completed === true);
+  assert.equal(completion?.sessionId, slot.id);
+  assert.equal(completion?.cue, "turn-complete");
+});
+
+test("background attention status carries explicit sound cue intent", () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.selectedId = "selected";
+  const slot = {
+    id: "background",
+    driver: {
+      runtimeState: () => "attention",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+    },
+    lastState: "running",
+    lastActivityAt: Date.now(),
+  };
+  internal.slots.set(slot.id, slot);
+
+  internal.onSlotEvent(slot, {
+    type: "ui.event",
+    sessionId: slot.id,
+    sessionGeneration: 1,
+    payload: { kind: "request", requestId: "approval", method: "confirm", payload: {}, createdAt: new Date().toISOString() },
+  });
+
+  const attention = events.find((event) => event.type === "session.status" && event.state === "attention");
+  assert.equal(attention?.sessionId, slot.id);
+  assert.equal(attention?.cue, "attention");
+});
+
+test("settings persist while sessions run, but provider logout waits for idle", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const updates: string[] = [];
+  let running = true;
+  const selected = {
+    id: "selected",
+    innerGeneration: 1,
+    driver: {
+      canSleep: () => true,
+      setPackageEnabled: async () => { updates.push("enabled"); },
+      updatePackageSettings: async () => { updates.push("package"); },
+      updateHookSettings: async () => { updates.push("hooks"); },
+      logoutProvider: async () => { updates.push("logout"); },
+    },
+  };
+  const background = {
+    id: "background",
+    driver: { canSleep: () => !running },
+  };
+  internal.generation = 1;
+  internal.selectedId = selected.id;
+  internal.slots.set(selected.id, selected);
+  internal.slots.set(background.id, background);
+
+  await coordinator.setPackageEnabled({ packageId: "pi-sieve", enabled: false });
+  await coordinator.updatePackageSettings({ packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 10_000 } });
+  await coordinator.updateHookSettings({ settings: { sessionStart: { enabled: false, sources: [] }, beforeAgentStart: { enabled: false, sources: [] } } });
+  assert.deepEqual(updates, ["enabled", "package", "hooks"]);
+  assert.equal(internal.slots.size, 2);
+
+  await assert.rejects(coordinator.logoutProvider("mock", 1), /every session is idle/);
+  running = false;
+  await coordinator.logoutProvider("mock", 1);
+  assert.deepEqual(updates, ["enabled", "package", "hooks", "logout"]);
+});
+
 test("runtime pool warm-switches without rebuilding and wakes sleeping sessions", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-pool-"));
   const cwd = join(root, "workspace");
@@ -573,6 +680,7 @@ test("empty project registry uses parking runtime and add/remove keeps the works
     assert.equal(added.cancelled, false);
     assert.equal((await driver.snapshot()).projectAvailable, true);
     assert.equal((await driver.listSessions()).projects[0]?.totalCount, 0);
+    assert.equal((await driver.listSessions()).projects[0]?.cwd, cwd);
 
     const archived = await driver.archiveProject({ projectId: projectIdForCwd(cwd), expectedGeneration: added.sessionGeneration });
     assert.equal((await driver.snapshot()).projectAvailable, false);

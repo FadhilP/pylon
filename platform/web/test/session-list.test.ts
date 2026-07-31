@@ -24,6 +24,7 @@ function page(id: string, count: number, returned = count): SessionProjectPage {
   return {
     id,
     label: id,
+    cwd: `/projects/${id}`,
     totalCount: count,
     sessions: Array.from({ length: returned }, (_, index) => session(`${id}-${index + 1}`, id)),
     ...(returned < count ? { nextCursor: String(returned) } : {}),

@@ -30,7 +30,8 @@ import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
 import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import { isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -101,12 +102,6 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
   return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
 }
 
-function hotPackageSettings(packageId: string, settings: PackageSettingsReadModel): boolean {
-  return packageId === "pi-advisor" && settings.kind === "advisor"
-    || packageId === "pi-scout" && settings.kind === "scout"
-    || packageId === "pi-grunt" && settings.kind === "grunt";
-}
-
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
@@ -152,6 +147,67 @@ function heliosPage(value: unknown): HeliosPageIdentity | undefined {
     || typeof page.title !== "string" || page.title.length > 500
     || typeof page.url !== "string" || page.url.length > 4096) return undefined;
   return { index: page.index as number, title: page.title, url: page.url };
+}
+
+function stateqlResult(value: unknown, sessionId: string, sessionGeneration: number): StateQLSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("StateQL returned an invalid snapshot");
+  const raw = value as Record<string, any>;
+  const closed = raw.session?.status === "closed";
+  const candidate = {
+    ...raw,
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration,
+    ...(closed ? { connection: null, transaction: null } : {}),
+  };
+  if (!isStateQLSnapshot(candidate) || candidate.actor_id !== sessionId) throw new Error("StateQL returned an invalid snapshot");
+  const snapshot = candidate as StateQLSnapshot;
+  const result: StateQLSnapshot = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration,
+    session: {
+      session_id: snapshot.session.session_id,
+      name: snapshot.session.name,
+      status: snapshot.session.status,
+    },
+    actor_id: snapshot.actor_id,
+    connection: snapshot.connection ? {
+      connection_id: snapshot.connection.connection_id,
+      name: snapshot.connection.name,
+      status: snapshot.connection.status,
+      driver: snapshot.connection.driver,
+      database: snapshot.connection.database,
+      read_only: snapshot.connection.read_only,
+    } : null,
+    transaction: snapshot.transaction ? {
+      transaction_id: snapshot.transaction.transaction_id,
+      owner_actor_id: snapshot.transaction.owner_actor_id,
+      state: snapshot.transaction.state,
+    } : null,
+    state_version: snapshot.state_version,
+    state_confidence: snapshot.state_confidence,
+    recent_results: snapshot.recent_results.map((item) => ({ alias: item.alias, handle: item.handle, rows: item.rows })),
+    recent_operations: snapshot.recent_operations.map((item) => ({
+      handle: item.handle,
+      actor_id: item.actor_id,
+      type: item.type,
+      affected_rows: item.affected_rows,
+      status: item.status,
+    })),
+    history: snapshot.history.map((item) => ({
+      command_id: item.command_id,
+      timestamp: item.timestamp,
+      session_id: item.session_id,
+      actor_id: item.actor_id,
+      command: item.command,
+      handle: item.handle,
+      executed: item.executed,
+      cached: item.cached,
+      success: item.success,
+      error_code: item.error_code,
+    })),
+  };
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 96 * 1024) throw new Error("StateQL returned an oversized snapshot");
+  return result;
 }
 
 function heliosResult(value: unknown, sessionGeneration: number): HeliosBrowserResult {
@@ -547,7 +603,7 @@ export class SessionRuntime implements PiDriver {
         settingsError = error instanceof Error ? error.message.slice(0, 500) : "Settings unavailable";
       }
       const enabled = state.enabledIds.has(item.id);
-      const active = enabled && item.extensionPaths.every((path) => loaded.has(resolve(path)));
+      const active = item.extensionPaths.every((path) => loaded.has(resolve(path)));
       return {
         id: item.id,
         name: item.name,
@@ -912,6 +968,43 @@ export class SessionRuntime implements PiDriver {
     };
   }
 
+  async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:stateql-snapshot-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      historyLimit,
+      signal: controller.signal,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("StateQL snapshot is unavailable");
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("StateQL snapshot request timed out")), { once: true })),
+      ]);
+      return stateqlResult(value, runtime.session.sessionId, this.gate.generation);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
+  }
+
   async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
     if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
     const runtime = this.requireRuntime();
@@ -1119,52 +1212,32 @@ export class SessionRuntime implements PiDriver {
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {
     const catalog = this.packageCatalog;
+    const runtime = this.requireRuntime();
     if (!catalog) throw new Error("runtime is not ready");
-    return this.changePackages(async (previous) => {
-      if (previous.enabledIds.has(input.packageId) === input.enabled) {
-        return { next: previous, rollback: async () => undefined, changed: false };
+    return this.withSettingsUpdate(async () => {
+      const current = await catalog.scan();
+      if (current.enabledIds.has(input.packageId) !== input.enabled) {
+        await catalog.setEnabled(input.packageId, input.enabled);
       }
-      return {
-        next: await catalog.setEnabled(input.packageId, input.enabled),
-        rollback: () => catalog.restoreEnabled(previous.enabledIds),
-      };
+      return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
   }
 
   async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
     const catalog = this.packageCatalog;
+    const runtime = this.requireRuntime();
     if (!catalog) throw new Error("runtime is not ready");
     this.assertPackageModels(input.settings);
-    return this.changePackages(async (previous) => {
-      const oldSettings = await catalog.updateSettings(input.packageId, input.settings);
-      const rollback = () => catalog.updateSettings(input.packageId, oldSettings).then(() => undefined);
-      if (hotPackageSettings(input.packageId, input.settings)) {
-        const refresh = () => this.refreshPackageSettings(input.packageId, previous.enabledIds.has(input.packageId));
-        try {
-          await refresh();
-        } catch (error) {
-          try {
-            await rollback();
-            await refresh();
-          } catch (rollbackError) {
-            this.recordError(rollbackError);
-          }
-          throw error;
-        }
-        return { next: previous, rollback, changed: false };
-      }
-      return { next: await catalog.scan(), rollback };
+    return this.withSettingsUpdate(async () => {
+      await catalog.updateSettings(input.packageId, input.settings);
+      return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
   }
 
   async updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
     const store = this.hookSettings;
-    const bridge = this.hookInjection;
-    if (!store || !bridge || !this.gate.ready || !this.canSleep()) {
-      throw new Error("hook settings can only change while the session is idle");
-    }
-    await store.update(input.settings);
-    bridge.update(input.settings);
+    if (!store) throw new Error("runtime is not ready");
+    await this.withSettingsUpdate(() => store.update(input.settings));
   }
 
   async rebuildDiscoverIndex(): Promise<void> {
@@ -1192,72 +1265,15 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-  private async changePackages(
-    mutate: (previous: PackageCatalogState) => Promise<{ next: PackageCatalogState; rollback: () => Promise<void>; changed?: boolean }>,
-  ): Promise<ReplacementResult> {
-    const runtime = this.requireRuntime();
-    const catalog = this.packageCatalog;
-    if (!catalog || !this.createRuntime || !this.target || !this.gate.ready) throw new Error("runtime is not ready");
-    if (this.packageUpdate || this.sessionMutation || runtime.session.isStreaming || this.ui.hasPendingDialog
-      || this.operational.jobs.items.some((job) => job.state === "running")) {
-      throw new Error("packages can only change while the session is idle");
-    }
-    const sessionFile = runtime.session.sessionFile;
-    if (!sessionFile) throw new Error("the current session must be persisted before packages can change");
-    const session = { cwd: runtime.cwd, path: sessionFile };
+  private async withSettingsUpdate<T>(action: () => Promise<T>): Promise<T> {
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    if (this.packageUpdate || this.sessionMutation) throw new Error("another settings update is in progress");
     this.packageUpdate = true;
-    const previous = await catalog.scan().catch((error) => {
-      this.packageUpdate = false;
-      throw error;
-    });
-    const previousFactory = this.createRuntime;
-    let rollback: (() => Promise<void>) | undefined;
     try {
-      const change = await mutate(previous);
-      rollback = change.rollback;
-      if (change.changed === false) {
-        return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
-      }
-      const nextFactory = await createPylonRuntimeFactory({
-        agentDir: this.target.agentDir,
-        additionalExtensionPaths: change.next.extensionPaths,
-        extensionFactories: [this.promptAttachments.extension, this.workspaceApplyTool.extension, this.hookInjection!.extension, ...(this.options.extensionFactories ?? [])],
-        eventBus: this.eventBus,
-      });
-      this.packageState = change.next;
-      await this.rebuildSession(session, nextFactory, false);
-      this.createRuntime = nextFactory;
-      return { cancelled: false, sessionId: this.requireRuntime().session.sessionId, sessionGeneration: this.gate.generation };
-    } catch (error) {
-      await rollback?.().catch(() => undefined);
-      this.packageState = previous;
-      if (!this.gate.ready) {
-        await this.rebuildSession(session, previousFactory, true).catch((recoveryError) => this.recordError(recoveryError));
-      }
-      throw error;
+      return await action();
     } finally {
       this.packageUpdate = false;
     }
-  }
-
-  private refreshPackageSettings(packageId: string, required: boolean): Promise<void> {
-    const agentDir = this.target?.agentDir;
-    if (!agentDir) throw new Error("runtime is not ready");
-    const handlers: Array<() => Promise<void>> = [];
-    this.eventBus.emit("pylon:package-settings-changed", {
-      version: 1,
-      packageId,
-      agentDir,
-      acknowledge: (handler: unknown) => {
-        if (typeof handler === "function") handlers.push(handler as () => Promise<void>);
-      },
-    });
-    if (handlers.length === 0) {
-      if (required) throw new Error(`${packageId} settings refresh is unavailable`);
-      return Promise.resolve();
-    }
-    if (handlers.length !== 1) throw new Error(`${packageId} settings refresh is ambiguous`);
-    return handlers[0]!();
   }
 
   private assertPackageModels(settings: PackageSettingsReadModel): void {
@@ -1629,7 +1645,7 @@ export class SessionRuntime implements PiDriver {
     this.authAbort = undefined;
     this.authGeneration = undefined;
     this.authFlow = undefined;
-    this.ui.cancelAll();
+    this.ui.dispose();
     this.detachSession();
     this.detachBus();
     this.eventBus.clear();
@@ -1859,6 +1875,9 @@ export class SessionRuntime implements PiDriver {
         invalidateFileSuggestions(session.sessionManager.getCwd());
         this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
         this.refreshSnapshot();
+        const assistantMessage = messageId
+          ? this.lastSnapshot?.conversation.messages.find((message) => message.id === messageId)
+          : undefined;
         forwarded = {
           ...raw,
           workDurationMs: duration,
@@ -1869,6 +1888,7 @@ export class SessionRuntime implements PiDriver {
           metrics: this.lastSnapshot?.metrics,
           stopped,
           userEntryId,
+          assistantMessage: assistantMessage ?? null,
           errorMessage: this.agentError,
         };
       } else if (kind === "session_info_changed") {

@@ -2,37 +2,32 @@
 
 Bundled workflow extensions and a low-noise theme for [Pi](https://pi.dev). Pylon adds planning, repository research, verification, safety, outbound context limiting, background work, checkpoints, and UI improvements.
 
-## Installation
+## Web App
 
-## Web Setup
-
-From the repository root, install dependencies and start the local web app:
+Install Pylon globally, enter the project you want to work on, and run `pylon`:
 
 ```sh
-npm run install:packages
-npm run web
+npm install --global @fadhilp/pylon
+cd /path/to/your/project
+pylon
 ```
 
-Then open [http://127.0.0.1:3141](http://127.0.0.1:3141). For development without a production build, run:
+Before starting, Pylon checks npm for a newer stable release. In an interactive terminal it asks before installing; in non-interactive use it only prints the exact update command. After any approved install attempt, Pylon exits so it never starts from files npm may be replacing; run `pylon` again to use the updated package. Set `PYLON_NO_UPDATE_CHECK=1` to skip the check.
 
-```sh
-npm run dev --workspace @pylon/web
-```
-
-The web host binds only to loopback. `PYLON_CWD` selects the initial project directory; `PYLON_PORT` changes the default port (`3141`).
+Then open [http://127.0.0.1:3141](http://127.0.0.1:3141). The web host binds only to loopback and uses the current directory as its initial project. `PYLON_CWD` overrides that directory; `PYLON_PORT` changes the default port (`3141`).
 
 Go to settings to setup your preferred provider. Choose your models for Advisor, Scout, Grunt. Recommended configuration for openAI subscriptions:
 - Main agent: GPT 5.6 Sol Medium
 - Advisor: GPT 5.6 Sol High
-- Scout: GPT 5.6 Luna Medium
+- Scout: GPT 5.6 Luna Medium/High
 - Grunt: GPT 5.6 Terra (Thinking level will be decided by main agent)
 
 ## Terminal Setup
 
-Install the complete bundle from GitHub:
+Install the complete bundle from npm:
 
 ```sh
-pi install git:github.com/FadhilP/pylon
+pi install npm:@fadhilp/pylon
 ```
 
 Then reload Pi:
@@ -82,6 +77,7 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 - **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
 - **[pi-heartbeat](./packages/pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
 - **[pi-helios](./packages/pi-helios)** — Provides owned Playwright browsers with isolated profiles, consent-gated browser attachment, and named Windows-window screenshots.
+- **[pi-stateql](./packages/pi-stateql)** — Provides safe stateful database queries, durable result handles, confirmed writes, and bounded web status/history.
 - **[pi-discover](./packages/pi-discover)** — Indexes supported source files in local SQLite for symbol and lexical code search, provides read-only repository search, and coordinates inactive-tool discovery.
 - **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance, fresh-browser isolated public-web research, and explicit Pi-session search.
 - **[pi-sieve](./packages/pi-sieve)** — Limits old bulky successful tool output in outbound context without modifying stored session messages.
@@ -106,6 +102,21 @@ Packages coordinate through bounded, versioned event-bus metadata while remainin
 Raw verification and Heartbeat logs never cross package events.
 
 ## Development
+
+Install workspace dependencies and start the local web app from the repository root:
+
+```sh
+npm run install:packages
+npm run web
+```
+
+For development without a production build, run `npm run dev --workspace @pylon/web`.
+
+### Publishing
+
+Configure npm Trusted Publishing for `@fadhilp/pylon` with repository `FadhilP/pylon` and workflow `publish.yml`; no npm token is required. Then update the version in `package.json` and `package-lock.json` and publish a GitHub Release with the matching tag, such as `v1.0.3`.
+
+[`.github/workflows/publish.yml`](./.github/workflows/publish.yml) follows the same release flow as StateQL: it installs from the lockfile and runs `npm publish`, which triggers Pylon's verification, clean-package test, and build lifecycle.
 
 Platform applications live under `platform/`: `platform/web` contains the current local web client and host, while `platform/desktop` reserves the future desktop shell.
 

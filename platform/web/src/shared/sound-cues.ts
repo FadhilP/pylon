@@ -26,12 +26,10 @@ export function appendWebAudioCue(
   const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, unknown>
     : {};
-  const backgroundStatus = event.type === "session.status"
-    && typeof payload.sessionId === "string"
-    && payload.sessionId !== event.sessionId;
-  const attention = event.type === "ui.request" || (backgroundStatus && payload.state === "attention");
+  const statusCue = event.type === "session.status" ? payload.cue : undefined;
+  const attention = event.type === "ui.request" || statusCue === "attention";
   const completed = (event.type === "agent.end" && payload.stopped !== true && payload.willRetry !== true)
-    || (backgroundStatus && payload.completed === true);
+    || statusCue === "turn-complete";
   const kind: WebAudioCueKind | undefined = attention
     ? "attention"
     : completed ? "turn-complete" : undefined;

@@ -1,6 +1,6 @@
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -341,6 +341,7 @@ export function isSessionListSnapshot(value: unknown): value is SessionListSnaps
   return value.projects.every((project) => record(project)
     && identifier(project.id)
     && typeof project.label === "string" && project.label.length > 0 && project.label.length <= 500
+    && boundedString(project.cwd, 32 * 1024)
     && Number.isSafeInteger(project.totalCount) && (project.totalCount as number) >= 0
     && (project.nextCursor === undefined || identifier(project.nextCursor))
     && Array.isArray(project.sessions) && project.sessions.length <= 100
@@ -376,6 +377,38 @@ export function isWorkspaceFileContent(value: unknown): value is WorkspaceFileCo
     && ["available", "deleted", "binary", "oversized"].includes(String(value.state))
     && (value.text === undefined || typeof value.text === "string" && value.text.length <= 2 * 1024 * 1024)
     && (value.truncated === undefined || typeof value.truncated === "boolean");
+}
+
+export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !record(value.session) || !identifier(value.session.session_id) || !identifier(value.session.name)
+    || !["active", "closed"].includes(String(value.session.status)) || !identifier(value.actor_id)
+    || !Array.isArray(value.recent_results) || value.recent_results.length > 10
+    || !Array.isArray(value.recent_operations) || value.recent_operations.length > 10
+    || !Array.isArray(value.history) || value.history.length > 100) return false;
+  const connection = value.connection;
+  if (connection !== null && (!record(connection) || !identifier(connection.connection_id)
+    || !boundedString(connection.name, 500) || connection.status !== "connected"
+    || !["sqlite", "postgres", "mysql"].includes(String(connection.driver))
+    || !boundedString(connection.database, 500) || typeof connection.read_only !== "boolean")) return false;
+  const transaction = value.transaction;
+  if (transaction !== null && (!record(transaction) || !identifier(transaction.transaction_id)
+    || !identifier(transaction.owner_actor_id) || !boundedString(transaction.state, 100))) return false;
+  if (value.session.status === "closed" && (connection !== null || transaction !== null)) return false;
+  if (value.state_version !== null && !boundedString(value.state_version, 128)) return false;
+  if (value.state_confidence !== null && !["authoritative", "transaction_snapshot", "database_reported", "local", "ttl_based", "unknown"].includes(String(value.state_confidence))) return false;
+  if (!value.recent_results.every((item) => record(item)
+    && (item.alias === null || boundedString(item.alias, 200)) && identifier(item.handle)
+    && Number.isSafeInteger(item.rows) && (item.rows as number) >= 0 && (item.rows as number) <= 10_000)) return false;
+  if (!value.recent_operations.every((item) => record(item) && identifier(item.handle)
+    && identifier(item.actor_id) && boundedString(item.type, 100) && boundedString(item.status, 100)
+    && (item.affected_rows === null || Number.isSafeInteger(item.affected_rows) && (item.affected_rows as number) >= 0))) return false;
+  return value.history.every((item) => record(item) && identifier(item.command_id)
+    && typeof item.timestamp === "string" && item.timestamp.length <= 64 && !Number.isNaN(Date.parse(item.timestamp))
+    && identifier(item.session_id) && identifier(item.actor_id) && boundedString(item.command, 100)
+    && (item.handle === null || identifier(item.handle))
+    && typeof item.executed === "boolean" && typeof item.cached === "boolean" && typeof item.success === "boolean"
+    && (item.error_code === null || boundedString(item.error_code, 100)));
 }
 
 export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnapshot {

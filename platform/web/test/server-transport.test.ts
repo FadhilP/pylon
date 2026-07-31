@@ -6,7 +6,7 @@ import { WebSocket } from "ws";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
@@ -57,7 +57,10 @@ class FakeDriver implements PiDriver {
   indexRebuilds = 0;
   newSessionParent?: string;
   heliosRequests: HeliosBrowserInput[] = [];
+  stateqlHistoryLimits: number[] = [];
   dialogMethod: "confirm" | "questionnaire" = "confirm";
+  deferDialog = false;
+  private pendingDialog?: DriverEvent;
   start(_target: RuntimeTarget): Promise<RuntimeHandle> { return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 }); }
   snapshot(): Promise<RuntimeSnapshot> { return Promise.resolve(structuredClone(this.current)); }
   terminalTarget() { return { sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, cwd: process.cwd() }; }
@@ -80,7 +83,7 @@ class FakeDriver implements PiDriver {
   }
   listSessions(): Promise<SessionListSnapshot> {
     const session = { id: this.current.sessionId, projectId: "project-workspace", cwdLabel: this.current.cwdLabel, createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 0, preview: "", active: true, pinned: false, runtimeState: "idle" as const };
-    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, activeSessions: [session], projects: [{ id: "project-workspace", label: "workspace", totalCount: 1, sessions: [session] }] });
+    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, activeSessions: [session], projects: [{ id: "project-workspace", label: "workspace", cwd: process.cwd(), totalCount: 1, sessions: [session] }] });
   }
   listArchived(): Promise<ArchiveListSnapshot> {
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [], sessions: [], totalSessionCount: 0 });
@@ -91,6 +94,22 @@ class FakeDriver implements PiDriver {
     this.heliosRequests.push(input);
     return Promise.resolve({ version: 1 as const, sessionGeneration: this.current.sessionGeneration, active: true, ownership: "owned" as const, state: "ready" as const, controlled: true });
   }
+  stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+    this.stateqlHistoryLimits.push(historyLimit);
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      session: { session_id: "s_1", name: "shared-workspace", status: "active" },
+      actor_id: this.current.sessionId,
+      connection: null,
+      transaction: null,
+      state_version: null,
+      state_confidence: null,
+      recent_results: [],
+      recent_operations: [],
+      history: [],
+    });
+  }
   prompt(input: PromptInput): Promise<AcceptedCommand> {
     this.prompts.push(input.message);
     this.promptImages.push(input.images);
@@ -98,8 +117,15 @@ class FakeDriver implements PiDriver {
     const payload = this.dialogMethod === "questionnaire"
       ? { title: "Clarify", questions: [{ question: "Which target?", options: ["Tests", "Build"] }] }
       : { title: "Guard approval", message: "Allow risky action?" };
-    this.emit({ type: "ui.event", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, payload: { kind: "request", requestId, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, method: this.dialogMethod, payload, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } });
+    const event: DriverEvent = { type: "ui.event", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, payload: { kind: "request", requestId, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, method: this.dialogMethod, payload, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+    if (this.deferDialog) this.pendingDialog = event;
+    else this.emit(event);
     return Promise.resolve({ commandId: input.commandId, sessionGeneration: this.current.sessionGeneration, accepted: true });
+  }
+  flushDialog(): void {
+    if (!this.pendingDialog) return;
+    this.emit(this.pendingDialog);
+    this.pendingDialog = undefined;
   }
   queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
     this.queued = { id: "queue-1", message: input.message, images: input.images, planMode: input.planMode === true };
@@ -524,6 +550,13 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.deepEqual((await body(files)).paths, ["src/index.ts"]);
     assert.equal((await fetch(`${origin}/api/v1/file-suggestions?q=src&generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
     assert.equal((await fetch(`${origin}/api/v1/file-suggestions?q=${"x".repeat(201)}&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 400);
+    const stateql = await fetch(`${origin}/api/v1/stateql?generation=1&historyLimit=25`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(stateql.status, 200);
+    assert.equal(stateql.headers.get("cache-control"), "no-store");
+    assert.equal((await body(stateql)).sessionGeneration, 1);
+    assert.deepEqual(driver.stateqlHistoryLimits, [25]);
+    assert.equal((await fetch(`${origin}/api/v1/stateql?generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/stateql?generation=1&historyLimit=101`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 400);
     const archives = await fetch(`${origin}/api/v1/archives`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(archives.status, 200);
     assert.deepEqual((await body(archives)).projects, []);
@@ -639,7 +672,7 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
   }
 });
 
-test("dialog owner reconnect preserves Guard confirmation and owner loss releases it", { timeout: 10_000 }, async () => {
+test("dialog owner survives disconnect races and releases after reconnect grace", { timeout: 10_000 }, async () => {
   const driver = new FakeDriver();
   let transport: ServerTransport;
   const server = createServer((request, response) => void transport.handle(request, response));
@@ -648,6 +681,7 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
   const origin = `http://127.0.0.1:${port}`;
   transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], dialogReconnectGraceMs: 500 });
   const tab = "guard-owner";
+  const otherTab = "guard-observer";
   let stream = new AbortController();
   try {
     const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
@@ -658,15 +692,48 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
     const prompt = (commandId: string) => fetch(`${origin}/api/v1/commands`, {
       method: "POST", headers, body: JSON.stringify({ type: "prompt", commandId, expectedGeneration: 1, message: "risky action" }),
     });
+    const waitForDisconnect = async () => {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const health = await body(await fetch(`${origin}/api/v1/health`));
+        if (health.sseClients === 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.fail("SSE client did not disconnect");
+    };
+
+    driver.deferDialog = true;
+    assert.equal((await prompt("guard-delayed-dialog")).status, 200);
+    stream.abort();
+    await waitForDisconnect();
+    driver.flushDialog();
+    const delayedBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }));
+    const delayedPending = delayedBoot.pendingUi as { owned: boolean; ownershipAvailable: boolean };
+    assert.deepEqual({ owned: delayedPending.owned, ownershipAvailable: delayedPending.ownershipAvailable }, {
+      owned: true,
+      ownershipAvailable: false,
+    });
+    const observerDuringGrace = (await body(await fetch(`${origin}/api/v1/bootstrap`, {
+      headers: { cookie, "x-pylon-tab-id": otherTab },
+    }))).pendingUi as { owned: boolean; ownershipAvailable: boolean };
+    assert.deepEqual({ owned: observerDuringGrace.owned, ownershipAvailable: observerDuringGrace.ownershipAvailable }, {
+      owned: false,
+      ownershipAvailable: false,
+    });
+    stream = new AbortController();
+    await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:${String(delayedBoot.sequence)}`, { headers: { cookie }, signal: stream.signal });
+    assert.equal((await fetch(`${origin}/api/v1/ui-responses/dialog-1`, {
+      method: "POST", headers, body: JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true }),
+    })).status, 200);
+    driver.deferDialog = false;
 
     assert.equal((await prompt("guard-reconnect")).status, 200);
     stream.abort();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForDisconnect();
     const reconnectBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }));
     assert.equal((reconnectBoot.pendingUi as { owned: boolean }).owned, true);
     stream = new AbortController();
     await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:${String(reconnectBoot.sequence)}`, { headers: { cookie }, signal: stream.signal });
-    const allow = await fetch(`${origin}/api/v1/ui-responses/dialog-1`, {
+    const allow = await fetch(`${origin}/api/v1/ui-responses/dialog-2`, {
       method: "POST", headers, body: JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true }),
     });
     assert.equal(allow.status, 200);
@@ -675,8 +742,7 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
     assert.equal((await prompt("guard-owner-loss")).status, 200);
     stream.abort();
     await new Promise((resolve) => setTimeout(resolve, 550));
-    assert.notEqual(driver.answers.at(-1)?.requestId, "dialog-2");
-    const otherTab = "guard-observer";
+    assert.notEqual(driver.answers.at(-1)?.requestId, "dialog-3");
     const otherBoot = await body(await fetch(`${origin}/api/v1/bootstrap`, {
       headers: { cookie, "x-pylon-tab-id": otherTab },
     }));
@@ -687,13 +753,13 @@ test("dialog owner reconnect preserves Guard confirmation and owner loss release
       signal: otherStream.signal,
     });
     const otherHeaders = { ...headers, "x-pylon-tab-id": otherTab };
-    const claim = await fetch(`${origin}/api/v1/ui-ownership/dialog-2`, {
+    const claim = await fetch(`${origin}/api/v1/ui-ownership/dialog-3`, {
       method: "POST",
       headers: otherHeaders,
       body: JSON.stringify({ sessionGeneration: 1, action: "claim" }),
     });
     assert.equal(claim.status, 200);
-    const answer = await fetch(`${origin}/api/v1/ui-responses/dialog-2`, {
+    const answer = await fetch(`${origin}/api/v1/ui-responses/dialog-3`, {
       method: "POST",
       headers: otherHeaders,
       body: JSON.stringify({ sessionGeneration: 1, method: "confirm", confirmed: true }),

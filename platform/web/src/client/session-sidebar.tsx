@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
@@ -8,6 +8,7 @@ import { displayDate, displayTime } from "./format";
 export interface SessionProject {
   id: string;
   label: string;
+  cwd: string;
   sessions: SessionSummary[];
   active: boolean;
 }
@@ -295,6 +296,16 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
                     closeMenu(true);
                     onRenameProject(project);
                   }}><IconPencil size={14} />Rename</button>
+                  <button type="button" onClick={() => {
+                    closeMenu(true);
+                    try {
+                      void navigator.clipboard.writeText(project.cwd)
+                        .then(() => setAnnouncement("Project path copied"))
+                        .catch(() => setAnnouncement("Copying project path failed"));
+                    } catch {
+                      setAnnouncement("Copying project path failed");
+                    }
+                  }}><IconCopy size={14} />Copy path</button>
                   <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
                     closeMenu(true);
                     onWorktreeSetup(project);
@@ -394,9 +405,9 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       <span className="session-copy">
         <strong>{sessionTitle(session)}</strong>
         <small>
-          {showProject ? `${session.cwdLabel} · ` : ""}
-          <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>{displayDate(session.createdAt)}</time>
-          {" · "}
+          {showProject
+            ? `${session.cwdLabel} · `
+            : <><time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>{displayDate(session.createdAt)}</time>{" · "}</>}
           <time
             dateTime={working ? session.workStartedAt : session.modifiedAt}
             title={working ? `Working since ${displayTime(session.workStartedAt!)}` : `Last active ${displayTime(session.modifiedAt)}`}
@@ -423,6 +434,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       ><IconDots size={15} /></summary>
       <div className="session-menu-popover">
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onRename(session); }}><IconPencil size={14} />Rename</button>
+        <button type="button" onClick={() => { void navigator.clipboard.writeText(session.id); onCloseMenu(); }}><IconCopy size={14} />Copy session ID</button>
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onSetPinned(session, !session.pinned); }}><IconPin size={14} />{session.pinned ? "Unpin" : "Pin"}</button>
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onArchive(session); }}><IconArchive size={14} />Archive</button>
         <button

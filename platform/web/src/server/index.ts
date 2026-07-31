@@ -8,7 +8,8 @@ import { ServerTransport } from "./http/router.ts";
 import { applySecurityHeaders, hostAllowed } from "./http/security.ts";
 import { createAssetHost } from "./http/static.ts";
 
-const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const webRoot = resolve(packageRoot, "platform/web");
 
 export interface PylonServerOptions {
   cwd?: string;

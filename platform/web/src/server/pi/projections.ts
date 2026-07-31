@@ -383,6 +383,7 @@ export class RuntimeProjection {
   private updateTimer?: NodeJS.Timeout;
   private updateBytes = 0;
   private activeMessageId?: string;
+  private latestAssistantMessageId?: string;
   private messageCounter = 0;
   private readonly turnMessages = new Map<string, string>();
   pendingUi?: UiRequestReadModel;
@@ -456,6 +457,7 @@ export class RuntimeProjection {
     this.tools.clear();
     this.delegatedRuns.clear();
     this.turnMessages.clear();
+    this.latestAssistantMessageId = undefined;
     for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
     for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
     for (const run of runtime.conversation.delegatedRuns) this.delegatedRuns.set(run.id, structuredClone(run));
@@ -483,6 +485,7 @@ export class RuntimeProjection {
         state: event.state,
         ...(Object.hasOwn(event, "workStartedAt") ? { workStartedAt: event.workStartedAt } : {}),
         ...(event.completed ? { completed: true } : {}),
+        ...(event.cue ? { cue: event.cue } : {}),
       });
       return;
     }
@@ -623,6 +626,7 @@ export class RuntimeProjection {
       return;
     }
     if (kind === "agent_start") {
+      this.latestAssistantMessageId = undefined;
       if (raw.metrics) this.metrics(object(raw.metrics));
       const startedAt = this.runtime.conversation.workStartedAt ?? (typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
         ? raw.workStartedAt
@@ -650,7 +654,10 @@ export class RuntimeProjection {
         ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, raw.workDurationMs as number))
         : undefined;
       const willRetry = raw.willRetry === true && raw.stopped !== true;
-      const assistant = [...this.messages.values()].reverse().find((message) => message.role === "assistant");
+      if (!willRetry && kind === "agent_end") this.flush();
+      const assistant = !willRetry && kind === "agent_end"
+        ? this.reconcileFinalAssistant(raw)
+        : [...this.messages.values()].reverse().find((message) => message.role === "assistant");
       const turnId = id(raw.turnId, "");
       if (!willRetry && assistant && turnId) {
         this.turnMessages.set(turnId, assistant.id);
@@ -663,6 +670,8 @@ export class RuntimeProjection {
         this.messages.set(assistant.id, assistant);
       }
       if (!willRetry) {
+        this.activeMessageId = undefined;
+        this.runtime.conversation.streaming = false;
         this.runtime.conversation.workStartedAt = undefined;
         this.runtime.conversation.workModelName = undefined;
         this.runtime.conversation.workThinkingLevel = undefined;
@@ -693,6 +702,31 @@ export class RuntimeProjection {
         userEntryId: this.runtime.conversation.stoppedRun?.userEntryId,
       });
     }
+  }
+
+  private reconcileFinalAssistant(raw: Record<string, unknown>): MessageReadModel | undefined {
+    if (raw.assistantMessage === null) return undefined;
+    const value = object(raw.assistantMessage);
+    if (value.role !== "assistant" || typeof value.id !== "string" || typeof value.text !== "string") return undefined;
+    const canonical = value as unknown as MessageReadModel;
+    let current = this.messages.get(canonical.id);
+    if (!current && canonical.entryId) {
+      current = [...this.messages.values()].find((message) => message.entryId === canonical.entryId);
+    }
+    if (!current && this.latestAssistantMessageId) {
+      const live = this.messages.get(this.latestAssistantMessageId);
+      if (live?.role === "assistant" && live.text === canonical.text) current = live;
+    }
+    const missing = !current;
+    const unfinished = current?.streaming === true;
+    const reconciled = { ...canonical, id: current?.id ?? canonical.id, streaming: false };
+    this.messages.set(reconciled.id, reconciled);
+    this.latestAssistantMessageId = reconciled.id;
+    if (missing) this.publish("message.start", { ...reconciled, streaming: true });
+    if (missing || unfinished) {
+      this.publish("message.end", { id: reconciled.id, text: reconciled.text, entryId: reconciled.entryId });
+    }
+    return reconciled;
   }
 
   private messageStart(raw: Record<string, unknown>): void {
@@ -733,6 +767,7 @@ export class RuntimeProjection {
       };
     }
     this.messages.set(messageId, item);
+    if (item.role === "assistant") this.latestAssistantMessageId = messageId;
     this.runtime.conversation.streaming = true;
     this.publish("message.start", item);
   }
@@ -745,6 +780,7 @@ export class RuntimeProjection {
     const incoming = text(raw.delta ?? raw.text);
     current.text = full || (current.text + incoming).slice(0, MAX_TEXT);
     current.streaming = true; this.messages.set(messageId, current); this.runtime.conversation.streaming = true;
+    if (current.role === "assistant") this.latestAssistantMessageId = messageId;
     this.pendingUpdate = { id: messageId, text: current.text };
     this.updateBytes += Buffer.byteLength(incoming || full);
     if (this.updateBytes >= MAX_PAYLOAD_TEXT) this.flush();

@@ -1,26 +1,59 @@
 {
-  "name": "pylon",
+  "name": "@fadhilp/pylon",
   "version": "1.0.2",
-  "private": true,
   "workspaces": [
     "packages/*",
     "platform/web"
   ],
-  "description": "Complete Pylon package with all extensions and themes.",
+  "description": "Pi workflow extensions and a local web interface.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FadhilP/pylon.git"
+  },
+  "homepage": "https://github.com/FadhilP/pylon#readme",
+  "bugs": "https://github.com/FadhilP/pylon/issues",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "coding-agent",
+    "developer-tools"
   ],
+  "bin": {
+    "pylon": "./bin/pylon.mjs"
+  },
+  "files": [
+    "bin",
+    "packages/*/bin/**",
+    "packages/*/extensions/**",
+    "packages/*/src/**",
+    "packages/*/themes/**",
+    "packages/*/package.json",
+    "packages/*/README.md",
+    "packages/*/LICENSE",
+    "skills",
+    "platform/web/dist",
+    "platform/web/dist-server",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
-    "verify": "npm run test:bundle && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
-    "verify:fast": "npm run test:bundle && node scripts/run-packages.mjs check && npm run build --workspace @pylon/web",
+    "verify": "npm run test:bundle && npm run test:update && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
+    "verify:fast": "npm run test:bundle && npm run test:update && node scripts/run-packages.mjs check && npm run build --workspace @pylon/web",
     "test:bundle": "node --experimental-transform-types --test-isolation=none --test-force-exit --test test/bundle.test.ts",
+    "test:update": "node --test test/update.test.mjs",
+    "test:package": "node --test test/package.test.mjs",
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test",
     "install:packages": "npm install --workspaces --include-workspace-root",
+    "prepack": "npm run build --workspace @pylon/web",
+    "prepublishOnly": "npm run verify && npm run test:package",
     "web": "node scripts/web.mjs",
     "web:update": "git pull --ff-only && npm run web"
   },
@@ -34,6 +67,7 @@
       "./packages/pi-grunt/extensions/pi-grunt.ts",
       "./packages/pi-heartbeat/extensions/pi-heartbeat.ts",
       "./packages/pi-helios/extensions/pi-helios.ts",
+      "./packages/pi-stateql/extensions/pi-stateql.ts",
       "./packages/pi-discover/extensions/pi-discover.ts",
       "./packages/pi-scout/extensions/pi-scout.ts",
       "./packages/pi-sieve/extensions/pi-sieve.ts",
@@ -45,8 +79,16 @@
     ]
   },
   "dependencies": {
-    "@playwright/cli": "0.1.17"
+    "@fadhilp/stateql": "0.4.1",
+    "@playwright/cli": "0.1.17",
+    "jiti": "^2.7.0",
+    "node-pty": "^1.1.0",
+    "pylon-core": "0.1.0",
+    "ws": "^8.21.1"
   },
+  "bundleDependencies": [
+    "pylon-core"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",

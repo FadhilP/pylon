@@ -155,6 +155,58 @@ export interface TimelineCheckpointDiff {
   truncated?: boolean;
 }
 
+export interface StateQLHistoryEntryReadModel {
+  command_id: string;
+  timestamp: string;
+  session_id: string;
+  actor_id: string;
+  command: string;
+  handle: string | null;
+  executed: boolean;
+  cached: boolean;
+  success: boolean;
+  error_code: string | null;
+}
+
+export interface StateQLSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  session: {
+    session_id: string;
+    name: string;
+    status: "active" | "closed";
+  };
+  actor_id: string;
+  connection: {
+    connection_id: string;
+    name: string;
+    status: "connected";
+    driver: "sqlite" | "postgres" | "mysql";
+    database: string;
+    read_only: boolean;
+  } | null;
+  transaction: {
+    transaction_id: string;
+    owner_actor_id: string;
+    state: string;
+  } | null;
+  state_version: string | null;
+  state_confidence: "authoritative" | "transaction_snapshot" | "database_reported" | "local" | "ttl_based" | "unknown" | null;
+  recent_results: Array<{
+    alias: string | null;
+    handle: string;
+    rows: number;
+  }>;
+  recent_operations: Array<{
+    handle: string;
+    actor_id: string;
+    type: string;
+    affected_rows: number | null;
+    status: string;
+  }>;
+  history: StateQLHistoryEntryReadModel[];
+}
+
 export interface DiscoverIndexReadModel {
   state: "idle" | "indexing" | "error";
   files?: number;
@@ -238,6 +290,7 @@ export interface SessionSummary {
 export interface SessionProjectPage {
   id: string;
   label: string;
+  cwd: string;
   totalCount: number;
   sessions: SessionSummary[];
   nextCursor?: string;

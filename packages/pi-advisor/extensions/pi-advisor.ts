@@ -189,7 +189,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     promptGuidelines: [
       "Use two advisor consultations by default for consequential work: cross-module behavior, architecture or API changes, migrations, security or privacy, data-loss risk, or broad regression risk. Skip advisor for trivial or local work.",
       "Use advisor first after focused reads or repo_scout establish evidence, before choosing an approach. Use advisor second after implementation and before final verification, with substantive new evidence such as changed ranges, key decisions, or preliminary test results; do not repeat the first request ceremonially. Reserve a third advisor call for material contradictions, failures, or unresolved risks.",
-      "Give advisor a concrete decision, risk, or approach to review plus only the highest-priority cited file ranges. Prefer complete decisive definitions, callers, and checks over broad file slices; 150–300 total evidence lines is a selection signal, not a hard cap, and may be exceeded when decisive context requires it. Advisor critiques evidence, reasoning, risks, and direction; Scout gathers evidence; main model decides, verifies evidence, and performs tools.",
+      "Give advisor a concrete decision, risk, or approach to review plus only the highest-priority cited file ranges. Usually provide 3–5 concise, non-overlapping ranges; use up to 8 only when each range is independently necessary, and avoid redundant evidence. Prefer complete decisive definitions, callers, and checks over broad file slices; 150–300 total evidence lines is a selection signal, not a hard cap, and may be exceeded when decisive context requires it. Advisor critiques evidence, reasoning, risks, and direction; Scout gathers evidence; main model decides, verifies evidence, and performs tools.",
     ],
     parameters: Type.Object(
       {
@@ -212,8 +212,8 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
               { additionalProperties: false },
             ),
             {
-              maxItems: 5,
-              description: "Complete decisive ranges only; usually 150–300 total lines, exceeding that when required for correctness",
+              maxItems: 8,
+              description: "Usually 3–5 concise, non-overlapping decisive ranges; use up to 8 only when independently necessary; usually 150–300 total lines, exceeding that when required for correctness",
             },
           ),
         ),
