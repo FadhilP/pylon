@@ -11,6 +11,19 @@ type Release = {
 
 const RELEASES: Release[] = [
   {
+    version: "1.1.0",
+    date: "Jul 31, 2026",
+    title: "Safe database workflows",
+    summary: "Pylon adds guarded StateQL database access, a smoother install and update path, and more resilient web sessions.",
+    notes: [
+      "Added the deferred StateQL tool with connection profiles, read queries, materialized result handles, schema inspection, write plans, transactions, receipts, and bounded history.",
+      "Added a Database inspector and masked credential prompts; submitted credentials stay scoped in server memory while connection changes and writes remain confirmation-gated.",
+      "Added the global pylon CLI, a stable npm update check, and production package and publishing verification.",
+      "Restored cached conversation history across runtime reconnects and replacements, marked background completions as unread, and rejected stale session reads.",
+      "Added this selectable, keyboard-accessible in-app release history.",
+    ],
+  },
+  {
     version: "1.0.2",
     date: "Jul 30, 2026",
     title: "Live subagent model settings",
