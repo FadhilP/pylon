@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 export const SIEVE_THRESHOLD = 8_192;
 export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd", "heartbeat_status", "memory"] as const;
@@ -14,7 +15,7 @@ export const ELIGIBLE_TOOL_NAMES = [
 export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
-  "Age 0 is preserved when active pruning is disabled; successful eligible age-1 output is capped at the threshold with active pruning, or three times the threshold without it.";
+  "With active pruning, eligible ages 0–1 share a three-threshold retained-source budget; without it, age 0 is preserved and age 1 keeps the three-threshold cap.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
 
 export type SieveOptions = {
@@ -28,10 +29,14 @@ export type ContextMessage = {
   role?: unknown;
 };
 
-export type TextBlock = {
+export type ContentBlock = {
+  type: string;
+  [field: string]: unknown;
+};
+
+export type TextBlock = ContentBlock & {
   type: "text";
   text: string;
-  [field: string]: unknown;
 };
 
 export type SkipStats = {
@@ -42,6 +47,14 @@ export type SkipStats = {
   malformedStructuredContent: number;
   atOrBelowThreshold: number;
   recoveryUnavailable: number;
+};
+
+export type ToolTransformStats = {
+  scanned: number;
+  transformed: number;
+  sourceChars: number;
+  retainedChars: number;
+  netCharsSaved: number;
 };
 
 export type TransformStats = {
@@ -56,18 +69,21 @@ export type TransformStats = {
     giantError: number;
     activeThreshold: number;
     staleRead: number;
+    duplicate: number;
+    errorCap: number;
+    mixedText: number;
   };
   /** Source text characters omitted (or projected to be omitted). */
   omittedChars: number;
   /** Omitted text characters less the replacement marker characters. */
   netCharsSaved: number;
+  byTool: Record<string, ToolTransformStats>;
   skipped: SkipStats;
 };
 
 export type RecoverableActiveResult = {
   toolCallId: string;
   toolName: string;
-  content: TextBlock[];
   isError: boolean;
 };
 
@@ -84,9 +100,19 @@ export function emptyTransformStats(): TransformStats {
   return {
     scanned: 0,
     transformed: 0,
-    transformedBy: { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 },
+    transformedBy: {
+      ageThreshold: 0,
+      budget: 0,
+      giantError: 0,
+      activeThreshold: 0,
+      staleRead: 0,
+      duplicate: 0,
+      errorCap: 0,
+      mixedText: 0,
+    },
     omittedChars: 0,
     netCharsSaved: 0,
+    byTool: {},
     skipped: {
       recentWindow: 0,
       ineligibleTool: 0,
@@ -108,8 +134,20 @@ export function addTransformStats(target: TransformStats, source: TransformStats
   target.transformedBy.giantError += source.transformedBy.giantError;
   target.transformedBy.activeThreshold += source.transformedBy.activeThreshold;
   target.transformedBy.staleRead += source.transformedBy.staleRead;
+  target.transformedBy.duplicate += source.transformedBy.duplicate;
+  target.transformedBy.errorCap += source.transformedBy.errorCap;
+  target.transformedBy.mixedText += source.transformedBy.mixedText;
   target.omittedChars += source.omittedChars;
   target.netCharsSaved += source.netCharsSaved;
+  for (const [toolName, usage] of Object.entries(source.byTool)) {
+    const current = target.byTool[toolName] ?? { scanned: 0, transformed: 0, sourceChars: 0, retainedChars: 0, netCharsSaved: 0 };
+    current.scanned += usage.scanned;
+    current.transformed += usage.transformed;
+    current.sourceChars += usage.sourceChars;
+    current.retainedChars += usage.retainedChars;
+    current.netCharsSaved += usage.netCharsSaved;
+    target.byTool[toolName] = current;
+  }
   target.skipped.recentWindow += source.skipped.recentWindow;
   target.skipped.ineligibleTool += source.skipped.ineligibleTool;
   target.skipped.error += source.skipped.error;
@@ -121,23 +159,23 @@ export function addTransformStats(target: TransformStats, source: TransformStats
 }
 
 export function omissionMarker(toolName: string, sourceChars: number) {
-  return `[pi-sieve: ${toolName} ${sourceChars} chars omitted]`;
+  return `[pi-sieve: ${toolName}; ${sourceChars} chars omitted]`;
 }
 
 export function giantErrorMarker(toolName: string, sourceChars: number) {
-  return `[pi-sieve: ${toolName} error ${sourceChars} chars truncated]\n`;
+  return `[pi-sieve: ${toolName} error; ${sourceChars} chars truncated]\n`;
 }
 
 export function recalledOmissionMarker(toolName: string, sourceChars: number) {
-  return `[pi-sieve: recalled ${toolName} ${sourceChars} chars omitted]`;
+  return `[pi-sieve: recalled ${toolName}; ${sourceChars} chars omitted]`;
 }
 
 export function recalledGiantErrorMarker(toolName: string, sourceChars: number) {
-  return `[pi-sieve: recalled ${toolName} error ${sourceChars} chars truncated]\n`;
+  return `[pi-sieve: recalled ${toolName} error; ${sourceChars} chars truncated]\n`;
 }
 
 export function partialOmissionMarker(toolName: string, sourceChars: number, omittedChars: number, recalled = false) {
-  return `[pi-sieve: ${recalled ? "recalled " : ""}${toolName} ${sourceChars} chars; ${omittedChars} chars omitted]`;
+  return `[pi-sieve: ${recalled ? "recalled " : ""}${toolName}; omitted ${omittedChars}/${sourceChars} chars]`;
 }
 
 export function activeOmissionMarker(
@@ -146,7 +184,11 @@ export function activeOmissionMarker(
   sourceChars: number,
   omittedChars: number,
 ) {
-  return `[pi-sieve: OUTPUT TRUNCATED for ${toolName}; ${omittedChars} of ${sourceChars} chars omitted. Recover via sieve_recall(toolCallId=${JSON.stringify(toolCallId)}).]`;
+  return `[pi-sieve: ${toolName}; omitted ${omittedChars}/${sourceChars} chars; sieve_recall ${JSON.stringify(toolCallId)}]`;
+}
+
+export function duplicateMarker(toolName: string, originalToolCallId: string, duplicateToolCallId: string | undefined, sourceChars: number) {
+  return `[pi-sieve: duplicate ${toolName} (${sourceChars} chars); same as ${JSON.stringify(originalToolCallId)}${duplicateToolCallId ? `; sieve_recall ${JSON.stringify(duplicateToolCallId)}` : ""}]`;
 }
 
 export function staleReadMarker(path: string, sourceChars: number) {
@@ -452,6 +494,100 @@ function sliceActiveResult(
   }
 }
 
+function mixedContentBlocks(content: unknown): { blocks: ContentBlock[]; textIndexes: number[]; sourceChars: number } | undefined {
+  if (!Array.isArray(content) || !content.length) return undefined;
+  const blocks: ContentBlock[] = [];
+  const textIndexes: number[] = [];
+  let sourceChars = 0;
+  for (let index = 0; index < content.length; index++) {
+    const block = content[index];
+    if (!block || typeof block !== "object" || typeof (block as { type?: unknown }).type !== "string") return undefined;
+    const value = block as ContentBlock;
+    if (value.type === "text") {
+      if (typeof value.text !== "string") return undefined;
+      textIndexes.push(index);
+      sourceChars += value.text.length;
+    }
+    blocks.push(value);
+  }
+  return textIndexes.length && textIndexes.length !== blocks.length ? { blocks, textIndexes, sourceChars } : undefined;
+}
+
+function sliceMixedActive<T extends ContextMessage>(
+  message: T,
+  source: SieveSource,
+  toolCallId: string,
+  threshold: number,
+): { message: T; omittedChars: number; retainedChars: number; netCharsSaved: number } | undefined {
+  const mixed = mixedContentBlocks((message as Record<string, unknown>).content);
+  if (!mixed || mixed.sourceChars <= threshold) return undefined;
+  const share = Math.max(1, Math.floor(threshold / mixed.textIndexes.length));
+  const content = mixed.blocks.map((block) => ({ ...block }));
+  let omittedChars = 0;
+  for (const index of mixed.textIndexes) {
+    const block = mixed.blocks[index] as TextBlock;
+    if (block.text.length <= share) continue;
+    const sliced = sliceActiveResult([block], source, toolCallId, share);
+    if (!sliced) return undefined;
+    content[index] = { ...block, text: sliced.outboundText };
+    omittedChars += sliced.omittedText.length;
+  }
+  if (!omittedChars) return undefined;
+  const outboundChars = mixed.textIndexes.reduce(
+    (sum, index) => sum + String(content[index].text ?? "").length,
+    0,
+  );
+  return {
+    message: { ...message, content } as T,
+    omittedChars,
+    retainedChars: mixed.sourceChars - omittedChars,
+    netCharsSaved: Math.max(0, mixed.sourceChars - outboundChars),
+  };
+}
+
+function sliceMixedOld<T extends ContextMessage>(
+  message: T,
+  source: SieveSource,
+  maxOutboundChars: number,
+  maxRetainedChars: number,
+): { message: T; omittedChars: number; retainedChars: number; netCharsSaved: number } | undefined {
+  const mixed = mixedContentBlocks((message as Record<string, unknown>).content);
+  if (!mixed) return undefined;
+  const shareOutbound = Math.max(1, Math.floor(maxOutboundChars / mixed.textIndexes.length));
+  const shareRetained = Math.max(0, Math.floor(maxRetainedChars / mixed.textIndexes.length));
+  const content = mixed.blocks.map((block) => ({ ...block }));
+  let omittedChars = 0;
+  let retainedChars = 0;
+  for (const index of mixed.textIndexes) {
+    const block = mixed.blocks[index] as TextBlock;
+    const sliced = sliceOldSuccess([block], source, shareOutbound, shareRetained);
+    if (!sliced) {
+      const marker = source.recalled
+        ? recalledOmissionMarker(source.toolName, block.text.length)
+        : omissionMarker(source.toolName, block.text.length);
+      if (marker.length >= block.text.length) {
+        content[index] = { ...block };
+        retainedChars += block.text.length;
+      } else {
+        content[index] = { ...block, text: marker };
+        omittedChars += block.text.length;
+      }
+      continue;
+    }
+    content[index] = { ...block, text: sliced.outboundText };
+    omittedChars += sliced.omittedText.length;
+    retainedChars += sliced.retainedChars;
+  }
+  if (!omittedChars) return undefined;
+  const outboundChars = mixed.textIndexes.reduce((sum, index) => sum + String(content[index].text ?? "").length, 0);
+  return {
+    message: { ...message, content } as T,
+    omittedChars,
+    retainedChars,
+    netCharsSaved: Math.max(0, mixed.sourceChars - outboundChars),
+  };
+}
+
 type TrackedToolCall = {
   id: string;
   name: string;
@@ -551,6 +687,136 @@ function readCoverage(argumentsValue: JsonObject, details: unknown, blocks: Text
   const returnedLines = Math.min(limit, blocks[0].text.split("\n").length);
   const end = safeRangeEnd(start, returnedLines);
   return end === undefined ? undefined : { start, end };
+}
+
+type DuplicateReplacement<T extends ContextMessage> = {
+  messageIndex: number;
+  message: T;
+  sourceChars: number;
+  markerChars: number;
+  toolName: string;
+  recoverable?: RecoverableActiveResult;
+};
+
+const duplicateExcludedTools = new Set([
+  "edit", "write", "continuity_update", "heartbeat_start", "heartbeat_cancel", "memory", RECALL_TOOL_NAME,
+]);
+
+function serializedContentLength(content: unknown): number {
+  try {
+    return JSON.stringify(content)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function exactDuplicateReplacements<T extends ContextMessage>(
+  messages: readonly T[],
+  cwd: string,
+  existing: ReadonlyMap<number, T>,
+  recoverable: boolean,
+): DuplicateReplacement<T>[] {
+  const calls: TrackedToolCall[] = [];
+  const callCounts = new Map<string, number>();
+  let assistantOrdinal = 0;
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "assistant" || !Array.isArray(fields.content)) continue;
+    assistantOrdinal++;
+    for (const part of fields.content) {
+      const call = jsonObject(part);
+      if (call?.type !== "toolCall" || typeof call.id !== "string" || !call.id || typeof call.name !== "string") continue;
+      calls.push({ id: call.id, name: call.name, arguments: jsonObject(call.arguments) ?? {}, assistantOrdinal, messageIndex });
+      callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+    }
+  }
+
+  const results = new Map<string, TrackedToolResult>();
+  const resultCounts = new Map<string, number>();
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "toolResult" || typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
+    resultCounts.set(fields.toolCallId, (resultCounts.get(fields.toolCallId) ?? 0) + 1);
+    results.set(fields.toolCallId, { fields, messageIndex });
+  }
+
+  const uniqueCalls = calls.filter((call) => callCounts.get(call.id) === 1 && resultCounts.get(call.id) === 1);
+  const candidates = uniqueCalls.flatMap((call) => {
+    const result = results.get(call.id);
+    if (!result || result.messageIndex <= call.messageIndex || result.fields.isError === true || existing.has(result.messageIndex)) return [];
+    if (!Array.isArray(result.fields.content) || !result.fields.content.length) return [];
+    return [{ call, result }];
+  });
+  const replacements: DuplicateReplacement<T>[] = [];
+  const replaced = new Set<number>();
+
+  // Read duplicates use source identity, not only equal display text.
+  const earlierReads: typeof candidates = [];
+  for (const candidate of candidates.filter(({ call }) => call.name === READ_TOOL_NAME)) {
+    const path = normalizedToolPath(candidate.call.arguments, cwd);
+    const blocks = textOnlyBlocks(candidate.result.fields.content);
+    const coverage = blocks && readCoverage(candidate.call.arguments, candidate.result.fields.details, blocks);
+    if (!path || !coverage || !blocks) continue;
+    const original = earlierReads.find(({ call, result }) => {
+      const originalPath = normalizedToolPath(call.arguments, cwd);
+      const originalBlocks = textOnlyBlocks(result.fields.content);
+      const originalCoverage = originalBlocks && readCoverage(call.arguments, result.fields.details, originalBlocks);
+      if (originalPath !== path || !originalCoverage || originalCoverage.start !== coverage.start || originalCoverage.end !== coverage.end
+        || !isDeepStrictEqual(result.fields.content, candidate.result.fields.content)) return false;
+      return !calls.some((mutation) =>
+        (mutation.name === "edit" || mutation.name === "write")
+        && mutation.messageIndex > result.messageIndex
+        && mutation.messageIndex <= candidate.call.messageIndex
+        && normalizedToolPath(mutation.arguments, cwd) === path,
+      );
+    });
+    if (!original) {
+      earlierReads.push(candidate);
+      continue;
+    }
+    const sourceChars = blocks.reduce((sum, block) => sum + block.text.length, 0);
+    const marker = duplicateMarker(READ_TOOL_NAME, original.call.id, recoverable ? candidate.call.id : undefined, sourceChars);
+    if (marker.length >= sourceChars) continue;
+    replacements.push({
+      messageIndex: candidate.result.messageIndex,
+      message: replaceWithMarker(messages[candidate.result.messageIndex], marker),
+      sourceChars,
+      markerChars: marker.length,
+      toolName: READ_TOOL_NAME,
+      ...(recoverable ? { recoverable: { toolCallId: candidate.call.id, toolName: READ_TOOL_NAME, isError: false } } : {}),
+    });
+    replaced.add(candidate.result.messageIndex);
+  }
+
+  // ponytail: duplicate result scans are quadratic; session result counts are small, index fingerprints if measured otherwise.
+  const earlierGeneric: typeof candidates = [];
+  for (const candidate of candidates) {
+    if (candidate.call.name === READ_TOOL_NAME || duplicateExcludedTools.has(candidate.call.name) || replaced.has(candidate.result.messageIndex)) continue;
+    const original = earlierGeneric.find(({ call, result }) =>
+      call.name === candidate.call.name
+      && isDeepStrictEqual(call.arguments, candidate.call.arguments)
+      && isDeepStrictEqual(result.fields.details, candidate.result.fields.details)
+      && isDeepStrictEqual(result.fields.content, candidate.result.fields.content),
+    );
+    if (!original) {
+      earlierGeneric.push(candidate);
+      continue;
+    }
+    const sourceChars = textOnlyContentLength(candidate.result.fields.content)
+      ?? serializedContentLength(candidate.result.fields.content);
+    const marker = duplicateMarker(candidate.call.name, original.call.id, recoverable ? candidate.call.id : undefined, sourceChars);
+    if (marker.length >= serializedContentLength(candidate.result.fields.content)) continue;
+    replacements.push({
+      messageIndex: candidate.result.messageIndex,
+      message: replaceWithMarker(messages[candidate.result.messageIndex], marker),
+      sourceChars,
+      markerChars: marker.length,
+      toolName: candidate.call.name,
+      ...(recoverable ? { recoverable: { toolCallId: candidate.call.id, toolName: candidate.call.name, isError: false } } : {}),
+    });
+    replaced.add(candidate.result.messageIndex);
+  }
+  return replacements;
 }
 
 function staleReadReplacements<T extends ContextMessage>(messages: readonly T[], cwd: string) {
@@ -698,24 +964,35 @@ export function sieveMessages<T extends ContextMessage>(
   }
 
   const stats = emptyTransformStats();
-  const staleReads = staleReadReplacements(messages, options.cwd ?? process.cwd());
+  const recoverableActiveResults: RecoverableActiveResult[] = [];
+  const cwd = options.cwd ?? process.cwd();
+  const staleReads = staleReadReplacements(messages, cwd);
   const replacements = staleReads.replacements;
   stats.scanned += replacements.size;
   stats.transformed += replacements.size;
   stats.transformedBy.staleRead += replacements.size;
   stats.omittedChars += staleReads.omittedChars;
   stats.netCharsSaved += staleReads.netCharsSaved;
-  const recoverableActiveResults: RecoverableActiveResult[] = [];
+  for (const duplicate of exactDuplicateReplacements(messages, cwd, replacements, options.pruneActive === true)) {
+    replacements.set(duplicate.messageIndex, duplicate.message);
+    if (duplicate.recoverable) recoverableActiveResults.push(duplicate.recoverable);
+    stats.scanned++;
+    stats.transformed++;
+    stats.transformedBy.duplicate++;
+    stats.omittedChars += duplicate.sourceChars;
+    stats.netCharsSaved += Math.max(0, duplicate.sourceChars - duplicate.markerChars);
+  }
   const activeToolCallIdCounts = new Map<string, number>();
   if (options.pruneActive) {
     for (let index = 0; index < messages.length; index++) {
       const fields = messages[index] as Record<string, unknown>;
-      if (fields.role !== "toolResult" || usersAfter[index] !== 0) continue;
+      if (fields.role !== "toolResult" || usersAfter[index] > 1) continue;
       if (typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
       activeToolCallIdCounts.set(fields.toolCallId, (activeToolCallIdCounts.get(fields.toolCallId) ?? 0) + 1);
     }
   }
   const retainedBudget = 3 * threshold;
+  let recentRetainedChars = 0;
   let retainedChars = 0;
 
   // Budget selection is deliberately newest-to-oldest, unlike outbound order.
@@ -723,20 +1000,18 @@ export function sieveMessages<T extends ContextMessage>(
     const message = messages[index];
     if (message.role !== "toolResult" || replacements.has(index)) continue;
     const age = usersAfter[index];
-    if (age === 0) {
-      if (!options.pruneActive) {
-        stats.skipped.recentWindow++;
-        continue;
-      }
+    if (age <= 1 && options.pruneActive) {
       stats.scanned++;
-      const source = sieveSource(message, false);
+      const source = sieveSource(message, age === 1);
       if (!source) {
         stats.skipped.ineligibleTool++;
         continue;
       }
-      const blocks = textOnlyBlocks((message as Record<string, unknown>).content);
-      const sourceLength = blocks?.reduce((length, block) => length + block.text.length, 0);
-      if (!blocks || sourceLength === undefined) {
+      const fields = message as Record<string, unknown>;
+      const blocks = textOnlyBlocks(fields.content);
+      const mixed = !blocks && source.kind === "plain" ? mixedContentBlocks(fields.content) : undefined;
+      const sourceLength = blocks?.reduce((length, block) => length + block.text.length, 0) ?? mixed?.sourceChars;
+      if (sourceLength === undefined) {
         stats.skipped.nonTextMixedOrEmptyContent++;
         continue;
       }
@@ -744,15 +1019,18 @@ export function sieveMessages<T extends ContextMessage>(
         stats.skipped.recentWindow++;
         continue;
       }
-      if (sourceLength <= threshold) {
+      const recentRemaining = Math.max(0, retainedBudget - recentRetainedChars);
+      const recentErrorThreshold = Math.max(SIEVE_THRESHOLD, threshold);
+      if (source.isError ? sourceLength <= recentErrorThreshold : sourceLength <= threshold && sourceLength <= recentRemaining) {
+        if (!source.isError) recentRetainedChars += sourceLength;
         stats.skipped.atOrBelowThreshold++;
         continue;
       }
-      if (source.kind === "rankedSearch" && !source.isError && !validStructuredContent(blocks, source.kind)) {
+      if (source.kind === "rankedSearch" && !source.isError && blocks && !validStructuredContent(blocks, source.kind)) {
         stats.skipped.malformedStructuredContent++;
         continue;
       }
-      const toolCallId = (message as Record<string, unknown>).toolCallId;
+      const toolCallId = fields.toolCallId;
       if (
         typeof toolCallId !== "string" ||
         !toolCallId ||
@@ -761,41 +1039,71 @@ export function sieveMessages<T extends ContextMessage>(
         stats.skipped.recoveryUnavailable++;
         continue;
       }
-      if (source.kind === "rankedSearch" && !source.isError) {
-        const sliced = sliceRankedSearch(blocks, source, threshold, toolCallId);
-        if (!sliced || sliced.outboundText.length >= sourceLength) {
+      const budgetMarkerLength = activeOmissionMarker(
+        source.toolName,
+        toolCallId,
+        sourceLength,
+        Math.max(0, sourceLength - recentRemaining),
+      ).length + 2;
+      const recentLimit = source.isError
+        ? recentErrorThreshold
+        : Math.min(threshold, Math.max(1, recentRemaining + budgetMarkerLength));
+      const byBudget = !source.isError && recentRemaining < Math.min(sourceLength, threshold);
+      if (mixed) {
+        const sliced = sliceMixedActive(message, source, toolCallId, recentLimit);
+        if (!sliced) {
           stats.skipped.recoveryUnavailable++;
           continue;
         }
-        replacements.set(index, replaceWithMarker(message, sliced.outboundText));
-        recoverableActiveResults.push({
-          toolCallId,
-          toolName: source.toolName,
-          content: blocks.map((block) => ({ ...block })),
-          isError: false,
-        });
+        replacements.set(index, sliced.message);
+        recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
         stats.transformed++;
-        stats.transformedBy.activeThreshold++;
+        if (!source.isError) recentRetainedChars += Math.min(recentRemaining, sliced.retainedChars);
+        stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+        stats.transformedBy.mixedText++;
+        if (source.isError) stats.transformedBy.errorCap++;
         stats.omittedChars += sliced.omittedChars;
-        stats.netCharsSaved += sourceLength - sliced.outboundText.length;
+        stats.netCharsSaved += sliced.netCharsSaved;
         continue;
       }
-      const sliced = sliceActiveResult(blocks, source, toolCallId, threshold);
-      if (!sliced) {
+      if (!blocks) {
+        stats.skipped.nonTextMixedOrEmptyContent++;
+        continue;
+      }
+      if (source.kind === "rankedSearch" && !source.isError) {
+        const sliced = sliceRankedSearch(blocks, source, recentLimit, toolCallId, recentRemaining);
+        const outboundText = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
+        if (outboundText.length >= sourceLength) {
+          stats.skipped.recoveryUnavailable++;
+          continue;
+        }
+        replacements.set(index, replaceWithMarker(message, outboundText));
+        recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: false });
+        if (sliced) recentRetainedChars += sliced.retainedChars;
+        stats.transformed++;
+        stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+        stats.omittedChars += sliced?.omittedChars ?? sourceLength;
+        stats.netCharsSaved += sourceLength - outboundText.length;
+        continue;
+      }
+      const sliced = sliceActiveResult(blocks, source, toolCallId, recentLimit);
+      const outboundText = sliced?.outboundText ?? activeOmissionMarker(source.toolName, toolCallId, sourceLength, sourceLength);
+      if (outboundText.length >= sourceLength) {
         stats.skipped.recoveryUnavailable++;
         continue;
       }
-      replacements.set(index, replaceWithMarker(message, sliced.outboundText));
-      recoverableActiveResults.push({
-        toolCallId,
-        toolName: source.toolName,
-        content: [{ type: "text", text: sliced.omittedText }],
-        isError: source.isError,
-      });
+      replacements.set(index, replaceWithMarker(message, outboundText));
+      recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
+      if (!source.isError && sliced) recentRetainedChars += sourceLength - sliced.omittedText.length;
       stats.transformed++;
-      stats.transformedBy.activeThreshold++;
-      stats.omittedChars += sliced.omittedText.length;
-      stats.netCharsSaved += Math.max(0, sourceLength - sliced.outboundText.length);
+      stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+      if (source.isError) stats.transformedBy.errorCap++;
+      stats.omittedChars += sliced?.omittedText.length ?? sourceLength;
+      stats.netCharsSaved += Math.max(0, sourceLength - outboundText.length);
+      continue;
+    }
+    if (age === 0) {
+      stats.skipped.recentWindow++;
       continue;
     }
     if (cutoff === undefined) {
@@ -810,19 +1118,27 @@ export function sieveMessages<T extends ContextMessage>(
       continue;
     }
 
-    const sourceLength = textOnlyContentLength((message as Record<string, unknown>).content);
+    const fields = message as Record<string, unknown>;
+    const textBlocks = textOnlyBlocks(fields.content);
+    const mixed = age > 1 && !source.isError && source.kind === "plain" && !textBlocks
+      ? mixedContentBlocks(fields.content)
+      : undefined;
+    const sourceLength = textBlocks?.reduce((sum, block) => sum + block.text.length, 0) ?? mixed?.sourceChars;
     if (source.isError) {
-      const giantThreshold = Math.max(32_000, 4 * threshold);
-      if (age > 1 && sourceLength !== undefined && sourceLength > giantThreshold) {
+      if (age > 1 && sourceLength !== undefined && sourceLength > threshold) {
         const marker = source.recalled
           ? recalledGiantErrorMarker(source.toolName, sourceLength)
           : giantErrorMarker(source.toolName, sourceLength);
-        const tail = textOnlyContentTail((message as Record<string, unknown>).content, GIANT_ERROR_TAIL_CHARS)!;
-        replacements.set(index, replaceWithMarker(message, marker + tail));
+        const available = Math.max(0, threshold - marker.length - 1);
+        const headChars = Math.floor(available / 4);
+        const tailChars = available - headChars;
+        const text = textBlocks!.map((block) => block.text).join("");
+        const outbound = marker + text.slice(0, headChars) + "\n" + text.slice(-tailChars);
+        replacements.set(index, replaceWithMarker(message, outbound));
         stats.transformed++;
-        stats.transformedBy.giantError++;
-        stats.omittedChars += sourceLength - tail.length;
-        stats.netCharsSaved += Math.max(0, sourceLength - tail.length - marker.length);
+        stats.transformedBy.errorCap++;
+        stats.omittedChars += sourceLength - headChars - tailChars;
+        stats.netCharsSaved += Math.max(0, sourceLength - outbound.length);
       } else {
         stats.skipped.error++;
       }
@@ -833,7 +1149,34 @@ export function sieveMessages<T extends ContextMessage>(
       stats.skipped.nonTextMixedOrEmptyContent++;
       continue;
     }
-    const blocks = textOnlyBlocks((message as Record<string, unknown>).content)!;
+    if (mixed) {
+      const effectiveThreshold = effectiveThresholdForAge(age, threshold);
+      const remainingBudget = retainedBudget - retainedChars;
+      if (sourceLength <= effectiveThreshold && sourceLength <= remainingBudget) {
+        retainedChars += sourceLength;
+        stats.skipped.atOrBelowThreshold++;
+        continue;
+      }
+      const sliced = sliceMixedOld(
+        message,
+        source,
+        sourceLength > effectiveThreshold ? effectiveThreshold : Math.max(0, sourceLength - 1),
+        Math.max(0, remainingBudget),
+      );
+      if (!sliced) {
+        stats.skipped.nonTextMixedOrEmptyContent++;
+        continue;
+      }
+      replacements.set(index, sliced.message);
+      retainedChars += sliced.retainedChars;
+      stats.transformed++;
+      stats.transformedBy[sourceLength > effectiveThreshold ? "ageThreshold" : "budget"]++;
+      stats.transformedBy.mixedText++;
+      stats.omittedChars += sliced.omittedChars;
+      stats.netCharsSaved += sliced.netCharsSaved;
+      continue;
+    }
+    const blocks = textBlocks!;
 
     if (source.kind === "relationshipGraph" && age === 1) {
       stats.skipped.recentWindow++;
@@ -924,6 +1267,32 @@ export function sieveMessages<T extends ContextMessage>(
     stats.transformed++;
     if (byAgeThreshold) stats.transformedBy.ageThreshold++;
     else stats.transformedBy.budget++;
+  }
+
+  const toolNames = new Set<string>();
+  for (let index = 0; index < messages.length; index++) {
+    const fields = messages[index] as Record<string, unknown>;
+    if (fields.role !== "toolResult" || typeof fields.toolName !== "string") continue;
+    const key = /^[a-zA-Z0-9_-]{1,64}$/.test(fields.toolName) && (toolNames.has(fields.toolName) || toolNames.size < 32)
+      ? fields.toolName
+      : "other";
+    toolNames.add(key);
+    const sourceChars = textOnlyContentLength(fields.content)
+      ?? mixedContentBlocks(fields.content)?.sourceChars
+      ?? serializedContentLength(fields.content);
+    const replacement = replacements.get(index) as Record<string, unknown> | undefined;
+    const retainedChars = replacement
+      ? textOnlyContentLength(replacement.content)
+        ?? mixedContentBlocks(replacement.content)?.sourceChars
+        ?? serializedContentLength(replacement.content)
+      : sourceChars;
+    const usage = stats.byTool[key] ?? { scanned: 0, transformed: 0, sourceChars: 0, retainedChars: 0, netCharsSaved: 0 };
+    usage.scanned++;
+    usage.sourceChars += sourceChars;
+    usage.retainedChars += retainedChars;
+    if (replacement) usage.transformed++;
+    usage.netCharsSaved += Math.max(0, sourceChars - retainedChars);
+    stats.byTool[key] = usage;
   }
 
   return {

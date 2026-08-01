@@ -230,7 +230,9 @@ test("automatic completion waits for required verification", async () => {
     await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
     await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? [])
-      await handler({ toolName: "edit", input: {} }, ctx);
+      await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
+    for (const handler of app.handlers.get("tool_result") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     const finalMessage = { message: {
       role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }],
     } };
@@ -822,6 +824,8 @@ test("shell tools require Verify only when the Git worktree changes", async () =
     for (const [sessionId, mutate, toolName] of [
       ["read-only-bash", false, "bash"],
       ["changed-bash", true, "bash"],
+      ["read-only-grunt", false, "grunt"],
+      ["changed-grunt", true, "grunt"],
     ] as const) {
       const app = runtime(), ctx = context(sessionId);
       for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
@@ -839,6 +843,47 @@ test("shell tools require Verify only when the Git worktree changes", async () =
         await exec("git", ["checkout", "--", "tracked.txt"], { cwd });
       }
     }
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("blocked Guard calls stay read-only and Timeline restore messages invalidate Verify", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-integrations-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
+    sessionManager: { getSessionId: () => "integration-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", { action: "set_plan", goal: "Ship", todos: ["Finish"] }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("tool_call") ?? [])
+      await handler({ toolName: "edit", toolCallId: "blocked-edit" }, ctx);
+    app.emit("pi-guard:decision", { version: 1, cwd, decision: "blocked", toolCallId: "blocked-edit" });
+    for (const handler of app.handlers.get("tool_result") ?? [])
+      await handler({ toolName: "edit", toolCallId: "blocked-edit", isError: true }, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    let result = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(result.content[0].text, /Work completed/);
+
+    await tool.execute("plan-2", { action: "set_plan", goal: "Restore", todos: ["Finish"] }, undefined, undefined, ctx);
+    await tool.execute("done-2", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    const contextHandler = app.handlers.get("context")![0];
+    contextHandler({ messages: [{
+      role: "custom", customType: "pi-worktree-mutation", content: "restored", details: {
+        version: 1, cwd, changed: true, source: "pi-timeline", mutationId: "restore-1",
+      },
+    }] }, ctx);
+    result = await tool.execute("complete-2", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(result.content[0].text, /Cannot complete until/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -864,7 +909,9 @@ test("execution completion requires a qualifying Verify result after mutation", 
     const updated = await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     assert.equal(updated.terminate, undefined);
     for (const handler of app.handlers.get("tool_call") ?? [])
-      await handler({ toolName: "edit" }, ctx);
+      await handler({ toolName: "edit", toolCallId: "edit" }, ctx);
+    for (const handler of app.handlers.get("tool_result") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit" }, ctx);
     const blocked = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
     assert.equal(blocked.terminate, undefined);

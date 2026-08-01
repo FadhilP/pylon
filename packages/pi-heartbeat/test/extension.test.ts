@@ -9,13 +9,14 @@ import extension from "../extensions/pi-heartbeat.ts";
 function harness() {
   const handlers = new Map<string, (...args: any[]) => any>();
   const tools = new Map<string, any>();
+  const events: Array<{ name: string; value: any }> = [];
   let sessionId = `heartbeat-test-${process.pid}-${Date.now()}`;
   extension({
     on: (name: string, handler: (...args: any[]) => any) =>
       handlers.set(name, handler),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: () => {},
-    events: { emit: () => {} },
+    events: { emit: (name: string, value: any) => events.push({ name, value }) },
   } as any);
   const ctx = {
     cwd: process.cwd(),
@@ -25,19 +26,19 @@ function harness() {
       getSessionId: () => sessionId,
     },
   };
-  return { handlers, tools, ctx, setSessionId: (value: string) => { sessionId = value; } };
+  return { handlers, tools, ctx, events, setSessionId: (value: string) => { sessionId = value; } };
 }
 
 test("session_start shuts down the previous manager before replacing it", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const agentDir = await mkdtemp(join(tmpdir(), "heartbeat-agent-"));
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  const { handlers, tools, ctx, setSessionId } = harness();
+  const { handlers, tools, ctx, events, setSessionId } = harness();
   const first = "first";
   try {
     setSessionId(first);
     await handlers.get("session_start")!({}, ctx);
-    await tools.get("heartbeat_start").execute(
+    const started = await tools.get("heartbeat_start").execute(
       "start",
       { command: `node -e "setTimeout(()=>{},10000)"`, otherWork: "replace session" },
       undefined,
@@ -47,6 +48,9 @@ test("session_start shuts down the previous manager before replacing it", async 
     setSessionId("second");
     await handlers.get("session_start")!({}, ctx);
     await assert.rejects(access(join(agentDir, "pi-heartbeat", "tmp", first)));
+    const firstJobEvents = events.filter((event) => event.name === "pi-heartbeat:job" && event.value.id === started.details.id);
+    assert.ok(firstJobEvents.length >= 2);
+    assert.ok(firstJobEvents.every((event) => event.value.sessionId === first), "terminal events retain the creating session");
   } finally {
     await handlers.get("session_shutdown")!();
     await rm(agentDir, { recursive: true, force: true });
@@ -89,7 +93,7 @@ test("early targeted and list checks are rejected without conflicting context", 
 });
 
 test("completed job remains in context until its output is fetched", async () => {
-  const { handlers, tools, ctx } = harness();
+  const { handlers, tools, ctx, events } = harness();
   await handlers.get("session_start")!({}, ctx);
   try {
     const started = await tools.get("heartbeat_start").execute(
@@ -107,6 +111,9 @@ test("completed job remains in context until its output is fetched", async () =>
     }
     assert.match(injected.messages.at(-1).content, /completed/);
     assert.match(injected.messages.at(-1).content, /status available now/);
+    const lifecycle = events.filter((event) => event.name === "pi-heartbeat:job");
+    assert.ok(lifecycle.length >= 2);
+    assert.ok(lifecycle.every((event) => event.value.sessionId === ctx.sessionManager.getSessionId()));
     assert.match(
       handlers.get("context")!({ messages: [] }).messages.at(-1).content,
       /completed/,

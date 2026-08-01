@@ -29,7 +29,7 @@ Apply the palette once with `/ui theme`, or select `focus-dark` through `/settin
 
 `bell on` enables an opt-in terminal bell after each settled agent run for the current runtime; `bell off` disables it. `disable` restores the built-in header, footer, editor, and working indicator for the current runtime. Disable the package persistently through `pi config`.
 
-## Features
+## What Changes
 
 - Restrained neutral tool and message surfaces instead of full neon status blocks.
 - Readable diff, syntax, Markdown, thinking, warning, and error colors.

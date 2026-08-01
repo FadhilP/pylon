@@ -16,7 +16,7 @@ Run `/guard` to view session counters.
 
 Pi Guard intercepts agent `bash`, `write`, and `edit` calls plus user `!` and `!!` shell commands. For approvable risks it offers **Allow once**, **Always allow this session**, **Always allow on this project**, and **Deny**. Session approvals live only in the current extension instance; project approvals survive sessions in Pi's user-controlled agent directory (never the repository). Without confirmation UI, every risky command fails closed, including remembered approvals.
 
-## Path Protection
+## Protected Paths
 
 Explicit absolute write/edit targets outside the workspace require approval and fail closed without UI. Remembered session/project approval covers the resolved target's parent directory and all descendants, so generated sibling and nested files do not need one-by-one approval; the prompt shows the directory being remembered. A target directly under a filesystem root stays exact-path scoped rather than approving the whole drive. Relative traversal and workspace symlink escapes remain blocked. Writes inside `.git` or `node_modules` are always blocked and cannot be approved; `.env` approvals remain exact-path scoped. Existing targets and nearest existing parents are canonicalized on every call.
 

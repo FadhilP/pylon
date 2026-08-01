@@ -55,6 +55,7 @@ export type Job = {
   label: string;
   command: string;
   cwd: string;
+  sessionId?: string;
   state: State;
   startedAt: number;
   lastCheckedAt: number;
@@ -97,6 +98,7 @@ export class JobManager {
     cwd: string,
     label?: string,
     timeoutMs = 1800000,
+    sessionId?: string,
   ) {
     if (!command.trim() || command.length > 8000)
       throw Error("Invalid command.");
@@ -123,6 +125,7 @@ export class JobManager {
       label: (label?.trim() || command.slice(0, 60)).replace(/[\r\n\t]/g, " "),
       command,
       cwd,
+      sessionId,
       state: "running",
       startedAt,
       lastCheckedAt: startedAt,

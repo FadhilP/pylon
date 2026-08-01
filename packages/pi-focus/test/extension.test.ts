@@ -100,7 +100,7 @@ test("focused chrome shows current session name and Git branch", () => {
   assert.equal(branchReads, 2);
 });
 
-test("Grunt shows and clears child-model activity widget", () => {
+test("Grunt and Web Scout show and clear child-model activity widget", () => {
   const handlers = new Map<string, Function[]>();
   const pi: any = {
     getSessionName: () => undefined,
@@ -120,6 +120,14 @@ test("Grunt shows and clears child-model activity widget", () => {
   );
 
   handlers.get("tool_execution_end")![0]({ toolName: "grunt" }, ctx);
+  assert.equal(widget, undefined);
+
+  handlers.get("tool_execution_start")![0]({ toolName: "web_scout" }, ctx);
+  assert.equal(
+    widget!({}, theme).render(120).map((line: string) => line.trimEnd()).join("\n"),
+    "WEB · child model active · expand tool row for activity",
+  );
+  handlers.get("tool_execution_end")![0]({ toolName: "web_scout" }, ctx);
   assert.equal(widget, undefined);
 });
 

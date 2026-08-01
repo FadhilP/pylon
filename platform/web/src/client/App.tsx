@@ -1308,10 +1308,6 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
       </div>
       <div className="topbar-actions">
         <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
-        {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
-          <IconDatabase size={16} />
-          <span>Database</span>
-        </button>}
         <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>
@@ -1322,6 +1318,10 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
           <span>Files</span>
           {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
         </button>
+        {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
+          <IconDatabase size={16} />
+          <span>Database</span>
+        </button>}
         {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""} ${browserActive ? "is-live" : ""}`} type="button" onClick={onToggleBrowser} aria-label={`Helios browser${browserActive ? ", active" : ""}`} aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
           <IconWorld size={16} />
           <span>Browser</span>

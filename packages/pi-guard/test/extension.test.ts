@@ -179,3 +179,30 @@ test("Guard uses the effective runtime-policy timeout", { concurrency: false }, 
   );
   assert.deepEqual(neverPrompts[0].dialogOptions, { timeout: 0 });
 });
+
+test("Guard applies command policy to Heartbeat and can be disabled by runtime policy", { concurrency: false }, async () => {
+  const { root, agent } = await paths();
+  process.env.PI_CODING_AGENT_DIR = agent;
+  const app = harness();
+  const heartbeat = {
+    type: "tool_call", toolName: "heartbeat_start", toolCallId: "heartbeat-risk",
+    input: { command: "rm -rf generated", otherWork: "Inspect files" },
+  };
+  assert.equal((await app.tool(heartbeat, context(root, ["Deny"]))).block, true);
+  assert.equal(app.decisions.at(-1).toolCallId, "heartbeat-risk");
+
+  const malformedPrompts: any[] = [];
+  assert.equal((await app.tool({
+    type: "tool_call", toolName: "heartbeat_start", toolCallId: "heartbeat-malformed", input: { command: 42 },
+  }, context(root, ["Allow once"], malformedPrompts))).block, true);
+  assert.deepEqual(malformedPrompts, [], "malformed commands cannot enter the approval path");
+  assert.equal(app.decisions.at(-1).reason, "invalid background command");
+
+  app.events.emit("pylon:runtime-policy", {
+    version: 2,
+    guardEnabled: false,
+    dialogTimeouts: { guard: 60, clarify: 60 },
+  });
+  assert.equal(await app.tool(heartbeat, context(root, [])), undefined);
+  assert.equal(await app.user({ command: "rm -rf generated" }, context(root, [])), undefined);
+});

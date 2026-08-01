@@ -5,7 +5,7 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/
 import { basename, dirname, resolve } from "node:path";
 import type { DialogTimeoutSeconds, RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 10;
+const VERSION = 11;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const MAX_PINNED_SESSIONS = 10_000;
@@ -19,6 +19,7 @@ export interface RegisteredProject {
   setupCommand?: string;
   verifyPolicy?: VerifyPolicyReadModel;
   timelineEnabled?: boolean;
+  guardEnabled?: boolean;
   workspacePolicy?: WorkspacePolicyMode;
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -29,6 +30,7 @@ interface SessionPolicyRecord {
   projectId: string;
   verify?: VerifyPolicyReadModel;
   timelineEnabled?: boolean;
+  guardEnabled?: boolean;
   workspace?: WorkspacePolicyMode;
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -40,6 +42,7 @@ export interface RuntimePolicyUpdate {
   sessionId: string;
   verify: VerifyPolicyReadModel | { mode: "inherit" };
   timeline: "inherit" | "enabled" | "disabled";
+  guard: "inherit" | "enabled" | "disabled";
   workspace: WorkspacePolicyMode | "inherit";
   guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
   clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";
@@ -131,6 +134,7 @@ export class ProjectRegistry {
   private sessionPolicies: SessionPolicyRecord[] = [];
   private globalPolicy = {
     timelineEnabled: true,
+    guardEnabled: true,
     workspace: "local" as WorkspacePolicyMode,
     guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
     clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
@@ -159,7 +163,7 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, 5, 6, 7, 8, 9, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, 6, 7, 8, 9, 10, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const persistedGlobal = value.globalPolicy && typeof value.globalPolicy === "object" && !Array.isArray(value.globalPolicy)
@@ -167,6 +171,7 @@ export class ProjectRegistry {
         : {};
       if (Number(value.version) >= 9) {
         if (typeof persistedGlobal.timelineEnabled !== "boolean"
+          || Number(value.version) >= VERSION && typeof persistedGlobal.guardEnabled !== "boolean"
           || !validWorkspacePolicy(persistedGlobal.workspace)
           || !validDialogTimeout(persistedGlobal.guardTimeoutSeconds)
           || !validDialogTimeout(persistedGlobal.clarifyTimeoutSeconds)) {
@@ -174,6 +179,7 @@ export class ProjectRegistry {
         }
         this.globalPolicy = {
           timelineEnabled: persistedGlobal.timelineEnabled,
+          guardEnabled: typeof persistedGlobal.guardEnabled === "boolean" ? persistedGlobal.guardEnabled : true,
           workspace: persistedGlobal.workspace,
           guardTimeoutSeconds: persistedGlobal.guardTimeoutSeconds,
           clarifyTimeoutSeconds: persistedGlobal.clarifyTimeoutSeconds,
@@ -182,7 +188,7 @@ export class ProjectRegistry {
       const legacyPolicy = Number(value.version) < 9;
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
+        const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; guardEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
         const workspacePolicy = record.workspacePolicy === undefined
           ? undefined
           : migrateWorkspacePolicy(record.workspacePolicy);
@@ -192,6 +198,7 @@ export class ProjectRegistry {
         if (record.setupCommand !== undefined && (typeof record.setupCommand !== "string" || record.setupCommand.length > 2_000)) return [];
         if (record.verifyPolicy !== undefined && !validVerifyPolicy(record.verifyPolicy)) return [];
         if (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean") return [];
+        if (record.guardEnabled !== undefined && typeof record.guardEnabled !== "boolean") return [];
         if (record.workspacePolicy !== undefined && workspacePolicy === undefined) return [];
         if (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds)) return [];
         if (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds)) return [];
@@ -202,6 +209,7 @@ export class ProjectRegistry {
           ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
           ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
           ...(record.timelineEnabled !== undefined && (!legacyPolicy || record.timelineEnabled !== true) ? { timelineEnabled: record.timelineEnabled } : {}),
+          ...(record.guardEnabled !== undefined ? { guardEnabled: record.guardEnabled } : {}),
           ...(workspacePolicy && (!legacyPolicy || workspacePolicy !== "local") ? { workspacePolicy } : {}),
           ...(record.guardTimeoutSeconds !== undefined && (!legacyPolicy || record.guardTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
           ...(record.clarifyTimeoutSeconds !== undefined && (!legacyPolicy || record.clarifyTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
@@ -509,6 +517,7 @@ export class ProjectRegistry {
     const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
     const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
     const projectTimeline = project.timelineEnabled ?? this.globalPolicy.timelineEnabled;
+    const projectGuard = project.guardEnabled ?? this.globalPolicy.guardEnabled;
     const projectWorkspace = project.workspacePolicy ?? this.globalPolicy.workspace;
     const projectGuardTimeout = project.guardTimeoutSeconds === undefined ? this.globalPolicy.guardTimeoutSeconds : project.guardTimeoutSeconds;
     const projectClarifyTimeout = project.clarifyTimeoutSeconds === undefined ? this.globalPolicy.clarifyTimeoutSeconds : project.clarifyTimeoutSeconds;
@@ -518,6 +527,7 @@ export class ProjectRegistry {
       project: {
         verify: projectVerify,
         ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
+        ...(project.guardEnabled !== undefined ? { guardEnabled: project.guardEnabled } : {}),
         ...(project.workspacePolicy !== undefined ? { workspace: project.workspacePolicy } : {}),
         ...(project.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: project.guardTimeoutSeconds } : {}),
         ...(project.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds } : {}),
@@ -525,6 +535,7 @@ export class ProjectRegistry {
       session: {
         ...(session?.verify ? { verify: cloneVerifyPolicy(session.verify) } : {}),
         ...(session?.timelineEnabled !== undefined ? { timelineEnabled: session.timelineEnabled } : {}),
+        ...(session?.guardEnabled !== undefined ? { guardEnabled: session.guardEnabled } : {}),
         ...(session?.workspace ? { workspace: session.workspace } : {}),
         ...(session?.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: session.guardTimeoutSeconds } : {}),
         ...(session?.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: session.clarifyTimeoutSeconds } : {}),
@@ -532,6 +543,7 @@ export class ProjectRegistry {
       effective: {
         verify: cloneVerifyPolicy(session?.verify ?? projectVerify),
         timelineEnabled: session?.timelineEnabled ?? projectTimeline,
+        guardEnabled: session?.guardEnabled ?? projectGuard,
         workspace: session?.workspace ?? projectWorkspace,
         guardTimeoutSeconds: session?.guardTimeoutSeconds === undefined ? projectGuardTimeout : session.guardTimeoutSeconds,
         clarifyTimeoutSeconds: session?.clarifyTimeoutSeconds === undefined ? projectClarifyTimeout : session.clarifyTimeoutSeconds,
@@ -548,13 +560,14 @@ export class ProjectRegistry {
     }
     const project = this.requireProject(input.projectId);
     if (input.scope === "global") {
-      if (input.verify.mode !== "inherit" || input.timeline === "inherit" || input.workspace === "inherit"
+      if (input.verify.mode !== "inherit" || input.timeline === "inherit" || input.guard === "inherit" || input.workspace === "inherit"
         || input.guardTimeoutSeconds === "inherit" || input.clarifyTimeoutSeconds === "inherit"
         || !validDialogTimeout(input.guardTimeoutSeconds) || !validDialogTimeout(input.clarifyTimeoutSeconds)) {
         throw new Error("invalid global runtime policy");
       }
       this.globalPolicy = {
         timelineEnabled: input.timeline === "enabled",
+        guardEnabled: input.guard === "enabled",
         workspace: input.workspace,
         guardTimeoutSeconds: input.guardTimeoutSeconds,
         clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
@@ -568,6 +581,8 @@ export class ProjectRegistry {
       project.verifyPolicy = cloneVerifyPolicy(input.verify);
       if (input.timeline === "inherit") delete project.timelineEnabled;
       else project.timelineEnabled = input.timeline === "enabled";
+      if (input.guard === "inherit") delete project.guardEnabled;
+      else project.guardEnabled = input.guard === "enabled";
       if (input.workspace === "inherit") delete project.workspacePolicy;
       else project.workspacePolicy = input.workspace;
       if (input.guardTimeoutSeconds === "inherit") delete project.guardTimeoutSeconds;
@@ -585,13 +600,15 @@ export class ProjectRegistry {
       else session.verify = cloneVerifyPolicy(input.verify);
       if (input.timeline === "inherit") delete session.timelineEnabled;
       else session.timelineEnabled = input.timeline === "enabled";
+      if (input.guard === "inherit") delete session.guardEnabled;
+      else session.guardEnabled = input.guard === "enabled";
       if (input.workspace === "inherit") delete session.workspace;
       else session.workspace = input.workspace;
       if (input.guardTimeoutSeconds === "inherit") delete session.guardTimeoutSeconds;
       else session.guardTimeoutSeconds = input.guardTimeoutSeconds;
       if (input.clarifyTimeoutSeconds === "inherit") delete session.clarifyTimeoutSeconds;
       else session.clarifyTimeoutSeconds = input.clarifyTimeoutSeconds;
-      if (!session.verify && session.timelineEnabled === undefined && !session.workspace
+      if (!session.verify && session.timelineEnabled === undefined && session.guardEnabled === undefined && !session.workspace
         && session.guardTimeoutSeconds === undefined && session.clarifyTimeoutSeconds === undefined) {
         this.sessionPolicies = this.sessionPolicies.filter((item) => item !== session);
       }
@@ -696,7 +713,7 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
   }
 
-  private async resolveProjects(records: Array<{ directory: string; label?: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds }>): Promise<RegisteredProject[]> {
+  private async resolveProjects(records: Array<{ directory: string; label?: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; guardEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
@@ -711,6 +728,7 @@ export class ProjectRegistry {
             ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
             ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
             ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+            ...(record.guardEnabled !== undefined ? { guardEnabled: record.guardEnabled } : {}),
             ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
             ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
             ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
@@ -742,6 +760,7 @@ export class ProjectRegistry {
         ...(project.setupCommand ? { setupCommand: project.setupCommand } : {}),
         ...(project.verifyPolicy ? { verifyPolicy: project.verifyPolicy } : {}),
         ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
+        ...(project.guardEnabled !== undefined ? { guardEnabled: project.guardEnabled } : {}),
         ...(project.workspacePolicy ? { workspacePolicy: project.workspacePolicy } : {}),
         ...(project.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: project.guardTimeoutSeconds } : {}),
         ...(project.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds } : {}),
@@ -798,6 +817,7 @@ export class ProjectRegistry {
       || typeof record.projectId !== "string" || !record.projectId || record.projectId.length > 128
       || (record.verify !== undefined && !validVerifyPolicy(record.verify))
       || (record.timelineEnabled !== undefined && typeof record.timelineEnabled !== "boolean")
+      || (record.guardEnabled !== undefined && typeof record.guardEnabled !== "boolean")
       || (record.workspace !== undefined && workspace === undefined)
       || (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds))
       || (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds))) return [];
@@ -806,6 +826,7 @@ export class ProjectRegistry {
       projectId: record.projectId,
       ...(record.verify ? { verify: cloneVerifyPolicy(record.verify) } : {}),
       ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+            ...(record.guardEnabled !== undefined ? { guardEnabled: record.guardEnabled } : {}),
       ...(workspace ? { workspace } : {}),
       ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
       ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),

@@ -116,11 +116,17 @@ async function saveProjectApproval(approval: ApprovalIdentity): Promise<boolean>
 export default function guardExtension(pi: ExtensionAPI) {
   let blocked = 0;
   let confirmed = 0;
+  let enabled = true;
+  let lastCtx: any;
   let approvalTimeoutSeconds: number | null | undefined;
   // This closure is per extension instance; Pi replaces it when a session is replaced.
   const sessionApprovals = new Set<string>();
   const disposePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
     if (event?.version !== 2) return;
+    if (typeof event.guardEnabled === "boolean") {
+      enabled = event.guardEnabled;
+      if (!enabled) lastCtx?.ui.setStatus("pi-guard", undefined);
+    }
     const value = event.dialogTimeouts?.guard;
     if (value === null || Number.isInteger(value) && value >= 15 && value <= 86_400) {
       approvalTimeoutSeconds = value;
@@ -133,9 +139,9 @@ export default function guardExtension(pi: ExtensionAPI) {
         timeout: approvalTimeoutSeconds === null ? 0 : approvalTimeoutSeconds * 1_000,
       };
 
-  const publish = (ctx: any, decision: string, reason: string) => {
+  const publish = (ctx: any, decision: string, reason: string, toolCallId?: string) => {
     pi.events.emit("pi-guard:decision", {
-      version: 1, cwd: ctx.cwd, decision, reason, blocked, confirmed,
+      version: 1, cwd: ctx.cwd, decision, reason, blocked, confirmed, toolCallId,
     });
     if (ctx.hasUI) ctx.ui.setStatus("pi-guard", `guard: ${decision}`);
   };
@@ -215,22 +221,34 @@ export default function guardExtension(pi: ExtensionAPI) {
     operation: ApprovalIdentity["operation"],
     value: string,
     signal?: AbortSignal,
+    toolCallId?: string,
   ) => {
     if (await approve(ctx, reason, detail, operation, value, signal)) {
       confirmed++;
-      publish(ctx, "confirmed", reason);
+      publish(ctx, "confirmed", reason, toolCallId);
       return true;
     }
     blocked++;
-    publish(ctx, "blocked", reason);
+    publish(ctx, "blocked", reason, toolCallId);
     return false;
   };
 
+  pi.on("session_start", (_event, ctx) => { lastCtx = ctx; });
   pi.on("tool_call", async (event, ctx) => {
-    if (isToolCallEventType("bash", event)) {
-      const risk = commandRisk(event.input.command);
+    if (!enabled) return;
+    if (isToolCallEventType("bash", event) || event.toolName === "heartbeat_start") {
+      const command = isToolCallEventType("bash", event)
+        ? event.input.command
+        : (event.input as { command?: unknown })?.command;
+      if (typeof command !== "string") {
+        const reason = "invalid background command";
+        blocked++;
+        publish(ctx, "blocked", reason, event.toolCallId);
+        return { block: true, reason: `Pi Guard blocked ${reason}.` };
+      }
+      const risk = commandRisk(command);
       if (!risk) return;
-      if (await allowOrBlock(ctx, risk, event.input.command, "command", event.input.command)) return;
+      if (await allowOrBlock(ctx, risk, String(command ?? ""), "command", String(command ?? ""), undefined, event.toolCallId)) return;
       return {
         block: true,
         reason: `Pi Guard blocked ${risk}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
@@ -244,17 +262,17 @@ export default function guardExtension(pi: ExtensionAPI) {
     } catch {
       const reason = "write target could not be resolved safely";
       blocked++;
-      publish(ctx, "blocked", reason);
+      publish(ctx, "blocked", reason, event.toolCallId);
       return { block: true, reason: `Pi Guard blocked ${reason}.` };
     }
     if (!risk) return;
     if (risk.action === "block") {
       blocked++;
-      publish(ctx, "blocked", risk.reason);
+      publish(ctx, "blocked", risk.reason, event.toolCallId);
       return { block: true, reason: `Pi Guard blocked ${risk.reason}.` };
     }
     const detail = `${event.input.path}\nResolved target: ${risk.target}`;
-    if (await allowOrBlock(ctx, risk.reason, detail, "path", risk.target)) return;
+    if (await allowOrBlock(ctx, risk.reason, detail, "path", risk.target, undefined, event.toolCallId)) return;
     return {
       block: true,
       reason: `Pi Guard blocked ${risk.reason}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
@@ -262,6 +280,7 @@ export default function guardExtension(pi: ExtensionAPI) {
   });
 
   pi.on("user_bash", async (event, ctx) => {
+    if (!enabled) return;
     const risk = commandRisk(event.command);
     if (!risk) return;
     if (await allowOrBlock(ctx, risk, event.command, "command", event.command)) return;
@@ -278,8 +297,12 @@ export default function guardExtension(pi: ExtensionAPI) {
   pi.registerCommand("guard", {
     description: "Show Pi Guard status",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(`Pi Guard active. Blocked: ${blocked}. Approved: ${confirmed}.`, "info");
+      ctx.ui.notify(`Pi Guard ${enabled ? "active" : "disabled by policy"}. Blocked: ${blocked}. Approved: ${confirmed}.`, "info");
     },
   });
-  pi.on("session_shutdown", () => disposePolicy?.());
+  pi.on("session_shutdown", () => {
+    lastCtx?.ui.setStatus("pi-guard", undefined);
+    lastCtx = undefined;
+    disposePolicy?.();
+  });
 }

@@ -24,7 +24,11 @@ Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. 
 
 ## Repository Scout
 
+### When to Use It
+
 Pi receives `repo_scout(task, retryReason?)`. The main model should default to it for non-local discovery, unfamiliar code, architecture mapping, data-flow mapping, and cross-file impact—not only before edits, but also before plans, diagnoses, reviews, or conclusions. Known-file self-contained work should skip Scout. Scout gathers evidence; the main model owns evaluation, severity, exploitability, priority, architecture choices, recommendations, and final conclusions.
+
+### Task Shape and Evidence
 
 Each task keeps useful context through four explicit parts: an observable action, concrete anchors or bounded scope, requested evidence, and a finite stopping boundary. Exact symbols are not mandatory: paths, packages, patterns, trust boundaries, inputs, and sinks are valid anchors. The stopping boundary may include directly relevant imports, registries, configuration, tests, or indirect dispatch needed to evidence the trace.
 
@@ -40,11 +44,15 @@ The isolated child always loads Scout-owned read-only `read` and `search_excerpt
 
 ## Web Scout
 
+### Browser Isolation
+
 Pi receives `web_scout(task, startUrls?, maxPages?)` for current public-web research requiring rendered pages. Calls launch immediately without Pi Guard or per-call confirmation because every run uses a fresh isolated browser with no user state. The selected provider still receives the task and returned page text; public sites receive browser traffic, network address, and research terms.
 
 Web Scout launches a headless temporary Helios-owned browser with no user cookies, tabs, profiles, or logins. A separate child Pi receives only `scout_browser` with `navigate`, `snapshot`, `follow`, and `back`. It cannot attach to user browsers, click arbitrary controls, fill forms, execute model-supplied scripts, access storage through tools, upload, download, or capture screenshots. Public pages may execute their own JavaScript and use temporary isolated cookies/storage; all are discarded when browser closes. Browser and child session close after each call.
 
 All browser traffic passes through an authenticated loopback proxy. Each HTTP request and HTTPS tunnel resolves every destination, rejects mixed or non-public DNS answers, connects directly to the validated address, and permits only ports 80/443. Loopback, private, link-local, carrier-grade NAT, multicast, documentation, transition, reserved, and metadata ranges are blocked for explicit navigation, redirects, and subresources. QUIC, non-proxied WebRTC, service workers, downloads, and proxy loopback bypass are disabled.
+
+### Budgets and Reports
 
 Default navigation budget is 8; accepted range is 1–12. Redirects and subresources share bounded proxy request/byte budgets but are not counted as separate tool navigations. Calls also have a bounded action budget and five-minute timeout. Reports cite URLs, titles, access date, short supporting excerpts, and gaps. Web pages remain untrusted data.
 

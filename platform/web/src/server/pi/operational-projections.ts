@@ -95,6 +95,9 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
       latest: value.sieve.latest ? cloneSieveStats(value.sieve.latest) : undefined,
       cumulativeActual: value.sieve.cumulativeActual ? cloneSieveStats(value.sieve.cumulativeActual) : undefined,
       cumulativeProjected: value.sieve.cumulativeProjected ? cloneSieveStats(value.sieve.cumulativeProjected) : undefined,
+      recallsByTool: value.sieve.recallsByTool
+        ? Object.fromEntries(Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [name, { ...usage }]))
+        : undefined,
     },
     health: { ...value.health, issues: [...value.health.issues] },
   };
@@ -123,27 +126,56 @@ export function applyOperationalEvent(
 function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
   const input = record(value);
   const transformedBy = record(input?.transformedBy);
-  if (!input || !transformedBy) return undefined;
+  const rawByTool = record(input?.byTool);
+  if (!input || !transformedBy || !rawByTool || Object.keys(rawByTool).length > 33) return undefined;
   const keys = ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const;
-  const reasons = ["ageThreshold", "budget", "giantError", "activeThreshold"] as const;
-  if (!keys.every((key) => Number.isFinite(input[key]) && Number(input[key]) >= 0)
-    || !reasons.every((key) => Number.isFinite(transformedBy[key]) && Number(transformedBy[key]) >= 0)) return undefined;
+  const reasons = ["ageThreshold", "budget", "giantError", "activeThreshold", "staleRead", "duplicate", "errorCap", "mixedText"] as const;
+  if (!keys.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)
+    || !reasons.every((key) => Number.isSafeInteger(transformedBy[key]) && Number(transformedBy[key]) >= 0)) return undefined;
+  const byTool: SieveTransformStatsReadModel["byTool"] = {};
+  for (const [name, rawUsage] of Object.entries(rawByTool)) {
+    const usage = record(rawUsage);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name) || !usage
+      || !["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every((key) =>
+        Number.isSafeInteger(usage[key]) && Number(usage[key]) >= 0)) return undefined;
+    byTool[name] = {
+      scanned: number(usage.scanned), transformed: number(usage.transformed), sourceChars: number(usage.sourceChars),
+      retainedChars: number(usage.retainedChars), netCharsSaved: number(usage.netCharsSaved),
+    };
+  }
   return {
-    scanned: number(input.scanned),
-    transformed: number(input.transformed),
-    omittedChars: number(input.omittedChars),
+    scanned: number(input.scanned), transformed: number(input.transformed), omittedChars: number(input.omittedChars),
     netCharsSaved: number(input.netCharsSaved),
     transformedBy: {
-      ageThreshold: number(transformedBy.ageThreshold),
-      budget: number(transformedBy.budget),
-      giantError: number(transformedBy.giantError),
-      activeThreshold: number(transformedBy.activeThreshold),
+      ageThreshold: number(transformedBy.ageThreshold), budget: number(transformedBy.budget),
+      giantError: number(transformedBy.giantError), activeThreshold: number(transformedBy.activeThreshold),
+      staleRead: number(transformedBy.staleRead), duplicate: number(transformedBy.duplicate),
+      errorCap: number(transformedBy.errorCap), mixedText: number(transformedBy.mixedText),
     },
+    byTool,
   };
 }
 
 function cloneSieveStats(value: SieveTransformStatsReadModel): SieveTransformStatsReadModel {
-  return { ...value, transformedBy: { ...value.transformedBy } };
+  return {
+    ...value,
+    transformedBy: { ...value.transformedBy },
+    byTool: Object.fromEntries(Object.entries(value.byTool).map(([name, usage]) => [name, { ...usage }])),
+  };
+}
+
+function sieveRecallStats(value: unknown): NonNullable<SieveReadModel["recallsByTool"]> | undefined {
+  const input = record(value);
+  if (!input || Object.keys(input).length > 33) return undefined;
+  const output: NonNullable<SieveReadModel["recallsByTool"]> = {};
+  for (const [name, rawUsage] of Object.entries(input)) {
+    const usage = record(rawUsage);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name) || !usage
+      || !Number.isSafeInteger(usage.recalls) || Number(usage.recalls) < 0
+      || !Number.isSafeInteger(usage.recalledChars) || Number(usage.recalledChars) < 0) return undefined;
+    output[name] = { recalls: Number(usage.recalls), recalledChars: Number(usage.recalledChars) };
+  }
+  return output;
 }
 
 function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
@@ -154,12 +186,15 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   const cumulativeActual = sieveStats(input.cumulativeActual);
   const cumulativeProjected = sieveStats(input.cumulativeProjected);
   const updatedAt = timestamp(input.updatedAt);
+  const recallsByTool = sieveRecallStats(input.recallsByTool);
   if (input.available !== true
     || !["enabled", "observe", "disabled"].includes(String(input.mode))
     || !["enabled", "observe"].includes(String(input.latestMode))
     || !Number.isSafeInteger(input.threshold) || Number(input.threshold) < 1_000
     || typeof input.activePruning !== "boolean"
-    || !latest || !cumulativeActual || !cumulativeProjected || !updatedAt) {
+    || !Number.isSafeInteger(input.recalls) || Number(input.recalls) < 0
+    || !Number.isSafeInteger(input.recalledChars) || Number(input.recalledChars) < 0
+    || !latest || !cumulativeActual || !cumulativeProjected || !recallsByTool || !updatedAt) {
     return { availability: "unavailable", error: "Pi Sieve returned invalid state." };
   }
   return {
@@ -171,8 +206,9 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
     latest,
     cumulativeActual,
     cumulativeProjected,
-    recalls: Math.max(0, number(input.recalls)),
-    recalledChars: Math.max(0, number(input.recalledChars)),
+    recalls: Number(input.recalls),
+    recalledChars: Number(input.recalledChars),
+    recallsByTool,
     updatedAt,
     ...(string(input.error, 500) ? { error: string(input.error, 500) } : {}),
   };

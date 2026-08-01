@@ -173,6 +173,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
   const [scope, setScope] = useState<"global" | "project" | "session">("project");
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
+  const [guard, setGuard] = useState<"inherit" | "enabled" | "disabled">("enabled");
   const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("local");
   const [guardTimeout, setGuardTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
   const [clarifyTimeout, setClarifyTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
@@ -188,6 +189,13 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
       : policy.session.timelineEnabled === undefined
         ? "inherit"
         : policy.session.timelineEnabled ? "enabled" : "disabled");
+    setGuard(scope === "global"
+      ? policy.global.guardEnabled ? "enabled" : "disabled"
+      : scope === "project"
+        ? policy.project.guardEnabled === undefined ? "inherit" : policy.project.guardEnabled ? "enabled" : "disabled"
+      : policy.session.guardEnabled === undefined
+        ? "inherit"
+        : policy.session.guardEnabled ? "enabled" : "disabled");
     setWorkspace(scope === "global"
       ? policy.global.workspace
       : scope === "project"
@@ -223,9 +231,11 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     nextWorkspace: WorkspacePolicyMode | "inherit" = workspace,
     nextGuardTimeout: DialogTimeoutSeconds | "inherit" = guardTimeout,
     nextClarifyTimeout: DialogTimeoutSeconds | "inherit" = clarifyTimeout,
+    nextGuard: "inherit" | "enabled" | "disabled" = guard,
   ) => {
     setVerify(nextVerify);
     setTimeline(nextTimeline);
+    setGuard(nextGuard);
     setWorkspace(nextWorkspace);
     setGuardTimeout(nextGuardTimeout);
     setClarifyTimeout(nextClarifyTimeout);
@@ -235,6 +245,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         scope,
         nextVerify,
         nextTimeline === "inherit" ? "inherit" : nextTimeline === "enabled",
+        nextGuard === "inherit" ? "inherit" : nextGuard === "enabled",
         nextWorkspace,
         nextGuardTimeout,
         nextClarifyTimeout,
@@ -292,6 +303,17 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         value={timeline}
         disabled={!idle}
         onChange={(event) => void save(verify, event.target.value as typeof timeline, workspace).catch(() => undefined)}
+      >
+        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+      </select>
+    </label>
+    <label>Guard
+      <select
+        value={guard}
+        disabled={!idle}
+        onChange={(event) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, event.target.value as typeof guard).catch(() => undefined)}
       >
         {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
         <option value="enabled">Enabled</option>
@@ -762,6 +784,12 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   }
   const saved = sieve.cumulativeActual.netCharsSaved;
   const projected = sieve.cumulativeProjected.netCharsSaved;
+  const topTools = Object.entries(sieve.cumulativeActual.byTool)
+    .filter(([, usage]) => usage.netCharsSaved > 0)
+    .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
+    .slice(0, 3)
+    .map(([name, usage]) => `${name} ${formatCompactNumber(usage.netCharsSaved)}`)
+    .join(", ") || "None";
   return <InspectorSection title="Context Pruning" meta={sieve.mode}>
     <div className="usage-strip">
       <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
@@ -772,6 +800,7 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
     <dl className="sieve-details">
       <div><dt>Latest scan</dt><dd>{formatCompactNumber(sieve.latest.scanned)} results</dd></div>
       <div><dt>Pruned</dt><dd>{formatCompactNumber(sieve.latest.transformed)} results</dd></div>
+      <div><dt>Top savings</dt><dd>{topTools}</dd></div>
       <div><dt>Active pruning</dt><dd>{sieve.activePruning ? "Enabled" : "Disabled"}</dd></div>
       <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "—"}</dd></div>
     </dl>

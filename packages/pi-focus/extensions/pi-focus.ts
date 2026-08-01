@@ -92,7 +92,7 @@ export default function focusExtension(pi: ExtensionAPI) {
   let density: Density = "compact";
   let completionBell = false;
   let state = "READY";
-  let activeChild: "SCOUT" | "ADVISOR" | "GRUNT" | undefined;
+  let activeChild: "SCOUT" | "WEB" | "ADVISOR" | "GRUNT" | undefined;
   const clearChild = (ctx: any) => {
     activeChild = undefined;
     ctx.ui.setWidget("focus-child", undefined);
@@ -190,13 +190,16 @@ export default function focusExtension(pi: ExtensionAPI) {
     if (
       !enabled ||
       event.toolName !== "repo_scout" &&
+      event.toolName !== "web_scout" &&
       event.toolName !== "advisor" &&
       event.toolName !== "grunt"
     )
       return;
     activeChild = event.toolName === "repo_scout"
       ? "SCOUT"
-      : event.toolName === "advisor" ? "ADVISOR" : "GRUNT";
+      : event.toolName === "web_scout"
+        ? "WEB"
+        : event.toolName === "advisor" ? "ADVISOR" : "GRUNT";
     ctx.ui.setWidget(
       "focus-child",
       (_tui, theme) =>
@@ -212,7 +215,7 @@ export default function focusExtension(pi: ExtensionAPI) {
     );
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (event.toolName === "repo_scout" || event.toolName === "advisor" || event.toolName === "grunt")
+    if (childTools.has(event.toolName))
       clearChild(ctx);
   });
 

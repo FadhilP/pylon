@@ -44,6 +44,7 @@ export interface RuntimePolicyReadModel {
   revision: number;
   global: {
     timelineEnabled: boolean;
+    guardEnabled: boolean;
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
@@ -51,6 +52,7 @@ export interface RuntimePolicyReadModel {
   project: {
     verify: VerifyPolicyReadModel;
     timelineEnabled?: boolean;
+    guardEnabled?: boolean;
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -58,6 +60,7 @@ export interface RuntimePolicyReadModel {
   session: {
     verify?: VerifyPolicyReadModel;
     timelineEnabled?: boolean;
+    guardEnabled?: boolean;
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -65,6 +68,7 @@ export interface RuntimePolicyReadModel {
   effective: {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
+    guardEnabled: boolean;
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;

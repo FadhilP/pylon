@@ -21,6 +21,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       pi.events.emit("pi-heartbeat:job", {
         version: 1,
         id: job.id,
+        sessionId: job.sessionId,
         cwd: job.cwd,
         label: job.label,
         state: job.state,
@@ -115,7 +116,13 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
           details: {},
         };
       if (!manager) throw Error("Heartbeat unavailable.");
-      const j = await manager.start(p.command, ctx.cwd, p.label, p.timeoutMs);
+      const j = await manager.start(
+        p.command,
+        ctx.cwd,
+        p.label,
+        p.timeoutMs,
+        ctx.sessionManager.getSessionId(),
+      );
       jobMeta.set(j.id, { todoId: p.todoId, purpose: p.purpose });
       announced.delete(j.id);
       refresh();

@@ -252,6 +252,10 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
       || value.scope === "global" && value.timeline === "inherit") {
       return { ok: false, error: "invalid Timeline policy" };
     }
+    if (!["inherit", "enabled", "disabled"].includes(String(value.guard))
+      || value.scope === "global" && value.guard === "inherit") {
+      return { ok: false, error: "invalid Guard policy" };
+    }
     if (!["inherit", "checkout", "worktree", "local"].includes(String(value.workspace))
       || value.scope === "global" && value.workspace === "inherit") {
       return { ok: false, error: "invalid workspace policy" };
@@ -570,22 +574,26 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!record(policy) || !Number.isSafeInteger(policy.revision) || (policy.revision as number) < 0
     || !record(policy.global)
     || typeof policy.global.timelineEnabled !== "boolean"
+    || typeof policy.global.guardEnabled !== "boolean"
     || !["checkout", "worktree", "local"].includes(String(policy.global.workspace))
     || !validDialogTimeout(policy.global.guardTimeoutSeconds)
     || !validDialogTimeout(policy.global.clarifyTimeoutSeconds)
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
     || (policy.project.timelineEnabled !== undefined && typeof policy.project.timelineEnabled !== "boolean")
+    || (policy.project.guardEnabled !== undefined && typeof policy.project.guardEnabled !== "boolean")
     || (policy.project.workspace !== undefined && !["checkout", "worktree", "local"].includes(String(policy.project.workspace)))
     || (policy.project.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.guardTimeoutSeconds))
     || (policy.project.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.clarifyTimeoutSeconds))
     || !record(policy.session)
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
+    || (policy.session.guardEnabled !== undefined && typeof policy.session.guardEnabled !== "boolean")
     || (policy.session.workspace !== undefined && !["checkout", "worktree", "local"].includes(String(policy.session.workspace)))
     || (policy.session.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.guardTimeoutSeconds))
     || (policy.session.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.clarifyTimeoutSeconds))
     || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
     || typeof policy.effective.timelineEnabled !== "boolean"
+    || typeof policy.effective.guardEnabled !== "boolean"
     || !["checkout", "worktree", "local"].includes(String(policy.effective.workspace))
     || !validDialogTimeout(policy.effective.guardTimeoutSeconds)
     || !validDialogTimeout(policy.effective.clarifyTimeoutSeconds)
@@ -737,14 +745,17 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !["healthy", "degraded", "unavailable"].includes(String(operational.health.status)) || !Array.isArray(operational.health.issues) || operational.health.issues.length > 20) return false;
   if (operational.sieve.availability === "available") {
     const stats = (value: unknown) => {
-      if (!record(value) || !record(value.transformedBy)) return false;
+      if (!record(value) || !record(value.transformedBy) || !record(value.byTool)
+        || Object.keys(value.byTool).length > 33) return false;
       const transformedBy = value.transformedBy;
-      return ["scanned", "transformed", "omittedChars", "netCharsSaved"].every((key) =>
-        typeof value[key] === "number" && Number.isFinite(value[key] as number) && (value[key] as number) >= 0)
-        && ["ageThreshold", "budget", "giantError", "activeThreshold"].every((key) =>
-          typeof transformedBy[key] === "number"
-          && Number.isFinite(transformedBy[key] as number)
-          && (transformedBy[key] as number) >= 0);
+      const toolStats = Object.entries(value.byTool).every(([name, usage]) => record(usage)
+        && /^[a-zA-Z0-9_-]{1,64}$/.test(name)
+        && ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every((key) =>
+          Number.isSafeInteger(usage[key]) && (usage[key] as number) >= 0));
+      return toolStats && ["scanned", "transformed", "omittedChars", "netCharsSaved"].every((key) =>
+        Number.isSafeInteger(value[key]) && (value[key] as number) >= 0)
+        && ["ageThreshold", "budget", "giantError", "activeThreshold", "staleRead", "duplicate", "errorCap", "mixedText"].every((key) =>
+          Number.isSafeInteger(transformedBy[key]) && (transformedBy[key] as number) >= 0);
     };
     if (!["enabled", "observe", "disabled"].includes(String(operational.sieve.mode))
       || !Number.isSafeInteger(operational.sieve.threshold) || (operational.sieve.threshold as number) < 1_000
@@ -755,6 +766,11 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       || !stats(operational.sieve.cumulativeProjected)
       || !Number.isSafeInteger(operational.sieve.recalls) || (operational.sieve.recalls as number) < 0
       || !Number.isSafeInteger(operational.sieve.recalledChars) || (operational.sieve.recalledChars as number) < 0
+      || !record(operational.sieve.recallsByTool) || Object.keys(operational.sieve.recallsByTool).length > 33
+      || !Object.entries(operational.sieve.recallsByTool).every(([name, usage]) => record(usage)
+        && /^[a-zA-Z0-9_-]{1,64}$/.test(name)
+        && Number.isSafeInteger(usage.recalls) && (usage.recalls as number) >= 0
+        && Number.isSafeInteger(usage.recalledChars) && (usage.recalledChars as number) >= 0)
       || typeof operational.sieve.updatedAt !== "string" || Number.isNaN(Date.parse(operational.sieve.updatedAt))
       || (operational.sieve.error !== undefined && !boundedString(operational.sieve.error, 500))) return false;
   }
@@ -809,10 +825,10 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["runtime policy", {
         runtimePolicy: {
           revision: 0,
-          global: { timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          global: { timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           project: { verify: { mode: "auto" } },
           session: {},
-          effective: { verify: { mode: "auto" }, timelineEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
+          effective: { verify: { mode: "auto" }, timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 },
           availableVerifyChecks: [],
         },
       }],

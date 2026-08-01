@@ -135,7 +135,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     needsVerification = false,
     awaitingClarificationProse = false,
     recentCalls = new Map<string, number[]>(),
-    pendingBash = new Map<string, string | undefined>(),
+    pendingMutations = new Map<string, string | undefined>(),
+    deniedToolCalls = new Set<string>(),
+    seenMutationMessages = new Set<string>(),
     sharedWorktreeObserver = false,
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
@@ -153,10 +155,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (value?.version === 1 && value.owner === "pylon-core") sharedWorktreeObserver = true;
     },
   });
-  const disposeWorktreeChange = pi.events.on("pylon:worktree-change", (event: any) => {
-    if (!sharedWorktreeObserver || event?.version !== 1 || event.cwd !== currentCwd || event.changed !== true) return;
+  const invalidateVerification = () => {
     latestVerification = undefined;
     needsVerification = true;
+  };
+  const disposeWorktreeChange = pi.events.on("pylon:worktree-change", (event: any) => {
+    if (!sharedWorktreeObserver || event?.version !== 1 || event.cwd !== currentCwd || event.changed !== true) return;
+    invalidateVerification();
+  });
+  const disposePackageMutation = pi.events.on("pi-worktree:mutation", (event: any) => {
+    if (event?.version !== 1 || event.cwd !== currentCwd || event.changed !== true) return;
+    invalidateVerification();
+  });
+  const disposeGuardDecision = pi.events.on("pi-guard:decision", (event: any) => {
+    if (event?.version === 1 && event.cwd === currentCwd && event.decision === "blocked" && typeof event.toolCallId === "string")
+      deniedToolCalls.add(event.toolCallId);
   });
   const modelName = (model: any) => `${model.provider}/${model.id}`;
   const assistantContent = (ctx: any) => {
@@ -519,7 +532,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
   });
   const disposeHeartbeat = pi.events.on("pi-heartbeat:job", (event: any) => {
-    if (event?.version !== 1 || event.cwd !== currentCwd || !event.todoId || !work) return;
+    if (event?.version !== 1 || event.cwd !== currentCwd
+      || event.sessionId !== leasedSessionId
+      || !event.todoId || !work) return;
     const todo = work.todos.find((item) => item.id === event.todoId);
     if (!todo) return;
     if (event.state === "running") updateTodo(work, todo.id, "in_progress");
@@ -546,7 +561,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     currentCwd = ctx.cwd;
     memoryInjectionEnabled = true;
     recentCalls.clear();
-    pendingBash.clear();
+    pendingMutations.clear();
+    deniedToolCalls.clear();
+    seenMutationMessages.clear();
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
@@ -633,6 +650,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     disposeVerify();
     disposeHeartbeat();
     disposeWorktreeChange();
+    disposePackageMutation();
+    disposeGuardDecision();
     disposeRuntimePolicy?.();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -699,22 +718,22 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Write the final user-facing response first, then retry completion as the last tool call in the same assistant message.",
       };
-    if (event.toolName === "bash" && !sharedWorktreeObserver) {
-      pendingBash.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
-    } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
-      latestVerification = undefined;
-      needsVerification = true;
-    }
+    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
+      pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
   pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName !== "bash" || sharedWorktreeObserver) return;
-    const before = pendingBash.get(event.toolCallId);
-    pendingBash.delete(event.toolCallId);
-    const after = await worktreeFingerprint(ctx.cwd);
-    if (!before || !after || before !== after) {
-      latestVerification = undefined;
-      needsVerification = true;
+    if (deniedToolCalls.delete(event.toolCallId)) {
+      pendingMutations.delete(event.toolCallId);
+      return;
     }
+    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt") {
+      const before = pendingMutations.get(event.toolCallId);
+      pendingMutations.delete(event.toolCallId);
+      const after = await worktreeFingerprint(ctx.cwd);
+      if (!before || !after || before !== after) invalidateVerification();
+      return;
+    }
+    if (["write", "edit", "heartbeat_start"].includes(event.toolName)) invalidateVerification();
   });
   pi.on("input", (event) => {
     if (event.source !== "extension") lastPrompt = event.text;
@@ -740,6 +759,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
       };
   });
   pi.on("context", (event) => {
+    for (const message of event.messages as any[]) {
+      if (message?.role !== "custom" || message.customType !== "pi-worktree-mutation" || message.details?.version !== 1) continue;
+      const id = String(message.details.mutationId ?? "");
+      if (!id || seenMutationMessages.has(id)) continue;
+      seenMutationMessages.add(id);
+      if (message.details.cwd === currentCwd && message.details.changed === true) invalidateVerification();
+    }
     const active = activeWork();
     let boundary = -1;
     for (let index = event.messages.length - 1; index >= 0; index--) {

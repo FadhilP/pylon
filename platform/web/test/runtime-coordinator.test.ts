@@ -440,7 +440,7 @@ test("new sessions apply the effective workspace policy before the first prompt"
       projectId,
       sessionId: created.sessionId,
       verify: policy.project.verify,
-      timeline: "inherit",
+      timeline: "inherit", guard: "inherit",
       workspace: "worktree",
       guardTimeoutSeconds: "inherit",
       clarifyTimeoutSeconds: "inherit",

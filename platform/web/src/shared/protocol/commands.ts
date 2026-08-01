@@ -120,6 +120,7 @@ export type WebCommand =
       scope: "global" | "project" | "session";
       verify: VerifyPolicyReadModel | { mode: "inherit" };
       timeline: "inherit" | "enabled" | "disabled";
+      guard: "inherit" | "enabled" | "disabled";
       workspace: WorkspacePolicyMode | "inherit";
       guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";

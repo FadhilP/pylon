@@ -5,12 +5,12 @@ Sequential delegated implementation worker for Pi. Grunt uses a separately confi
 ## Installation
 
 ```sh
-pi install /absolute/path/to/pylon
+pi install git:github.com/FadhilP/pylon
 ```
 
 This installs the complete Pylon bundle, including pi-grunt. Run `/reload` after installation.
 
-## Configuration
+## Setup and Configuration
 
 ```text
 /grunt provider/model-id
@@ -22,7 +22,11 @@ This installs the complete Pylon bundle, including pi-grunt. Run `/reload` after
 /grunt disable
 ```
 
+### Modes
+
 Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model and restores isolated mode. `/grunt direct` opts into direct execution; `/grunt isolated` switches back. `/grunt dynamic` chooses isolated mode when the current directory belongs to a Git worktree with a `HEAD` commit, otherwise direct mode. The selected mode persists in Grunt's global config and is shown by `/grunt status`. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
+
+### Limits
 
 Environment controls:
 
@@ -33,9 +37,11 @@ Environment controls:
 
 Workers have a fixed 262,144-token reported-context limit. After each assistant response, Grunt counts `totalTokens - cacheRead` when native totals are available, otherwise `input + output + cacheWrite`. Exceeding the limit terminates the child and leaves any isolated edits unapplied.
 
-## Routing
+## When to Delegate
 
 Route by expected main-model effort avoided, not changed LOC alone.
+
+### Keep in the Main Model
 
 Keep these in the main model:
 
@@ -44,12 +50,16 @@ Keep these in the main model:
 - Ordinary semantic changes around 50–300 LOC where a fresh worker would repeat discovery.
 - Any task whose handoff cannot name exact anchors and decisive checks.
 
+### Delegate These Tasks
+
 Use Grunt mainly for:
 
 - Mechanical or repetitive multi-file work.
 - Bounded, already-designed implementation slices with exact files and symbols.
 - Changes typically around 300–500+ LOC where worker execution displaces substantial main-model work.
 - Work with focused validation and little expected repair.
+
+### Handoffs and Review
 
 Every handoff should name exact files and symbols, chosen design, constraints, non-goals, acceptance criteria, and focused checks. Provide `suggestedPaths` whenever reliable anchors are known. Use `targetedContext` only for directly applicable snippets or project instructions such as relevant `AGENTS.md` rules. Never copy broad conversation history. Omit uncertain paths or context rather than adding noise. Suggested paths guide scope but are not an allowlist.
 
@@ -61,11 +71,15 @@ Advisor remains optional. Use it at least once when delegated work follows conse
 
 After any Grunt result, the main model owns recovery. It should inspect completed changes or a partial patch artifact, then fix small/local defects and finish small remaining work directly. It should not spawn another worker merely to verify or repair the previous worker. Re-delegation is reserved for remaining work that is still medium or large, self-contained, easy to validate, and likely cheaper than main-model completion.
 
-## Behavior
+## Execution Behavior
 
 `grunt({ task, thinking, suggestedPaths?, targetedContext?, checkCommands? })` starts one synchronous child Pi process. `targetedContext` is capped at 4,000 characters; `checkCommands` accepts up to eight focused existing checks. The child receives the built-in `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash` tools. Optional parent context is bounded and redacted. `suggestedPaths` guides scope but is not an allowlist.
 
+### Isolated Mode
+
 In isolated mode, Grunt requires a Git repository with a `HEAD` commit. It creates a detached temporary worktree, then mirrors only dirty/deleted tracked paths and non-ignored untracked paths because Git already checked out clean tracked files. Checkout and baseline-commit hooks are disabled. After normal completion, Grunt derives a binary patch against the immutable baseline commit, verifies that the parent's `HEAD` and dirty-file fingerprints remain unchanged, rechecks immediately before integration, then applies the patch. Worker commits remain included. Successful results omit changed-path and worker-report duplication; the main model inspects authoritative Git state. Non-completed results retain changed paths, scope diagnostics, and the worker report for recovery. Isolation setup failures throw tool errors, so Pi marks them as errors in the TUI.
+
+### Direct and Dynamic Modes
 
 In direct mode, Grunt runs in Pi's current working directory and works outside Git repositories. Edits happen immediately. Failure, timeout, cancellation, or a blocked report may leave partial changes. Direct mode provides no rollback, stale-parent check, patch artifact, or derived changed-path list.
 
@@ -73,7 +87,7 @@ Dynamic mode checks for a Git worktree and valid `HEAD` before each Grunt call. 
 
 Ignored dependency directories such as `node_modules`, `.venv`, and `venv` are not copied. When present in the parent but unavailable to the worker, Grunt tells the worker to skip checks requiring them instead of installing or repeatedly probing for them.
 
-### Worker context
+### Worker Context
 
 The worker receives:
 

@@ -39,7 +39,10 @@ const noSkips = {
   atOrBelowThreshold: 0,
   recoveryUnavailable: 0,
 };
-const noTransformTypes = { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 };
+const noTransformTypes = {
+  ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0,
+  duplicate: 0, errorCap: 0, mixedText: 0,
+};
 
 function oldResultAtAge(age: number, text: string, extra: Record<string, unknown> = {}) {
   return sieveMessages([user("before"), textResult("bash", text, extra), ...Array.from({ length: age }, (_, index) => user(`after-${index}`))], 4_000);
@@ -71,7 +74,7 @@ function relationshipGraphText(count = 12) {
 }
 
 function assertPartialOutput(output: string, source: string, toolName: string, recalled = false) {
-  const match = output.match(/; (\d+) chars omitted\]/);
+  const match = output.match(/; omitted (\d+)\/\d+ chars\]/);
   assert.ok(match);
   const omittedChars = Number(match[1]);
   const marker = partialOmissionMarker(toolName, source.length, omittedChars, recalled);
@@ -98,9 +101,10 @@ test("partially retains old output and treats all text blocks as one source", ()
   assert.deepEqual(result.stats, {
     scanned: 1,
     transformed: 1,
-    transformedBy: { ageThreshold: 1, budget: 0, giantError: 0, activeThreshold: 0, staleRead: 0 },
+    transformedBy: { ...noTransformTypes, ageThreshold: 1 },
     omittedChars,
     netCharsSaved: source.length - output.length,
+    byTool: result.stats.byTool,
     skipped: noSkips,
   });
 });
@@ -140,7 +144,7 @@ test("preserves age 0 and caps only eligible successful age-1 output", () => {
     user("after"),
   ], 4_000, { pruneActive: true });
   assert.equal(activeEqual.stats.transformed, 0, "active age-1 equality is retained");
-  assert.equal(activeOver.stats.transformedBy.ageThreshold, 1, "active age-1 output cannot re-expand");
+  assert.equal(activeOver.stats.transformedBy.activeThreshold, 1, "active age-1 output cannot re-expand");
 
   const combined = sieveMessages([
     user("before"),
@@ -161,10 +165,10 @@ test("prunes bulky Heartbeat status and Memory lists without covering short muta
   const activeHeartbeat = sieveMessages([user("current"), heartbeat], 4_000, { pruneActive: true });
   assert.equal(activeHeartbeat.stats.transformedBy.activeThreshold, 1);
   assert.ok(((activeHeartbeat.messages[1] as any).content[0].text as string).length <= 4_000);
-  assert.match((activeHeartbeat.messages[1] as any).content[0].text, /sieve_recall\(toolCallId="heartbeat-1"\)/);
+  assert.match((activeHeartbeat.messages[1] as any).content[0].text, /sieve_recall "heartbeat-1"/);
   assert.deepEqual((activeHeartbeat.messages[1] as any).details, { id: "job-1" });
   assert.equal(activeHeartbeat.recoverableActiveResults[0]?.toolName, "heartbeat_status");
-  assert.ok((activeHeartbeat.recoverableActiveResults[0]?.content[0]?.text.length ?? 0) > 0);
+  assert.equal(activeHeartbeat.recoverableActiveResults[0]?.toolCallId, "heartbeat-1");
 
   const recalledHeartbeat = recalledResult("heartbeat_status", source);
   const agedRecall = sieveMessages([user("before"), recalledHeartbeat, user("second"), user("third")], 4_000);
@@ -217,35 +221,19 @@ test("enforces the retained successful-output budget at equality, overflow, and 
   assert.equal(noExpansion.stats.transformed, 0);
 });
 
-test("truncates only giant eligible text errors and preserves their concatenated source tail", () => {
-  const giantBoundary = 32_000;
-  const equal = oldResultAtAge(2, "x".repeat(giantBoundary), { isError: true });
+test("caps eligible old errors at the configured threshold with diagnostic head and tail", () => {
+  const equal = oldResultAtAge(2, "x".repeat(4_000), { isError: true });
   assert.equal(equal.stats.transformed, 0);
-  assert.equal((equal.messages[1].content as any)[0].text.length, giantBoundary);
 
-  const customBoundary = (length: number) => sieveMessages([
-    user("before"), textResult("bash", "x".repeat(length), { isError: true }), user("second"), user("third"),
-  ], 10_000);
-  assert.equal(customBoundary(40_000).stats.transformed, 0);
-  assert.equal(customBoundary(40_001).stats.transformedBy.giantError, 1);
-
-  const tail = "t".repeat(GIANT_ERROR_TAIL_CHARS);
-  const sourceBoundary = Math.max(32_000, 4 * SIEVE_THRESHOLD);
-  const prefixLength = sourceBoundary + 1 - tail.length;
-  const source = "x".repeat(prefixLength) + tail;
+  const source = "h".repeat(5_000) + "t".repeat(5_001);
   const result = sieveMessages([
-    user("before"),
-    { ...textResult("bash", "unused", { isError: true }), content: [{ type: "text", text: source.slice(0, prefixLength) }, { type: "text", text: tail }] },
-    user("second"),
-    user("third"),
-  ]);
-  const output = (result.messages[1].content as any);
-  const marker = giantErrorMarker("bash", source.length);
-
-  assert.deepEqual(output, [{ type: "text", text: marker + tail }]);
-  assert.equal(result.stats.transformedBy.giantError, 1);
-  assert.equal(result.stats.omittedChars, source.length - GIANT_ERROR_TAIL_CHARS);
-  assert.equal(result.stats.netCharsSaved, source.length - GIANT_ERROR_TAIL_CHARS - marker.length);
+    user("before"), textResult("bash", source, { isError: true }), user("second"), user("third"),
+  ], 10_000);
+  assert.equal(result.stats.transformedBy.errorCap, 1);
+  const output = (result.messages[1].content as any)[0].text as string;
+  assert.equal(output.length, 10_000);
+  assert.match(output, /^\[pi-sieve: bash error;/);
+  assert.match(output, /h+\nh*t+$/);
 });
 
 test("prunes a read only after a successful mutation and covering post-mutation read", () => {
@@ -443,7 +431,7 @@ test("structure-aware ranked search pruning preserves valid JSON, rank order, an
       tool: "sieve_recall",
       toolCallId: `${toolName}-active`,
     });
-    assert.equal(activeResult.recoverableActiveResults[0].content[0].text, source);
+    assert.equal(activeResult.recoverableActiveResults[0].toolCallId, `${toolName}-active`);
     assert.equal(activeResult.stats.transformedBy.activeThreshold, 1);
 
     const aged = sieveMessages([user("before"), active, user("second"), user("third")], 1_000);
@@ -533,13 +521,14 @@ test("records recent-window and old-result skip reasons, including malformed and
     transformedBy: noTransformTypes,
     omittedChars: 0,
     netCharsSaved: 0,
+    byTool: result.stats.byTool,
     skipped: {
       recentWindow: 0,
       ineligibleTool: 2,
       error: 1,
-      nonTextMixedOrEmptyContent: 3,
+      nonTextMixedOrEmptyContent: 2,
       malformedStructuredContent: 0,
-      atOrBelowThreshold: 3,
+      atOrBelowThreshold: 4,
       recoveryUnavailable: 0,
     },
   });
@@ -551,6 +540,7 @@ test("records recent-window and old-result skip reasons, including malformed and
     transformedBy: noTransformTypes,
     omittedChars: 0,
     netCharsSaved: 0,
+    byTool: noWindow.stats.byTool,
     skipped: { ...noSkips, recentWindow: 1 },
   });
 });
@@ -592,9 +582,8 @@ test("keeps recalls visible at age 0 then prunes eligible recalled output with a
   const aged = sieveMessages([user("before"), agedRecall, user("after")], 4_000, { pruneActive: true });
   const agedOutput = (aged.messages[1].content as any)[0].text as string;
   assert.equal(agedOutput.length, 4_000);
-  assertPartialOutput(agedOutput, agedRecallText, "rg", true);
-  assert.equal(aged.stats.transformedBy.ageThreshold, 1);
-  assert.equal(aged.stats.transformedBy.activeThreshold, 0);
+  assert.match(agedOutput, /sieve_recall "call-1"/);
+  assert.equal(aged.stats.transformedBy.activeThreshold, 1);
 
   const budgetRecall = recalledResult("fd", "r".repeat(1_000));
   const budgeted = sieveMessages([
@@ -611,13 +600,10 @@ test("keeps recalls visible at age 0 then prunes eligible recalled output with a
 
   const giantError = recalledResult("bash", "x".repeat(32_001), { sourceIsError: true });
   const oldError = sieveMessages([user("before"), giantError, user("second"), user("third")], 4_000);
-  assert.equal(
-    (oldError.messages[1].content as any)[0].text,
-    recalledGiantErrorMarker("bash", 32_001) + "x".repeat(GIANT_ERROR_TAIL_CHARS),
-  );
-  assert.equal(oldError.stats.transformedBy.giantError, 1);
+  assert.match((oldError.messages[1].content as any)[0].text, /^\[pi-sieve: recalled bash error;/);
+  assert.equal(oldError.stats.transformedBy.errorCap, 1);
 
-  const boundaryError = recalledResult("bash", "x".repeat(32_000), { sourceIsError: true });
+  const boundaryError = recalledResult("bash", "x".repeat(4_000), { sourceIsError: true });
   const retainedError = sieveMessages([user("before"), boundaryError, user("second"), user("third")], 4_000);
   assert.equal(retainedError.messages[1], boundaryError);
   assert.equal(retainedError.stats.skipped.error, 1);
@@ -639,10 +625,10 @@ test("keeps recalls visible at age 0 then prunes eligible recalled output with a
   }
 });
 
-test("partially prunes recoverable active results and stores only omitted text", () => {
+test("partially prunes recoverable active results and registers full-result recovery", () => {
   assert.equal(
     activeOmissionMarker("rg", "call-1", 30_356, 22_347),
-    '[pi-sieve: OUTPUT TRUNCATED for rg; 22347 of 30356 chars omitted. Recover via sieve_recall(toolCallId="call-1").]',
+    '[pi-sieve: rg; omitted 22347/30356 chars; sieve_recall "call-1"]',
   );
 
   const successText = "h".repeat(2_001) + "t".repeat(2_000);
@@ -650,31 +636,34 @@ test("partially prunes recoverable active results and stores only omitted text",
     ...textResult("bash", "unused", { toolCallId: "active-success" }),
     content: [{ type: "text", text: successText.slice(0, 2_001) }, { type: "text", text: successText.slice(2_001) }],
   };
-  const errorText = "e".repeat(4_001);
+  const errorText = "e".repeat(SIEVE_THRESHOLD + 1);
   const error = textResult("rg", errorText, { toolCallId: "active-error", isError: true });
   const read = textResult("read", "r".repeat(10_000), { toolCallId: "active-read" });
   const result = sieveMessages([user("first"), success, error, read], 4_000, { pruneActive: true });
 
   const successRecovery = result.recoverableActiveResults.find(({ toolCallId }) => toolCallId === "active-success")!;
-  const successOmitted = successRecovery.content[0].text;
-  const successMarker = activeOmissionMarker("bash", "active-success", successText.length, successOmitted.length);
+  assert.equal(successRecovery.toolName, "bash");
   const successOutbound = (result.messages[1].content as any)[0].text as string;
+  const successMatch = successOutbound.match(/omitted (\d+)\/\d+ chars/)!;
+  const successOmittedLength = Number(successMatch[1]);
+  const successMarker = activeOmissionMarker("bash", "active-success", successText.length, successOmittedLength);
   const [successHead, successTail] = successOutbound.split(`\n${successMarker}\n`);
+  const successOmitted = successText.slice(successHead.length, successText.length - successTail.length);
   assert.equal(successOutbound.length, 4_000);
   assert.equal(successHead + successOmitted + successTail, successText);
 
   const errorRecovery = result.recoverableActiveResults.find(({ toolCallId }) => toolCallId === "active-error")!;
-  const errorOmitted = errorRecovery.content[0].text;
-  const errorMarker = activeOmissionMarker("rg", "active-error", errorText.length, errorOmitted.length);
+  assert.equal(errorRecovery.toolName, "rg");
   const errorOutbound = (result.messages[2].content as any)[0].text as string;
-  assert.equal(errorOutbound.length, 4_000);
-  assert.equal(errorOutbound, errorMarker + "\n" + errorText.slice(errorOmitted.length));
-  assert.equal(errorOmitted + errorText.slice(errorOmitted.length), errorText);
+  const errorOmittedLength = Number(errorOutbound.match(/omitted (\d+)\/\d+ chars/)![1]);
+  const errorMarker = activeOmissionMarker("rg", "active-error", errorText.length, errorOmittedLength);
+  assert.equal(errorOutbound.length, SIEVE_THRESHOLD);
+  assert.equal(errorOutbound, errorMarker + "\n" + errorText.slice(errorOmittedLength));
 
   assert.equal(result.messages[3], read);
   assert.equal((success.content as any)[0].text + (success.content as any)[1].text, successText);
   assert.equal(result.stats.transformedBy.activeThreshold, 2);
-  assert.equal(result.stats.omittedChars, successOmitted.length + errorOmitted.length);
+  assert.equal(result.stats.omittedChars, successOmitted.length + errorOmittedLength);
   assert.equal(result.stats.netCharsSaved, successText.length + errorText.length - successOutbound.length - errorOutbound.length);
   assert.deepEqual(
     new Set(result.recoverableActiveResults.map(({ toolCallId }) => toolCallId)),
@@ -712,16 +701,110 @@ test("active slicing converges across tiny, odd, and omitted-count boundary payl
       textResult("bash", source, { toolCallId: "boundary" }),
     ], threshold, { pruneActive: true });
     const outbound = (result.messages[1].content as any)[0].text as string;
-    const omitted = result.recoverableActiveResults[0].content[0].text;
-    const marker = activeOmissionMarker("bash", "boundary", source.length, omitted.length);
+    assert.equal(result.recoverableActiveResults[0].toolCallId, "boundary");
+    const omittedLength = Number(outbound.match(/omitted (\d+)\/\d+ chars/)![1]);
+    const marker = activeOmissionMarker("bash", "boundary", source.length, omittedLength);
     const [head, tail] = outbound.split(`\n${marker}\n`);
+    const omitted = source.slice(head.length, source.length - tail.length);
 
     assert.equal(outbound.length, threshold);
-    assert.equal(source.length - omitted.length, expectedRetainedChars);
+    assert.equal(source.length - omittedLength, expectedRetainedChars);
     assert.equal(head.length, Math.floor(expectedRetainedChars / 2));
     assert.equal(tail.length, expectedRetainedChars - head.length);
     assert.equal(head + omitted + tail, source);
   }
+});
+
+test("prunes only the later exact read duplicate and blocks dedupe across ambiguous mutations", () => {
+  const source = "same snapshot\n".repeat(100);
+  const call = (id: string, name: string, argumentsValue: Record<string, unknown>) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name, arguments: argumentsValue }],
+  });
+  const readResult = (id: string) => textResult("read", source, { toolCallId: id, isError: false });
+  const messages = [
+    user("inspect"),
+    call("read-1", "read", { path: "src/a.ts", offset: 1, limit: 100 }), readResult("read-1"),
+    call("read-2", "read", { path: "src/a.ts", offset: 1, limit: 100 }), readResult("read-2"),
+  ];
+  const result = sieveMessages(messages, 1_000, { pruneActive: true, cwd: resolve("dedupe") });
+  assert.equal(result.messages[2], messages[2]);
+  assert.match((result.messages[4] as any).content[0].text, /duplicate read.*same as "read-1".*sieve_recall "read-2"/);
+  assert.equal(result.stats.transformedBy.duplicate, 1);
+  assert.deepEqual(result.recoverableActiveResults, [{ toolCallId: "read-2", toolName: "read", isError: false }]);
+
+  const blocked = [...messages.slice(0, 3),
+    call("edit-1", "edit", { path: "src/a.ts", edits: [{ oldText: "x", newText: "y" }] }),
+    ...messages.slice(3),
+  ];
+  const blockedResult = sieveMessages(blocked, 1_000, { pruneActive: true, cwd: resolve("dedupe") });
+  assert.equal(blockedResult.stats.transformedBy.duplicate, 0);
+  assert.equal(blockedResult.messages[6], blocked[6]);
+
+  const sameMessage = [
+    ...messages.slice(0, 3),
+    { role: "assistant", content: [
+      { type: "toolCall", id: "edit-1", name: "edit", arguments: { path: "src/a.ts", edits: [{ oldText: "x", newText: "y" }] } },
+      { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/a.ts", offset: 1, limit: 100 } },
+    ] },
+    textResult("edit", "ambiguous", { toolCallId: "edit-1", isError: true }),
+    readResult("read-2"),
+  ];
+  const sameMessageResult = sieveMessages(sameMessage, 1_000, { pruneActive: true, cwd: resolve("dedupe") });
+  assert.equal(sameMessageResult.stats.transformedBy.duplicate, 0);
+  assert.equal(sameMessageResult.messages[5], sameMessage[5]);
+});
+
+test("deduplicates only later exact successful results", () => {
+  const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "rg", arguments: { pattern: "x" } }] });
+  const source = "match\n".repeat(100);
+  const first = textResult("rg", source, { toolCallId: "rg-1", isError: false, details: { truncated: false } });
+  const second = textResult("rg", source, { toolCallId: "rg-2", isError: false, details: { truncated: false } });
+  const result = sieveMessages([user("search"), call("rg-1"), first, call("rg-2"), second], 1_000, { pruneActive: true });
+  assert.equal(result.messages[2], first);
+  assert.match((result.messages[4] as any).content[0].text, /duplicate rg/);
+  assert.equal(result.stats.transformedBy.duplicate, 1);
+
+  const failed = textResult("rg", source, { toolCallId: "rg-2", isError: true, details: { truncated: false } });
+  const failureResult = sieveMessages([user("search"), call("rg-1"), first, call("rg-2"), failed], 1_000, { pruneActive: true });
+  assert.equal(failureResult.stats.transformedBy.duplicate, 0);
+  assert.equal(failureResult.messages[4], failed);
+});
+
+test("prunes eligible text inside mixed content without changing image blocks", () => {
+  const image = { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } };
+  const mixed = {
+    ...textResult("bash", "unused", { toolCallId: "mixed", isError: false }),
+    content: [{ type: "text", text: "h".repeat(2_000) }, image, { type: "text", text: "t".repeat(2_000) }],
+  };
+  const result = sieveMessages([user("current"), mixed], 1_000, { pruneActive: true });
+  const output = (result.messages[1] as any).content;
+  assert.deepEqual(output[1], image);
+  assert.ok(output[0].text.length < 2_000 && output[2].text.length < 2_000);
+  assert.equal(result.stats.transformedBy.mixedText, 1);
+  assert.equal((mixed.content[0] as any).text.length, 2_000);
+});
+
+test("keeps unique delegated evidence and verify failures protected", () => {
+  for (const toolName of ["advisor", "repo_scout", "grunt"]) {
+    const result = textResult(toolName, "evidence".repeat(2_000), { toolCallId: `${toolName}-1`, isError: false });
+    const output = sieveMessages([user("current"), result], 1_000, { pruneActive: true });
+    assert.equal(output.messages[1], result);
+    assert.equal(output.stats.transformed, 0);
+  }
+  const failure = textResult("verify", "failure".repeat(2_000), { toolCallId: "verify-1", isError: true });
+  const output = sieveMessages([user("before"), failure, user("second"), user("third")], 1_000, { pruneActive: true });
+  assert.equal(output.messages[1], failure);
+  assert.equal(output.stats.transformed, 0);
+});
+
+test("shares the active retained budget across age-zero results", () => {
+  const results = Array.from({ length: 4 }, (_, index) => textResult("bash", String(index).repeat(900), {
+    toolCallId: `active-budget-${index}`, isError: false,
+  }));
+  const output = sieveMessages([user("current"), ...results], 1_000, { pruneActive: true });
+  assert.equal(output.stats.transformedBy.budget, 1);
+  assert.ok((output.messages[1] as any).content[0].text.length < 900);
+  assert.deepEqual(output.messages.slice(2), results.slice(1));
 });
 
 test("runtime modes, persisted settings, active recall, thresholds, and telemetry", async () => {
@@ -789,7 +872,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((context.messages[1].content[0] as { text: string }).text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /pi-sieve: observe/);
-  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0, stale-read 0; projected gross omitted ~${expectedGrossTokens} tokens`));
+  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0, stale-read 0.*projected gross omitted ~${expectedGrossTokens} tokens`));
   assert.match(notification, /actual transformations 0.*projected observe transformations 1/);
 
   await command.handler("enable", ctx);
@@ -829,22 +912,25 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const activeOutbound = hook({ messages: [user("first"), activeSource] });
   const activeOutboundText = activeOutbound.messages[1].content[0].text;
   assert.equal(activeOutboundText.length, SIEVE_THRESHOLD);
-  hook({ messages: [user("partial same turn")] });
+  hook({ messages: [user("first"), activeSource, user("partial same turn")] });
   const recallTool = tools.get("sieve_recall");
-  const recalled = await recallTool.execute("recall-call", { toolCallId: "active-runtime" });
-  const omittedLength = recalled.content[0].text.length;
-  assert.ok(omittedLength > 0 && omittedLength < oversizedLength);
+  const toolCtx = {
+    sessionManager: { getBranch: () => [{ type: "message", message: activeSource }] },
+  };
+  const recalled = await recallTool.execute("recall-call", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
+  const omittedLength = Number(activeOutboundText.match(/omitted (\d+)\/\d+ chars/)![1]);
+  assert.equal(recalled.content[0].text.length, oversizedLength);
   assert.ok(activeOutboundText.includes(activeOmissionMarker("bash", "active-runtime", oversizedLength, omittedLength)));
   assert.equal(recalled.details.sourceToolName, "bash");
   recalled.content[0].text = "mutated response";
-  const recalledAgain = await recallTool.execute("recall-call-2", { toolCallId: "active-runtime" });
-  assert.equal(recalledAgain.content[0].text.length, omittedLength);
+  const recalledAgain = await recallTool.execute("recall-call-2", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
+  assert.equal(recalledAgain.content[0].text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /Active-result pruning: enabled/);
-  assert.match(notification, new RegExp(`Active recalls: 2; restored ~${Math.ceil(2 * omittedLength / 4)} tokens`));
+  assert.match(notification, new RegExp(`Active recalls: 2; restored ~${Math.ceil(2 * oversizedLength / 4)} tokens`));
   for (const handler of handlers.get("input") ?? []) await handler({ source: "interactive" }, {});
-  const missed = await recallTool.execute("recall-call-3", { toolCallId: "active-runtime" });
-  assert.equal(missed.details.found, false);
+  const afterInput = await recallTool.execute("recall-call-3", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
+  assert.equal(afterInput.details.found, true);
   activeTools.push("later-tool");
   await command.handler("active disable", ctx);
   assert.deepEqual(await loadConfig(settingsPath), {

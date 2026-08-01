@@ -1200,6 +1200,7 @@ export class RuntimeCoordinator implements PiDriver {
       sessionId: selected.id,
       verify: input.verify,
       timeline: input.timeline,
+      guard: input.guard,
       workspace: input.workspace,
       guardTimeoutSeconds: input.guardTimeoutSeconds,
       clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
@@ -1218,6 +1219,9 @@ export class RuntimeCoordinator implements PiDriver {
         timeline: previous.session.timelineEnabled === undefined
           ? "inherit"
           : previous.session.timelineEnabled ? "enabled" : "disabled",
+        guard: previous.session.guardEnabled === undefined
+          ? "inherit"
+          : previous.session.guardEnabled ? "enabled" : "disabled",
         workspace: previous.session.workspace ?? "inherit",
         guardTimeoutSeconds: previous.session.guardTimeoutSeconds === undefined ? "inherit" : previous.session.guardTimeoutSeconds,
         clarifyTimeoutSeconds: previous.session.clarifyTimeoutSeconds === undefined ? "inherit" : previous.session.clarifyTimeoutSeconds,

@@ -20,7 +20,7 @@ User command: `/heartbeat [list|status ID|cancel ID]`.
 
 Optional arguments include `todoId` and `purpose` (`verification`, `build`, or `other`). Use `purpose: "verification"` for long declared project checks while independent work remains. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity updates explicitly linked todos.
 
-## Lifecycle
+## Job Lifecycle
 
 Jobs and logs exist only in the current extension runtime. Reload, session replacement, or exit kills process trees, waits at most five seconds, then deletes external logs. UTF-8 tails and full-log writes are ordered; output and log sizes remain bounded. No automatic polling or extra model calls occur.
 

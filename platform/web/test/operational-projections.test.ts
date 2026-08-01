@@ -71,6 +71,41 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.tools.policies.length, 0);
 });
 
+test("Sieve projections retain bounded per-tool telemetry", () => {
+  const stats = {
+    scanned: 2,
+    transformed: 1,
+    omittedChars: 1_000,
+    netCharsSaved: 900,
+    transformedBy: {
+      ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 0,
+      staleRead: 0, duplicate: 1, errorCap: 0, mixedText: 0,
+    },
+    byTool: {
+      read: { scanned: 2, transformed: 1, sourceChars: 2_000, retainedChars: 1_100, netCharsSaved: 900 },
+    },
+  };
+  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", {
+    version: 1,
+    available: true,
+    mode: "enabled",
+    threshold: 8_192,
+    activePruning: true,
+    latestMode: "enabled",
+    latest: stats,
+    cumulativeActual: stats,
+    cumulativeProjected: { ...stats, transformed: 0, byTool: {} },
+    recalls: 1,
+    recalledChars: 1_000,
+    recallsByTool: { read: { recalls: 1, recalledChars: 1_000 } },
+    updatedAt: new Date(0).toISOString(),
+  });
+
+  assert.equal(state.sieve.availability, "available");
+  assert.equal(state.sieve.cumulativeActual?.byTool.read?.netCharsSaved, 900);
+  assert.deepEqual(state.sieve.recallsByTool?.read, { recalls: 1, recalledChars: 1_000 });
+});
+
 test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {
   let state = initialOperational([], ["pi-heartbeat.ts"]);
   state = applyOperationalEvent(state, "pi-heartbeat:job", {

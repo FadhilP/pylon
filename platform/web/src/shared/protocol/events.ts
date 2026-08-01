@@ -354,6 +354,14 @@ export interface ToolPolicyReadModel {
 
 export interface ToolsReadModel { availability: FeatureState; policies: ToolPolicyReadModel[]; }
 
+export interface SieveToolTransformStatsReadModel {
+  scanned: number;
+  transformed: number;
+  sourceChars: number;
+  retainedChars: number;
+  netCharsSaved: number;
+}
+
 export interface SieveTransformStatsReadModel {
   scanned: number;
   transformed: number;
@@ -364,7 +372,12 @@ export interface SieveTransformStatsReadModel {
     budget: number;
     giantError: number;
     activeThreshold: number;
+    staleRead: number;
+    duplicate: number;
+    errorCap: number;
+    mixedText: number;
   };
+  byTool: Record<string, SieveToolTransformStatsReadModel>;
 }
 
 export interface SieveReadModel {
@@ -378,6 +391,7 @@ export interface SieveReadModel {
   cumulativeProjected?: SieveTransformStatsReadModel;
   recalls?: number;
   recalledChars?: number;
+  recallsByTool?: Record<string, { recalls: number; recalledChars: number }>;
   updatedAt?: string;
   error?: string;
 }

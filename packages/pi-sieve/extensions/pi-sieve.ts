@@ -31,12 +31,19 @@ const estimatedTokens = (characters: number) => Math.ceil(characters / CHARS_PER
 
 function statsText(stats: TransformStats, outcomeLabel: string) {
   const { skipped } = stats;
+  const tools = Object.entries(stats.byTool)
+    .filter(([, usage]) => usage.transformed > 0)
+    .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
+    .slice(0, 8)
+    .map(([name, usage]) => `${name} ${usage.transformed}/${usage.scanned}, ~${estimatedTokens(usage.netCharsSaved)} tokens`)
+    .join(", ") || "none";
   return [
     `scanned ${stats.scanned}`,
     `${outcomeLabel} ${stats.transformed}`,
-    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}, stale-read ${stats.transformedBy.staleRead}`,
+    `transform types: age-threshold ${stats.transformedBy.ageThreshold}, budget ${stats.transformedBy.budget}, giant-error ${stats.transformedBy.giantError}, active-threshold ${stats.transformedBy.activeThreshold}, stale-read ${stats.transformedBy.staleRead}, duplicate ${stats.transformedBy.duplicate}, error-cap ${stats.transformedBy.errorCap}, mixed-text ${stats.transformedBy.mixedText}`,
     `${outcomeLabel.replace("transformations", "gross omitted")} ~${estimatedTokens(stats.omittedChars)} tokens`,
     `${outcomeLabel.replace("transformations", "net saved")} ~${estimatedTokens(stats.netCharsSaved)} tokens`,
+    `tools: ${tools}`,
     `skips: recent-window ${skipped.recentWindow}, ineligible-tool ${skipped.ineligibleTool}, error ${skipped.error}, non-text/mixed/empty ${skipped.nonTextMixedOrEmptyContent}, malformed-structured ${skipped.malformedStructuredContent}, at/below-threshold ${skipped.atOrBelowThreshold}, recovery-unavailable ${skipped.recoveryUnavailable}`,
   ].join("; ");
 }
@@ -63,7 +70,7 @@ function statusText(
     "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
     `Retained successful-output budget: ${3 * threshold} characters, newest-to-oldest`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
-    `Read policy: ${READ_TOOL_NAME} is excluded from size/age pruning; superseded stale text reads may be replaced`,
+    `Read policy: unique ${READ_TOOL_NAME} output is excluded from size/age pruning; later exact duplicates and proven stale snapshots may be replaced`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
     `Recent-window policy: ${RECENT_WINDOW_POLICY}`,
@@ -83,6 +90,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let activePruning = true;
   let activeRecalls = 0;
   let activeRecalledChars = 0;
+  let recallsByTool: Record<string, { recalls: number; recalledChars: number }> = {};
   let recoverableActiveResults = new Map<string, RecoverableActiveResult>();
   let persistedConfig = defaultConfig();
   const settingsPath = options.configPath ?? configPath();
@@ -107,6 +115,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     cumulativeProjected,
     recalls: activeRecalls,
     recalledChars: activeRecalledChars,
+    recallsByTool,
     updatedAt: new Date().toISOString(),
     ...(configLoadError ? { error: (configLoadError as any)?.message ?? String(configLoadError) } : {}),
   });
@@ -149,25 +158,45 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   pi.registerTool({
     name: RECALL_TOOL_NAME,
     label: "Sieve Recall",
-    description: "Recover one current-turn tool result omitted by pi-sieve active pruning.",
+    description: "Recover one registered tool result omitted by pi-sieve from the current session branch.",
     parameters: Type.Object({
       toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
-    async execute(_toolCallId, params) {
-      const result = activePruning ? recoverableActiveResults.get(params.toolCallId) : undefined;
-      if (!result) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const registered = activePruning ? recoverableActiveResults.get(params.toolCallId) : undefined;
+      const matches = registered
+        ? (ctx.sessionManager?.getBranch?.() ?? []).flatMap((entry: any) => {
+          const message = entry?.type === "message" ? entry.message : undefined;
+          return message?.role === "toolResult"
+            && message.toolCallId === params.toolCallId
+            && message.toolName === registered.toolName
+            && (message.isError === true) === registered.isError
+            && Array.isArray(message.content)
+            ? [message]
+            : [];
+        })
+        : [];
+      const source = matches.length === 1 ? matches[0] : undefined;
+      if (!registered || !source) {
         return {
-          content: [{ type: "text" as const, text: `No recoverable active result for toolCallId ${JSON.stringify(params.toolCallId)}.` }],
+          content: [{ type: "text" as const, text: `No recoverable result for toolCallId ${JSON.stringify(params.toolCallId)}.` }],
           details: { found: false, sourceToolCallId: params.toolCallId, sourceToolName: "", sourceIsError: false },
         };
       }
-      const sourceChars = result.content.reduce((length, block) => length + block.text.length, 0);
+      const sourceChars = source.content.reduce(
+        (length: number, block: any) => length + (block?.type === "text" && typeof block.text === "string" ? block.text.length : 0),
+        0,
+      );
       activeRecalls++;
       activeRecalledChars += sourceChars;
+      const recallUsage = recallsByTool[registered.toolName] ?? { recalls: 0, recalledChars: 0 };
+      recallUsage.recalls++;
+      recallUsage.recalledChars += sourceChars;
+      recallsByTool = { ...recallsByTool, [registered.toolName]: recallUsage };
       publishState();
       return {
-        content: result.content.map((block) => ({ ...block })),
-        details: { found: true, sourceToolCallId: result.toolCallId, sourceToolName: result.toolName, sourceIsError: result.isError },
+        content: source.content.map((block: any) => ({ ...block })),
+        details: { found: true, sourceToolCallId: registered.toolCallId, sourceToolName: registered.toolName, sourceIsError: registered.isError },
       };
     },
   });
@@ -179,9 +208,6 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     publishState();
     if (configLoadError)
       ctx.ui.notify(`Could not load pi-sieve settings: ${(configLoadError as any)?.message ?? String(configLoadError)}`, "error");
-  });
-  pi.on("input", () => {
-    recoverableActiveResults.clear();
   });
   pi.on("session_shutdown", () => {
     disposeStateRequest();
@@ -203,8 +229,9 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     }
 
     addTransformStats(cumulativeActual, result.stats);
-    for (const recoverable of result.recoverableActiveResults)
-      recoverableActiveResults.set(recoverable.toolCallId, recoverable);
+    recoverableActiveResults = new Map(
+      result.recoverableActiveResults.map((recoverable) => [recoverable.toolCallId, recoverable]),
+    );
     publishState();
     return { messages: result.messages };
   });
@@ -260,6 +287,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         cumulativeProjected = emptyTransformStats();
         activeRecalls = 0;
         activeRecalledChars = 0;
+        recallsByTool = {};
         publishState();
         ctx.ui.notify("pi-sieve statistics reset.", "info");
         return;

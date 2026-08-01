@@ -107,6 +107,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
     revision: 0,
     global: {
       timelineEnabled: true,
+      guardEnabled: true,
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
@@ -118,6 +119,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
     effective: {
       verify: { mode: "auto" },
       timelineEnabled: true,
+      guardEnabled: true,
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
@@ -2207,6 +2209,7 @@ export class SessionRuntime implements PiDriver {
         session: {
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
           ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
+          ...(this.runtimePolicy.session.guardEnabled !== undefined ? { guardEnabled: this.runtimePolicy.session.guardEnabled } : {}),
           ...(this.runtimePolicy.session.workspace ? { workspace: this.runtimePolicy.session.workspace } : {}),
           ...(this.runtimePolicy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: this.runtimePolicy.session.guardTimeoutSeconds } : {}),
           ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds } : {}),
@@ -2239,6 +2242,7 @@ export class SessionRuntime implements PiDriver {
       sessionId,
       verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
       timelineEnabled: this.runtimePolicy.effective.timelineEnabled,
+      guardEnabled: this.runtimePolicy.effective.guardEnabled,
       dialogTimeouts: {
         guard: this.runtimePolicy.effective.guardTimeoutSeconds,
         clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,

@@ -12,7 +12,7 @@ pi install git:github.com/FadhilP/pylon
 
 This installs the complete Pylon bundle, including pylon-core. Run `/reload` after installation.
 
-## Usage
+## End-User Commands
 
 - `/pylon` shows registered package policies and the latest bounded Guard decision.
 - `/pylon doctor` also checks local Pi and Node compatibility, required and optional executables, old locks, quarantined state, configured child-model availability, package tool surfaces, and bounded package health reports without network calls.
@@ -22,7 +22,7 @@ This installs the complete Pylon bundle, including pylon-core. Run `/reload` aft
 
 Guard remains the independent final safety authority; Pylon never approves or weakens it.
 
-## Scope
+## Runtime Behavior
 
 - Merges independently enabled tools without lost updates.
 - Keeps optional browser and capture tools inactive until pi-discover selects them; configured workflow tools remain active so their guidance stays visible.
@@ -44,7 +44,9 @@ Guard remains the independent final safety authority; Pylon never approves or we
 
 V1 does not coordinate TUI ownership, context ordering, general package storage, child processes, or benchmark packages. Durable storage is limited to bounded telemetry and changed-file summaries.
 
-## Protocol
+## Package-Author Protocol
+
+### Registration
 
 Packages synchronously emit `pylon:tool-policy` during `session_start` and whenever policy changes:
 
@@ -63,6 +65,10 @@ pi.events.emit("pylon:tool-policy", {
 });
 ```
 
+### Deferred Tools and Gates
+
 `deferredTools` must be a subset of `enabledTools`. `deferredToolUsage` optionally maps deferred tool names to concise one-line capability phrases (maximum 120 characters) used for discovery matching and model guidance; its keys must be deferred tools. If multiple owners advertise different phrases for the same tool, Pylon omits that ambiguous usage. Deferred tools stay inactive until selected through the synchronous `pylon:tool-discovery` capability used by pi-discover. The capability exposes the currently eligible names and usage catalog. Each selection replaces the previous one and is capped at six tools. `allowOnly` still intersects the result, so planning and safety gates remain authoritative. When removing a gate, `restoreTools` may provide the package's pre-gate snapshot; Pylon merges unmanaged entries into its baseline only when no other gate remains. No acknowledgement means Pylon is absent, so the package applies its standalone behavior. On `session_shutdown`, emit `{ version: 1, kind: "unregister", owner: "pi-example" }`.
+
+### Health Reports
 
 Doctor health collection emits `pylon:health-request`. Reporters must call `respond(reportPromise)` synchronously; Pylon awaits each promise for at most three seconds. Reports contain only `version`, `owner`, `label`, bounded `lines`, and `warning`—never page content, URLs, credentials, or raw logs.

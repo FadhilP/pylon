@@ -115,6 +115,86 @@ async function deleteRefs(root: string, refs: string[]) {
     await exec("git", ["update-ref", "-d", ref], { cwd: root });
 }
 
+test("Heartbeat completion delays checkpoints and Grunt mutations are captured", async () => {
+  const { root } = await repository();
+  const entries: any[] = [{
+    type: "message", id: "user-1",
+    message: { role: "user", content: "Start background work" },
+  }];
+  const handlers = new Map<string, Function[]>(), eventHandlers = new Map<string, Set<Function>>(), appended: any[] = [];
+  const events = {
+    on(name: string, handler: Function) {
+      const values = eventHandlers.get(name) ?? new Set();
+      values.add(handler);
+      eventHandlers.set(name, values);
+      return () => values.delete(handler);
+    },
+    emit(name: string, value: any) {
+      for (const handler of eventHandlers.get(name) ?? []) handler(value);
+    },
+  };
+  const pi: any = {
+    events,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    setSessionName() {},
+  };
+  extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+  const ctx: any = {
+    cwd: root, hasUI: false, mode: "json",
+    sessionManager: {
+      getBranch: () => entries, getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id, getSessionFile: () => undefined,
+      getSessionId: () => "integration-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("agent_start")![0]({}, ctx);
+    events.emit("pi-heartbeat:job", { version: 1, id: "foreign-job", sessionId: "other-session", cwd: root, state: "running" });
+    events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "running" });
+    await handlers.get("tool_result")![0]({ toolName: "heartbeat_start", toolCallId: "heartbeat" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+    await writeFile(join(root, "tracked.txt"), "background\n");
+    events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "completed" });
+    for (let attempt = 0; attempt < 100 && !appended.some((entry) => entry.customType === "pi-prompt-checkpoint"); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 1);
+
+    entries.push({ type: "message", id: "user-2", message: { role: "user", content: "Delegate edit" } });
+    await handlers.get("input")![0]({ source: "interactive" }, ctx);
+    await handlers.get("agent_start")![0]({}, ctx);
+    await handlers.get("tool_call")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
+    await writeFile(join(root, "tracked.txt"), "delegated\n");
+    await handlers.get("tool_result")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    let checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
+    assert.equal(checkpoints.length, 2);
+
+    entries.push({ type: "message", id: "user-3", message: { role: "user", content: "Handle overlapping edits" } });
+    await handlers.get("input")![0]({ source: "interactive" }, ctx);
+    await handlers.get("agent_start")![0]({}, ctx);
+    await writeFile(join(root, "tracked.txt"), "race-one\n");
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-race" }, ctx);
+    const settling = handlers.get("agent_settled")![0]({}, ctx);
+    await writeFile(join(root, "tracked.txt"), "race-two\n");
+    await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-race" }, ctx);
+    await settling;
+    for (let attempt = 0; attempt < 200 && appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length < 4; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
+    assert.equal(checkpoints.length, 4, "a mutation arriving during capture gets a later checkpoint");
+    await handlers.get("session_shutdown")![0]();
+    for (const checkpoint of checkpoints)
+      await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("timeline rejects incompatible targets before rollback capture", async () => {
   const { root, git } = await repository();
   try {
@@ -246,6 +326,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     const eventHandlers = new Map<string, Function>();
     const commands = new Map<string, any>();
     const notices: string[] = [];
+    const mutations: any[] = [];
     let confirmations = 0;
     let forks = 0;
     const pi: any = {
@@ -254,7 +335,9 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
           eventHandlers.set(name, handler);
           return () => eventHandlers.delete(name);
         },
-        emit() {},
+        emit(name: string, value: any) {
+          if (name === "pi-worktree:mutation") mutations.push(value);
+        },
       },
       on: (name: string, handler: Function) =>
         sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
@@ -315,6 +398,11 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     assert.deepEqual(notices, []);
     await transaction.apply();
     assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "after first turn\n");
+    assert.equal(mutations.length, 1);
+    assert.deepEqual(
+      { version: mutations[0].version, cwd: mutations[0].cwd, changed: mutations[0].changed, source: mutations[0].source, operation: mutations[0].operation },
+      { version: 1, cwd: root, changed: true, source: "pi-timeline", operation: "edit-navigation-restore" },
+    );
     await transaction.rollback();
     assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "current work\n");
 

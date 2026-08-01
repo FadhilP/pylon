@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import {
@@ -137,9 +137,14 @@ export default function timelineExtension(
     suppressNextTreeWarning = false,
     activeRun: RunEntry | undefined,
     latestVerification: any,
-    pendingBash = new Map<string, string | undefined>(),
+    pendingMutations = new Map<string, string | undefined>(),
+    deniedToolCalls = new Set<string>(),
+    runningHeartbeatJobs = new Set<string>(),
     sharedWorktreeObserver = false,
     automaticMutation = false,
+    automaticMutationGeneration = 0,
+    agentRunning = false,
+    automaticCheckpoint: Promise<void> | undefined,
     releaseSessionLease: ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
     ephemeralSession = false,
     currentSessionId = "",
@@ -155,12 +160,32 @@ export default function timelineExtension(
       if (value?.version === 1 && value.owner === "pylon-core") sharedWorktreeObserver = true;
     },
   });
+  const markAutomaticMutation = () => {
+    automaticMutation = true;
+    automaticMutationGeneration++;
+  };
   const disposeWorktreeChange = pi.events.on("pylon:worktree-change", (event: any) => {
     if (sharedWorktreeObserver && event?.version === 1 && event.cwd === lastCtx?.cwd && event.changed === true)
-      automaticMutation = true;
+      markAutomaticMutation();
+  });
+  const disposeGuardDecision = pi.events.on("pi-guard:decision", (event: any) => {
+    if (event?.version === 1 && event.cwd === lastCtx?.cwd && event.decision === "blocked" && typeof event.toolCallId === "string")
+      deniedToolCalls.add(event.toolCallId);
   });
   const artifactRoot = options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
+  const mutationDetails = (cwd: string, operation: string) => ({
+    version: 1, cwd, changed: true, source: "pi-timeline", operation,
+    mutationId: randomUUID(),
+  });
+  const publishMutation = (cwd: string, operation: string) =>
+    pi.events.emit("pi-worktree:mutation", mutationDetails(cwd, operation));
+  const mutationMessage = (cwd: string, operation: string, content: string) => ({
+    customType: "pi-worktree-mutation",
+    content,
+    display: false,
+    details: mutationDetails(cwd, operation),
+  });
   const stateSnapshot = (available = true) => {
     const branch = lastCtx?.sessionManager.getBranch?.() ?? [];
     const positions = new Map<string, number>(
@@ -215,13 +240,14 @@ export default function timelineExtension(
     try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Timeline. */ }
   });
   const disposeRuntimePolicy = pi.events.on("pylon:runtime-policy", (value: any) => {
-    if (value?.version !== 1
+    if (![1, 2].includes(value?.version)
       || value.sessionId !== currentSessionId
       || typeof value.timelineEnabled !== "boolean") return;
     enabled = value.timelineEnabled;
     if (!enabled) {
       automaticMutation = false;
-      pendingBash.clear();
+      pendingMutations.clear();
+      runningHeartbeatJobs.clear();
     }
     publishState();
   });
@@ -275,6 +301,7 @@ export default function timelineExtension(
       return {
         apply: async () => {
           await restore(target.record, lastCtx.cwd);
+          publishMutation(lastCtx.cwd, "edit-navigation-restore");
           paired = true;
           pendingContext = `Filesystem restored to before edited prompt ${request.targetEntryId}.`;
           refresh(lastCtx);
@@ -713,9 +740,14 @@ export default function timelineExtension(
   pi.on("session_start", async (_e, ctx) => {
     lastCtx = ctx;
     latestVerification = undefined;
-    pendingBash.clear();
+    pendingMutations.clear();
+    deniedToolCalls.clear();
+    runningHeartbeatJobs.clear();
     confirmedForks.clear();
     automaticMutation = false;
+    automaticMutationGeneration = 0;
+    agentRunning = false;
+    automaticCheckpoint = undefined;
     const nextSessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!releaseSessionLease && currentSessionId === nextSessionId;
     if (releaseSessionLease && !reuseSessionLease)
@@ -748,9 +780,13 @@ export default function timelineExtension(
     disposeRelocation();
     disposeWorkspaceApplied();
     disposeWorktreeChange();
+    disposeGuardDecision();
+    disposeHeartbeatJobs();
     disposeFilesRequest();
     disposeDiffRequest();
     disposeRuntimePolicy();
+    await automaticCheckpoint?.catch(() => {});
+    automaticCheckpoint = undefined;
     await releaseSessionLease?.(ephemeralSession);
     releaseSessionLease = undefined;
     currentSessionId = "";
@@ -761,24 +797,56 @@ export default function timelineExtension(
   pi.on("input", (event) => {
     if (event.source !== "extension") paired = false;
   });
+  const flushAutomaticCheckpoint = (ctx = lastCtx) => {
+    if (!ctx || !enabled || agentRunning || runningHeartbeatJobs.size || !automaticMutation) return automaticCheckpoint;
+    if (!automaticCheckpoint) {
+      const generation = automaticMutationGeneration;
+      automaticCheckpoint = (async () => {
+        if (await checkpoint(ctx) && generation === automaticMutationGeneration) automaticMutation = false;
+      })().finally(() => {
+        const changedDuringCheckpoint = generation !== automaticMutationGeneration;
+        if (changedDuringCheckpoint) paired = false;
+        automaticCheckpoint = undefined;
+        if (changedDuringCheckpoint && !agentRunning && !runningHeartbeatJobs.size)
+          queueMicrotask(() => { void flushAutomaticCheckpoint(ctx); });
+      });
+    }
+    return automaticCheckpoint;
+  };
+  const disposeHeartbeatJobs = pi.events.on("pi-heartbeat:job", (event: any) => {
+    if (event?.version !== 1 || event.cwd !== lastCtx?.cwd
+      || event.sessionId !== currentSessionId
+      || typeof event.id !== "string") return;
+    if (["running", "cancelling"].includes(event.state)) runningHeartbeatJobs.add(event.id);
+    else {
+      runningHeartbeatJobs.delete(event.id);
+      flushAutomaticCheckpoint();
+    }
+  });
+  pi.on("agent_start", () => { agentRunning = true; });
   pi.on("tool_call", async (event, ctx) => {
-    if (enabled && event.toolName === "bash" && !sharedWorktreeObserver)
-      pendingBash.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
+    if (enabled && ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt"))
+      pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled) return;
-    if (event.toolName === "bash" && !sharedWorktreeObserver) {
-      const before = pendingBash.get(event.toolCallId);
-      pendingBash.delete(event.toolCallId);
+    if (deniedToolCalls.delete(event.toolCallId)) {
+      pendingMutations.delete(event.toolCallId);
+      return;
+    }
+    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt") {
+      const before = pendingMutations.get(event.toolCallId);
+      pendingMutations.delete(event.toolCallId);
       const after = await worktreeFingerprint(ctx.cwd);
-      if (!before || !after || before !== after) automaticMutation = true;
+      if (!before || !after || before !== after) markAutomaticMutation();
     } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
-      automaticMutation = true;
+      markAutomaticMutation();
     }
   });
   pi.on("agent_settled", async (_e, ctx) => {
+    agentRunning = false;
     void nameSession(ctx).catch(() => {});
-    if (enabled && automaticMutation && await checkpoint(ctx)) automaticMutation = false;
+    await flushAutomaticCheckpoint(ctx);
   });
   pi.on("session_tree", (_e, ctx) => {
     if (suppressNextTreeWarning) {
@@ -929,11 +997,7 @@ export default function timelineExtension(
                 });
                 await restore(target.record, fresh.cwd);
                 await fresh.sendMessage(
-                  {
-                    customType: "pi-timeline",
-                    content: `Filesystem restored from linked run checkpoint ${id}.`,
-                    display: false,
-                  },
+                  mutationMessage(fresh.cwd, "linked-jump-restore", `Filesystem restored from linked run checkpoint ${id}.`),
                   { deliverAs: "nextTurn" },
                 );
               } catch (e: any) {
@@ -950,11 +1014,7 @@ export default function timelineExtension(
                   try {
                     await restore(target.record, child.cwd);
                     await child.sendMessage(
-                      {
-                        customType: "pi-timeline",
-                        content: `Filesystem restored in forked Pi session from linked run checkpoint ${id}.`,
-                        display: false,
-                      },
+                      mutationMessage(child.cwd, "linked-fork-restore", `Filesystem restored in forked Pi session from linked run checkpoint ${id}.`),
                       { deliverAs: "nextTurn" },
                     );
                   } catch (e: any) {
@@ -976,6 +1036,7 @@ export default function timelineExtension(
             summarize: false,
           });
           await restore(target.record, ctx.cwd);
+          publishMutation(ctx.cwd, "jump-restore");
           paired = true;
           pendingContext = `Filesystem restored from user prompt ${id}. Later changes may not exist.`;
           refresh(ctx);
@@ -995,11 +1056,7 @@ export default function timelineExtension(
             try {
               await restore(target.record, fresh.cwd);
               await fresh.sendMessage(
-                {
-                  customType: "pi-timeline",
-                  content: `Filesystem restored in forked Pi session from user prompt ${id}.`,
-                  display: false,
-                },
+                mutationMessage(fresh.cwd, "fork-restore", `Filesystem restored in forked Pi session from user prompt ${id}.`),
                 { deliverAs: "nextTurn" },
               );
               fresh.ui.notify("Timeline fork restored.", "info");
