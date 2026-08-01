@@ -1026,6 +1026,8 @@ export function App() {
           />}
           {rightPanel === "browser" && <BrowserPanel
             key={`browser:${live.runtime?.sessionId ?? "loading"}`}
+            connected={live.connection === "connected" && live.runtime?.ready === true}
+            generation={live.runtime?.sessionGeneration}
             mirrorRequest={browserMirrorRequest}
             onActiveChange={setBrowserActive}
             onClose={() => setRightPanel(null)}

@@ -7,7 +7,9 @@ import { checkForUpdate } from "./update.mjs";
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-if (await checkForUpdate(version) === "continue") {
+if (process.argv.includes("--version")) {
+  console.log(version);
+} else if (await checkForUpdate(version) === "continue") {
   const { startPylonServer } = await import("../platform/web/dist-server/server/index.js");
   const running = await startPylonServer({
     cwd: process.env.PYLON_CWD ?? process.cwd(),

@@ -44,9 +44,24 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
   const [expandedPackage, setExpandedPackage] = useState<string | null | undefined>();
   const filteredPackages = packages.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()));
   const providers = providerAuth?.providers ?? [];
-  const filteredProviders = providers.filter((provider) => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()));
+  const filteredProviders = providers
+    .filter((provider) => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+  const providerGroups = [
+    { id: "connected", label: "Connected", providers: filteredProviders.filter((provider) => provider.configured) },
+    { id: "available", label: "Available", providers: filteredProviders.filter((provider) => !provider.configured) },
+  ];
   const authFlow = providerAuth?.flow;
   const authRunning = authFlow?.status === "running";
+  const providerPrompt = pendingUi?.payload.context === "provider-auth" ? pendingUi : undefined;
+  const primaryAuthLink = authFlow?.deviceCode
+    ? { url: authFlow.deviceCode.verificationUri, label: "Open verification page" }
+    : authFlow?.authUrl
+      ? { url: authFlow.authUrl, label: "Open sign-in page" }
+      : authFlow?.links?.[0];
+  const secondaryAuthLinks = authFlow?.links?.filter((link, index, links) =>
+    link.url !== primaryAuthLink?.url && links.findIndex((candidate) => candidate.url === link.url) === index) ?? [];
+  const authRetryable = authFlow?.status === "failed" || authFlow?.status === "cancelled";
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -66,7 +81,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = [...dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled])") ?? []]
+    const focusable = [...dialogRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []]
       .filter((element) => !element.closest("[hidden]"));
     if (!focusable.length) return;
     const first = focusable[0]!;
@@ -125,35 +140,43 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               <div><h2>Providers</h2><p>Connect accounts and API keys used by Pi. Credentials stay on this machine.</p></div>
               <input type="search" value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="Filter providers" aria-label="Filter providers" />
             </div>
-            {authFlow && <div className={`provider-auth-flow is-${authFlow.status}`} role="status">
-              <div><strong>{authFlow.providerName}</strong><span>{authFlow.message ?? "Authentication in progress."}</span></div>
-              {authFlow.authUrl && <a href={authFlow.authUrl} target="_blank" rel="noopener noreferrer">Open sign-in page <IconExternalLink size={14} /></a>}
-              {authFlow.deviceCode && <div className="provider-device-code">
+            {(authFlow || providerPrompt) && <section className={`provider-auth-task is-${authFlow?.status ?? "running"}`} aria-labelledby="provider-auth-title">
+              <header>
+                <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
+                <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>{authFlow?.message ?? "Authentication requires a response."}</p>
+                {authFlow?.instructions && authFlow.instructions !== authFlow.message && <p className="provider-auth-instructions">{authFlow.instructions}</p>}
+              </header>
+              <div className="provider-auth-actions">
+                {primaryAuthLink && <a className="provider-auth-primary" href={primaryAuthLink.url} target="_blank" rel="noopener noreferrer">{primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} /><span className="sr-only"> (opens in a new tab)</span></a>}
+                {authRetryable && authFlow && <button type="button" className="provider-auth-retry" onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>Try again</button>}
+                {authRunning && <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>Cancel</button>}
+              </div>
+              {authFlow?.deviceCode && <div className="provider-device-code">
+                <span>One-time code</span>
                 <code>{authFlow.deviceCode.userCode}</code>
-                <a href={authFlow.deviceCode.verificationUri} target="_blank" rel="noopener noreferrer">Open verification page <IconExternalLink size={14} /></a>
               </div>}
-              {authFlow.links?.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">{link.label ?? "Open provider page"} <IconExternalLink size={14} /></a>)}
-              {authRunning && <button type="button" className="secondary-button" onClick={onProviderCancel}>Cancel</button>}
-            </div>}
-            {pendingUi?.payload.context === "provider-auth" && <div className="provider-auth-prompt"><UiDialog request={pendingUi} /></div>}
+              {secondaryAuthLinks.length > 0 && <div className="provider-auth-links">{secondaryAuthLinks.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">{link.label ?? "Open provider page"} <IconExternalLink size={14} /><span className="sr-only"> (opens in a new tab)</span></a>)}</div>}
+              {providerPrompt && <div className="provider-auth-manual"><UiDialog request={providerPrompt} /></div>}
+            </section>}
             {providers.length === 0 && <div className="settings-empty"><IconKey size={22} /><strong>No providers available</strong></div>}
             {providers.length > 0 && filteredProviders.length === 0 && <div className="settings-empty"><strong>No matching providers</strong><span>Try a different filter.</span></div>}
-            {filteredProviders.length > 0 && <div className="settings-provider-list">{filteredProviders.map((provider) => <section className="settings-provider" key={provider.id}>
-              <div className="settings-provider-copy">
-                {/* <span className="provider-mark" aria-hidden="true">{packageInitials(provider.name)}</span> */}
-                <span><strong>{provider.name}</strong><small>{provider.id}</small></span>
-              </div>
-              <span className={`provider-state${provider.configured ? " is-connected" : ""}`}>{provider.configured ? provider.stored ? "Connected" : "External" : "Not connected"}</span>
-              <div className="provider-actions">
-                {!provider.configured && provider.methods.map((method) => <button
-                  key={method.type}
-                  type="button"
-                  disabled={authRunning || !method.interactive}
-                  title={method.interactive ? undefined : "Configured outside Pylon"}
-                  onClick={() => onProviderLogin(provider.id, method.type)}
-                >{method.type === "oauth" ? "Sign in" : "Add key"}</button>)}
-                {provider.configured && provider.stored && <button className="provider-disconnect" type="button" disabled={providerLogoutDisabled || authRunning} onClick={() => onProviderLogout(provider.id)}><IconLogout size={14} /> Disconnect</button>}
-              </div>
+            {filteredProviders.length > 0 && <div className="settings-provider-groups">{providerGroups.map((group) => group.providers.length > 0 && <section className="settings-provider-group" key={group.id} aria-labelledby={`provider-group-${group.id}`}>
+              <header><h3 id={`provider-group-${group.id}`}>{group.label}</h3><span>{group.providers.length}</span></header>
+              <div className="settings-provider-list">{group.providers.map((provider) => <section className="settings-provider" key={provider.id}>
+                <div className="settings-provider-copy"><span><strong>{provider.name}</strong><small>{provider.id}</small></span></div>
+                <span className={`provider-state${provider.configured ? " is-connected" : ""}`}>{provider.configured ? provider.stored ? "Connected" : "External" : "Not connected"}</span>
+                <div className="provider-actions">
+                  {!provider.configured && provider.methods.map((method) => method.interactive
+                    ? <button
+                        key={method.type}
+                        type="button"
+                        disabled={authRunning}
+                        onClick={() => onProviderLogin(provider.id, method.type)}
+                      >{method.type === "oauth" ? "Sign in" : "Add key"}</button>
+                    : <span className="provider-action-note" key={method.type} title={method.name}>Configured outside Pylon</span>)}
+                  {provider.configured && provider.stored && <button className="provider-disconnect" type="button" disabled={providerLogoutDisabled || authRunning} onClick={() => onProviderLogout(provider.id)}><IconLogout size={14} /> Disconnect</button>}
+                </div>
+              </section>)}</div>
             </section>)}</div>}
             {providerLogoutDisabled && <p className="settings-note" role="status">Providers can disconnect when every active session is idle.</p>}
           </section>

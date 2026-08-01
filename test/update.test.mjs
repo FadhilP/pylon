@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { checkForUpdate, isNewerVersion } from "../bin/update.mjs";
 
 const response = (version) => async () => ({
   ok: true,
   text: async () => JSON.stringify({ version }),
+});
+
+test("prints the installed version", () => {
+  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/pylon.mjs", import.meta.url)), "--version"], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), version);
 });
 
 test("compares stable npm versions", () => {

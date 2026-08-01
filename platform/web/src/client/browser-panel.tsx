@@ -34,7 +34,7 @@ function navigableUrl(value: string): string {
   return `https://${trimmed}`;
 }
 
-export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }: { mirrorRequest: string; onActiveChange: (active: boolean) => void; onClose: () => void; onError: (cause: unknown, fallback: string) => void }) {
+export function BrowserPanel({ connected, generation, mirrorRequest, onActiveChange, onClose, onError }: { connected: boolean; generation?: number; mirrorRequest: string; onActiveChange: (active: boolean) => void; onClose: () => void; onError: (cause: unknown, fallback: string) => void }) {
   const [browser, setBrowser] = useState<HeliosBrowserResult>();
   const [frame, setFrame] = useState("");
   const [address, setAddress] = useState("about:blank");
@@ -61,10 +61,21 @@ export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }
   };
 
   const request = async (action: Action, silent = false) => {
+    const snapshot = runtimeStore.getSnapshot();
+    if (snapshot.connection !== "connected" || !snapshot.runtime?.ready) return;
+    const sessionId = snapshot.runtime.sessionId;
+    const sessionGeneration = snapshot.runtime.sessionGeneration;
+    const stillCurrent = () => {
+      const current = runtimeStore.getSnapshot();
+      return current.connection === "connected"
+        && current.runtime?.ready === true
+        && current.runtime.sessionId === sessionId
+        && current.runtime.sessionGeneration === sessionGeneration;
+    };
     const sequence = ++requestSequence.current;
     try {
       const result = await runtimeStore.heliosBrowser(action);
-      if (!active.current) return result;
+      if (!active.current || !stillCurrent()) return;
       if (sequence >= appliedStateSequence.current) {
         appliedStateSequence.current = sequence;
         setBrowser(result);
@@ -78,22 +89,30 @@ export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }
       }
       return result;
     } catch (cause) {
-      if (!silent && active.current) setError(cause instanceof Error ? cause.message : "Browser request failed");
+      if (!active.current || !stillCurrent()) return;
+      if (!silent) setError(cause instanceof Error ? cause.message : "Browser request failed");
       throw cause;
     }
   };
 
   useEffect(() => {
     active.current = true;
-    void request({ action: "status" }).catch(() => undefined);
     return () => {
       active.current = false;
-      void runtimeStore.heliosBrowser({ action: "release" }).catch(() => undefined);
+      const snapshot = runtimeStore.getSnapshot();
+      if (snapshot.connection === "connected" && snapshot.runtime?.ready) {
+        void runtimeStore.heliosBrowser({ action: "release" }).catch(() => undefined);
+      }
     };
   }, []);
 
   useEffect(() => {
-    if (!mirrorRequest || handledMirrorRequest.current === mirrorRequest) return;
+    if (!connected) return;
+    void request({ action: "status" }).catch(() => undefined);
+  }, [connected, generation]);
+
+  useEffect(() => {
+    if (!connected || !mirrorRequest || handledMirrorRequest.current === mirrorRequest) return;
     if (browser?.active && browser.state === "ready") {
       handledMirrorRequest.current = mirrorRequest;
       return;
@@ -112,7 +131,7 @@ export function BrowserPanel({ mirrorRequest, onActiveChange, onClose, onError }
     };
     timer = window.setTimeout(poll, 250);
     return () => { stopped = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [browser?.active, browser?.state, mirrorRequest]);
+  }, [browser?.active, browser?.state, connected, generation, mirrorRequest]);
 
   useEffect(() => {
     if (!browser?.active || browser.ownership !== "owned" || browser.state !== "ready") return;

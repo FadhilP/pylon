@@ -83,7 +83,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       controller.abort();
       requestRevision.current++;
     };
-  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.workspace?.revision]);
+  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
   useEffect(() => {
     if (!requestedPath) return;
     setSelectedPath(requestedPath.path);
@@ -95,16 +95,35 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       setContent(undefined);
       return;
     }
+    const current = runtimeStore.getSnapshot();
+    if (!runtime?.ready
+      || current.connection !== "connected"
+      || !current.runtime?.ready
+      || current.runtime.sessionId !== runtime.sessionId
+      || current.runtime.sessionGeneration !== runtime.sessionGeneration) {
+      setContent(undefined);
+      setViewerLoading(false);
+      return;
+    }
+    const sessionId = runtime.sessionId;
+    const generation = runtime.sessionGeneration;
+    const stillCurrent = () => {
+      const snapshot = runtimeStore.getSnapshot();
+      return snapshot.connection === "connected"
+        && snapshot.runtime?.ready === true
+        && snapshot.runtime.sessionId === sessionId
+        && snapshot.runtime.sessionGeneration === generation;
+    };
     let active = true;
     setViewerLoading(true);
     const request = view === "diff"
       ? runtimeStore.workspaceDiff(selectedPath)
       : runtimeStore.workspaceFile(selectedPath, view);
     void request.then((value) => {
-      if (active) setContent(value);
+      if (active && stillCurrent()) setContent(value);
     })
       .catch((error) => {
-        if (!active) return;
+        if (!active || !stillCurrent()) return;
         setContent(undefined);
         onError(error, "Unable to read workspace file");
       })
@@ -112,7 +131,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
         if (active) setViewerLoading(false);
       });
     return () => { active = false; };
-  }, [selectedPath, view, runtime?.workspace?.revision]);
+  }, [live.connection, selectedPath, view, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
 
   const matchingFiles = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();

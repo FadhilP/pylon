@@ -47,7 +47,22 @@ test("files wait for replacement runtime to reconnect before loading", async () 
   const source = await readFile(new URL("../src/client/files-panel.tsx", import.meta.url), "utf8");
 
   assert.match(source, /useEffect\(\(\) => \{\s*if \(live\.connection !== "connected" \|\| !runtime\?\.ready\) \{\s*setInventoryLoading\(false\);\s*return;/);
-  assert.match(source, /\[live\.connection, runtime\?\.ready, runtime\?\.sessionId, runtime\?\.workspace\?\.revision\]/);
+  assert.match(source, /if \(!selectedPath\)[\s\S]*?const current = runtimeStore\.getSnapshot\(\);[\s\S]*?current\.connection !== "connected"[\s\S]*?current\.runtime\.sessionGeneration !== runtime\.sessionGeneration[\s\S]*?setViewerLoading\(false\);[\s\S]*?const request = view/);
+  assert.match(source, /\[live\.connection, runtime\?\.ready, runtime\?\.sessionId, runtime\?\.sessionGeneration, runtime\?\.workspace\?\.revision\]/);
+  assert.match(source, /const stillCurrent = \(\) =>[\s\S]*?snapshot\.runtime\.sessionGeneration === generation/);
+  assert.match(source, /if \(active && stillCurrent\(\)\) setContent\(value\)/);
+  assert.match(source, /\[live\.connection, selectedPath, view, runtime\?\.ready, runtime\?\.sessionId, runtime\?\.sessionGeneration, runtime\?\.workspace\?\.revision\]/);
+});
+
+test("browser waits for replacement runtime to reconnect before checking status", async () => {
+  const browser = await readFile(new URL("../src/client/browser-panel.tsx", import.meta.url), "utf8");
+  const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+
+  assert.match(browser, /const request = async[\s\S]*?const snapshot = runtimeStore\.getSnapshot\(\);\s*if \(snapshot\.connection !== "connected" \|\| !snapshot\.runtime\?\.ready\) return;[\s\S]*?const stillCurrent = \(\) =>[\s\S]*?current\.runtime\.sessionGeneration === sessionGeneration/);
+  assert.match(browser, /if \(!active\.current \|\| !stillCurrent\(\)\) return;/);
+  assert.match(browser, /useEffect\(\(\) => \{\s*if \(!connected\) return;\s*void request\(\{ action: "status" \}\)\.catch\(\(\) => undefined\);\s*\}, \[connected, generation\]\)/);
+  assert.match(browser, /if \(!connected \|\| !mirrorRequest/);
+  assert.match(app, /<BrowserPanel[\s\S]*?connected=\{live\.connection === "connected" && live\.runtime\?\.ready === true\}[\s\S]*?generation=\{live\.runtime\?\.sessionGeneration\}/);
 });
 
 test("agent completion bypasses frame batching and flushes pending notifications", async () => {
