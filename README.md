@@ -1,10 +1,12 @@
 # Pylon
 
-Bundled workflow extensions and a low-noise theme for [Pi](https://pi.dev). Pylon adds planning, repository research, verification, safety, outbound context limiting, background work, checkpoints, and UI improvements.
+Pylon is a web-first coding agent workspace built on [Pi](https://pi.dev). It combines planning, repository research, delegated implementation, verification, safety controls, checkpoints, and a low-noise interface in one bundle.
 
-## Web App
+Pylon is optimized for **cost efficiency and output quality rather than speed**. It routes focused work to cost-effective models and reserves stronger models for decisions that benefit from them, while verification and specialist reviews help protect quality. This workflow can take longer than using a single model directly.
 
-Install Pylon globally, enter the project you want to work on, and run `pylon`:
+## Web App Setup (Recommended)
+
+Pylon requires Node.js 22.18 or newer. Install it globally, open the project you want to work on, and start the web app:
 
 ```sh
 npm install --global @fadhilp/pylon
@@ -12,17 +14,20 @@ cd /path/to/your/project
 pylon
 ```
 
-Before starting, Pylon checks npm for a newer stable release. In an interactive terminal it asks before installing; in non-interactive use it only prints the exact update command. After any approved install attempt, Pylon exits so it never starts from files npm may be replacing; run `pylon` again to use the updated package. Set `PYLON_NO_UPDATE_CHECK=1` to skip the check.
+Open [http://127.0.0.1:3141](http://127.0.0.1:3141), then use **Settings** to configure your provider and select models for the main agent, Advisor, Scout, and Grunt.
 
-Then open [http://127.0.0.1:3141](http://127.0.0.1:3141). The web host binds only to loopback and uses the current directory as its initial project. `PYLON_CWD` overrides that directory; `PYLON_PORT` changes the default port (`3141`).
+Recommended configuration for OpenAI subscriptions:
 
-Go to settings to setup your preferred provider. Choose your models for Advisor, Scout, Grunt. Recommended configuration for openAI subscriptions:
 - Main agent: GPT 5.6 Sol Medium
 - Advisor: GPT 5.6 Sol High
 - Scout: GPT 5.6 Luna Medium
-- Grunt: GPT 5.6 Terra (Thinking level will be decided by main agent)
+- Grunt: GPT 5.6 Terra (the main agent selects the thinking level)
 
-## Terminal Setup
+The server binds only to loopback and uses the directory where you ran `pylon` as the initial project. Set `PYLON_CWD` to override that directory or `PYLON_PORT` to change the default port (`3141`).
+
+Before startup, Pylon checks npm for a newer stable release. Interactive terminals ask before updating; non-interactive sessions only print the update command. After an approved update attempt, run `pylon` again. Set `PYLON_NO_UPDATE_CHECK=1` to disable the check.
+
+## Terminal Setup (Alternative)
 
 Install the complete bundle from npm:
 

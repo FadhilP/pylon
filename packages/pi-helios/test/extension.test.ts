@@ -331,7 +331,7 @@ test("crafted Web Scout grant path cannot delete attacker-selected directory", a
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("window capture consent names resolved title", async () => {
+test("window capture consent names resolved title", { skip: process.platform !== "win32" }, async () => {
   const { tools } = runtime({ exec: async () => successfulLookup() });
   let confirmation = "";
   const result = await tools.get("helios_capture").execute("id", { target: "window", title: "Code" }, undefined, undefined, context({
