@@ -1,7 +1,7 @@
 {
   "name": "pi-discover",
   "version": "0.1.0",
-  "description": "General-purpose repository relationship and inactive-tool discovery for Pi",
+  "description": "General-purpose repository, historical-session, and inactive-tool discovery for Pi",
   "type": "module",
   "keywords": ["pi-package"],
   "engines": { "node": ">=22.18.0" },

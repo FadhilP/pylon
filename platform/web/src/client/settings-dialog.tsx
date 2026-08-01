@@ -305,7 +305,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
     return <div className="package-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.activePruning} disabled={disabled} onChange={(event) => onUpdate({ ...settings, activePruning: event.target.checked })} />Active pruning</label>
       <label>Projection mode<select value={settings.projectionMode} disabled={disabled} onChange={(event) => onUpdate({ ...settings, projectionMode: event.target.value as typeof settings.projectionMode })}>
-        <option value="stable">Stable</option><option value="legacy">Legacy</option>
+        <option value="legacy">Standard</option><option value="stable">Stable (experimental)</option>
       </select></label>
       <label>Pruning threshold<input key={settings.threshold} type="number" min={1_000} max={50_000} step={1_000} defaultValue={settings.threshold} disabled={disabled} onBlur={(event) => {
         const threshold = Number(event.target.value);
@@ -313,18 +313,20 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
           onUpdate({ ...settings, threshold });
         }
       }} /></label>
-      <label>Rollover high multiplier<input key={settings.rolloverHighMultiplier} type="number" min={2} max={64} step={1} defaultValue={settings.rolloverHighMultiplier} disabled={disabled || settings.projectionMode !== "stable"} onBlur={(event) => {
-        const high = Number(event.target.value);
-        if (Number.isSafeInteger(high) && high > settings.rolloverLowMultiplier && high <= 64 && high !== settings.rolloverHighMultiplier) {
-          onUpdate({ ...settings, rolloverHighMultiplier: high });
-        }
-      }} /></label>
-      <label>Rollover target multiplier<input key={settings.rolloverLowMultiplier} type="number" min={1} max={63} step={1} defaultValue={settings.rolloverLowMultiplier} disabled={disabled || settings.projectionMode !== "stable"} onBlur={(event) => {
-        const low = Number(event.target.value);
-        if (Number.isSafeInteger(low) && low >= 1 && low < settings.rolloverHighMultiplier && low !== settings.rolloverLowMultiplier) {
-          onUpdate({ ...settings, rolloverLowMultiplier: low });
-        }
-      }} /></label>
+      {settings.projectionMode === "stable" && <>
+        <label>Rollover high multiplier<input key={settings.rolloverHighMultiplier} type="number" min={2} max={64} step={1} defaultValue={settings.rolloverHighMultiplier} disabled={disabled} onBlur={(event) => {
+          const high = Number(event.target.value);
+          if (Number.isSafeInteger(high) && high > settings.rolloverLowMultiplier && high <= 64 && high !== settings.rolloverHighMultiplier) {
+            onUpdate({ ...settings, rolloverHighMultiplier: high });
+          }
+        }} /></label>
+        <label>Rollover target multiplier<input key={settings.rolloverLowMultiplier} type="number" min={1} max={63} step={1} defaultValue={settings.rolloverLowMultiplier} disabled={disabled} onBlur={(event) => {
+          const low = Number(event.target.value);
+          if (Number.isSafeInteger(low) && low >= 1 && low < settings.rolloverHighMultiplier && low !== settings.rolloverLowMultiplier) {
+            onUpdate({ ...settings, rolloverLowMultiplier: low });
+          }
+        }} /></label>
+      </>}
     </div>;
   }
   if (settings.kind === "timeline") {

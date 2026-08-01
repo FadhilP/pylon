@@ -16,7 +16,7 @@ export const ELIGIBLE_TOOL_NAMES = [
 export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
-  "With active pruning, eligible ages 0–1 share a three-threshold retained-source budget; without it, age 0 is preserved and age 1 keeps the three-threshold cap.";
+  "Age 0 uses independent per-result caps with active pruning; age 1 uses the threshold with active pruning or three times the threshold without it.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
 export const DEFAULT_ROLLOVER_HIGH_MULTIPLIER = 8;
 export const DEFAULT_ROLLOVER_LOW_MULTIPLIER = 4;
@@ -1064,13 +1064,12 @@ export function sieveMessages<T extends ContextMessage>(
   if (options.pruneActive) {
     for (let index = 0; index < messages.length; index++) {
       const fields = messages[index] as Record<string, unknown>;
-      if (fields.role !== "toolResult" || usersAfter[index] > 1) continue;
+      if (fields.role !== "toolResult" || usersAfter[index] !== 0) continue;
       if (typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
       activeToolCallIdCounts.set(fields.toolCallId, (activeToolCallIdCounts.get(fields.toolCallId) ?? 0) + 1);
     }
   }
   const retainedBudget = 3 * threshold;
-  let recentRetainedChars = 0;
   let retainedChars = 0;
 
   // Budget selection is deliberately newest-to-oldest, unlike outbound order.
@@ -1078,9 +1077,9 @@ export function sieveMessages<T extends ContextMessage>(
     const message = messages[index];
     if (message.role !== "toolResult" || replacements.has(index)) continue;
     const age = usersAfter[index];
-    if (age <= 1 && options.pruneActive) {
+    if (age === 0 && options.pruneActive) {
       stats.scanned++;
-      const source = sieveSource(message, age === 1);
+      const source = sieveSource(message, false);
       if (!source) {
         stats.skipped.ineligibleTool++;
         continue;
@@ -1097,10 +1096,8 @@ export function sieveMessages<T extends ContextMessage>(
         stats.skipped.recentWindow++;
         continue;
       }
-      const recentRemaining = Math.max(0, retainedBudget - recentRetainedChars);
       const recentErrorThreshold = Math.max(SIEVE_THRESHOLD, threshold);
-      if (source.isError ? sourceLength <= recentErrorThreshold : sourceLength <= threshold && sourceLength <= recentRemaining) {
-        if (!source.isError) recentRetainedChars += sourceLength;
+      if (sourceLength <= (source.isError ? recentErrorThreshold : threshold)) {
         stats.skipped.atOrBelowThreshold++;
         continue;
       }
@@ -1117,16 +1114,7 @@ export function sieveMessages<T extends ContextMessage>(
         stats.skipped.recoveryUnavailable++;
         continue;
       }
-      const budgetMarkerLength = activeOmissionMarker(
-        source.toolName,
-        toolCallId,
-        sourceLength,
-        Math.max(0, sourceLength - recentRemaining),
-      ).length + 2;
-      const recentLimit = source.isError
-        ? recentErrorThreshold
-        : Math.min(threshold, Math.max(1, recentRemaining + budgetMarkerLength));
-      const byBudget = !source.isError && recentRemaining < Math.min(sourceLength, threshold);
+      const recentLimit = source.isError ? recentErrorThreshold : threshold;
       if (mixed) {
         const sliced = sliceMixedActive(message, source, toolCallId, recentLimit);
         if (!sliced) {
@@ -1136,8 +1124,7 @@ export function sieveMessages<T extends ContextMessage>(
         replacements.set(index, sliced.message);
         recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
         stats.transformed++;
-        if (!source.isError) recentRetainedChars += Math.min(recentRemaining, sliced.retainedChars);
-        stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+        stats.transformedBy.activeThreshold++;
         stats.transformedBy.mixedText++;
         if (source.isError) stats.transformedBy.errorCap++;
         stats.omittedChars += sliced.omittedChars;
@@ -1149,7 +1136,7 @@ export function sieveMessages<T extends ContextMessage>(
         continue;
       }
       if (source.kind === "rankedSearch" && !source.isError) {
-        const sliced = sliceRankedSearch(blocks, source, recentLimit, toolCallId, recentRemaining);
+        const sliced = sliceRankedSearch(blocks, source, recentLimit, toolCallId);
         const outboundText = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
         if (outboundText.length >= sourceLength) {
           stats.skipped.recoveryUnavailable++;
@@ -1157,9 +1144,8 @@ export function sieveMessages<T extends ContextMessage>(
         }
         replacements.set(index, replaceWithMarker(message, outboundText));
         recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: false });
-        if (sliced) recentRetainedChars += sliced.retainedChars;
         stats.transformed++;
-        stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+        stats.transformedBy.activeThreshold++;
         stats.omittedChars += sliced?.omittedChars ?? sourceLength;
         stats.netCharsSaved += sourceLength - outboundText.length;
         continue;
@@ -1172,9 +1158,8 @@ export function sieveMessages<T extends ContextMessage>(
       }
       replacements.set(index, replaceWithMarker(message, outboundText));
       recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
-      if (!source.isError && sliced) recentRetainedChars += sourceLength - sliced.omittedText.length;
       stats.transformed++;
-      stats.transformedBy[byBudget ? "budget" : "activeThreshold"]++;
+      stats.transformedBy.activeThreshold++;
       if (source.isError) stats.transformedBy.errorCap++;
       stats.omittedChars += sliced?.omittedText.length ?? sourceLength;
       stats.netCharsSaved += Math.max(0, sourceLength - outboundText.length);
@@ -1608,6 +1593,7 @@ function recordProjectionStats(stats: TransformStats, entry: ProjectionEntry) {
   stats.byTool[key] = usage;
 }
 
+// TODO(pi-sieve): compare restored legacy and rollover epochs across more retained real sessions before choosing a long-term default.
 /** Applies an immutable epoch ledger to an outbound-only raw context copy. */
 export function stableSieveMessages<T extends ContextMessage>(
   messages: readonly T[],

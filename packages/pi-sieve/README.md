@@ -17,8 +17,8 @@ Run `/reload` after installation.
 /sieve enable
 /sieve observe
 /sieve disable
+/sieve projection standard
 /sieve projection stable
-/sieve projection legacy
 /sieve reflow
 /sieve rollover 8 4
 /sieve rollover reset
@@ -29,11 +29,11 @@ Run `/reload` after installation.
 /sieve reset-stats
 ```
 
-Pi Sieve is enabled in `stable` projection mode by default. The threshold, active-pruning setting, projection mode, and rollover multipliers persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192. Stable rollover defaults to a high watermark of `8T` and a newest-first target of `4T`, where `T` is the configured threshold. Multipliers are integers from 1 through 64 and the high value must exceed the target.
+Pi Sieve is enabled in `standard` projection mode by default. The threshold, active-pruning setting, projection mode, and rollover multipliers persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192. Stable rollover defaults to a high watermark of `8T` and a newest-first target of `4T`, where `T` is the configured threshold. Multipliers are integers from 1 through 64 and the high value must exceed the target.
 
 `observe` computes projections and telemetry without changing outbound context. `disable` does neither. Moving between runtime modes starts a fresh projection epoch before the next provider call.
 
-## Stable projections
+## Stable projections (experimental)
 
 Stable mode freezes every unique tool result the first time it appears in an epoch:
 
@@ -91,11 +91,11 @@ Recoverable markers include an exact `toolCallId` for `sieve_recall`. Recall:
 
 Missing, stale, ambiguous, or mismatched IDs fail closed. A successful recall is a newly appended explicit recovery and remains complete for the rest of the epoch. The recall tool is active only when active pruning and global `enabled` mode are both active.
 
-## Legacy rollback
+## Standard projection
 
-`/sieve projection legacy` retains the previous mutable age/budget implementation for one rollback cycle. Legacy mode may reslice prior results as they age or as newer output consumes shared budgets. Switching projection mode starts a new epoch and reports that the cached prefix will reset.
+`/sieve projection standard` uses the default mutable age/budget implementation. Age-0 results use independent per-result caps, age 1 uses an independent threshold, and only older results consume the shared retained-output budget. Standard mode may still reslice prior results as they age. Switching projection mode starts a new epoch and reports that the cached prefix will reset. The old `legacy` command name remains accepted for compatibility.
 
-Use `/sieve projection stable` to return to immutable projections.
+Use `/sieve projection stable` to try the experimental immutable projections and automatic rollover.
 
 ## Telemetry
 

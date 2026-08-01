@@ -148,7 +148,14 @@ test("preserves age 0 and caps only eligible successful age-1 output", () => {
     user("after"),
   ], 4_000, { pruneActive: true });
   assert.equal(activeEqual.stats.transformed, 0, "active age-1 equality is retained");
-  assert.equal(activeOver.stats.transformedBy.activeThreshold, 1, "active age-1 output cannot re-expand");
+  assert.equal(activeOver.stats.transformedBy.ageThreshold, 1, "active age-1 output cannot re-expand");
+
+  const transitioning = textResult("fd", "x".repeat(4_001), { toolCallId: "age-transition", isError: false });
+  const atAgeZero = sieveMessages([user("before"), transitioning], 4_000, { pruneActive: true });
+  const atAgeOne = sieveMessages([user("before"), transitioning, user("after")], 4_000, { pruneActive: true });
+  assert.match((atAgeZero.messages[1] as any).content[0].text, /sieve_recall "age-transition"/);
+  assert.doesNotMatch((atAgeOne.messages[1] as any).content[0].text, /sieve_recall/);
+  assert.equal(atAgeOne.recoverableActiveResults.length, 0);
 
   const combined = sieveMessages([
     user("before"),
@@ -586,8 +593,9 @@ test("keeps recalls visible at age 0 then prunes eligible recalled output with a
   const aged = sieveMessages([user("before"), agedRecall, user("after")], 4_000, { pruneActive: true });
   const agedOutput = (aged.messages[1].content as any)[0].text as string;
   assert.equal(agedOutput.length, 4_000);
-  assert.match(agedOutput, /sieve_recall "call-1"/);
-  assert.equal(aged.stats.transformedBy.activeThreshold, 1);
+  assert.match(agedOutput, /\[pi-sieve: recalled rg; omitted/);
+  assert.doesNotMatch(agedOutput, /sieve_recall/);
+  assert.equal(aged.stats.transformedBy.ageThreshold, 1);
 
   const budgetRecall = recalledResult("fd", "r".repeat(1_000));
   const budgeted = sieveMessages([
@@ -801,14 +809,21 @@ test("keeps unique delegated evidence and verify failures protected", () => {
   assert.equal(output.stats.transformed, 0);
 });
 
-test("shares the active retained budget across age-zero results", () => {
-  const results = Array.from({ length: 4 }, (_, index) => textResult("bash", String(index).repeat(900), {
-    toolCallId: `active-budget-${index}`, isError: false,
+test("caps age-zero results independently without a shared retained budget", () => {
+  const below = Array.from({ length: 4 }, (_, index) => textResult("bash", String(index).repeat(900), {
+    toolCallId: `active-below-${index}`, isError: false,
   }));
-  const output = sieveMessages([user("current"), ...results], 1_000, { pruneActive: true });
-  assert.equal(output.stats.transformedBy.budget, 1);
-  assert.ok((output.messages[1] as any).content[0].text.length < 900);
-  assert.deepEqual(output.messages.slice(2), results.slice(1));
+  const retained = sieveMessages([user("current"), ...below], 1_000, { pruneActive: true });
+  assert.equal(retained.stats.transformed, 0);
+  assert.deepEqual(retained.messages.slice(1), below);
+
+  const above = Array.from({ length: 4 }, (_, index) => textResult("bash", String(index).repeat(1_200), {
+    toolCallId: `active-above-${index}`, isError: false,
+  }));
+  const pruned = sieveMessages([user("current"), ...above], 1_000, { pruneActive: true });
+  assert.equal(pruned.stats.transformedBy.activeThreshold, 4);
+  assert.equal(pruned.stats.transformedBy.budget, 0);
+  assert.ok(pruned.messages.slice(1).every((message: any) => message.content[0].text.length <= 1_000));
 });
 
 test("stable epochs freeze every prior result while context grows beyond the soft budget", () => {
@@ -878,7 +893,7 @@ test("budget rollover favors newest results, reaches its target, and freezes the
   assert.ok(retainedProjectionBudget(edgeEpoch) <= 2_000);
 });
 
-test("regression replay keeps stable history fixed while legacy newest-first budgeting churns", () => {
+test("regression replay keeps stable and restored legacy history fixed during one tool turn", () => {
   const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command: id } }] });
   const messages: any[] = [user("long tool turn")];
   const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
@@ -913,7 +928,7 @@ test("regression replay keeps stable history fixed while legacy newest-first bud
   }
 
   assert.equal(stableChangedHistoricalResults, 0);
-  assert.ok(legacyChangedHistoricalResults > 0, "legacy replay should reproduce historical-result churn");
+  assert.equal(legacyChangedHistoricalResults, 0, "independent age-zero caps must not rewrite prior results");
   assert.ok(stableRetainedChars > 3_000, "stable mode reports append-only retained growth");
   assert.ok(legacyRetainedChars <= stableRetainedChars);
 });
@@ -1051,7 +1066,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const command = commands.get("sieve");
   const oversizedLength = SIEVE_THRESHOLD + 1;
   const context = { messages: [user("first"), textResult("ls", "x".repeat(oversizedLength)), user("second"), user("third")] };
-  const expectedGrossTokens = 1;
+  const expectedGrossTokens = 10;
   const expectedNetTokens = 1;
   let notification = "";
   const ctx: any = { ui: { notify: (text: string) => { notification = text; } } };
@@ -1064,7 +1079,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: 12_000,
-    projectionMode: "stable",
+    projectionMode: "legacy",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -1077,7 +1092,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((context.messages[1].content[0] as { text: string }).text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /pi-sieve: observe/);
-  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 0, budget 0, giant-error 0, active-threshold 1, stale-read 0.*projected gross omitted ~${expectedGrossTokens} tokens`));
+  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0, stale-read 0.*projected gross omitted ~${expectedGrossTokens} tokens`));
   assert.match(notification, /actual transformations 0.*projected observe transformations 1/);
 
   await command.handler("enable", ctx);
@@ -1112,7 +1127,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
-    projectionMode: "stable",
+    projectionMode: "legacy",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -1121,6 +1136,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(activeTools.includes("sieve_recall"), false);
   await command.handler("enable", ctx);
   assert.equal(activeTools.includes("sieve_recall"), true);
+  await command.handler("projection stable", ctx);
   const activeSource = textResult("bash", "z".repeat(oversizedLength), { toolCallId: "active-runtime" });
   const activeOutbound = hook({ messages: [user("first"), activeSource] });
   const activeOutboundText = activeOutbound.messages[1].content[0].text;
@@ -1143,6 +1159,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(publishedStates.at(-1).latest.transformed, 9, "only final rollover stats are published");
   assert.equal(publishedStates.at(-1).rolloverHighMultiplier, 8);
   assert.equal(publishedStates.at(-1).rolloverLowMultiplier, 4);
+  assert.ok(publishedStates.at(-1).epoch.rolloverEligibleRetainedChars <= 4 * SIEVE_THRESHOLD);
   const rolloverEpochId = publishedStates.at(-1).epoch.id;
   const rolloverRecall = await tools.get("sieve_recall").execute("rollover-recall", { toolCallId: "runtime-roll-0" });
   assert.equal(rolloverRecall.details.found, true);
@@ -1238,10 +1255,14 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     rolloverLowMultiplier: 4,
   });
 
-  await command.handler("projection legacy", ctx);
+  await command.handler("projection standard", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy");
+  assert.match(notification, /projection mode set to standard/);
+  await command.handler("projection legacy", ctx);
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy", "legacy remains a compatibility alias");
   await command.handler("projection stable", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "stable");
+  assert.match(notification, /projection mode set to stable \(experimental\)/);
   await command.handler("active enable", ctx);
   const resumedHandlers = new Map<string, Function[]>();
   const resumedCommands = new Map<string, any>();

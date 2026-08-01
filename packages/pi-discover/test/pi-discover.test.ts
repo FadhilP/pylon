@@ -12,6 +12,7 @@ import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuer
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
+import { registerSessionSearch, searchSessions, type SessionSource } from "../src/sessions.ts";
 
 class Bus {
   handlers = new Map<string, ((...values: any[]) => any)[]>();
@@ -32,7 +33,7 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
   const commands = new Map<string, any>();
   const events = new Bus();
   const lifecycle = new Bus();
-  const active = ["read", "rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_tools"];
+  const active = ["read", "rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_sessions", "search_tools"];
   let setActiveCalls = 0;
   const pi: any = {
     events,
@@ -47,6 +48,7 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
       { name: "symbol_search", description: "Search indexed symbols" },
       { name: "code_search", description: "Search indexed code" },
       { name: "index_status", description: "Report index status" },
+      { name: "search_sessions", description: "Search historical Pi sessions" },
       { name: "search_tools", description: "Find inactive tools" },
       { name: "git_history", description: "Search commit history and changes" },
       { name: "web_lookup", description: "Search public web pages" },
@@ -67,6 +69,99 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+function sessionSource(sessions: any[], branches: Record<string, any[]>): SessionSource {
+  return {
+    async listAll() { return sessions; },
+    open(path: string) { return { getBranch: () => branches[path] ?? [] } as any; },
+  };
+}
+
+test("session search scopes by cwd, excludes the active session, redacts, and accepts an exact session id", async () => {
+  const cwd = process.cwd();
+  const other = join(cwd, "other-workspace");
+  const sessions = [
+    { id: "current", path: "current", cwd, modified: new Date("2026-01-03"), allMessagesText: "OAuth current" },
+    { id: "same-cwd", path: "same", cwd, modified: new Date("2026-01-02"), allMessagesText: "OAuth decision" },
+    { id: "other-cwd", path: "other", cwd: other, modified: new Date("2026-01-01"), allMessagesText: "" },
+  ];
+  const branches = {
+    current: [{ type: "message", message: { role: "user", content: "OAuth current" } }],
+    same: [{ type: "message", message: { role: "assistant", content: `OAuth api_key=sk-${"x".repeat(40)}` } }],
+    other: [{ type: "message", message: { role: "user", content: "OAuth elsewhere" } }],
+  };
+  const source = sessionSource(sessions, branches);
+
+  const local = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current" }, source);
+  assert.deepEqual(local.matches.map((match) => match.sessionId), ["same-cwd"]);
+  assert.ok(local.redactionCount >= 1);
+  assert.doesNotMatch(local.matches[0].text, /sk-/);
+
+  const selected = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "other-cwd", scope: "all" }, source);
+  assert.deepEqual(selected.matches.map((match) => match.sessionId), ["other-cwd"]);
+  assert.equal(selected.sessionLookup, "found");
+  const outside = await searchSessions({ query: "OAuth", cwd, sessionId: "other-cwd" }, source);
+  assert.equal(outside.matches.length, 0);
+  assert.equal(outside.sessionLookup, "outside_scope");
+  assert.equal((await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "current" }, source)).sessionLookup, "active_session");
+  assert.equal((await searchSessions({ query: "OAuth", cwd, sessionId: "missing" }, source)).sessionLookup, "not_found");
+});
+
+test("session search reports truncation only when session or match limits overflow", async () => {
+  const cwd = process.cwd();
+  const sessions = Array.from({ length: 201 }, (_, index) => ({
+    id: `session-${index}`, path: `session-${index}`, cwd, modified: new Date("2026-01-01"), allMessagesText: "",
+  }));
+  const emptyBranches = Object.fromEntries(sessions.map((session) => [session.path, []]));
+  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(sessions.slice(0, 200), emptyBranches))).truncated, false);
+  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(sessions, emptyBranches))).truncated, true);
+
+  const messages = Array.from({ length: 13 }, (_, index) => ({ type: "message", message: { role: "user", content: `needle ${index}` } }));
+  const oneSession = [sessions[0]];
+  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(oneSession, { "session-0": messages.slice(0, 12) }))).truncated, false);
+  const overflow = await searchSessions({ query: "needle", cwd }, sessionSource(oneSession, { "session-0": messages }));
+  assert.equal(overflow.matches.length, 12);
+  assert.equal(overflow.truncated, true);
+});
+
+test("search_sessions confirms disclosure and reports declined or approved searches", async () => {
+  const tools = new Map<string, any>();
+  let listed = 0;
+  const source = sessionSource([
+    { id: "chosen", path: "chosen", cwd: process.cwd(), modified: new Date("2026-01-01"), allMessagesText: "release decision" },
+  ], {
+    chosen: [{ type: "message", message: { role: "user", content: "release decision" } }],
+  });
+  const countedSource: SessionSource = { ...source, async listAll() { listed++; return source.listAll(); } };
+  registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, countedSource);
+  const tool = tools.get("search_sessions");
+  let confirmation = "";
+  const ctx = (approved: boolean) => ({
+    cwd: process.cwd(), hasUI: true,
+    sessionManager: { getSessionId: () => "current" },
+    ui: { async confirm(_title: string, message: string) { confirmation = message; return approved; } },
+  });
+
+  const declined = await tool.execute("declined", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx(false));
+  assert.equal(declined.details.declined, true);
+  assert.equal(listed, 0);
+  assert.match(confirmation, /all workspaces.*sent to the selected model provider.*retained/i);
+
+  const approved = await tool.execute("approved", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx(true));
+  assert.equal(approved.details.sessionId, "chosen");
+  assert.equal(JSON.parse(approved.content[0].text).matches[0].sessionId, "chosen");
+
+  const cappedTools = new Map<string, any>();
+  registerSessionSearch({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, countedSource, 200);
+  const capped = await cappedTools.get("search_sessions").execute("capped", { query: "release" }, undefined, undefined, ctx(true));
+  assert.ok(Buffer.byteLength(capped.content[0].text, "utf8") <= 200);
+  assert.doesNotThrow(() => JSON.parse(capped.content[0].text));
+
+  await assert.rejects(
+    () => tool.execute("headless", { query: "release" }, undefined, undefined, { ...ctx(true), hasUI: false }),
+    /interactive confirmation/i,
+  );
+});
 
 test("indexed searches display only model-useful fields", async () => {
   const tools = new Map<string, any>();
@@ -544,13 +639,15 @@ test("host refreshes its SQLite index after each turn", async () => {
   runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status"]);
+    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status", "search_sessions"]);
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
+      search_sessions: "search historical Pi sessions after explicit user confirmation",
     });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
+    assert.ok(!runtime.active.includes("search_sessions"));
     await waitFor(() => indexStates.at(-1)?.state === "idle");
     assert.equal(indexStates.at(-1)?.state, "idle");
     assert.equal(indexStates.at(-1)?.files, 1);

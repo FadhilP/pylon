@@ -182,7 +182,7 @@ function sieveRecallStats(value: unknown): NonNullable<SieveReadModel["recallsBy
 
 function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
   const input = record(value);
-  const metrics = ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "recoverableEntries"];
+  const metrics = ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "rolloverEligibleRetainedChars", "recoverableEntries"];
   if (!input || !metrics.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)) return undefined;
   const startedAt = input.startedAt === undefined ? undefined : timestamp(input.startedAt);
   if (input.startedAt !== undefined && !startedAt) return undefined;
@@ -192,7 +192,9 @@ function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
     ...(startedAt ? { startedAt } : {}),
     ...(string(input.promptFingerprint, 200) ? { promptFingerprint: string(input.promptFingerprint, 200) } : {}),
     frozenResultCount: Number(input.frozenResultCount), frozenSourceChars: Number(input.frozenSourceChars),
-    frozenRetainedChars: Number(input.frozenRetainedChars), recoverableEntries: Number(input.recoverableEntries),
+    frozenRetainedChars: Number(input.frozenRetainedChars),
+    rolloverEligibleRetainedChars: Number(input.rolloverEligibleRetainedChars),
+    recoverableEntries: Number(input.recoverableEntries),
   };
 }
 

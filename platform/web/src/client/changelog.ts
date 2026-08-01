@@ -13,7 +13,7 @@ export const RELEASES: Release[] = [
     title: "Stable context and database diagnostics",
     summary: "Pylon keeps projected tool history cache-stable, coordinates package safety signals more reliably, and expands database and runtime inspection.",
     notes: [
-      "Made Sieve's stable projection mode the default, freezing prior tool results within explicit epochs while preserving safe recall, deduplication, reflow controls, rollback to legacy behavior, and detailed cache-health telemetry.",
+      "Added optional experimental stable Sieve projection epochs with safe recall, deduplication, configurable rollover controls, and detailed cache-health telemetry while keeping the standard policy as the default.",
       "Coordinated Guard decisions, Grunt and package mutations, Heartbeat jobs, Timeline checkpoints, and verification invalidation so blocked or in-flight work no longer produces stale completion state.",
       "Added scoped Guard enablement, a package-gated Database panel, live delegated-agent durations, steadier history loading, and clearer Sieve activity, projection, context, and health views in the web workspace.",
       "Upgraded StateQL with storage-health diagnostics, stricter TLS compatibility warnings, and guarded access to the new doctor command.",

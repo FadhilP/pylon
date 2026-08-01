@@ -401,6 +401,7 @@ export interface SieveReadModel {
     frozenResultCount: number;
     frozenSourceChars: number;
     frozenRetainedChars: number;
+    rolloverEligibleRetainedChars: number;
     recoverableEntries: number;
   };
   stability?: {

@@ -47,14 +47,6 @@ function context(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("historical findings use one persistent before-agent message", async () => {
-  const runtime = await harness();
-  try {
-    assert.equal(runtime.handlers.has("context"), false);
-    assert.equal(runtime.handlers.get("before_agent_start")?.length, 1);
-  } finally { runtime.restore(); }
-});
-
 test("Repo Scout orientation guidance follows currently selected tools", async () => {
   assert.equal(repoScoutOrientationGuidance(["read", "symbol_search"]), undefined);
   const indexed = repoScoutOrientationGuidance(["repo_scout", "symbol_search", "rg", "read"]);
@@ -77,28 +69,10 @@ test("Repo Scout orientation guidance follows currently selected tools", async (
     assert.match(result.systemPrompt, /code_search.*concepts/);
     assert.match(result.systemPrompt, /Unless exact anchors already exist, use 1–3 targeted searches/);
     assert.doesNotMatch(result.systemPrompt, /`(?:symbol_search|relationship_graph|fd|rg|grep|find)`/);
-
-    runtime.handlers.get("input")?.forEach(handler => handler({
-      source: "interactive",
-      text: "Search my Pi sessions for absent evidence",
-    }));
-    const combined = await runtime.handlers.get("before_agent_start")![0]({
-      systemPrompt: "CHAINED",
-      systemPromptOptions: { selectedTools: ["repo_scout", "grep", "read"] },
-    }, context());
-    assert.match(combined.message.content, /No matching eligible Pi-session text found/);
-    assert.match(combined.systemPrompt, /^CHAINED\n\nRepo Scout orientation tools currently visible:/);
-
-    runtime.handlers.get("input")?.forEach(handler => handler({
-      source: "interactive",
-      text: "Search my Pi sessions for absent evidence",
-    }));
-    const messageOnly = await runtime.handlers.get("before_agent_start")![0]({
-      systemPrompt: "CHAINED",
+    assert.equal(runtime.handlers.get("before_agent_start")![0]({
+      systemPrompt: "BASE",
       systemPromptOptions: { selectedTools: ["read"] },
-    }, context());
-    assert.match(messageOnly.message.content, /No matching eligible Pi-session text found/);
-    assert.equal("systemPrompt" in messageOnly, false);
+    }), undefined);
   } finally { runtime.restore(); }
 });
 

@@ -784,7 +784,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       && keys.every((key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0);
     const rawEpoch = operational.sieve.epoch;
     const epoch = record(rawEpoch) ? rawEpoch : undefined;
-    if (operational.sieve.epoch !== undefined && (!metrics(epoch, ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "recoverableEntries"])
+    if (operational.sieve.epoch !== undefined && (!metrics(epoch, ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "rolloverEligibleRetainedChars", "recoverableEntries"])
       || !["id", "reason", "promptFingerprint"].every((key) => epoch![key] === undefined || boundedString(epoch![key], 200))
       || epoch!.startedAt !== undefined && (typeof epoch!.startedAt !== "string" || Number.isNaN(Date.parse(epoch!.startedAt))))) return false;
     const rawStability = operational.sieve.stability;

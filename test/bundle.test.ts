@@ -106,9 +106,8 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_tools", "sieve_recall", "stateql", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "sieve_recall", "stateql", "symbol_search", "verify", "web_scout",
     ]);
-    assert.ok(renderers.has("pi-scout-session"));
 
     let notification = "";
     const ui = new Proxy({ confirm: async () => false, notify: (text: string) => { notification = text; } }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
@@ -126,6 +125,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(active.includes("memory"));
     assert.ok(!active.includes("grunt"));
     assert.ok(!active.includes("index_status"));
+    assert.ok(!active.includes("search_sessions"));
     assert.ok(!active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
     assert.ok(!active.includes("advisor"));

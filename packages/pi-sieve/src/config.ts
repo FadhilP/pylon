@@ -32,7 +32,7 @@ export function configuredThreshold(config: SieveConfig): number {
 }
 
 export function configuredProjectionMode(config: SieveConfig): ProjectionMode {
-  return config.projectionMode ?? "stable";
+  return config.projectionMode ?? "legacy";
 }
 
 export function configuredRolloverHighMultiplier(config: SieveConfig): number {

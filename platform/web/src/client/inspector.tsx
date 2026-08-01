@@ -813,27 +813,30 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
       </div>
     </section>
 
-    <section className="sieve-group" aria-labelledby="sieve-projection-heading">
-      <header className="sieve-group-heading">
-        <h3 id="sieve-projection-heading">Projection</h3>
-        <span>{sieve.projectionMode === "stable" ? "Stable projection" : "Legacy projection"}</span>
-      </header>
-      <p className="sieve-pruning-state">Active pruning {sieve.activePruning ? "enabled" : "disabled"}</p>
-      <div className="sieve-inline-metrics">
-        <span><strong>{formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}</strong> frozen</span>
-        <span><strong>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}</strong> chars retained</span>
-      </div>
-      <p className="sieve-epoch-reason">Epoch started: {epochReason}</p>
-    </section>
+    {sieve.projectionMode === "stable" && <>
+      <section className="sieve-group" aria-labelledby="sieve-projection-heading">
+        <header className="sieve-group-heading">
+          <h3 id="sieve-projection-heading">Projection</h3>
+          <span>Stable projection (experimental)</span>
+        </header>
+        <p className="sieve-pruning-state">Active pruning {sieve.activePruning ? "enabled" : "disabled"}</p>
+        <div className="sieve-inline-metrics">
+          <span><strong>{formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}</strong> frozen</span>
+          <span><strong>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}</strong> chars retained</span>
+          <span><strong>{formatCompactNumber(sieve.epoch?.rolloverEligibleRetainedChars ?? 0)}</strong> rollover eligible</span>
+        </div>
+        <p className="sieve-epoch-reason">Epoch started: {epochReason}</p>
+      </section>
 
-    <section className="sieve-group" aria-labelledby="sieve-health-heading">
-      <header className="sieve-group-heading"><h3 id="sieve-health-heading">Health</h3></header>
-      <p className="sieve-health-count"><strong>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</strong> projection reuses</p>
-      <p className={`sieve-health-note ${healthy ? "is-healthy" : "has-warning"}`}>
-        {healthy && <IconCheck size={13} aria-hidden="true" />}
-        {healthy ? "No prefix churn or budget exceedances" : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
-      </p>
-    </section>
+      <section className="sieve-group" aria-labelledby="sieve-health-heading">
+        <header className="sieve-group-heading"><h3 id="sieve-health-heading">Health</h3></header>
+        <p className="sieve-health-count"><strong>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</strong> projection reuses</p>
+        <p className={`sieve-health-note ${healthy ? "is-healthy" : "has-warning"}`}>
+          {healthy && <IconCheck size={13} aria-hidden="true" />}
+          {healthy ? "No prefix churn or budget exceedances" : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
+        </p>
+      </section>
+    </>}
 
     <details className="sieve-more">
       <summary>

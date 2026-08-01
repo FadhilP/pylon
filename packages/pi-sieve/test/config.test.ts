@@ -38,7 +38,7 @@ test("web settings round-trip projection mode", async () => {
     kind: "sieve",
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
-    projectionMode: "stable",
+    projectionMode: "legacy",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -63,7 +63,7 @@ test("web settings round-trip projection mode", async () => {
 test("sieve config defaults safely and quarantines invalid settings", async () => {
   assert.equal(configuredActivePruning({ version: 1 }), true);
   assert.equal(configuredThreshold({ version: 1 }), SIEVE_THRESHOLD);
-  assert.equal(configuredProjectionMode({ version: 1 }), "stable");
+  assert.equal(configuredProjectionMode({ version: 1 }), "legacy");
   assert.equal(configuredProjectionMode({ version: 1, projectionMode: "legacy" }), "legacy");
   assert.equal(configuredRolloverHighMultiplier({ version: 1 }), 8);
   assert.equal(configuredRolloverLowMultiplier({ version: 1 }), 4);
