@@ -111,19 +111,3 @@ npm run web
 ```
 
 For development without a production build, run `npm run dev --workspace @pylon/web`.
-
-### Publishing
-
-Configure npm Trusted Publishing for `@fadhilp/pylon` with repository `FadhilP/pylon` and workflow `publish.yml`; no npm token is required. Then update the version in `package.json` and `package-lock.json` and publish a GitHub Release with the matching tag, such as `v1.0.3`.
-
-[`.github/workflows/publish.yml`](./.github/workflows/publish.yml) follows the same release flow as StateQL: it installs from the lockfile and runs `npm publish`, which triggers Pylon's verification, clean-package test, and build lifecycle.
-
-Platform applications live under `platform/`: `platform/web` contains the current local web client and host, while `platform/desktop` reserves the future desktop shell.
-
-Packages follow the same responsibility-based layout:
-
-- `extensions/` contains Pi entrypoints, registration metadata, and runtime wiring.
-- `packages/<name>/src/` contains reusable implementation modules; child/model system prompts live in each package's `src/prompts.ts`.
-- `test/` mirrors the subject under test with `<subject>.test.ts` names.
-
-Keep tool descriptions, `promptSnippet`, and `promptGuidelines` beside their tool registration because they are part of the extension API definition, not standalone model prompts.
