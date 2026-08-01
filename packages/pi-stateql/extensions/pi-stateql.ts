@@ -10,7 +10,7 @@ const COMMANDS = [
   "session.summary",
   "query", "filter", "exec", "show", "rows", "count", "columns", "alias.set", "inspect",
   "transaction.begin", "transaction.status", "transaction.commit", "transaction.rollback",
-  "plan", "apply", "history", "receipt", "capabilities",
+  "plan", "apply", "history", "receipt", "doctor", "capabilities",
 ] as const;
 
 const toolSchema = Type.Object({
@@ -105,6 +105,7 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   apply: ["handle", "timeout_ms"],
   history: ["limit"],
   receipt: ["handle"],
+  doctor: [],
   capabilities: [],
 };
 
@@ -202,8 +203,10 @@ function insecureTls(target: string | undefined): boolean {
   if (!target) return false;
   try {
     const url = new URL(target);
-    const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
+    const sslMode = url.searchParams.getAll("sslmode").at(-1)?.toLowerCase();
+    const libpqCompat = url.searchParams.getAll("uselibpqcompat").at(-1)?.toLowerCase() === "true";
     return sslMode === "disable" || sslMode === "no-verify"
+      || libpqCompat && (sslMode === undefined || ["prefer", "require", "verify-ca"].includes(sslMode))
       || url.searchParams.get("ssl")?.toLowerCase() === "false"
       || url.searchParams.get("rejectUnauthorized")?.toLowerCase() === "false";
   } catch {
@@ -218,7 +221,7 @@ function confirmationText(input: StateQLToolInput, brokered = false): string {
         : input.secret_env ? `environment variable ${input.secret_env}, which must contain a complete PostgreSQL/MySQL URL or explicit sqlite:<path> source`
           : brokered ? "the provided passwordless target using its securely brokered password approval"
             : "the provided target";
-      const tlsWarning = insecureTls(input.target) ? " Warning: this target disables TLS or certificate verification." : "";
+      const tlsWarning = insecureTls(input.target) ? " Warning: this target weakens or disables TLS certificate or hostname verification." : "";
       return `Connect StateQL using ${source} in ${input.read_only === false ? "read-write" : "read-only"} mode? Queries may expose database content to the selected model provider.${tlsWarning}`;
     }
     case "profile.add": return `Save StateQL profile “${input.name ?? ""}” in ${input.read_only === false ? "read-write" : "read-only"} mode? Credential values are not stored.`;
@@ -388,7 +391,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   pi.registerTool({
     name: "stateql",
     label: "StateQL",
-    description: "Safely connect to SQLite, PostgreSQL, or MySQL; run bounded reads; reuse durable result handles; inspect schemas; plan or confirm writes; manage transactions; and inspect receipts/history. Cross-session lifecycle commands and arbitrary exports are unavailable. Output is capped at 40 KB.",
+    description: "Safely connect to SQLite, PostgreSQL, or MySQL; run bounded reads; reuse durable result handles; inspect schemas and StateQL storage health; plan or confirm writes; manage transactions; and inspect receipts/history. Cross-session lifecycle, purge, and arbitrary export commands are unavailable. Output is capped at 40 KB.",
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",
@@ -396,6 +399,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       "Never weaken TLS or certificate verification without explicit user authorization; prefer configuring the database CA certificate.",
       "Reuse StateQL result handles with filter, rows, count, and columns instead of rerunning queries.",
       "Use StateQL plan before consequential writes when practical; never set replay, unbounded, or destructive overrides without explicit user authorization.",
+      "Use doctor to diagnose StateQL storage integrity or STATE_CORRUPTED failures; purge remains unavailable.",
     ],
     parameters: toolSchema,
     executionMode: "sequential",

@@ -129,6 +129,8 @@ test("registers one deferred, sequential StateQL tool bound to the Pi actor", as
   assert.equal(tool.executionMode, "sequential");
   assert.equal(tool.parameters.additionalProperties, false);
   assert.ok(tool.parameters.properties.command.enum.includes("query"));
+  assert.ok(tool.parameters.properties.command.enum.includes("doctor"));
+  assert.ok(!tool.parameters.properties.command.enum.includes("purge"));
   assert.match(tool.parameters.properties.target.description, /masked password dialog/);
   assert.match(tool.parameters.properties.secret_env.description, /complete PostgreSQL\/MySQL URL or explicit sqlite:<path>/);
   assert.ok(!tool.parameters.properties.command.enum.includes("session.start"));
@@ -260,18 +262,26 @@ test("Pylon requires insecure TLS approval before releasing the brokered passwor
     });
     return { ok: true, command_id: "cmd_insecure", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
   };
-  for (const callId of ["insecure-1", "insecure-2"]) {
+  const targets = [
+    "postgresql://postgres@db.example.com/app?sslmode=no-verify",
+    "postgresql://postgres@db.example.com/app?sslmode=require&sslmode=no-verify",
+    "postgresql://postgres@db.example.com/app?sslmode=prefer&uselibpqcompat=true",
+    "postgresql://postgres@db.example.com/app?sslmode=require&uselibpqcompat=true",
+    "postgresql://postgres@db.example.com/app?sslmode=verify-ca&uselibpqcompat=true",
+    "postgresql://postgres@db.example.com/app?uselibpqcompat=true",
+  ];
+  for (const [index, target] of targets.entries()) {
     await value.tools.get("stateql").execute(
-      callId,
-      { command: "connect", target: "postgresql://postgres@db.example.com/app?sslmode=no-verify", read_only: true },
+      `insecure-${index}`,
+      { command: "connect", target, read_only: true },
       undefined,
       undefined,
       context({ ui }),
     );
   }
-  assert.deepEqual(order, ["confirm", "password", "confirm", "password"]);
+  assert.deepEqual(order, targets.flatMap(() => ["confirm", "password"]));
   assert.match(confirmation, /Allow insecure database TLS/);
-  assert.match(confirmation, /disables TLS or certificate verification/);
+  assert.match(confirmation, /weakens or disables TLS certificate or hostname verification/);
 });
 
 test("Pylon invalidates brokered PostgreSQL and MySQL passwords after authentication failure", async () => {
@@ -328,7 +338,7 @@ test("regular Pi leaves username-only server targets unchanged and warns about i
   await value.tools.get("stateql").execute("target", { command: "connect", target }, undefined, undefined, context({ ui }));
   assert.equal(value.instances[0].commands[0].target, target);
   assert.equal(value.instances[0].commands[0].secret_env, undefined);
-  assert.match(confirmation, /disables TLS or certificate verification/);
+  assert.match(confirmation, /weakens or disables TLS certificate or hostname verification/);
 });
 
 test("unknown internal password references fail closed without environment or full-source fallback", async () => {
@@ -682,6 +692,9 @@ test("real StateQL integration persists commands and exposes a non-recording saf
     await tool.execute("connect", { command: "connect", target: database, read_only: false }, undefined, undefined, ctx);
     await tool.execute("create", { command: "exec", sql: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", allow_destructive: true }, undefined, undefined, ctx);
     await tool.execute("query", { command: "query", sql: "SELECT id, name FROM users ORDER BY id LIMIT 5" }, undefined, undefined, ctx);
+    const doctor = await tool.execute("doctor", { command: "doctor" }, undefined, undefined, ctx);
+    assert.match(doctor.content[0].text, /"integrity": "ok"/);
+    assert.match(doctor.content[0].text, /"initial_schema_v1"/);
 
     let response: Promise<StateQLSnapshot> | undefined;
     value.events.get("pylon:stateql-snapshot-request")![0]({
@@ -693,7 +706,7 @@ test("real StateQL integration persists commands and exposes a non-recording saf
     });
     assert.ok(response);
     const first = await response;
-    assert.deepEqual(first.history.map((entry) => entry.command), ["query", "exec", "connect"]);
+    assert.deepEqual(first.history.map((entry) => entry.command), ["doctor", "query", "exec", "connect"]);
     assert.equal(JSON.stringify(first).includes("CREATE TABLE"), false);
     const before = JSON.stringify(first);
 

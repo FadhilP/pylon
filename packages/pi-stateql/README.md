@@ -14,11 +14,11 @@ Run `/reload` after installation. In the Pylon bundle, the `stateql` tool is def
 
 ### Capabilities
 
-Use the `stateql` tool for StateQL connection profiles, read-only queries, materialized result handles, filtering, schema inspection, write plans, confirmed writes, transactions, receipts, and bounded history. Each Pi session is an actor in one durable StateQL workspace; linked actors reuse its connection, handles, aliases, cache, and history. StateQL membership and lifecycle commands are intentionally unavailable to the model-facing tool.
+Use the `stateql` tool for StateQL connection profiles, read-only queries, materialized result handles, filtering, schema and storage-health inspection, write plans, confirmed writes, transactions, receipts, and bounded history. Each Pi session is an actor in one durable StateQL workspace; linked actors reuse its connection, handles, aliases, cache, and history. StateQL membership, lifecycle, purge, and export commands are intentionally unavailable to the model-facing tool.
 
 ### Connections and Credentials
 
-Prefer profiles and credential environment variables. A `secret_env` value replaces `target` and must resolve to a complete PostgreSQL/MySQL URL or explicit `sqlite:<path>` source, not only a password or bare SQLite path; do not pass both fields. In Pylon Web, a PostgreSQL/MySQL `target` containing a username but no password opens a masked password-only dialog. Submitting it authorizes that connection, so there is no redundant connect confirmation. Pylon inserts and temporarily reuses the password for the same actor, workspace, endpoint, database, user, and access level while preserving connection options.
+Prefer profiles and credential environment variables. A `secret_env` value replaces `target` and must resolve to a complete PostgreSQL/MySQL URL or explicit `sqlite:<path>` source, not only a password or bare SQLite path; do not pass both fields. In Pylon Web, a PostgreSQL/MySQL `target` containing a username but no password opens a masked password-only dialog. Submitting it authorizes that connection, so there is no redundant connect confirmation. Pylon inserts and temporarily reuses the password for the same actor, workspace, endpoint, database, user, and access level while preserving connection options. PostgreSQL `sslmode=prefer`, `require`, and `verify-ca` use StateQL's strict verification unless `uselibpqcompat=true`; that opt-out requires a separate insecure-TLS confirmation.
 
 ### Examples
 
@@ -27,6 +27,7 @@ Prefer profiles and credential environment variables. A `secret_env` value repla
 { "command": "connect", "secret_env": "APP_DATABASE_URL", "read_only": true }
 { "command": "query", "sql": "SELECT id, name FROM users WHERE status = ? ORDER BY id LIMIT 50", "params": ["active"] }
 { "command": "rows", "handle": "q_1", "offset": 0, "limit": 20 }
+{ "command": "doctor" }
 ```
 
 ## Safety and Privacy

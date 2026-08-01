@@ -784,32 +784,68 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   }
   const saved = sieve.cumulativeActual.netCharsSaved;
   const projected = sieve.cumulativeProjected.netCharsSaved;
-  const topTools = Object.entries(sieve.cumulativeActual.byTool)
+  const observing = sieve.mode === "observe";
+  const latestProjected = sieve.latestMode === "observe";
+  const topTools = Object.entries(observing ? sieve.cumulativeProjected.byTool : sieve.cumulativeActual.byTool)
     .filter(([, usage]) => usage.netCharsSaved > 0)
     .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
     .slice(0, 3)
     .map(([name, usage]) => `${name} ${formatCompactNumber(usage.netCharsSaved)}`)
-    .join(", ") || "None";
-  return <InspectorSection title="Context Pruning" meta={`${sieve.mode} · ${sieve.projectionMode}`}>
-    <div className="usage-strip">
+    .join(", ") || "None yet";
+  const prefixChurn = sieve.stability?.prefixChurnViolations ?? 0;
+  const softExceedances = sieve.stability?.softBudgetExceedances ?? 0;
+  const healthy = prefixChurn === 0 && softExceedances === 0;
+  const epochReason = sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
+
+  return <InspectorSection title="Context Pruning" meta={sieve.mode}>
+    <div className="sieve-summary" aria-label="Context pruning summary">
+      <div><small>{observing ? "Would save" : "Saved"}</small><strong>{formatCompactNumber(observing ? projected : saved)}</strong><span>characters</span></div>
       <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
-      <div><small>Saved</small><strong>{formatCompactNumber(saved)}</strong><span>characters</span></div>
-      <div><small>Projected</small><strong>{formatCompactNumber(projected)}</strong><span>characters</span></div>
       <div><small>Recalls</small><strong>{formatCompactNumber(sieve.recalls ?? 0)}</strong><span>{formatCompactNumber(sieve.recalledChars ?? 0)} restored</span></div>
     </div>
-    <dl className="sieve-details">
-      <div><dt>Latest scan</dt><dd>{formatCompactNumber(sieve.latest.scanned)} results</dd></div>
-      <div><dt>Pruned</dt><dd>{formatCompactNumber(sieve.latest.transformed)} results</dd></div>
-      <div><dt>Top savings</dt><dd>{topTools}</dd></div>
-      <div><dt>Active pruning</dt><dd>{sieve.activePruning ? "Enabled" : "Disabled"}</dd></div>
-      <div><dt>Epoch</dt><dd>{sieve.epoch?.reason ?? "—"} · {formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)} frozen</dd></div>
-      <div><dt>Retained</dt><dd>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)} chars</dd></div>
-      <div><dt>Cache hits</dt><dd>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</dd></div>
-      <div><dt>Soft exceedances</dt><dd>{formatCompactNumber(sieve.stability?.softBudgetExceedances ?? 0)}</dd></div>
-      <div><dt>Prefix churn</dt><dd>{formatCompactNumber(sieve.stability?.prefixChurnViolations ?? 0)}</dd></div>
-      <div><dt>Context usage</dt><dd>{sieve.contextUsagePercent === undefined ? "—" : `${sieve.contextUsagePercent}%`}</dd></div>
-      <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "—"}</dd></div>
-    </dl>
+
+    <section className="sieve-group" aria-labelledby="sieve-latest-heading">
+      <header className="sieve-group-heading"><h3 id="sieve-latest-heading">Latest activity</h3></header>
+      <div className="sieve-activity-stats">
+        <div><strong>{formatCompactNumber(sieve.latest.scanned)}</strong><span>scanned</span></div>
+        <div><strong>{formatCompactNumber(sieve.latest.transformed)}</strong><span>pruned</span></div>
+        <div><strong>{formatCompactNumber(sieve.latest.netCharsSaved)}</strong><span>{latestProjected ? "potential chars" : "chars saved"}</span></div>
+      </div>
+    </section>
+
+    <section className="sieve-group" aria-labelledby="sieve-projection-heading">
+      <header className="sieve-group-heading">
+        <h3 id="sieve-projection-heading">Projection</h3>
+        <span>{sieve.projectionMode === "stable" ? "Stable projection" : "Legacy projection"}</span>
+      </header>
+      <p className="sieve-pruning-state">Active pruning {sieve.activePruning ? "enabled" : "disabled"}</p>
+      <div className="sieve-inline-metrics">
+        <span><strong>{formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}</strong> frozen</span>
+        <span><strong>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}</strong> chars retained</span>
+      </div>
+      <p className="sieve-epoch-reason">Epoch started: {epochReason}</p>
+    </section>
+
+    <section className="sieve-group" aria-labelledby="sieve-health-heading">
+      <header className="sieve-group-heading"><h3 id="sieve-health-heading">Health</h3></header>
+      <p className="sieve-health-count"><strong>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</strong> projection reuses</p>
+      <p className={`sieve-health-note ${healthy ? "is-healthy" : "has-warning"}`}>
+        {healthy && <IconCheck size={13} aria-hidden="true" />}
+        {healthy ? "No prefix churn or budget exceedances" : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
+      </p>
+    </section>
+
+    <details className="sieve-more">
+      <summary>
+        <span>Context <strong>{sieve.contextUsagePercent === undefined ? "unavailable" : `${Math.round(sieve.contextUsagePercent)}%`}</strong></span>
+        <span>More details <IconChevronDown size={13} aria-hidden="true" /></span>
+      </summary>
+      <dl>
+        <div><dt>Top savings</dt><dd>{topTools}</dd></div>
+        <div><dt>Epoch ID</dt><dd className="mono" title={sieve.epoch?.id}>{sieve.epoch?.id ?? "Unavailable"}</dd></div>
+        <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "Unavailable"}</dd></div>
+      </dl>
+    </details>
     {sieve.error && <p className="inline-alert" role="alert">{sieve.error}</p>}
   </InspectorSection>;
 }

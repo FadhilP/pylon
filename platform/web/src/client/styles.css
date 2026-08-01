@@ -1501,10 +1501,43 @@
   .slash-suggestions span { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .composer-surface.slash-suggestions { position: relative; inset: auto; margin-inline: auto; border-radius: 9px 9px 0 0; }
 
-  .sieve-details dt { color: var(--text-muted); font-size: 12px; }
-  .sieve-details { display: grid; gap: 7px; margin-top: 10px; }
-  .sieve-details > div { display: flex; justify-content: space-between; gap: 12px; }
-  .sieve-details dd { color: var(--text-soft); font-size: 12px; text-align: right; }
+  .sieve-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+  .sieve-summary > div { display: grid; min-width: 0; align-content: center; gap: 2px; padding: 12px 10px; }
+  .sieve-summary > div + div { border-left: 1px solid var(--line); }
+  .sieve-summary small,
+  .sieve-summary span { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .sieve-summary strong { font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 620; }
+  .sieve-group { padding: 14px 3px; }
+  .sieve-group + .sieve-group { border-top: 1px solid var(--line); }
+  .sieve-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .sieve-group-heading h3 { font-size: 12px; font-weight: 620; }
+  .sieve-group-heading > span,
+  .sieve-group-heading time { color: var(--text-muted); font-size: 11px; }
+  .sieve-activity-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .sieve-activity-stats > div { display: grid; min-width: 0; gap: 2px; }
+  .sieve-activity-stats strong { font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 620; }
+  .sieve-activity-stats span { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .sieve-pruning-state { color: var(--text-soft); font-size: 12px; }
+  .sieve-inline-metrics { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 7px; color: var(--text-muted); font-size: 12px; }
+  .sieve-inline-metrics strong { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 620; }
+  .sieve-epoch-reason { margin-top: 6px; color: var(--text-muted); font-size: 11px; }
+  .sieve-health-count { color: var(--text-soft); font-size: 12px; }
+  .sieve-health-count strong { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 620; }
+  .sieve-health-note { display: flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 11px; }
+  .sieve-health-note.is-healthy { color: var(--green); }
+  .sieve-health-note.has-warning { color: var(--amber); }
+  .sieve-more { border-top: 1px solid var(--line); }
+  .sieve-more > summary { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 3px; color: var(--text-muted); cursor: pointer; font-size: 11px; list-style: none; }
+  .sieve-more > summary::-webkit-details-marker { display: none; }
+  .sieve-more > summary span { display: inline-flex; align-items: center; gap: 4px; }
+  .sieve-more > summary strong { color: var(--text-soft); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sieve-more > summary svg { transition: transform var(--motion-fast) var(--motion-ease-out); }
+  .sieve-more[open] > summary svg { transform: rotate(180deg); }
+  .sieve-more dl { display: grid; gap: 8px; padding: 3px 3px 12px; }
+  .sieve-more dl > div { display: grid; min-width: 0; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; }
+  .sieve-more dt,
+  .sieve-more dd { min-width: 0; color: var(--text-muted); font-size: 11px; }
+  .sieve-more dd { overflow-wrap: anywhere; color: var(--text-soft); text-align: right; }
 
   .prompt-form textarea {
     display: block;
