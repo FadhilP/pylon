@@ -8,6 +8,19 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.2.0",
+    date: "Aug 1, 2026",
+    title: "Stable context and database diagnostics",
+    summary: "Pylon keeps projected tool history cache-stable, coordinates package safety signals more reliably, and expands database and runtime inspection.",
+    notes: [
+      "Made Sieve's stable projection mode the default, freezing prior tool results within explicit epochs while preserving safe recall, deduplication, reflow controls, rollback to legacy behavior, and detailed cache-health telemetry.",
+      "Coordinated Guard decisions, Grunt and package mutations, Heartbeat jobs, Timeline checkpoints, and verification invalidation so blocked or in-flight work no longer produces stale completion state.",
+      "Added scoped Guard enablement, a package-gated Database panel, live delegated-agent durations, steadier history loading, and clearer Sieve activity, projection, context, and health views in the web workspace.",
+      "Upgraded StateQL with storage-health diagnostics, stricter TLS compatibility warnings, and guarded access to the new doctor command.",
+      "Stopped work after failed verification until the next user turn and tightened Continuity's todo-state validation.",
+    ],
+  },
+  {
     version: "1.1.4",
     date: "Aug 1, 2026",
     title: "Safer reconnects and provider setup",
