@@ -336,5 +336,5 @@ test("runtime policy overrides model-supplied Verify checks", async () => {
     cwd,
     hasUI: false,
   });
-  assert.deepEqual(commands, ["/d /s /c npm run lint"]);
+  assert.deepEqual(commands, [process.platform === "win32" ? "/d /s /c npm run lint" : "run lint"]);
 });
