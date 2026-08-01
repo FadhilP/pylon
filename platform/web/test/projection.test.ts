@@ -331,7 +331,7 @@ test("delegated activity remains bounded when redaction expands text", () => {
   assert.match(text, /password: <redacted>/);
 });
 
-test("projection publishes live delegated-run updates once per tool event", () => {
+test("projection suppresses duration-only delegated heartbeats", () => {
   const published: Array<{ type: string; payload: any }> = [];
   const initial = runtime();
   initial.metrics.userMessages = 2;
@@ -348,6 +348,17 @@ test("projection publishes live delegated-run updates once per tool event", () =
     },
   }));
   assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.response, undefined);
+  projection.apply(session({
+    type: "tool_execution_update",
+    toolCallId: "grunt-1",
+    toolName: "grunt",
+    partialResult: {
+      content: [{ type: "text", text: "1s" }],
+      details: { state: "running", durationMs: 1_000 },
+    },
+  }));
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.durationMs, 1_000);
+  assert.equal(published.filter((event) => event.type === "delegate.update").length, 2);
   projection.apply(session({
     type: "tool_execution_end",
     toolCallId: "grunt-1",

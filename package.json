@@ -55,7 +55,9 @@
     "prepack": "npm run build --workspace @pylon/web",
     "prepublishOnly": "npm run verify && npm run test:package",
     "web": "node scripts/web.mjs",
-    "web:update": "git pull --ff-only && npm run web"
+    "web:update": "git pull --ff-only && npm run web",
+    "release": "npm version",
+    "version": "npm install"
   },
   "pi": {
     "extensions": [

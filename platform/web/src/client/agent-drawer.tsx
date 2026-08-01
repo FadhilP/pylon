@@ -1,5 +1,5 @@
 import { IconArrowLeft, IconBotId, IconTool, IconX } from "@tabler/icons-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
 import { MarkdownContent } from "./conversation-panel";
@@ -61,7 +61,7 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
       <span className={`agent-status is-${run.status}`}>{run.status}</span>
       {run.modelName && <span>{modelLabel(run.modelName, models)}</span>}
       {run.thinkingLevel && <span>{thinkingLabel(run.thinkingLevel)}</span>}
-      {run.durationMs !== undefined && <span>{formatWorkDuration(run.durationMs)}</span>}
+      {(run.startedAt || run.durationMs !== undefined) && <AgentDuration key={run.id} run={run} />}
     </div>
     <dl className={`agent-usage${usage ? "" : " is-pending"}`}>
       <div><dt>Input</dt><dd>{usage ? usage.input.toLocaleString() : "—"}</dd></div>
@@ -92,6 +92,21 @@ function AgentDetails({ run, models }: { run: DelegatedAgentRunReadModel; models
     </div>}
     {run.response && <section className="agent-section agent-response"><h2>Response</h2><MarkdownContent text={run.response} /></section>}
   </div>;
+}
+
+function AgentDuration({ run }: { run: DelegatedAgentRunReadModel }) {
+  const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (run.status !== "running" || Number.isNaN(started)) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [run.id, run.status, started]);
+  const elapsed = run.status === "running" && !Number.isNaN(started)
+    ? Math.max(0, now - started)
+    : run.durationMs;
+  return elapsed === undefined ? null : <span>{formatWorkDuration(elapsed)}</span>;
 }
 
 function agentLabel(kind: DelegatedAgentKind): string {

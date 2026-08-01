@@ -392,7 +392,8 @@ export function ConversationPanel({
     const viewportTop = stream?.getBoundingClientRect().top ?? 0;
     const anchor = preserveAnchor
       ? [...(transcriptRef.current?.children ?? [])].find((element) =>
-          element.getBoundingClientRect().bottom > viewportTop) as HTMLElement | undefined
+          !element.classList.contains("history-loader")
+          && element.getBoundingClientRect().bottom > viewportTop) as HTMLElement | undefined
       : undefined;
     const anchorTop = anchor?.getBoundingClientRect().top;
     setHistoryLoading(all ? "all" : "page");
@@ -400,8 +401,10 @@ export function ConversationPanel({
       await runtimeStore.loadEarlierMessages(all);
       requestAnimationFrame(() => {
         if (!stream) return;
-        if (preserveAnchor && anchor?.isConnected && anchorTop !== undefined) {
-          stream.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+        if (preserveAnchor) {
+          if (anchor?.isConnected && anchorTop !== undefined) {
+            stream.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+          }
           return;
         }
         stream.scrollTop = 0;

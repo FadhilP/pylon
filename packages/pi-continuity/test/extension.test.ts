@@ -104,8 +104,9 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(guidance, /internal task list/i);
   assert.match(guidance, /Keep verification out of new todo lists/i);
   assert.match(guidance, /sole verification-only todo completes automatically/i);
-  assert.match(guidance, /nonterminal continuity updates before final text/i);
-  assert.doesNotMatch(guidance, /exactly one evidence-aware|Verify fails|failed verification/i);
+  assert.match(guidance, /nonterminal updates before final text/i);
+  assert.match(guidance, /After failed, stale, cancelled, or error Verify results/i);
+  assert.match(guidance, /one caveated text-only final response and stop without another tool call/i);
   assert.ok(guidance.length < 1_000);
   assert.doesNotMatch(guidance, /memory|durable/i);
   assert.deepEqual(continuity.parameters.properties.action.enum, ["clarify", "set_plan", "todo", "state"]);
@@ -123,6 +124,29 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(memoryGuidance, /Never save .*secrets/i);
   assert.match(memoryGuidance, /user scope for cross-project preferences and project scope otherwise/i);
   assert.ok(memoryGuidance.length < 700);
+});
+
+test("state rejects todo fields before mutation or circuit breaking", async () => {
+  const tool = runtime().tools.get("continuity_update");
+  for (const [field, value] of [
+    ["todoId", "todo_1"],
+    ["todoIds", ["todo_1"]],
+    ["status", "done"],
+    ["nextTodoId", "todo_2"],
+  ] as const) {
+    const result = await tool.execute("invalid", { action: "state", [field]: value }, undefined, undefined, {});
+    assert.match(result.content[0].text, new RegExp(`^${field} require action \\"todo\\"`));
+    assert.equal(result.terminate, undefined);
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await tool.execute("repeated", {
+      action: "state", todoIds: ["todo_1"], status: "done",
+    }, undefined, undefined, {});
+    assert.match(result.content[0].text, /^todoIds, status require action "todo"/);
+    assert.equal(result.details?.circuitBreaker, undefined);
+  }
+  const valid = await tool.execute("valid", { action: "state" }, undefined, undefined, {});
+  assert.match(valid.content[0].text, /No active work/);
 });
 
 test("completion requires response text before its tool call", async () => {

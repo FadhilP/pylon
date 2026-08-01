@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -5,26 +7,40 @@ import {
   MIN_SIEVE_THRESHOLD,
   configPath,
   configuredActivePruning,
+  configuredProjectionMode,
   configuredThreshold,
   defaultConfig,
   loadConfig,
   saveConfig,
+  type ProjectionMode,
   type SieveConfig,
 } from "../src/config.ts";
 import {
   ELIGIBLE_TOOL_NAMES,
+  PROJECTION_POLICY_VERSION,
   READ_TOOL_NAME,
   RECALL_TOOL_NAME,
   RECENT_WINDOW_POLICY,
   SIEVE_THRESHOLD,
   addTransformStats,
+  createProjectionEpoch,
   emptyTransformStats,
+  projectionSourceHash,
   sieveMessages,
+  stableSieveMessages,
+  type EpochReason,
+  type ProjectionDiagnostics,
+  type ProjectionEpoch,
   type RecoverableActiveResult,
   type TransformStats,
 } from "../src/sieve.ts";
 
 type SieveMode = "enabled" | "observe" | "disabled";
+
+type RawRecoverableResult = RecoverableActiveResult & {
+  sourceHash: string;
+  message: any;
+};
 
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const estimatedTokens = (characters: number) => Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
@@ -50,6 +66,7 @@ function statsText(stats: TransformStats, outcomeLabel: string) {
 
 function statusText(
   mode: SieveMode,
+  projectionMode: ProjectionMode,
   threshold: number,
   latestMode: Exclude<SieveMode, "disabled">,
   latestStats: TransformStats,
@@ -58,30 +75,69 @@ function statusText(
   activePruning: boolean,
   activeRecalls: number,
   activeRecalledChars: number,
+  epoch: ProjectionEpoch | undefined,
+  stability: {
+    newProjections: number;
+    projectionCacheHits: number;
+    explicitReflows: number;
+    softBudgetExceedances: number;
+    prefixChurnViolations: number;
+    estimatedInvalidatedChars: number;
+  },
 ) {
   const cumulative = emptyTransformStats();
   addTransformStats(cumulative, cumulativeActual);
   addTransformStats(cumulative, cumulativeProjected);
   const latestLabel = latestMode === "observe" ? "projected transformations" : "actual transformations";
+  const frozen = [...(epoch?.entries.values() ?? [])];
+  const frozenSource = frozen.reduce((sum, entry) => sum + entry.sourceChars, 0);
+  const frozenRetained = frozen.reduce((sum, entry) => sum + entry.retainedChars, 0);
 
   return [
-    `pi-sieve: ${mode}`,
+    `pi-sieve: ${mode}; projection ${projectionMode}`,
     `Threshold: > ~${estimatedTokens(threshold)} tokens (${threshold} JS characters; estimated at ${CHARS_PER_ESTIMATED_TOKEN} characters/token)`,
-    "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
-    `Retained successful-output budget: ${3 * threshold} characters, newest-to-oldest`,
+    projectionMode === "stable"
+      ? "Projection policy: append-only per-result caps; age and the three-threshold value are telemetry only"
+      : "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
+    `Soft retained-output threshold: ${3 * threshold} characters${projectionMode === "legacy" ? ", newest-to-oldest eviction enabled" : ", no eviction"}`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
-    `Read policy: unique ${READ_TOOL_NAME} output is excluded from size/age pruning; later exact duplicates and proven stale snapshots may be replaced`,
+    `Read policy: unique ${READ_TOOL_NAME} output is excluded from size/age pruning; only later exact duplicates may be replaced in stable mode`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
-    `Recent-window policy: ${RECENT_WINDOW_POLICY}`,
+    `Recent-window policy: ${projectionMode === "stable" ? "results freeze at first projection; user messages do not reflow them" : RECENT_WINDOW_POLICY}`,
+    `Epoch: ${epoch?.id ?? "not started"}${epoch ? ` (${epoch.reason}, ${epoch.startedAt})` : ""}; frozen ${frozen.length}; source ${frozenSource} chars; retained ${frozenRetained} chars`,
+    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; soft-budget exceedances ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars`,
     `Latest call (${latestMode === "observe" ? "observe projections" : "enabled actual"}): ${statsText(latestStats, latestLabel)}`,
     `Cumulative outcomes: actual transformations ${cumulativeActual.transformed}; actual gross omitted ~${estimatedTokens(cumulativeActual.omittedChars)} tokens; actual net saved ~${estimatedTokens(cumulativeActual.netCharsSaved)} tokens; projected observe transformations ${cumulativeProjected.transformed}; projected observe gross omitted ~${estimatedTokens(cumulativeProjected.omittedChars)} tokens; projected observe net saved ~${estimatedTokens(cumulativeProjected.netCharsSaved)} tokens`,
     `Cumulative classifications: ${statsText(cumulative, "qualifying transformations")}`,
   ].join("\n");
 }
 
+function fingerprint(pi: ExtensionAPI, ctx: any, threshold: number, activePruning: boolean, projectionMode: ProjectionMode) {
+  const active = typeof pi.getActiveTools === "function" ? [...pi.getActiveTools()].sort() : [];
+  const all = typeof pi.getAllTools === "function" ? pi.getAllTools() : [];
+  const activeSet = new Set(active);
+  const schemas = all
+    .filter((tool: any) => activeSet.has(tool.name))
+    .map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }))
+    .sort((left: any, right: any) => left.name.localeCompare(right.name));
+  const value = {
+    model: ctx?.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+    systemPrompt: typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : "",
+    active,
+    schemas,
+    cwd: resolve(ctx?.cwd ?? process.cwd()),
+    threshold,
+    activePruning,
+    projectionMode,
+    policyVersion: PROJECTION_POLICY_VERSION,
+  };
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
 export default function sieveExtension(pi: ExtensionAPI, options: { configPath?: string } = {}) {
   let mode: SieveMode = "enabled";
+  let projectionMode: ProjectionMode = "stable";
   let threshold = SIEVE_THRESHOLD;
   let latestMode: Exclude<SieveMode, "disabled"> = "enabled";
   let latestStats = emptyTransformStats();
@@ -92,21 +148,65 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let activeRecalledChars = 0;
   let recallsByTool: Record<string, { recalls: number; recalledChars: number }> = {};
   let recoverableActiveResults = new Map<string, RecoverableActiveResult>();
+  let rawRecoverableResults = new Map<string, RawRecoverableResult>();
+  let epoch: ProjectionEpoch | undefined;
+  let pendingEpochReason: EpochReason | undefined = "session-start";
+  let contextUsagePercent: number | undefined;
+  let stability = {
+    newProjections: 0,
+    projectionCacheHits: 0,
+    recoverableEntries: 0,
+    explicitReflows: 0,
+    softBudgetExceedances: 0,
+    prefixChurnViolations: 0,
+    earliestChangedPriorMessageIndex: undefined as number | undefined,
+    estimatedInvalidatedChars: 0,
+  };
+  let softBudgetExceededInEpoch = false;
   let persistedConfig = defaultConfig();
   const settingsPath = options.configPath ?? configPath();
   const applyConfig = (config: SieveConfig) => {
     persistedConfig = config;
     activePruning = configuredActivePruning(config);
     threshold = configuredThreshold(config);
+    projectionMode = configuredProjectionMode(config);
   };
   let configLoadError: unknown;
   let configQueue: Promise<void> = loadConfig(settingsPath).then(applyConfig).catch((error) => {
     configLoadError = error;
   });
+
+  const beginEpoch = (reason: EpochReason, ctx?: any, knownFingerprint?: string) => {
+    const promptFingerprint = knownFingerprint ?? fingerprint(pi, ctx, threshold, activePruning, projectionMode);
+    epoch = createProjectionEpoch(reason, { threshold, activePruning }, promptFingerprint);
+    pendingEpochReason = undefined;
+    recoverableActiveResults.clear();
+    rawRecoverableResults.clear();
+    softBudgetExceededInEpoch = false;
+  };
+  const requestEpoch = (reason: EpochReason) => {
+    pendingEpochReason = reason;
+    recoverableActiveResults.clear();
+    rawRecoverableResults.clear();
+  };
+  const epochSnapshot = () => {
+    const entries = [...(epoch?.entries.values() ?? [])];
+    return {
+      id: epoch?.id,
+      reason: epoch?.reason,
+      startedAt: epoch?.startedAt,
+      promptFingerprint: epoch?.promptFingerprint,
+      frozenResultCount: entries.length,
+      frozenSourceChars: entries.reduce((sum, entry) => sum + entry.sourceChars, 0),
+      frozenRetainedChars: entries.reduce((sum, entry) => sum + entry.retainedChars, 0),
+      recoverableEntries: entries.filter((entry) => entry.recoverable && !epoch?.taintedIds.has(entry.toolCallId)).length,
+    };
+  };
   const stateSnapshot = (available = true) => ({
     version: 1,
     available,
     mode,
+    projectionMode,
     threshold,
     activePruning,
     latestMode,
@@ -116,6 +216,9 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     recalls: activeRecalls,
     recalledChars: activeRecalledChars,
     recallsByTool,
+    epoch: epochSnapshot(),
+    stability,
+    ...(contextUsagePercent !== undefined ? { contextUsagePercent } : {}),
     updatedAt: new Date().toISOString(),
     ...(configLoadError ? { error: (configLoadError as any)?.message ?? String(configLoadError) } : {}),
   });
@@ -123,13 +226,14 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   const disposeStateRequest = pi.events.on("pi-sieve:state-request", (request: any) => {
     if (request?.version === 1 && typeof request.respond === "function") request.respond(stateSnapshot());
   });
-  const updateConfig = async (patch: { activePruning?: boolean; threshold?: number }) => {
+  const updateConfig = async (patch: { activePruning?: boolean; threshold?: number; projectionMode?: ProjectionMode }) => {
     const operation = configQueue.then(async () => {
       if (configLoadError) throw configLoadError;
       const next: SieveConfig = {
         version: 1,
         activePruning: patch.activePruning ?? configuredActivePruning(persistedConfig),
         threshold: patch.threshold ?? configuredThreshold(persistedConfig),
+        projectionMode: patch.projectionMode ?? configuredProjectionMode(persistedConfig),
       };
       await saveConfig(next, settingsPath);
       applyConfig(next);
@@ -158,57 +262,53 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   pi.registerTool({
     name: RECALL_TOOL_NAME,
     label: "Sieve Recall",
-    description: "Recover one registered tool result omitted by pi-sieve from the current session branch.",
+    description: "Recover one registered tool result omitted by pi-sieve from the current active raw context.",
     parameters: Type.Object({
       toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params) {
       const registered = activePruning ? recoverableActiveResults.get(params.toolCallId) : undefined;
-      const matches = registered
-        ? (ctx.sessionManager?.getBranch?.() ?? []).flatMap((entry: any) => {
-          const message = entry?.type === "message" ? entry.message : undefined;
-          return message?.role === "toolResult"
-            && message.toolCallId === params.toolCallId
-            && message.toolName === registered.toolName
-            && (message.isError === true) === registered.isError
-            && Array.isArray(message.content)
-            ? [message]
-            : [];
-        })
-        : [];
-      const source = matches.length === 1 ? matches[0] : undefined;
-      if (!registered || !source) {
+      const source = registered ? rawRecoverableResults.get(params.toolCallId) : undefined;
+      const frozen = projectionMode === "stable" ? epoch?.entries.get(params.toolCallId) : undefined;
+      if (!registered || !source
+        || source.toolName !== registered.toolName
+        || source.isError !== registered.isError
+        || (projectionMode === "stable" && frozen?.sourceHash !== source.sourceHash)) {
         return {
           content: [{ type: "text" as const, text: `No recoverable result for toolCallId ${JSON.stringify(params.toolCallId)}.` }],
           details: { found: false, sourceToolCallId: params.toolCallId, sourceToolName: "", sourceIsError: false },
         };
       }
-      const sourceChars = source.content.reduce(
+      const sourceChars = source.message.content.reduce(
         (length: number, block: any) => length + (block?.type === "text" && typeof block.text === "string" ? block.text.length : 0),
         0,
       );
       activeRecalls++;
       activeRecalledChars += sourceChars;
       const recallUsage = recallsByTool[registered.toolName] ?? { recalls: 0, recalledChars: 0 };
-      recallUsage.recalls++;
-      recallUsage.recalledChars += sourceChars;
-      recallsByTool = { ...recallsByTool, [registered.toolName]: recallUsage };
+      recallsByTool = {
+        ...recallsByTool,
+        [registered.toolName]: { recalls: recallUsage.recalls + 1, recalledChars: recallUsage.recalledChars + sourceChars },
+      };
       publishState();
       return {
-        content: source.content.map((block: any) => ({ ...block })),
+        content: structuredClone(source.message.content),
         details: { found: true, sourceToolCallId: registered.toolCallId, sourceToolName: registered.toolName, sourceIsError: registered.isError },
       };
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     await configQueue;
-    recoverableActiveResults.clear();
+    requestEpoch(event?.reason === "reload" ? "reload" : event?.reason === "startup" ? "session-start" : "session-replacement");
     refreshRecallTool();
     publishState();
     if (configLoadError)
       ctx.ui.notify(`Could not load pi-sieve settings: ${(configLoadError as any)?.message ?? String(configLoadError)}`, "error");
   });
+  pi.on("session_compact", () => requestEpoch("compaction"));
+  pi.on("session_tree", () => requestEpoch("branch-navigation"));
+  pi.on("model_select", () => requestEpoch("model-change"));
   pi.on("session_shutdown", () => {
     disposeStateRequest();
     pi.events.emit("pi-sieve:state-change", stateSnapshot(false));
@@ -217,27 +317,71 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
 
   pi.on("context", (event, ctx) => {
     if (mode === "disabled") return;
+    const currentFingerprint = fingerprint(pi, ctx, threshold, activePruning, projectionMode);
+    if (!epoch || pendingEpochReason) beginEpoch(pendingEpochReason || "session-start", ctx, currentFingerprint);
+    else if (epoch.promptFingerprint !== currentFingerprint) beginEpoch("prompt-fingerprint", ctx, currentFingerprint);
 
-    const result = sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
+    let result = projectionMode === "stable"
+      ? stableSieveMessages(event.messages, epoch!, { cwd: ctx?.cwd })
+      : sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
+    let diagnostics = "diagnostics" in result ? result.diagnostics as ProjectionDiagnostics : undefined;
+    if (projectionMode === "stable" && diagnostics?.requiresReflow) {
+      // The mismatch is converted into a deliberate epoch boundary before anything is sent.
+      stability.earliestChangedPriorMessageIndex ??= diagnostics.earliestChangedMessageIndex;
+      stability.estimatedInvalidatedChars += diagnostics.estimatedInvalidatedChars;
+      beginEpoch(
+        diagnostics.ambiguousReflows > 0 ? "ambiguous-id" : diagnostics.historyMismatches > 0 ? "history-mismatch" : "source-mismatch",
+        ctx,
+        currentFingerprint,
+      );
+      const rerun = stableSieveMessages(event.messages, epoch!, { cwd: ctx?.cwd });
+      result = rerun;
+      diagnostics = rerun.diagnostics;
+    }
+
     latestMode = mode;
     latestStats = result.stats;
+    const usage = typeof ctx?.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+    contextUsagePercent = usage?.percent ?? undefined;
+    if (projectionMode === "stable" && diagnostics) {
+      stability.newProjections += diagnostics.newProjections;
+      stability.projectionCacheHits += diagnostics.cacheHits;
+      if (diagnostics.softBudgetExceeded && !softBudgetExceededInEpoch) {
+        stability.softBudgetExceedances++;
+        softBudgetExceededInEpoch = true;
+      }
+      stability.recoverableEntries = result.recoverableActiveResults.length;
+    }
     if (mode === "observe") {
       addTransformStats(cumulativeProjected, result.stats);
       publishState();
-      // Classify exactly as enabled, but leave Pi's outbound messages unchanged.
       return;
     }
 
     addTransformStats(cumulativeActual, result.stats);
-    recoverableActiveResults = new Map(
-      result.recoverableActiveResults.map((recoverable) => [recoverable.toolCallId, recoverable]),
-    );
+    recoverableActiveResults = new Map(result.recoverableActiveResults.map((item) => [item.toolCallId, item]));
+    const rawCounts = new Map<string, number>();
+    for (const message of event.messages as any[]) {
+      if (message?.role === "toolResult" && typeof message.toolCallId === "string" && message.toolCallId)
+        rawCounts.set(message.toolCallId, (rawCounts.get(message.toolCallId) ?? 0) + 1);
+    }
+    rawRecoverableResults = new Map();
+    for (let index = 0; index < event.messages.length; index++) {
+      const message: any = event.messages[index];
+      const registered = message?.role === "toolResult" ? recoverableActiveResults.get(message.toolCallId) : undefined;
+      if (!registered || rawCounts.get(message.toolCallId) !== 1) continue;
+      rawRecoverableResults.set(message.toolCallId, {
+        ...registered,
+        sourceHash: projectionSourceHash(event.messages, index, ctx?.cwd),
+        message: structuredClone(message),
+      });
+    }
     publishState();
     return { messages: result.messages };
   });
 
   pi.registerCommand("sieve", {
-    description: "Configure outbound bulky tool-output limiting, including active-result pruning and recall",
+    description: "Configure cache-stable outbound tool-result projections, rollback mode, and recall",
     handler: async (args, ctx) => {
       const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const [action = "status", value] = parts;
@@ -245,40 +389,50 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       const hasNoValue = parts.length === 1;
 
       if (action === "active" && hasOnlyValue && (value === "enable" || value === "disable")) {
-        const nextActivePruning = value === "enable";
         try {
-          await updateConfig({ activePruning: nextActivePruning });
+          await updateConfig({ activePruning: value === "enable" });
         } catch (error: any) {
           ctx.ui.notify(`Could not save pi-sieve active-result setting: ${error?.message ?? String(error)}`, "error");
           return;
         }
-        if (!activePruning) recoverableActiveResults.clear();
+        requestEpoch("configuration-change");
         refreshRecallTool();
         publishState();
-        ctx.ui.notify(`pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}.`, "info");
+        ctx.ui.notify(`pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}; cached prefix will reset.`, "info");
         return;
       }
-      if (action === "enable" && hasNoValue) {
-        mode = "enabled";
-        refreshRecallTool();
+      if (action === "projection" && hasOnlyValue && (value === "stable" || value === "legacy")) {
+        try {
+          await updateConfig({ projectionMode: value });
+        } catch (error: any) {
+          ctx.ui.notify(`Could not save pi-sieve projection mode: ${error?.message ?? String(error)}`, "error");
+          return;
+        }
+        requestEpoch("configuration-change");
         publishState();
-        ctx.ui.notify("pi-sieve enabled.", "info");
+        ctx.ui.notify(`pi-sieve projection mode set to ${projectionMode}; cached prefix will reset.`, "info");
         return;
       }
-      if (action === "observe" && hasNoValue) {
-        mode = "observe";
-        recoverableActiveResults.clear();
-        refreshRecallTool();
+      if (action === "reflow" && hasNoValue) {
+        stability.explicitReflows++;
+        requestEpoch("explicit-reflow");
         publishState();
-        ctx.ui.notify("pi-sieve observing: classifications are reported without changing outbound messages.", "info");
+        ctx.ui.notify("pi-sieve will rebuild projections on the next provider call; cached prefix will reset.", "info");
         return;
       }
-      if (action === "disable" && hasNoValue) {
-        mode = "disabled";
-        recoverableActiveResults.clear();
+      if ((action === "enable" || action === "observe" || action === "disable") && hasNoValue) {
+        const nextMode: SieveMode = action === "enable" ? "enabled" : action === "disable" ? "disabled" : "observe";
+        if (mode !== nextMode) requestEpoch("configuration-change");
+        mode = nextMode;
+        if (mode !== "enabled") {
+          recoverableActiveResults.clear();
+          rawRecoverableResults.clear();
+        }
         refreshRecallTool();
         publishState();
-        ctx.ui.notify("pi-sieve disabled.", "info");
+        ctx.ui.notify(mode === "observe"
+          ? "pi-sieve observing: classifications are reported without changing outbound messages."
+          : `pi-sieve ${mode}.`, "info");
         return;
       }
       if (action === "reset-stats" && hasNoValue) {
@@ -288,56 +442,40 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         activeRecalls = 0;
         activeRecalledChars = 0;
         recallsByTool = {};
+        stability = {
+          newProjections: 0, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
+          softBudgetExceedances: 0, prefixChurnViolations: 0, earliestChangedPriorMessageIndex: undefined,
+          estimatedInvalidatedChars: 0,
+        };
         publishState();
         ctx.ui.notify("pi-sieve statistics reset.", "info");
         return;
       }
-      if (action === "threshold" && hasOnlyValue && value === "reset") {
+      if (action === "threshold" && hasOnlyValue && (value === "reset" || /^\d+$/.test(value))) {
+        const candidate = value === "reset" ? SIEVE_THRESHOLD : Number(value);
+        if (!Number.isSafeInteger(candidate) || candidate < MIN_SIEVE_THRESHOLD || candidate > MAX_SIEVE_THRESHOLD) {
+          ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "info");
+          return;
+        }
         try {
-          await updateConfig({ threshold: SIEVE_THRESHOLD });
+          await updateConfig({ threshold: candidate });
         } catch (error: any) {
           ctx.ui.notify(`Could not save pi-sieve threshold: ${error?.message ?? String(error)}`, "error");
           return;
         }
+        requestEpoch("configuration-change");
         publishState();
-        ctx.ui.notify(`pi-sieve threshold reset to ${threshold}.`, "info");
-        return;
-      }
-      if (action === "threshold" && hasOnlyValue && typeof value === "string" && /^\d+$/.test(value)) {
-        const candidate = Number(value);
-        if (
-          Number.isSafeInteger(candidate) &&
-          candidate >= MIN_SIEVE_THRESHOLD &&
-          candidate <= MAX_SIEVE_THRESHOLD
-        ) {
-          try {
-            await updateConfig({ threshold: candidate });
-          } catch (error: any) {
-            ctx.ui.notify(`Could not save pi-sieve threshold: ${error?.message ?? String(error)}`, "error");
-            return;
-          }
-          publishState();
-          ctx.ui.notify(`pi-sieve threshold set to ${threshold}.`, "info");
-          return;
-        }
-        ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "info");
+        ctx.ui.notify(`pi-sieve threshold ${value === "reset" ? "reset" : "set"} to ${threshold}; cached prefix will reset.`, "info");
         return;
       }
       if (action === "status" && hasNoValue) {
         ctx.ui.notify(statusText(
-          mode,
-          threshold,
-          latestMode,
-          latestStats,
-          cumulativeActual,
-          cumulativeProjected,
-          activePruning,
-          activeRecalls,
-          activeRecalledChars,
+          mode, projectionMode, threshold, latestMode, latestStats, cumulativeActual, cumulativeProjected,
+          activePruning, activeRecalls, activeRecalledChars, epoch, stability,
         ), "info");
         return;
       }
-      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
+      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|projection <stable|legacy>|reflow|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
     },
   });
 }

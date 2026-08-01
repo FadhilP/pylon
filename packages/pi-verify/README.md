@@ -18,7 +18,7 @@ verify({ scope: "changed" | "project", checks?: string[] })
 
 Use Verify after edits and before completion. `changed` skips verification when Git reports a clean worktree. `project` always runs detected checks. Child-package commands run inside their package directory.
 
-Call Verify in a tool-only assistant turn with no user-facing prose. Wait for its result, then write exactly one evidence-aware final response. This single ordering applies to passing and non-passing outcomes, preventing an early summary from being repeated after a failure.
+Call Verify in a tool-only assistant turn with no user-facing prose. Wait for its result, then write exactly one evidence-aware final response. This single ordering applies to passing and non-passing outcomes, preventing an early summary from being repeated after a failure. A failed, cancelled, stale, or errored result blocks further tool calls for the rest of that agent run; the next user input or session starts fresh.
 
 ## Verification Behavior
 
@@ -28,7 +28,7 @@ Verify first runs bounded changed-set hygiene with `git diff --check HEAD --` fo
 
 ### Scheduling and Limits
 
-When the root declares no checks, immediate non-hidden source directories are checked with the same detection rules in stable name order; common generated and vendor directories are skipped, and discovery never recurses. At most six checks run: checks sharing a working directory stay sequential, while independent child-package directories run concurrently with a limit of four. Omitted check IDs are reported. Pass up to six IDs through `checks` for explicit selection. Each check has a five-minute timeout. A failure prevents new checks from starting; already-running independent checks finish. Hygiene output is capped at 80 lines or 8 KiB; check output keeps 160 lines or 12 KiB.
+When the root declares no checks, immediate non-hidden source directories are checked with the same detection rules in stable name order; common generated and vendor directories are skipped, and discovery never recurses. At most six checks run: checks sharing a working directory stay sequential, while independent child-package directories run concurrently with a limit of four. Omitted check IDs are reported. Omit `checks` by default; pass up to six exact IDs only when supplied by the user or verification catalog, never inferred from scripts or labels. Each check has a five-minute timeout. A failure prevents new checks from starting; already-running independent checks finish. Hygiene output is capped at 80 lines or 8 KiB; check output keeps 160 lines or 12 KiB.
 
 ### Scope Boundaries
 

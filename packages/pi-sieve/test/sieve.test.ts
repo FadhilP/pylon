@@ -14,7 +14,9 @@ import {
   partialOmissionMarker,
   recalledGiantErrorMarker,
   recalledOmissionMarker,
+  createProjectionEpoch,
   sieveMessages,
+  stableSieveMessages,
   staleReadMarker,
 } from "../src/sieve.ts";
 
@@ -807,6 +809,159 @@ test("shares the active retained budget across age-zero results", () => {
   assert.deepEqual(output.messages.slice(2), results.slice(1));
 });
 
+test("stable epochs freeze every prior result while context grows beyond the soft budget", () => {
+  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const call = (id: string, name = "bash", argumentsValue: Record<string, unknown> = {}) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name, arguments: argumentsValue }],
+  });
+  const messages: any[] = [user("start")];
+  const prior = new Map<string, string>();
+
+  for (let index = 0; index < 6; index++) {
+    const id = `stable-${index}`;
+    messages.push(call(id), textResult("bash", String(index).repeat(2_000), { toolCallId: id, isError: false }));
+    const result = stableSieveMessages(messages, epoch, { cwd: resolve("stable") });
+    for (const message of result.messages as any[]) {
+      if (message.role !== "toolResult") continue;
+      const serialized = JSON.stringify(message);
+      assert.equal(prior.get(message.toolCallId) ?? serialized, serialized, `projection ${message.toolCallId} changed`);
+      prior.set(message.toolCallId, serialized);
+    }
+    assert.equal((result.messages.at(-1) as any).content[0].text.length, 1_000);
+  }
+
+  const beforeUser = stableSieveMessages(messages, epoch, { cwd: resolve("stable") });
+  messages.push(user("continue"));
+  const afterUser = stableSieveMessages(messages, epoch, { cwd: resolve("stable") });
+  assert.deepEqual(afterUser.messages.slice(0, -1), beforeUser.messages);
+  assert.equal(afterUser.diagnostics.softBudgetExceeded, true);
+  assert.equal(afterUser.diagnostics.sourceMismatches, 0);
+  assert.equal(epoch.entries.size, 6);
+});
+
+test("regression replay keeps stable history fixed while legacy newest-first budgeting churns", () => {
+  const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command: id } }] });
+  const messages: any[] = [user("long tool turn")];
+  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  let previousStable: any[] = [];
+  let previousLegacy: any[] = [];
+  let stableChangedHistoricalResults = 0;
+  let legacyChangedHistoricalResults = 0;
+  let stableRetainedChars = 0;
+  let legacyRetainedChars = 0;
+
+  for (let index = 0; index < 7; index++) {
+    const id = `replay-${index}`;
+    messages.push(call(id), textResult("bash", String(index).repeat(1_200), { toolCallId: id, isError: false }));
+    const stable = stableSieveMessages(messages, epoch);
+    const legacy = sieveMessages(messages, 1_000, { pruneActive: true });
+    const historicalLength = previousStable.length;
+    assert.deepEqual(stable.messages.slice(0, historicalLength), previousStable, `stable request ${index} rewrote its prefix`);
+    for (let messageIndex = 0; messageIndex < previousLegacy.length; messageIndex++) {
+      if ((previousLegacy[messageIndex] as any)?.role === "toolResult"
+        && JSON.stringify(previousLegacy[messageIndex]) !== JSON.stringify(legacy.messages[messageIndex]))
+        legacyChangedHistoricalResults++;
+    }
+    for (let messageIndex = 0; messageIndex < previousStable.length; messageIndex++) {
+      if ((previousStable[messageIndex] as any)?.role === "toolResult"
+        && JSON.stringify(previousStable[messageIndex]) !== JSON.stringify(stable.messages[messageIndex]))
+        stableChangedHistoricalResults++;
+    }
+    previousStable = structuredClone(stable.messages);
+    previousLegacy = structuredClone(legacy.messages);
+    stableRetainedChars = stable.stats.byTool.bash?.retainedChars ?? 0;
+    legacyRetainedChars = legacy.stats.byTool.bash?.retainedChars ?? 0;
+  }
+
+  assert.equal(stableChangedHistoricalResults, 0);
+  assert.ok(legacyChangedHistoricalResults > 0, "legacy replay should reproduce historical-result churn");
+  assert.ok(stableRetainedChars > 3_000, "stable mode reports append-only retained growth");
+  assert.ok(legacyRetainedChars <= stableRetainedChars);
+});
+
+test("stable projection applies only append-safe caps and duplicates", () => {
+  const call = (id: string, name: string, argumentsValue: Record<string, unknown> = {}) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name, arguments: argumentsValue }],
+  });
+  const readText = "read evidence\n".repeat(200);
+  const delegated = "delegated evidence".repeat(200);
+  const ranked = rankedSearchText("symbol");
+  const graph = relationshipGraphText();
+  const image = { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } };
+  const mixed = { ...textResult("bash", "unused", { toolCallId: "mixed-stable", isError: false }), content: [{ type: "text", text: "x".repeat(2_000) }, image] };
+  const messages: any[] = [
+    user("inspect"),
+    call("read-1", "read", { path: "a.ts", offset: 1, limit: 200 }), textResult("read", readText, { toolCallId: "read-1", isError: false }),
+    call("advisor-1", "advisor", { request: "review" }), textResult("advisor", delegated, { toolCallId: "advisor-1", isError: false }),
+    call("verify-1", "verify", { scope: "changed" }), textResult("verify", delegated, { toolCallId: "verify-1", isError: true }),
+    call("ranked-1", "symbol_search", { query: "run" }), textResult("symbol_search", ranked, { toolCallId: "ranked-1", isError: false }),
+    call("graph-1", "relationship_graph", { query: "run" }), textResult("relationship_graph", graph, { toolCallId: "graph-1", isError: false }),
+    call("mixed-stable", "bash"), mixed,
+    call("recall-stable", "sieve_recall", { toolCallId: "ranked-1" }), textResult("sieve_recall", delegated, { toolCallId: "recall-stable", isError: false, details: { found: true, sourceToolName: "symbol_search", sourceIsError: false } }),
+    call("read-2", "read", { path: "a.ts", offset: 1, limit: 200 }), textResult("read", readText, { toolCallId: "read-2", isError: false }),
+  ];
+  const source = structuredClone(messages);
+  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const result = stableSieveMessages(messages, epoch, { cwd: resolve("stable-policy") });
+
+  assert.deepEqual(result.messages[2], source[2], "unique read passes through byte-for-byte");
+  assert.deepEqual(result.messages[4], source[4]);
+  assert.deepEqual(result.messages[6], source[6]);
+  assert.doesNotThrow(() => JSON.parse((result.messages[8] as any).content[0].text));
+  assert.doesNotThrow(() => JSON.parse((result.messages[10] as any).content[0].text));
+  assert.deepEqual((result.messages[12] as any).content[1], image);
+  assert.deepEqual(result.messages[14], source[14], "explicit recall stays complete for the epoch");
+  assert.match((result.messages[16] as any).content[0].text, /duplicate read/);
+  assert.deepEqual(messages, source, "raw messages remain untouched");
+});
+
+test("stable epochs diagnose source changes and taint later duplicate IDs without rewriting the original", () => {
+  const source = textResult("bash", "x".repeat(2_000), { toolCallId: "collision", isError: false });
+  const messages: any[] = [user("start"), source];
+  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const first = stableSieveMessages(messages, epoch);
+  const frozen = JSON.stringify(first.messages[1]);
+
+  const collided = [...messages, textResult("bash", "different", { toolCallId: "collision", isError: false })];
+  const collision = stableSieveMessages(collided, epoch);
+  assert.equal(collision.diagnostics.requiresReflow, true);
+  assert.equal(collision.diagnostics.ambiguousReflows, 1);
+  assert.equal(epoch.entries.get("collision")?.projectedMessage && JSON.stringify(epoch.entries.get("collision")!.projectedMessage), frozen);
+  const collisionReflow = stableSieveMessages(collided, createProjectionEpoch("ambiguous-id", { threshold: 1_000, activePruning: true }, "prompt"));
+  assert.deepEqual(collisionReflow.messages, collided, "ambiguous IDs pass through after the deliberate epoch reset");
+  assert.equal(collisionReflow.recoverableActiveResults.length, 0);
+  assert.equal(collisionReflow.diagnostics.ambiguousIds, 2);
+
+  const malformedEpoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const malformed: any[] = [user("start"), textResult("bash", "before", { toolCallId: "" })];
+  stableSieveMessages(malformed, malformedEpoch);
+  const malformedChanged = stableSieveMessages([malformed[0], { ...malformed[1], content: [{ type: "text", text: "after" }] }], malformedEpoch);
+  assert.equal(malformedChanged.diagnostics.historyMismatches, 1, "ID-less historical changes force a reflow");
+
+  const duplicateEpoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const duplicates = [user("start"), textResult("bash", "one", { toolCallId: "same" }), textResult("bash", "two", { toolCallId: "same" })];
+  stableSieveMessages(duplicates, duplicateEpoch);
+  const swapped = stableSieveMessages([duplicates[0], duplicates[2], duplicates[1]], duplicateEpoch);
+  assert.equal(swapped.diagnostics.historyMismatches, 1, "swapped ambiguous occurrences force a reflow");
+
+  const reordered = [user("inserted history"), ...messages];
+  const historyMismatch = stableSieveMessages(reordered, epoch);
+  assert.equal(historyMismatch.diagnostics.requiresReflow, true);
+  assert.equal(historyMismatch.diagnostics.historyMismatches, 1);
+  assert.equal(epoch.entries.size, 1, "history mismatch does not mutate the ledger");
+
+  const sourceEpoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  stableSieveMessages(messages, sourceEpoch);
+  const mutated = [messages[0], { ...source, content: [{ type: "text", text: "changed" }] }];
+  const mismatch = stableSieveMessages(mutated, sourceEpoch);
+  assert.equal(mismatch.diagnostics.requiresReflow, true);
+  assert.equal(mismatch.diagnostics.sourceMismatches, 1);
+  assert.equal(sourceEpoch.entries.get("collision")?.projectedMessage && JSON.stringify(sourceEpoch.entries.get("collision")!.projectedMessage), frozen);
+
+  const rebuilt = stableSieveMessages(messages, createProjectionEpoch("reload", { threshold: 1_000, activePruning: true }, "prompt"));
+  assert.deepEqual(rebuilt.messages, first.messages, "reload reconstruction is deterministic");
+});
+
 test("runtime modes, persisted settings, active recall, thresholds, and telemetry", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-sieve-runtime-"));
   const settingsPath = join(directory, "config.json");
@@ -814,8 +969,14 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
   let activeTools = ["bash", "read"];
+  let toolSchemas: any[] = [
+    { name: "bash", description: "Run command", parameters: { type: "object" } },
+    { name: "read", description: "Read file", parameters: { type: "object" } },
+    { name: "sieve_recall", description: "Recall", parameters: { type: "object" } },
+  ];
   let runtimeInitialized = false;
   const eventHandlers = new Map<string, Function[]>();
+  const publishedStates: any[] = [];
   extension({
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
@@ -827,6 +988,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
       assert.equal(runtimeInitialized, true, "action API called during extension loading");
       return [...activeTools];
     },
+    getAllTools: () => structuredClone(toolSchemas),
     setActiveTools: (names: string[]) => {
       assert.equal(runtimeInitialized, true, "action API called during extension loading");
       activeTools = [...names];
@@ -837,6 +999,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
         return () => {};
       },
       emit: (name: string, value: unknown) => {
+        if (name === "pi-sieve:state-change") publishedStates.push(value);
         for (const handler of eventHandlers.get(name) ?? []) handler(value);
       },
     },
@@ -849,9 +1012,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const command = commands.get("sieve");
   const oversizedLength = SIEVE_THRESHOLD + 1;
   const context = { messages: [user("first"), textResult("ls", "x".repeat(oversizedLength)), user("second"), user("third")] };
-  const expectedOldStats = sieveMessages(context.messages).stats;
-  const expectedGrossTokens = Math.ceil(expectedOldStats.omittedChars / 4);
-  const expectedNetTokens = Math.ceil(expectedOldStats.netCharsSaved / 4);
+  const expectedGrossTokens = 1;
+  const expectedNetTokens = 1;
   let notification = "";
   const ctx: any = { ui: { notify: (text: string) => { notification = text; } } };
 
@@ -863,16 +1025,18 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: 12_000,
+    projectionMode: "stable",
   });
   await command.handler("active disable", ctx);
   await command.handler("threshold reset", ctx);
+  await command.handler("active enable", ctx);
 
   await command.handler("observe", ctx);
   assert.equal(hook(context), undefined);
   assert.equal((context.messages[1].content[0] as { text: string }).text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /pi-sieve: observe/);
-  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 1, budget 0, giant-error 0, active-threshold 0, stale-read 0.*projected gross omitted ~${expectedGrossTokens} tokens`));
+  assert.match(notification, new RegExp(`Latest call \\(observe projections\\): scanned 1; projected transformations 1; transform types: age-threshold 0, budget 0, giant-error 0, active-threshold 1, stale-read 0.*projected gross omitted ~${expectedGrossTokens} tokens`));
   assert.match(notification, /actual transformations 0.*projected observe transformations 1/);
 
   await command.handler("enable", ctx);
@@ -893,6 +1057,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   await command.handler("threshold 50001", ctx);
   assert.equal(notification, "Threshold must be an integer from 1000 to 50000.");
   await command.handler("threshold reset", ctx);
+  await command.handler("active disable", ctx);
   await command.handler("status", ctx);
   assert.match(notification, new RegExp(`Threshold: > ~${Math.ceil(SIEVE_THRESHOLD / 4)} tokens \\(${SIEVE_THRESHOLD} JS characters; estimated at 4 characters/token\\)`));
   assert.match(notification, /Active-result pruning: disabled/);
@@ -902,6 +1067,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
+    projectionMode: "stable",
   });
   assert.equal(activeTools.includes("sieve_recall"), true);
   await command.handler("observe", ctx);
@@ -912,7 +1078,42 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const activeOutbound = hook({ messages: [user("first"), activeSource] });
   const activeOutboundText = activeOutbound.messages[1].content[0].text;
   assert.equal(activeOutboundText.length, SIEVE_THRESHOLD);
+  const firstEpoch = publishedStates.at(-1).epoch.id;
   hook({ messages: [user("first"), activeSource, user("partial same turn")] });
+  assert.equal(publishedStates.at(-1).epoch.id, firstEpoch, "user messages do not start epochs");
+  assert.ok(publishedStates.at(-1).stability.projectionCacheHits >= 1);
+  assert.equal(publishedStates.at(-1).stability.prefixChurnViolations, 0);
+
+  for (const [eventName, reason] of [["session_compact", "compaction"], ["session_tree", "branch-navigation"], ["model_select", "model-change"]] as const) {
+    for (const handler of handlers.get(eventName) ?? []) await handler({}, {});
+    hook({ messages: [user("first"), activeSource] });
+    assert.equal(publishedStates.at(-1).epoch.reason, reason);
+    assert.notEqual(publishedStates.at(-1).epoch.id, firstEpoch);
+  }
+
+  const fingerprintMessages = { messages: [user("first"), activeSource] };
+  const fingerprintCtx = (provider: string, prompt: string, cwd = resolve("fingerprint")) => ({
+    cwd,
+    model: { provider, id: "model" },
+    getSystemPrompt: () => prompt,
+  });
+  hook(fingerprintMessages, fingerprintCtx("provider-a", "prompt-a"));
+  const providerEpoch = publishedStates.at(-1).epoch.id;
+  hook(fingerprintMessages, fingerprintCtx("provider-b", "prompt-a"));
+  assert.equal(publishedStates.at(-1).epoch.reason, "prompt-fingerprint");
+  assert.notEqual(publishedStates.at(-1).epoch.id, providerEpoch, "provider identity participates in the fingerprint");
+  const promptEpoch = publishedStates.at(-1).epoch.id;
+  hook(fingerprintMessages, fingerprintCtx("provider-b", "prompt-b", resolve("fingerprint", ".")));
+  assert.notEqual(publishedStates.at(-1).epoch.id, promptEpoch, "effective prompt participates in the fingerprint");
+  const schemaEpoch = publishedStates.at(-1).epoch.id;
+  toolSchemas = toolSchemas.map((tool) => tool.name === "bash" ? { ...tool, description: "Changed schema description" } : tool);
+  hook(fingerprintMessages, fingerprintCtx("provider-b", "prompt-b"));
+  assert.notEqual(publishedStates.at(-1).epoch.id, schemaEpoch, "active tool schema participates in the fingerprint");
+
+  await command.handler("reflow", ctx);
+  hook({ messages: [user("first"), activeSource] });
+  assert.equal(publishedStates.at(-1).epoch.reason, "explicit-reflow");
+  assert.equal(publishedStates.at(-1).stability.explicitReflows, 1);
   const recallTool = tools.get("sieve_recall");
   const toolCtx = {
     sessionManager: { getBranch: () => [{ type: "message", message: activeSource }] },
@@ -931,16 +1132,23 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   for (const handler of handlers.get("input") ?? []) await handler({ source: "interactive" }, {});
   const afterInput = await recallTool.execute("recall-call-3", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
   assert.equal(afterInput.details.found, true);
+  const collisionSource = textResult("bash", "collision", { toolCallId: "active-runtime", isError: false });
+  const collisionOutbound = hook({ messages: [user("first"), activeSource, collisionSource] });
+  assert.deepEqual(collisionOutbound.messages.slice(1), [activeSource, collisionSource]);
+  assert.equal(publishedStates.at(-1).epoch.reason, "ambiguous-id");
+  const ambiguousRecall = await recallTool.execute("recall-ambiguous", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
+  assert.equal(ambiguousRecall.details.found, false);
   activeTools.push("later-tool");
   await command.handler("active disable", ctx);
   assert.deepEqual(await loadConfig(settingsPath), {
     version: 1,
     activePruning: false,
     threshold: SIEVE_THRESHOLD,
+    projectionMode: "stable",
   });
   assert.equal(activeTools.includes("sieve_recall"), false);
   assert.equal(activeTools.includes("later-tool"), true);
-  assert.equal(hook({ messages: [user("first"), activeSource] }).messages[1], activeSource);
+  assert.deepEqual(hook({ messages: [user("first"), activeSource] }).messages[1], activeSource);
 
   await command.handler("threshold 1000", ctx);
   await command.handler("disable", ctx);
@@ -957,8 +1165,13 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: false,
     threshold: 1_000,
+    projectionMode: "stable",
   });
 
+  await command.handler("projection legacy", ctx);
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy");
+  await command.handler("projection stable", ctx);
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "stable");
   await command.handler("active enable", ctx);
   const resumedHandlers = new Map<string, Function[]>();
   const resumedCommands = new Map<string, any>();

@@ -304,6 +304,9 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   if (settings.kind === "sieve") {
     return <div className="package-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.activePruning} disabled={disabled} onChange={(event) => onUpdate({ ...settings, activePruning: event.target.checked })} />Active pruning</label>
+      <label>Projection mode<select value={settings.projectionMode} disabled={disabled} onChange={(event) => onUpdate({ ...settings, projectionMode: event.target.value as typeof settings.projectionMode })}>
+        <option value="stable">Stable</option><option value="legacy">Legacy</option>
+      </select></label>
       <label>Pruning threshold<input key={settings.threshold} type="number" min={1_000} max={50_000} step={1_000} defaultValue={settings.threshold} disabled={disabled} onBlur={(event) => {
         const threshold = Number(event.target.value);
         if (Number.isSafeInteger(threshold) && threshold >= 1_000 && threshold <= 50_000 && threshold !== settings.threshold) {

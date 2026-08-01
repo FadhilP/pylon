@@ -85,10 +85,11 @@ test("Sieve projections retain bounded per-tool telemetry", () => {
       read: { scanned: 2, transformed: 1, sourceChars: 2_000, retainedChars: 1_100, netCharsSaved: 900 },
     },
   };
-  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", {
+  const payload = {
     version: 1,
     available: true,
     mode: "enabled",
+    projectionMode: "stable",
     threshold: 8_192,
     activePruning: true,
     latestMode: "enabled",
@@ -98,12 +99,22 @@ test("Sieve projections retain bounded per-tool telemetry", () => {
     recalls: 1,
     recalledChars: 1_000,
     recallsByTool: { read: { recalls: 1, recalledChars: 1_000 } },
+    epoch: { id: "epoch-1", reason: "prompt", startedAt: new Date(0).toISOString(), promptFingerprint: "fingerprint", frozenResultCount: 2, frozenSourceChars: 2_000, frozenRetainedChars: 1_100, recoverableEntries: 1 },
+    stability: { newProjections: 1, projectionCacheHits: 2, recoverableEntries: 1, explicitReflows: 0, softBudgetExceedances: 0, prefixChurnViolations: 0, estimatedInvalidatedChars: 0 },
+    contextUsagePercent: 42.5,
     updatedAt: new Date(0).toISOString(),
-  });
+  };
+  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", payload);
 
   assert.equal(state.sieve.availability, "available");
   assert.equal(state.sieve.cumulativeActual?.byTool.read?.netCharsSaved, 900);
   assert.deepEqual(state.sieve.recallsByTool?.read, { recalls: 1, recalledChars: 1_000 });
+  assert.equal(state.sieve.projectionMode, "stable");
+  assert.equal(state.sieve.epoch?.frozenRetainedChars, 1_100);
+  assert.equal(state.sieve.stability?.projectionCacheHits, 2);
+  assert.equal(state.sieve.contextUsagePercent, 42.5);
+  const invalid = applyOperationalEvent(state, "pi-sieve:state-change", { ...payload, stability: { ...payload.stability, projectionCacheHits: -1 } });
+  assert.equal(invalid.sieve.availability, "unavailable");
 });
 
 test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,7 @@ export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
   "With active pruning, eligible ages 0–1 share a three-threshold retained-source budget; without it, age 0 is preserved and age 1 keeps the three-threshold cap.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
+export const PROJECTION_POLICY_VERSION = 1;
 
 export type SieveOptions = {
   pruneActive?: boolean;
@@ -91,6 +93,70 @@ export type TransformResult<T extends ContextMessage> = {
   messages: T[];
   stats: TransformStats;
   recoverableActiveResults: RecoverableActiveResult[];
+};
+
+export type EpochReason =
+  | "session-start"
+  | "session-replacement"
+  | "reload"
+  | "compaction"
+  | "branch-navigation"
+  | "model-change"
+  | "prompt-fingerprint"
+  | "configuration-change"
+  | "explicit-reflow"
+  | "source-mismatch"
+  | "history-mismatch"
+  | "ambiguous-id";
+
+export type EpochConfig = {
+  threshold: number;
+  activePruning: boolean;
+  policyVersion: number;
+};
+
+export type ProjectionKind = keyof TransformStats["transformedBy"];
+
+export type ProjectionEntry = {
+  toolCallId: string;
+  sourceHash: string;
+  toolName: string;
+  isError: boolean;
+  projectedContent: ContentBlock[];
+  projectedMessage: ContextMessage;
+  sourceChars: number;
+  retainedChars: number;
+  recoverable: boolean;
+  transformed: boolean;
+  projectionKind?: ProjectionKind;
+};
+
+export type ProjectionEpoch = {
+  id: string;
+  reason: EpochReason;
+  config: EpochConfig;
+  promptFingerprint: string;
+  startedAt: string;
+  entries: Map<string, ProjectionEntry>;
+  taintedIds: Set<string>;
+  rawMessageHashes: string[];
+};
+
+export type ProjectionDiagnostics = {
+  newProjections: number;
+  cacheHits: number;
+  ambiguousIds: number;
+  sourceMismatches: number;
+  historyMismatches: number;
+  ambiguousReflows: number;
+  softBudgetExceeded: boolean;
+  earliestChangedMessageIndex?: number;
+  estimatedInvalidatedChars: number;
+  requiresReflow: boolean;
+};
+
+export type StableTransformResult<T extends ContextMessage> = TransformResult<T> & {
+  diagnostics: ProjectionDiagnostics;
 };
 
 const eligibleTools = new Set<string>(ELIGIBLE_TOOL_NAMES);
@@ -381,6 +447,7 @@ function sliceRelationshipGraph(
   source: SieveSource,
   maxOutboundChars: number,
   maxRetainedChars = Number.POSITIVE_INFINITY,
+  toolCallId?: string,
 ): StructuredSlice | undefined {
   const text = blocks.map((block) => block.text).join("");
   const parsed = parseJsonText(blocks);
@@ -416,7 +483,7 @@ function sliceRelationshipGraph(
     const withoutMarker = JSON.stringify(graph);
     const outboundText = JSON.stringify({
       ...graph,
-      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locationCount - returned),
+      piSieve: structuredPruneMetadata(source, text.length, "omittedLocations", locationCount - returned, toolCallId),
     });
     if (outboundText.length <= maxOutboundChars && withoutMarker.length <= maxRetainedChars) {
       return {
@@ -1300,4 +1367,322 @@ export function sieveMessages<T extends ContextMessage>(
     stats,
     recoverableActiveResults,
   };
+}
+
+function cloneProjectionValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function canonicalProjectionValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === undefined) return { $undefined: true };
+  if (typeof value === "bigint") return { $bigint: value.toString() };
+  if (typeof value === "number" && !Number.isFinite(value)) return { $number: String(value) };
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return { $cycle: true };
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => canonicalProjectionValue(item, seen));
+  return Object.fromEntries(
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => [key, canonicalProjectionValue((value as Record<string, unknown>)[key], seen)]),
+  );
+}
+
+function projectionHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(canonicalProjectionValue(value))).digest("hex");
+}
+
+export function projectionSourceHash<T extends ContextMessage>(
+  messages: readonly T[],
+  resultIndex: number,
+  cwd = process.cwd(),
+): string {
+  const result = messages[resultIndex] as Record<string, unknown> | undefined;
+  const toolCallId = typeof result?.toolCallId === "string" ? result.toolCallId : "";
+  const calls: unknown[] = [];
+  for (let index = 0; index < resultIndex; index++) {
+    const fields = messages[index] as Record<string, unknown>;
+    if (fields.role !== "assistant" || !Array.isArray(fields.content)) continue;
+    for (const block of fields.content) {
+      const call = jsonObject(block);
+      if (call?.type === "toolCall" && call.id === toolCallId) calls.push(call);
+    }
+  }
+  return projectionHash({ cwd: resolve(cwd), calls, result });
+}
+
+export function createProjectionEpoch(
+  reason: EpochReason,
+  config: Omit<EpochConfig, "policyVersion"> & { policyVersion?: number },
+  promptFingerprint: string,
+): ProjectionEpoch {
+  return {
+    id: randomUUID(),
+    reason,
+    config: { ...config, policyVersion: config.policyVersion ?? PROJECTION_POLICY_VERSION },
+    promptFingerprint,
+    startedAt: new Date().toISOString(),
+    entries: new Map(),
+    taintedIds: new Set(),
+    rawMessageHashes: [],
+  };
+}
+
+type NewProjection<T extends ContextMessage> = {
+  message: T;
+  recoverable: boolean;
+  projectionKind?: ProjectionKind;
+};
+
+/** Projects one newly observed raw result using only history at or before it. */
+export function projectNewResult<T extends ContextMessage>(
+  messages: readonly T[],
+  resultIndex: number,
+  threshold = SIEVE_THRESHOLD,
+  options: SieveOptions = {},
+): NewProjection<T> {
+  const message = messages[resultIndex];
+  const fields = message as Record<string, unknown>;
+  if (fields?.role !== "toolResult") return { message, recoverable: false };
+  const cwd = options.cwd ?? process.cwd();
+  const prefix = messages.slice(0, resultIndex + 1);
+  const duplicate = exactDuplicateReplacements(prefix, cwd, new Map(), options.pruneActive === true)
+    .find((replacement) => replacement.messageIndex === resultIndex);
+  if (duplicate) {
+    return {
+      message: duplicate.message,
+      recoverable: duplicate.recoverable !== undefined,
+      projectionKind: "duplicate",
+    };
+  }
+  if (!options.pruneActive) return { message, recoverable: false };
+
+  const source = sieveSource(message, false);
+  if (!source) return { message, recoverable: false };
+  const toolCallId = fields.toolCallId;
+  if (typeof toolCallId !== "string" || !toolCallId) return { message, recoverable: false };
+  const resultCount = prefix.reduce((count, candidate) => {
+    const value = candidate as Record<string, unknown>;
+    return count + (value.role === "toolResult" && value.toolCallId === toolCallId ? 1 : 0);
+  }, 0);
+  if (resultCount !== 1) return { message, recoverable: false };
+
+  const blocks = textOnlyBlocks(fields.content);
+  const mixed = !blocks && source.kind === "plain" ? mixedContentBlocks(fields.content) : undefined;
+  const sourceLength = blocks?.reduce((length, block) => length + block.text.length, 0) ?? mixed?.sourceChars;
+  if (sourceLength === undefined) return { message, recoverable: false };
+  const cap = source.isError ? Math.max(SIEVE_THRESHOLD, threshold) : threshold;
+  if (sourceLength <= cap) return { message, recoverable: false };
+  if (source.kind !== "plain" && (!blocks || !validStructuredContent(blocks, source.kind)))
+    return { message, recoverable: false };
+
+  if (mixed) {
+    const sliced = sliceMixedActive(message, source, toolCallId, cap);
+    return sliced
+      ? { message: sliced.message, recoverable: true, projectionKind: source.isError ? "errorCap" : "mixedText" }
+      : { message, recoverable: false };
+  }
+  if (!blocks) return { message, recoverable: false };
+  if (source.kind === "rankedSearch" && !source.isError) {
+    const sliced = sliceRankedSearch(blocks, source, cap, toolCallId);
+    const outbound = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
+    return outbound.length < sourceLength
+      ? { message: replaceWithMarker(message, outbound), recoverable: true, projectionKind: "activeThreshold" }
+      : { message, recoverable: false };
+  }
+  if (source.kind === "relationshipGraph" && !source.isError) {
+    const sliced = sliceRelationshipGraph(blocks, source, cap, Number.POSITIVE_INFINITY, toolCallId);
+    const outbound = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
+    return outbound.length < sourceLength
+      ? { message: replaceWithMarker(message, outbound), recoverable: true, projectionKind: "activeThreshold" }
+      : { message, recoverable: false };
+  }
+  const sliced = sliceActiveResult(blocks, source, toolCallId, cap);
+  const outbound = sliced?.outboundText ?? activeOmissionMarker(source.toolName, toolCallId, sourceLength, sourceLength);
+  return outbound.length < sourceLength
+    ? {
+      message: replaceWithMarker(message, outbound),
+      recoverable: true,
+      projectionKind: source.isError ? "errorCap" : "activeThreshold",
+    }
+    : { message, recoverable: false };
+}
+
+function contentCharacters(content: unknown): number {
+  return textOnlyContentLength(content)
+    ?? mixedContentBlocks(content)?.sourceChars
+    ?? serializedContentLength(content);
+}
+
+function recordProjectionStats(stats: TransformStats, entry: ProjectionEntry) {
+  stats.scanned++;
+  if (entry.transformed) {
+    stats.transformed++;
+    if (entry.projectionKind) stats.transformedBy[entry.projectionKind]++;
+    stats.omittedChars += Math.max(0, entry.sourceChars - entry.retainedChars);
+    stats.netCharsSaved += Math.max(0, entry.sourceChars - entry.retainedChars);
+  } else {
+    stats.skipped.atOrBelowThreshold++;
+  }
+  const key = /^[a-zA-Z0-9_-]{1,64}$/.test(entry.toolName) ? entry.toolName : "other";
+  const usage = stats.byTool[key] ?? { scanned: 0, transformed: 0, sourceChars: 0, retainedChars: 0, netCharsSaved: 0 };
+  usage.scanned++;
+  usage.sourceChars += entry.sourceChars;
+  usage.retainedChars += entry.retainedChars;
+  if (entry.transformed) usage.transformed++;
+  usage.netCharsSaved += Math.max(0, entry.sourceChars - entry.retainedChars);
+  stats.byTool[key] = usage;
+}
+
+/** Applies an immutable epoch ledger to an outbound-only raw context copy. */
+export function stableSieveMessages<T extends ContextMessage>(
+  messages: readonly T[],
+  epoch: ProjectionEpoch,
+  options: SieveOptions = {},
+): StableTransformResult<T> {
+  const threshold = epoch.config.threshold;
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    const fields = message as Record<string, unknown>;
+    if (fields.role === "toolResult" && typeof fields.toolCallId === "string" && fields.toolCallId)
+      counts.set(fields.toolCallId, (counts.get(fields.toolCallId) ?? 0) + 1);
+  }
+
+  const output = [...messages];
+  const stats = emptyTransformStats();
+  const recoverableActiveResults: RecoverableActiveResult[] = [];
+  const diagnostics: ProjectionDiagnostics = {
+    newProjections: 0,
+    cacheHits: 0,
+    ambiguousIds: 0,
+    sourceMismatches: 0,
+    historyMismatches: 0,
+    ambiguousReflows: 0,
+    softBudgetExceeded: false,
+    estimatedInvalidatedChars: 0,
+    requiresReflow: false,
+  };
+  const rawMessageHashes = messages.map((message) => projectionHash(message));
+
+  for (let index = 0; index < messages.length; index++) {
+    const fields = messages[index] as Record<string, unknown>;
+    const toolCallId = fields.toolCallId;
+    if (fields.role !== "toolResult" || typeof toolCallId !== "string" || !toolCallId) continue;
+    const existing = epoch.entries.get(toolCallId);
+    if (counts.get(toolCallId)! > 1 && existing?.transformed) {
+      diagnostics.ambiguousReflows++;
+      diagnostics.requiresReflow = true;
+      diagnostics.earliestChangedMessageIndex = index;
+      diagnostics.estimatedInvalidatedChars = messages.slice(index).reduce(
+        (sum, value) => sum + serializedContentLength(value),
+        0,
+      );
+      return { messages: output, stats, recoverableActiveResults, diagnostics };
+    }
+    if (counts.get(toolCallId) === 1 && existing
+      && existing.sourceHash !== projectionSourceHash(messages, index, options.cwd)) {
+      diagnostics.sourceMismatches++;
+      diagnostics.requiresReflow = true;
+      diagnostics.earliestChangedMessageIndex = index;
+      diagnostics.estimatedInvalidatedChars = messages.slice(index).reduce(
+        (sum, value) => sum + serializedContentLength(value),
+        0,
+      );
+      return { messages: output, stats, recoverableActiveResults, diagnostics };
+    }
+  }
+
+  const historicalLength = epoch.rawMessageHashes.length;
+  let changedIndex: number | undefined;
+  for (let index = 0; index < historicalLength; index++) {
+    if (rawMessageHashes[index] !== epoch.rawMessageHashes[index]) {
+      changedIndex = index;
+      break;
+    }
+  }
+  if (changedIndex !== undefined || rawMessageHashes.length < historicalLength) {
+    diagnostics.historyMismatches++;
+    diagnostics.requiresReflow = true;
+    diagnostics.earliestChangedMessageIndex = changedIndex ?? rawMessageHashes.length;
+    diagnostics.estimatedInvalidatedChars = messages.slice(diagnostics.earliestChangedMessageIndex).reduce(
+      (sum, value) => sum + serializedContentLength(value),
+      0,
+    );
+    return { messages: output, stats, recoverableActiveResults, diagnostics };
+  }
+
+  const usedIds = new Set<string>();
+  for (let index = 0; index < messages.length; index++) {
+    const raw = messages[index];
+    const fields = raw as Record<string, unknown>;
+    if (fields.role !== "toolResult") continue;
+    const toolCallId = fields.toolCallId;
+    if (typeof toolCallId !== "string" || !toolCallId) {
+      diagnostics.ambiguousIds++;
+      continue;
+    }
+    const sourceHash = projectionSourceHash(messages, index, options.cwd);
+    const existing = epoch.entries.get(toolCallId);
+    if (counts.get(toolCallId) !== 1) {
+      epoch.taintedIds.add(toolCallId);
+      diagnostics.ambiguousIds++;
+      if (existing && !usedIds.has(toolCallId) && existing.sourceHash === sourceHash) {
+        output[index] = cloneProjectionValue(existing.projectedMessage) as T;
+        usedIds.add(toolCallId);
+        diagnostics.cacheHits++;
+        recordProjectionStats(stats, existing);
+      }
+      continue;
+    }
+    if (existing) {
+      if (existing.sourceHash !== sourceHash) {
+        diagnostics.sourceMismatches++;
+        diagnostics.requiresReflow = true;
+        diagnostics.earliestChangedMessageIndex ??= index;
+        diagnostics.estimatedInvalidatedChars += messages.slice(index).reduce(
+          (sum, value) => sum + serializedContentLength(value),
+          0,
+        );
+        continue;
+      }
+      output[index] = cloneProjectionValue(existing.projectedMessage) as T;
+      diagnostics.cacheHits++;
+      recordProjectionStats(stats, existing);
+      if (existing.recoverable && !epoch.taintedIds.has(toolCallId))
+        recoverableActiveResults.push({ toolCallId, toolName: existing.toolName, isError: existing.isError });
+      continue;
+    }
+
+    const decision = projectNewResult(messages, index, threshold, {
+      pruneActive: epoch.config.activePruning,
+      cwd: options.cwd,
+    });
+    const projectedMessage = cloneProjectionValue(decision.message);
+    const projectedFields = projectedMessage as Record<string, unknown>;
+    const sourceChars = contentCharacters(fields.content);
+    const retainedChars = contentCharacters(projectedFields.content);
+    const entry: ProjectionEntry = {
+      toolCallId,
+      sourceHash,
+      toolName: typeof fields.toolName === "string" ? fields.toolName : "unknown",
+      isError: fields.isError === true,
+      projectedContent: cloneProjectionValue((projectedFields.content as ContentBlock[]) ?? []),
+      projectedMessage,
+      sourceChars,
+      retainedChars,
+      recoverable: decision.recoverable,
+      transformed: !isDeepStrictEqual(fields.content, projectedFields.content),
+      ...(decision.projectionKind ? { projectionKind: decision.projectionKind } : {}),
+    };
+    epoch.entries.set(toolCallId, entry);
+    output[index] = cloneProjectionValue(projectedMessage) as T;
+    diagnostics.newProjections++;
+    recordProjectionStats(stats, entry);
+    if (entry.recoverable) recoverableActiveResults.push({ toolCallId, toolName: entry.toolName, isError: entry.isError });
+  }
+
+  epoch.rawMessageHashes = rawMessageHashes;
+  const retained = [...epoch.entries.values()].reduce((sum, entry) => sum + entry.retainedChars, 0);
+  diagnostics.softBudgetExceeded = retained > 3 * threshold;
+  return { messages: output, stats, recoverableActiveResults, diagnostics };
 }

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.ts";
@@ -177,6 +178,17 @@ function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | 
 function delegatedRequest(input: unknown): string | undefined {
   const raw = object(input);
   return text(raw.request ?? raw.task, MAX_PAYLOAD_TEXT) || undefined;
+}
+
+function equalDelegatedRunExceptDuration(
+  previous: DelegatedAgentRunReadModel,
+  next: DelegatedAgentRunReadModel,
+): boolean {
+  const previousComparable = { ...previous };
+  const nextComparable = { ...next };
+  delete previousComparable.durationMs;
+  delete nextComparable.durationMs;
+  return isDeepStrictEqual(previousComparable, nextComparable);
 }
 
 function updateDelegatedRun(
@@ -817,7 +829,12 @@ export class RuntimeProjection {
     const old = this.delegatedRuns.get(toolId);
     const kind = delegatedAgentKind(raw.name ?? raw.toolName) ?? old?.kind;
     if (!kind) return;
-    this.setDelegatedRun(updateDelegatedRun(old, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, raw.partialResult, "running"));
+    const next = updateDelegatedRun(old, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, raw.partialResult, "running");
+    if (old && equalDelegatedRunExceptDuration(old, next)) {
+      this.delegatedRuns.set(toolId, next);
+      return;
+    }
+    this.setDelegatedRun(next);
   }
   private toolEnd(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool"); const old = this.tools.get(toolId);

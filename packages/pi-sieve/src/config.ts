@@ -7,10 +7,13 @@ import { SIEVE_THRESHOLD } from "./sieve.ts";
 export const MIN_SIEVE_THRESHOLD = 1_000;
 export const MAX_SIEVE_THRESHOLD = 50_000;
 
+export type ProjectionMode = "stable" | "legacy";
+
 export type SieveConfig = {
   version: 1;
   activePruning?: boolean;
   threshold?: number;
+  projectionMode?: ProjectionMode;
 };
 
 export const defaultConfig = (): SieveConfig => ({ version: 1 });
@@ -22,6 +25,10 @@ export function configuredActivePruning(config: SieveConfig): boolean {
 
 export function configuredThreshold(config: SieveConfig): number {
   return config.threshold ?? SIEVE_THRESHOLD;
+}
+
+export function configuredProjectionMode(config: SieveConfig): ProjectionMode {
+  return config.projectionMode ?? "stable";
 }
 
 export async function loadConfig(path = configPath()): Promise<SieveConfig> {
@@ -41,6 +48,7 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
       Array.isArray(value) ||
       value.version !== 1 ||
       (value.activePruning !== undefined && typeof value.activePruning !== "boolean") ||
+      (value.projectionMode !== undefined && value.projectionMode !== "stable" && value.projectionMode !== "legacy") ||
       (value.threshold !== undefined &&
         (!Number.isInteger(value.threshold) ||
           value.threshold < MIN_SIEVE_THRESHOLD ||
@@ -51,6 +59,7 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
       version: 1,
       ...(value.activePruning !== undefined ? { activePruning: value.activePruning } : {}),
       ...(value.threshold !== undefined ? { threshold: value.threshold } : {}),
+      ...(value.projectionMode !== undefined ? { projectionMode: value.projectionMode } : {}),
     };
   } catch (error) {
     try {

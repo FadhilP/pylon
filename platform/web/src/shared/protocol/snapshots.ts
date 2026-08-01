@@ -376,6 +376,7 @@ export type PackageSettingsReadModel =
       kind: "sieve";
       activePruning: boolean;
       threshold: number;
+      projectionMode: "stable" | "legacy";
     }
   | {
       kind: "helios";

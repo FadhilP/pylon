@@ -51,6 +51,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
   let latestContext: any;
   let currentCwd = "";
   let currentSessionId = "";
+  let nonPassingState: VerificationState | undefined;
   let policy: VerifyPolicy = { mode: "auto" };
   const catalog = async (cwd: string) => {
     const detection = await detectChecks(cwd);
@@ -144,6 +145,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
   };
   const publish = (details: Details, cwd: string) => {
     const event = { version: 1 as const, cwd, ...details };
+    if (["failed", "cancelled", "stale", "error"].includes(details.state))
+      nonPassingState = details.state;
     pi.events.emit("pi-verify:result", event);
     pi.events.emit("pi-verify:lifecycle", event);
     const hygiene = details.hygiene
@@ -160,6 +163,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     currentCwd = ctx.cwd;
     currentSessionId = ctx.sessionManager.getSessionId();
+    nonPassingState = undefined;
     latestContext = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
@@ -172,8 +176,17 @@ export default function verifyExtension(pi: ExtensionAPI) {
     disposeCatalog?.();
     currentCwd = "";
     currentSessionId = "";
+    nonPassingState = undefined;
+  });
+  pi.on("input", (event) => {
+    if (event.source !== "extension") nonPassingState = undefined;
   });
   pi.on("tool_call", (event) => {
+    if (nonPassingState)
+      return {
+        block: true,
+        reason: `Verification already ended this agent run with ${nonPassingState}. Write one caveated evidence-aware text-only final response and stop; do not call more tools.`,
+      };
     if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
       latestContext = undefined;
   });
@@ -203,7 +216,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       "Run bounded changed-set hygiene, then detect and run existing project verification commands. Discovers immediate child packages when root declares no checks. Scope changed skips clean Git worktrees; project always runs. Optionally select up to six stable check IDs.",
     promptSnippet: "Run detected project checks and return bounded failures",
     promptGuidelines: [
-      "Use verify after code changes before claiming completion. Call Verify in a tool-only assistant turn with no user-facing prose, wait for its result, then write exactly one evidence-aware final response. This ordering applies to passing, failed, stale, cancelled, error, clean, and no-check outcomes. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits and project for broad refactors or release checks. Verify never installs dependencies.",
+      "Use verify after code changes before claiming completion. Call Verify in a tool-only assistant turn with no user-facing prose, wait for its result, then write exactly one evidence-aware final response. After failed, stale, cancelled, or error results, stop without another tool call. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits and project for broad refactors or release checks. Verify never installs dependencies.",
     ],
     parameters: Type.Object(
       {

@@ -383,6 +383,7 @@ export interface SieveTransformStatsReadModel {
 export interface SieveReadModel {
   availability: FeatureState;
   mode?: "enabled" | "observe" | "disabled";
+  projectionMode?: "stable" | "legacy";
   threshold?: number;
   activePruning?: boolean;
   latestMode?: "enabled" | "observe";
@@ -392,6 +393,27 @@ export interface SieveReadModel {
   recalls?: number;
   recalledChars?: number;
   recallsByTool?: Record<string, { recalls: number; recalledChars: number }>;
+  epoch?: {
+    id?: string;
+    reason?: string;
+    startedAt?: string;
+    promptFingerprint?: string;
+    frozenResultCount: number;
+    frozenSourceChars: number;
+    frozenRetainedChars: number;
+    recoverableEntries: number;
+  };
+  stability?: {
+    newProjections: number;
+    projectionCacheHits: number;
+    recoverableEntries: number;
+    explicitReflows: number;
+    softBudgetExceedances: number;
+    prefixChurnViolations: number;
+    estimatedInvalidatedChars: number;
+    earliestChangedPriorMessageIndex?: number;
+  };
+  contextUsagePercent?: number;
   updatedAt?: string;
   error?: string;
 }

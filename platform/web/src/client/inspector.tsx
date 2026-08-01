@@ -790,7 +790,7 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
     .slice(0, 3)
     .map(([name, usage]) => `${name} ${formatCompactNumber(usage.netCharsSaved)}`)
     .join(", ") || "None";
-  return <InspectorSection title="Context Pruning" meta={sieve.mode}>
+  return <InspectorSection title="Context Pruning" meta={`${sieve.mode} · ${sieve.projectionMode}`}>
     <div className="usage-strip">
       <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
       <div><small>Saved</small><strong>{formatCompactNumber(saved)}</strong><span>characters</span></div>
@@ -802,6 +802,12 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
       <div><dt>Pruned</dt><dd>{formatCompactNumber(sieve.latest.transformed)} results</dd></div>
       <div><dt>Top savings</dt><dd>{topTools}</dd></div>
       <div><dt>Active pruning</dt><dd>{sieve.activePruning ? "Enabled" : "Disabled"}</dd></div>
+      <div><dt>Epoch</dt><dd>{sieve.epoch?.reason ?? "—"} · {formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)} frozen</dd></div>
+      <div><dt>Retained</dt><dd>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)} chars</dd></div>
+      <div><dt>Cache hits</dt><dd>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</dd></div>
+      <div><dt>Soft exceedances</dt><dd>{formatCompactNumber(sieve.stability?.softBudgetExceedances ?? 0)}</dd></div>
+      <div><dt>Prefix churn</dt><dd>{formatCompactNumber(sieve.stability?.prefixChurnViolations ?? 0)}</dd></div>
+      <div><dt>Context usage</dt><dd>{sieve.contextUsagePercent === undefined ? "—" : `${sieve.contextUsagePercent}%`}</dd></div>
       <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "—"}</dd></div>
     </dl>
     {sieve.error && <p className="inline-alert" role="alert">{sieve.error}</p>}

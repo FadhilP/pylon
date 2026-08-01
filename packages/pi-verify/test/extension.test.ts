@@ -15,6 +15,9 @@ test("verify guidance requires one post-result response", () => {
   assert.match(guidance, /tool-only assistant turn/i);
   assert.match(guidance, /no user-facing prose/i);
   assert.match(guidance, /exactly one evidence-aware final response/i);
+  assert.match(guidance, /After failed, stale, cancelled, or error results, stop without another tool call/i);
+  assert.match(guidance, /Omit checks by default; only pass exact IDs supplied by the user or verification catalog/i);
+  assert.match(guidance, /never infer IDs from scripts or labels/i);
   assert.doesNotMatch(guidance, /prose first|verification follows below/i);
   const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
   assert.match(tool.renderCall({ scope: "changed" }, theme).render(80).join("\n"), /Verify worktree changes/);
@@ -85,9 +88,11 @@ test("Verify never terminates early, even when the assistant emitted prior prose
     const caseCwd = kind === "no_checks" ? await mkdtemp(join(tmpdir(), "pi-verify-no-checks-")) : cwd;
     let heads = 0;
     let tool: any;
+    const handlers = new Map<string, (event: any, ctx?: any) => any>();
     extension({
       registerTool: (value: any) => { tool = value; },
-      on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
+      on: (name: string, handler: (event: any, ctx?: any) => any) => handlers.set(name, handler),
+      events: { emit: () => {} }, appendEntry: () => {},
       exec: async (command: string, args: string[]) => {
         if (command === "git" && args[0] === "rev-parse") {
           heads++;
@@ -102,20 +107,43 @@ test("Verify never terminates early, even when the assistant emitted prior prose
       },
     } as any);
     const id = `verify-${kind}`;
-    return tool.execute(id, { scope: kind === "clean" ? "changed" : "project", ...(kind === "invalid" ? { checks: ["missing"] } : {}) }, kind === "cancelled" ? { aborted: true } : undefined, undefined, {
+    const result = await tool.execute(id, { scope: kind === "clean" ? "changed" : "project", ...(kind === "invalid" ? { checks: ["missing"] } : {}) }, kind === "cancelled" ? { aborted: true } : undefined, undefined, {
       cwd: caseCwd, hasUI: false,
       sessionManager: { getLeafEntry: () => ({ type: "message", message: { role: "assistant", content: [
         { type: "text", text: prose },
         { type: "toolCall", id, name: "verify" },
       ] } }) },
     });
+    return { result, handlers, tool, caseCwd };
   };
 
   for (const kind of ["passed", "clean", "no_checks", "failed", "cancelled", "stale", "error", "invalid"] as const) {
-    const result = await run(kind);
+    const { result, handlers } = await run(kind);
     assert.equal(result.terminate, undefined, `${kind} must retain one evidence-aware follow-up`);
     assert.equal(result.details.terminal, undefined);
+    const block = handlers.get("tool_call")!({ toolName: "read" });
+    if (["failed", "cancelled", "stale", "error", "invalid"].includes(kind))
+      assert.match(block.reason, /Write one caveated evidence-aware text-only final response and stop/i);
+    else
+      assert.equal(block, undefined, `${kind} must not latch the non-passing guard`);
   }
+
+  const { handlers, tool, caseCwd } = await run("invalid");
+  assert.match(handlers.get("tool_call")!({ toolName: "verify" }).reason, /already ended this agent run with error/i);
+  handlers.get("input")!({ source: "extension" });
+  assert.match(handlers.get("tool_call")!({ toolName: "bash" }).reason, /do not call more tools/i);
+  handlers.get("input")!({ source: "interactive" });
+  assert.equal(handlers.get("tool_call")!({ toolName: "verify" }), undefined);
+
+  await tool.execute("invalid-again", { scope: "project", checks: ["missing"] }, undefined, undefined, {
+    cwd: caseCwd, hasUI: false,
+  });
+  assert.match(handlers.get("tool_call")!({ toolName: "read" }).reason, /already ended this agent run/i);
+  handlers.get("session_start")!({}, {
+    cwd: caseCwd,
+    sessionManager: { getSessionId: () => "replacement", getEntries: () => [] },
+  });
+  assert.equal(handlers.get("tool_call")!({ toolName: "read" }), undefined);
 });
 
 test("tool-only passing Verify remains nonterminal and reports capped check IDs compactly", async () => {

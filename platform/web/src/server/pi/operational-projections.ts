@@ -98,6 +98,8 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
       recallsByTool: value.sieve.recallsByTool
         ? Object.fromEntries(Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [name, { ...usage }]))
         : undefined,
+      epoch: value.sieve.epoch ? { ...value.sieve.epoch } : undefined,
+      stability: value.sieve.stability ? { ...value.sieve.stability } : undefined,
     },
     health: { ...value.health, issues: [...value.health.issues] },
   };
@@ -178,6 +180,36 @@ function sieveRecallStats(value: unknown): NonNullable<SieveReadModel["recallsBy
   return output;
 }
 
+function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
+  const input = record(value);
+  const metrics = ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "recoverableEntries"];
+  if (!input || !metrics.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)) return undefined;
+  const startedAt = input.startedAt === undefined ? undefined : timestamp(input.startedAt);
+  if (input.startedAt !== undefined && !startedAt) return undefined;
+  return {
+    ...(string(input.id, 200) ? { id: string(input.id, 200) } : {}),
+    ...(string(input.reason, 200) ? { reason: string(input.reason, 200) } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(string(input.promptFingerprint, 200) ? { promptFingerprint: string(input.promptFingerprint, 200) } : {}),
+    frozenResultCount: Number(input.frozenResultCount), frozenSourceChars: Number(input.frozenSourceChars),
+    frozenRetainedChars: Number(input.frozenRetainedChars), recoverableEntries: Number(input.recoverableEntries),
+  };
+}
+
+function sieveStability(value: unknown): SieveReadModel["stability"] | undefined {
+  const input = record(value);
+  const metrics = ["newProjections", "projectionCacheHits", "recoverableEntries", "explicitReflows", "softBudgetExceedances", "prefixChurnViolations", "estimatedInvalidatedChars"];
+  if (!input || !metrics.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)
+    || input.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(input.earliestChangedPriorMessageIndex) || Number(input.earliestChangedPriorMessageIndex) < 0)) return undefined;
+  return {
+    newProjections: Number(input.newProjections), projectionCacheHits: Number(input.projectionCacheHits),
+    recoverableEntries: Number(input.recoverableEntries), explicitReflows: Number(input.explicitReflows),
+    softBudgetExceedances: Number(input.softBudgetExceedances), prefixChurnViolations: Number(input.prefixChurnViolations),
+    estimatedInvalidatedChars: Number(input.estimatedInvalidatedChars),
+    ...(input.earliestChangedPriorMessageIndex !== undefined ? { earliestChangedPriorMessageIndex: Number(input.earliestChangedPriorMessageIndex) } : {}),
+  };
+}
+
 function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   const input = record(value);
   if (!input || input.version !== 1) return old;
@@ -187,7 +219,14 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   const cumulativeProjected = sieveStats(input.cumulativeProjected);
   const updatedAt = timestamp(input.updatedAt);
   const recallsByTool = sieveRecallStats(input.recallsByTool);
+  const epoch = input.epoch === undefined ? undefined : sieveEpoch(input.epoch);
+  const stability = input.stability === undefined ? undefined : sieveStability(input.stability);
+  const contextUsagePercent = input.contextUsagePercent;
   if (input.available !== true
+    || !["stable", "legacy"].includes(String(input.projectionMode))
+    || input.epoch !== undefined && !epoch
+    || input.stability !== undefined && !stability
+    || contextUsagePercent !== undefined && (typeof contextUsagePercent !== "number" || !Number.isFinite(contextUsagePercent) || contextUsagePercent < 0 || contextUsagePercent > 100)
     || !["enabled", "observe", "disabled"].includes(String(input.mode))
     || !["enabled", "observe"].includes(String(input.latestMode))
     || !Number.isSafeInteger(input.threshold) || Number(input.threshold) < 1_000
@@ -200,6 +239,7 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   return {
     availability: "available",
     mode: input.mode as NonNullable<SieveReadModel["mode"]>,
+    projectionMode: input.projectionMode as NonNullable<SieveReadModel["projectionMode"]>,
     threshold: input.threshold as number,
     activePruning: input.activePruning,
     latestMode: input.latestMode as NonNullable<SieveReadModel["latestMode"]>,
@@ -209,6 +249,9 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
     recalls: Number(input.recalls),
     recalledChars: Number(input.recalledChars),
     recallsByTool,
+    ...(epoch ? { epoch } : {}),
+    ...(stability ? { stability } : {}),
+    ...(contextUsagePercent !== undefined ? { contextUsagePercent } : {}),
     updatedAt,
     ...(string(input.error, 500) ? { error: string(input.error, 500) } : {}),
   };

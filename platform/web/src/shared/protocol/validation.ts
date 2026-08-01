@@ -129,6 +129,7 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   }
   if (value.kind === "sieve") {
     return typeof value.activePruning === "boolean"
+      && (value.projectionMode === "stable" || value.projectionMode === "legacy")
       && Number.isSafeInteger(value.threshold)
       && (value.threshold as number) >= 1_000
       && (value.threshold as number) <= 50_000;
@@ -758,6 +759,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
           Number.isSafeInteger(transformedBy[key]) && (transformedBy[key] as number) >= 0);
     };
     if (!["enabled", "observe", "disabled"].includes(String(operational.sieve.mode))
+      || !["stable", "legacy"].includes(String(operational.sieve.projectionMode))
       || !Number.isSafeInteger(operational.sieve.threshold) || (operational.sieve.threshold as number) < 1_000
       || typeof operational.sieve.activePruning !== "boolean"
       || !["enabled", "observe"].includes(String(operational.sieve.latestMode))
@@ -773,6 +775,18 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
         && Number.isSafeInteger(usage.recalledChars) && (usage.recalledChars as number) >= 0)
       || typeof operational.sieve.updatedAt !== "string" || Number.isNaN(Date.parse(operational.sieve.updatedAt))
       || (operational.sieve.error !== undefined && !boundedString(operational.sieve.error, 500))) return false;
+    const metrics = (value: Record<string, unknown> | undefined, keys: string[]) => value !== undefined
+      && keys.every((key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0);
+    const rawEpoch = operational.sieve.epoch;
+    const epoch = record(rawEpoch) ? rawEpoch : undefined;
+    if (operational.sieve.epoch !== undefined && (!metrics(epoch, ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "recoverableEntries"])
+      || !["id", "reason", "promptFingerprint"].every((key) => epoch![key] === undefined || boundedString(epoch![key], 200))
+      || epoch!.startedAt !== undefined && (typeof epoch!.startedAt !== "string" || Number.isNaN(Date.parse(epoch!.startedAt))))) return false;
+    const rawStability = operational.sieve.stability;
+    const stability = record(rawStability) ? rawStability : undefined;
+    if (operational.sieve.stability !== undefined && (!metrics(stability, ["newProjections", "projectionCacheHits", "recoverableEntries", "explicitReflows", "softBudgetExceedances", "prefixChurnViolations", "estimatedInvalidatedChars"])
+      || stability!.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(stability!.earliestChangedPriorMessageIndex) || (stability!.earliestChangedPriorMessageIndex as number) < 0))) return false;
+    if (operational.sieve.contextUsagePercent !== undefined && (typeof operational.sieve.contextUsagePercent !== "number" || !Number.isFinite(operational.sieve.contextUsagePercent) || operational.sieve.contextUsagePercent < 0 || operational.sieve.contextUsagePercent > 100)) return false;
   }
   if (operational.continuity.memory !== undefined
     && (!Array.isArray(operational.continuity.memory) || operational.continuity.memory.length > 30

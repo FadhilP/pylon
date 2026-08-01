@@ -919,8 +919,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     promptGuidelines: [
       "Use set_plan for explicit /plan, risky or multi-phase work, handoffs/background jobs, or likely blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. During explicit planning, Continuity owns plan presentation; otherwise it maintains an internal task list.",
-      "Clarify only a blocking user decision: ask one plain-language question with the recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
-      "Keep verification out of new todo lists and finish implementation todos before Verify; a sole verification-only todo completes automatically when Verify passes. Make nonterminal continuity updates before final text without progress narration.",
+      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
+      "Keep verification out of new todo lists. Finish implementation todos before Verify; a sole verification-only todo completes automatically when Verify passes. Make nonterminal updates before final text without progress narration.",
+      "After failed, stale, cancelled, or error Verify results, write one caveated text-only final response and stop without another tool call.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -1007,6 +1008,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
       { additionalProperties: false },
     ),
     async execute(_i, p, _s, _u, ctx): Promise<any> {
+      if (p.action === "state") {
+        const todoFields = (["todoId", "todoIds", "status", "nextTodoId"] as const)
+          .filter((field) => p[field] !== undefined);
+        if (todoFields.length)
+          return {
+            content: [{
+              type: "text",
+              text: `${todoFields.join(", ")} require action \"todo\"; complete todos before updating state.`,
+            }],
+          };
+      }
       if (tripsCircuitBreaker(p)) {
         ctx.abort();
         return {
