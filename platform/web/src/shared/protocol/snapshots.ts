@@ -377,6 +377,8 @@ export type PackageSettingsReadModel =
       activePruning: boolean;
       threshold: number;
       projectionMode: "stable" | "legacy";
+      rolloverHighMultiplier: number;
+      rolloverLowMultiplier: number;
     }
   | {
       kind: "helios";

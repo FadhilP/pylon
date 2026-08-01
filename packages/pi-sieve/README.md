@@ -20,6 +20,8 @@ Run `/reload` after installation.
 /sieve projection stable
 /sieve projection legacy
 /sieve reflow
+/sieve rollover 8 4
+/sieve rollover reset
 /sieve active enable
 /sieve active disable
 /sieve threshold 12000
@@ -27,7 +29,7 @@ Run `/reload` after installation.
 /sieve reset-stats
 ```
 
-Pi Sieve is enabled in `stable` projection mode by default. The threshold, active-pruning setting, and projection mode persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192.
+Pi Sieve is enabled in `stable` projection mode by default. The threshold, active-pruning setting, projection mode, and rollover multipliers persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192. Stable rollover defaults to a high watermark of `8T` and a newest-first target of `4T`, where `T` is the configured threshold. Multipliers are integers from 1 through 64 and the high value must exceed the target.
 
 `observe` computes projections and telemetry without changing outbound context. `disable` does neither. Moving between runtime modes starts a fresh projection epoch before the next provider call.
 
@@ -40,7 +42,7 @@ Stable mode freezes every unique tool result the first time it appears in an epo
 3. It stores a deep-cloned complete outbound result in an extension-owned ledger.
 4. Later context hooks reuse that frozen result byte-for-byte.
 
-New results may append context, but they never evict, reslice, age-prune, stale-prune, or convert an older projection to a marker. The historical three-times-threshold budget remains telemetry only. Pi's normal compaction is responsible for removing accumulated old context.
+New results append context without changing older projections inside the epoch. When reducible retained source strictly exceeds the configured high watermark, Pi Sieve deliberately starts one `budget-rollover` epoch, recomputes unique eligible successful results newest-to-oldest toward the lower target, and freezes that new ledger. This trades one explicit cache reset for another stable period. Protected, unsupported, erroneous, missing-ID, and duplicate-ID results remain outside the rollover budget. Pi's normal compaction remains responsible for context that Sieve cannot reduce.
 
 Raw session messages are never transformed or persisted by Pi Sieve.
 
@@ -55,6 +57,7 @@ A new epoch deliberately resets the provider prefix after:
 - effective system-prompt or active tool-schema change
 - threshold, active-pruning, projection-mode, or runtime-mode change
 - explicit `/sieve reflow`
+- automatic retained-source budget rollover
 - detected non-append history or source-identity mismatch
 
 User messages, assistant turns, new results, repeated context hooks, and recall calls do not start epochs.
@@ -101,7 +104,7 @@ Use `/sieve projection stable` to return to immutable projections.
 - epoch ID, reason, start time, and prompt fingerprint
 - frozen result, source-character, retained-character, and recoverable counts
 - new projections and projection-ledger cache hits
-- explicit reflows and soft-budget exceedances
+- explicit reflows, automatic budget rollovers, and watermark crossings
 - prefix-churn violations, earliest changed index, and estimated invalidated characters
 - current context usage percentage when Pi reports it
 - per-tool transformations, retained characters, and savings
@@ -109,4 +112,4 @@ Use `/sieve projection stable` to return to immutable projections.
 
 The critical stable-mode invariant is `prefix-churn violations: 0`. Provider-reported input and cache-read usage remains authoritative; Pi Sieve does not attribute provider usage to individual tools.
 
-Pi Sieve does not trigger automatic compaction. The three-times-threshold value and context usage are operational signals only.
+Pi Sieve does not trigger automatic compaction. Rollover controls reducible retained tool source only; context usage and unprunable content remain operational signals.

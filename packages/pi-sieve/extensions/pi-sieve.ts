@@ -3,11 +3,15 @@ import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  MAX_ROLLOVER_MULTIPLIER,
   MAX_SIEVE_THRESHOLD,
+  MIN_ROLLOVER_MULTIPLIER,
   MIN_SIEVE_THRESHOLD,
   configPath,
   configuredActivePruning,
   configuredProjectionMode,
+  configuredRolloverHighMultiplier,
+  configuredRolloverLowMultiplier,
   configuredThreshold,
   defaultConfig,
   loadConfig,
@@ -16,6 +20,8 @@ import {
   type SieveConfig,
 } from "../src/config.ts";
 import {
+  DEFAULT_ROLLOVER_HIGH_MULTIPLIER,
+  DEFAULT_ROLLOVER_LOW_MULTIPLIER,
   ELIGIBLE_TOOL_NAMES,
   PROJECTION_POLICY_VERSION,
   READ_TOOL_NAME,
@@ -26,6 +32,8 @@ import {
   createProjectionEpoch,
   emptyTransformStats,
   projectionSourceHash,
+  retainedProjectionBudget,
+  rolloverStableSieveMessages,
   sieveMessages,
   stableSieveMessages,
   type EpochReason,
@@ -75,11 +83,14 @@ function statusText(
   activePruning: boolean,
   activeRecalls: number,
   activeRecalledChars: number,
+  rolloverHighMultiplier: number,
+  rolloverLowMultiplier: number,
   epoch: ProjectionEpoch | undefined,
   stability: {
     newProjections: number;
     projectionCacheHits: number;
     explicitReflows: number;
+    automaticRollovers: number;
     softBudgetExceedances: number;
     prefixChurnViolations: number;
     estimatedInvalidatedChars: number;
@@ -97,23 +108,31 @@ function statusText(
     `pi-sieve: ${mode}; projection ${projectionMode}`,
     `Threshold: > ~${estimatedTokens(threshold)} tokens (${threshold} JS characters; estimated at ${CHARS_PER_ESTIMATED_TOKEN} characters/token)`,
     projectionMode === "stable"
-      ? "Projection policy: append-only per-result caps; age and the three-threshold value are telemetry only"
+      ? `Projection policy: append-only per-result caps; automatic newest-first rollover at >${rolloverHighMultiplier}T to ${rolloverLowMultiplier}T`
       : "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
-    `Soft retained-output threshold: ${3 * threshold} characters${projectionMode === "legacy" ? ", newest-to-oldest eviction enabled" : ", no eviction"}`,
+    `Stable rollover: high ${rolloverHighMultiplier}T (${rolloverHighMultiplier * threshold} retained source chars); target ${rolloverLowMultiplier}T (${rolloverLowMultiplier * threshold} chars)`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
     `Read policy: unique ${READ_TOOL_NAME} output is excluded from size/age pruning; only later exact duplicates may be replaced in stable mode`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
     `Recent-window policy: ${projectionMode === "stable" ? "results freeze at first projection; user messages do not reflow them" : RECENT_WINDOW_POLICY}`,
     `Epoch: ${epoch?.id ?? "not started"}${epoch ? ` (${epoch.reason}, ${epoch.startedAt})` : ""}; frozen ${frozen.length}; source ${frozenSource} chars; retained ${frozenRetained} chars`,
-    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; soft-budget exceedances ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars`,
+    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; automatic rollovers ${stability.automaticRollovers}; watermark crossings ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars`,
     `Latest call (${latestMode === "observe" ? "observe projections" : "enabled actual"}): ${statsText(latestStats, latestLabel)}`,
     `Cumulative outcomes: actual transformations ${cumulativeActual.transformed}; actual gross omitted ~${estimatedTokens(cumulativeActual.omittedChars)} tokens; actual net saved ~${estimatedTokens(cumulativeActual.netCharsSaved)} tokens; projected observe transformations ${cumulativeProjected.transformed}; projected observe gross omitted ~${estimatedTokens(cumulativeProjected.omittedChars)} tokens; projected observe net saved ~${estimatedTokens(cumulativeProjected.netCharsSaved)} tokens`,
     `Cumulative classifications: ${statsText(cumulative, "qualifying transformations")}`,
   ].join("\n");
 }
 
-function fingerprint(pi: ExtensionAPI, ctx: any, threshold: number, activePruning: boolean, projectionMode: ProjectionMode) {
+function fingerprint(
+  pi: ExtensionAPI,
+  ctx: any,
+  threshold: number,
+  activePruning: boolean,
+  projectionMode: ProjectionMode,
+  rolloverHighMultiplier: number,
+  rolloverLowMultiplier: number,
+) {
   const active = typeof pi.getActiveTools === "function" ? [...pi.getActiveTools()].sort() : [];
   const all = typeof pi.getAllTools === "function" ? pi.getAllTools() : [];
   const activeSet = new Set(active);
@@ -130,6 +149,8 @@ function fingerprint(pi: ExtensionAPI, ctx: any, threshold: number, activePrunin
     threshold,
     activePruning,
     projectionMode,
+    rolloverHighMultiplier,
+    rolloverLowMultiplier,
     policyVersion: PROJECTION_POLICY_VERSION,
   };
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -139,6 +160,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let mode: SieveMode = "enabled";
   let projectionMode: ProjectionMode = "stable";
   let threshold = SIEVE_THRESHOLD;
+  let rolloverHighMultiplier = DEFAULT_ROLLOVER_HIGH_MULTIPLIER;
+  let rolloverLowMultiplier = DEFAULT_ROLLOVER_LOW_MULTIPLIER;
   let latestMode: Exclude<SieveMode, "disabled"> = "enabled";
   let latestStats = emptyTransformStats();
   let cumulativeActual = emptyTransformStats();
@@ -157,6 +180,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     projectionCacheHits: 0,
     recoverableEntries: 0,
     explicitReflows: 0,
+    automaticRollovers: 0,
     softBudgetExceedances: 0,
     prefixChurnViolations: 0,
     earliestChangedPriorMessageIndex: undefined as number | undefined,
@@ -170,6 +194,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     activePruning = configuredActivePruning(config);
     threshold = configuredThreshold(config);
     projectionMode = configuredProjectionMode(config);
+    rolloverHighMultiplier = configuredRolloverHighMultiplier(config);
+    rolloverLowMultiplier = configuredRolloverLowMultiplier(config);
   };
   let configLoadError: unknown;
   let configQueue: Promise<void> = loadConfig(settingsPath).then(applyConfig).catch((error) => {
@@ -177,8 +203,12 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   });
 
   const beginEpoch = (reason: EpochReason, ctx?: any, knownFingerprint?: string) => {
-    const promptFingerprint = knownFingerprint ?? fingerprint(pi, ctx, threshold, activePruning, projectionMode);
-    epoch = createProjectionEpoch(reason, { threshold, activePruning }, promptFingerprint);
+    const promptFingerprint = knownFingerprint ?? fingerprint(
+      pi, ctx, threshold, activePruning, projectionMode, rolloverHighMultiplier, rolloverLowMultiplier,
+    );
+    epoch = createProjectionEpoch(reason, {
+      threshold, activePruning, rolloverHighMultiplier, rolloverLowMultiplier,
+    }, promptFingerprint);
     pendingEpochReason = undefined;
     recoverableActiveResults.clear();
     rawRecoverableResults.clear();
@@ -209,6 +239,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     projectionMode,
     threshold,
     activePruning,
+    rolloverHighMultiplier,
+    rolloverLowMultiplier,
     latestMode,
     latest: latestStats,
     cumulativeActual,
@@ -226,7 +258,13 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   const disposeStateRequest = pi.events.on("pi-sieve:state-request", (request: any) => {
     if (request?.version === 1 && typeof request.respond === "function") request.respond(stateSnapshot());
   });
-  const updateConfig = async (patch: { activePruning?: boolean; threshold?: number; projectionMode?: ProjectionMode }) => {
+  const updateConfig = async (patch: {
+    activePruning?: boolean;
+    threshold?: number;
+    projectionMode?: ProjectionMode;
+    rolloverHighMultiplier?: number;
+    rolloverLowMultiplier?: number;
+  }) => {
     const operation = configQueue.then(async () => {
       if (configLoadError) throw configLoadError;
       const next: SieveConfig = {
@@ -234,6 +272,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         activePruning: patch.activePruning ?? configuredActivePruning(persistedConfig),
         threshold: patch.threshold ?? configuredThreshold(persistedConfig),
         projectionMode: patch.projectionMode ?? configuredProjectionMode(persistedConfig),
+        rolloverHighMultiplier: patch.rolloverHighMultiplier ?? configuredRolloverHighMultiplier(persistedConfig),
+        rolloverLowMultiplier: patch.rolloverLowMultiplier ?? configuredRolloverLowMultiplier(persistedConfig),
       };
       await saveConfig(next, settingsPath);
       applyConfig(next);
@@ -317,7 +357,9 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
 
   pi.on("context", (event, ctx) => {
     if (mode === "disabled") return;
-    const currentFingerprint = fingerprint(pi, ctx, threshold, activePruning, projectionMode);
+    const currentFingerprint = fingerprint(
+      pi, ctx, threshold, activePruning, projectionMode, rolloverHighMultiplier, rolloverLowMultiplier,
+    );
     if (!epoch || pendingEpochReason) beginEpoch(pendingEpochReason || "session-start", ctx, currentFingerprint);
     else if (epoch.promptFingerprint !== currentFingerprint) beginEpoch("prompt-fingerprint", ctx, currentFingerprint);
 
@@ -338,6 +380,40 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       result = rerun;
       diagnostics = rerun.diagnostics;
     }
+    if (projectionMode === "stable" && diagnostics?.softBudgetExceeded) {
+      if (!softBudgetExceededInEpoch) {
+        stability.softBudgetExceedances++;
+        softBudgetExceededInEpoch = true;
+      }
+      const previousMessages = result.messages;
+      const previousBudget = retainedProjectionBudget(epoch!);
+      const rolloverEpoch = createProjectionEpoch("budget-rollover", {
+        threshold, activePruning, rolloverHighMultiplier, rolloverLowMultiplier,
+      }, currentFingerprint);
+      const rerun = rolloverStableSieveMessages(
+        event.messages,
+        rolloverEpoch,
+        rolloverLowMultiplier * threshold,
+        { cwd: ctx?.cwd },
+      );
+      const rolloverBudget = retainedProjectionBudget(rolloverEpoch);
+      if (rolloverBudget < previousBudget && rolloverBudget <= rolloverLowMultiplier * threshold) {
+        let changedIndex = 0;
+        while (changedIndex < previousMessages.length
+          && JSON.stringify(previousMessages[changedIndex]) === JSON.stringify(rerun.messages[changedIndex])) changedIndex++;
+        if (changedIndex < previousMessages.length) {
+          stability.earliestChangedPriorMessageIndex ??= changedIndex;
+          stability.estimatedInvalidatedChars += JSON.stringify(previousMessages.slice(changedIndex)).length;
+        }
+        epoch = rolloverEpoch;
+        recoverableActiveResults.clear();
+        rawRecoverableResults.clear();
+        softBudgetExceededInEpoch = false;
+        stability.automaticRollovers++;
+        result = rerun;
+        diagnostics = rerun.diagnostics;
+      }
+    }
 
     latestMode = mode;
     latestStats = result.stats;
@@ -346,10 +422,6 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     if (projectionMode === "stable" && diagnostics) {
       stability.newProjections += diagnostics.newProjections;
       stability.projectionCacheHits += diagnostics.cacheHits;
-      if (diagnostics.softBudgetExceeded && !softBudgetExceededInEpoch) {
-        stability.softBudgetExceedances++;
-        softBudgetExceededInEpoch = true;
-      }
       stability.recoverableEntries = result.recoverableActiveResults.length;
     }
     if (mode === "observe") {
@@ -444,11 +516,30 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         recallsByTool = {};
         stability = {
           newProjections: 0, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
-          softBudgetExceedances: 0, prefixChurnViolations: 0, earliestChangedPriorMessageIndex: undefined,
+          automaticRollovers: 0, softBudgetExceedances: 0, prefixChurnViolations: 0, earliestChangedPriorMessageIndex: undefined,
           estimatedInvalidatedChars: 0,
         };
         publishState();
         ctx.ui.notify("pi-sieve statistics reset.", "info");
+        return;
+      }
+      if (action === "rollover" && (parts.length === 3 || hasOnlyValue && value === "reset")) {
+        const high = value === "reset" ? DEFAULT_ROLLOVER_HIGH_MULTIPLIER : Number(value);
+        const low = value === "reset" ? DEFAULT_ROLLOVER_LOW_MULTIPLIER : Number(parts[2]);
+        if (!Number.isSafeInteger(high) || !Number.isSafeInteger(low)
+          || low < MIN_ROLLOVER_MULTIPLIER || high > MAX_ROLLOVER_MULTIPLIER || high <= low) {
+          ctx.ui.notify(`Rollover multipliers must be integers from ${MIN_ROLLOVER_MULTIPLIER} to ${MAX_ROLLOVER_MULTIPLIER}, with high greater than low.`, "info");
+          return;
+        }
+        try {
+          await updateConfig({ rolloverHighMultiplier: high, rolloverLowMultiplier: low });
+        } catch (error: any) {
+          ctx.ui.notify(`Could not save pi-sieve rollover settings: ${error?.message ?? String(error)}`, "error");
+          return;
+        }
+        requestEpoch("configuration-change");
+        publishState();
+        ctx.ui.notify(`pi-sieve rollover ${value === "reset" ? "reset" : "set"} to ${high}T → ${low}T; cached prefix will reset.`, "info");
         return;
       }
       if (action === "threshold" && hasOnlyValue && (value === "reset" || /^\d+$/.test(value))) {
@@ -471,11 +562,12 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       if (action === "status" && hasNoValue) {
         ctx.ui.notify(statusText(
           mode, projectionMode, threshold, latestMode, latestStats, cumulativeActual, cumulativeProjected,
-          activePruning, activeRecalls, activeRecalledChars, epoch, stability,
+          activePruning, activeRecalls, activeRecalledChars,
+          rolloverHighMultiplier, rolloverLowMultiplier, epoch, stability,
         ), "info");
         return;
       }
-      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|projection <stable|legacy>|reflow|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
+      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|projection <stable|legacy>|reflow|rollover <high low|reset>|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
     },
   });
 }

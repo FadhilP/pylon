@@ -132,7 +132,12 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && (value.projectionMode === "stable" || value.projectionMode === "legacy")
       && Number.isSafeInteger(value.threshold)
       && (value.threshold as number) >= 1_000
-      && (value.threshold as number) <= 50_000;
+      && (value.threshold as number) <= 50_000
+      && Number.isSafeInteger(value.rolloverHighMultiplier)
+      && Number.isSafeInteger(value.rolloverLowMultiplier)
+      && (value.rolloverLowMultiplier as number) >= 1
+      && (value.rolloverHighMultiplier as number) <= 64
+      && (value.rolloverHighMultiplier as number) > (value.rolloverLowMultiplier as number);
   }
   if (value.kind === "helios") return typeof value.headed === "boolean";
   return value.kind === "timeline" && typeof value.editRollbackDefault === "boolean";

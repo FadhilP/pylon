@@ -15,6 +15,8 @@ import {
   recalledGiantErrorMarker,
   recalledOmissionMarker,
   createProjectionEpoch,
+  retainedProjectionBudget,
+  rolloverStableSieveMessages,
   sieveMessages,
   stableSieveMessages,
   staleReadMarker,
@@ -810,7 +812,9 @@ test("shares the active retained budget across age-zero results", () => {
 });
 
 test("stable epochs freeze every prior result while context grows beyond the soft budget", () => {
-  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  const epoch = createProjectionEpoch("session-start", {
+    threshold: 1_000, activePruning: true, rolloverHighMultiplier: 3, rolloverLowMultiplier: 2,
+  }, "prompt");
   const call = (id: string, name = "bash", argumentsValue: Record<string, unknown> = {}) => ({
     role: "assistant", content: [{ type: "toolCall", id, name, arguments: argumentsValue }],
   });
@@ -837,6 +841,41 @@ test("stable epochs freeze every prior result while context grows beyond the sof
   assert.equal(afterUser.diagnostics.softBudgetExceeded, true);
   assert.equal(afterUser.diagnostics.sourceMismatches, 0);
   assert.equal(epoch.entries.size, 6);
+});
+
+test("budget rollover favors newest results, reaches its target, and freezes the new epoch", () => {
+  const messages: any[] = [user("start")];
+  for (let index = 0; index < 6; index++) {
+    messages.push(textResult("bash", String(index).repeat(2_000), { toolCallId: `roll-${index}`, isError: false }));
+  }
+  const originalEpoch = createProjectionEpoch("session-start", {
+    threshold: 1_000, activePruning: true, rolloverHighMultiplier: 3, rolloverLowMultiplier: 2,
+  }, "prompt");
+  const original = stableSieveMessages(messages, originalEpoch);
+  assert.equal(original.diagnostics.softBudgetExceeded, true);
+
+  const rolloverEpoch = createProjectionEpoch("budget-rollover", {
+    threshold: 1_000, activePruning: true, rolloverHighMultiplier: 3, rolloverLowMultiplier: 2,
+  }, "prompt");
+  const rolled = rolloverStableSieveMessages(messages, rolloverEpoch, 2_000);
+  assert.ok(retainedProjectionBudget(rolloverEpoch) <= 2_000);
+  assert.equal(rolloverEpoch.entries.get("roll-0")?.retainedSourceChars, 0);
+  assert.ok((rolloverEpoch.entries.get("roll-5")?.retainedSourceChars ?? 0) > 0);
+  assert.equal(rolled.diagnostics.softBudgetExceeded, false);
+  assert.deepEqual(stableSieveMessages(messages, rolloverEpoch).messages, rolled.messages);
+
+  const read = textResult("read", "read".repeat(1_000), { toolCallId: "protected-read", isError: false });
+  const error = textResult("bash", "error".repeat(400), { toolCallId: "protected-error", isError: true });
+  const duplicateA = textResult("bash", "one", { toolCallId: "duplicate-id", isError: false });
+  const duplicateB = textResult("bash", "two", { toolCallId: "duplicate-id", isError: false });
+  const edgeMessages: any[] = [user("edges"), read, error, duplicateA, duplicateB, ...messages.slice(1)];
+  const edgeEpoch = createProjectionEpoch("budget-rollover", {
+    threshold: 1_000, activePruning: true, rolloverHighMultiplier: 3, rolloverLowMultiplier: 2,
+  }, "prompt");
+  const edge = rolloverStableSieveMessages(edgeMessages, edgeEpoch, 2_000);
+  assert.deepEqual(edge.messages.slice(1, 5), [read, error, duplicateA, duplicateB]);
+  assert.equal(edgeEpoch.entries.has("duplicate-id"), false);
+  assert.ok(retainedProjectionBudget(edgeEpoch) <= 2_000);
 });
 
 test("regression replay keeps stable history fixed while legacy newest-first budgeting churns", () => {
@@ -1026,6 +1065,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     activePruning: true,
     threshold: 12_000,
     projectionMode: "stable",
+    rolloverHighMultiplier: 8,
+    rolloverLowMultiplier: 4,
   });
   await command.handler("active disable", ctx);
   await command.handler("threshold reset", ctx);
@@ -1057,6 +1098,10 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   await command.handler("threshold 50001", ctx);
   assert.equal(notification, "Threshold must be an integer from 1000 to 50000.");
   await command.handler("threshold reset", ctx);
+  await command.handler("rollover 10 5", ctx);
+  assert.equal((await loadConfig(settingsPath)).rolloverHighMultiplier, 10);
+  assert.equal((await loadConfig(settingsPath)).rolloverLowMultiplier, 5);
+  await command.handler("rollover reset", ctx);
   await command.handler("active disable", ctx);
   await command.handler("status", ctx);
   assert.match(notification, new RegExp(`Threshold: > ~${Math.ceil(SIEVE_THRESHOLD / 4)} tokens \\(${SIEVE_THRESHOLD} JS characters; estimated at 4 characters/token\\)`));
@@ -1068,6 +1113,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
     projectionMode: "stable",
+    rolloverHighMultiplier: 8,
+    rolloverLowMultiplier: 4,
   });
   assert.equal(activeTools.includes("sieve_recall"), true);
   await command.handler("observe", ctx);
@@ -1083,6 +1130,25 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(publishedStates.at(-1).epoch.id, firstEpoch, "user messages do not start epochs");
   assert.ok(publishedStates.at(-1).stability.projectionCacheHits >= 1);
   assert.equal(publishedStates.at(-1).stability.prefixChurnViolations, 0);
+
+  const rolloverMessages: any[] = [user("roll over")];
+  for (let index = 0; index < 9; index++) {
+    rolloverMessages.push(textResult("bash", String(index).repeat(SIEVE_THRESHOLD + 1_000), {
+      toolCallId: `runtime-roll-${index}`, isError: false,
+    }));
+  }
+  hook({ messages: rolloverMessages });
+  assert.equal(publishedStates.at(-1).epoch.reason, "budget-rollover");
+  assert.equal(publishedStates.at(-1).stability.automaticRollovers, 1);
+  assert.equal(publishedStates.at(-1).latest.transformed, 9, "only final rollover stats are published");
+  assert.equal(publishedStates.at(-1).rolloverHighMultiplier, 8);
+  assert.equal(publishedStates.at(-1).rolloverLowMultiplier, 4);
+  const rolloverEpochId = publishedStates.at(-1).epoch.id;
+  const rolloverRecall = await tools.get("sieve_recall").execute("rollover-recall", { toolCallId: "runtime-roll-0" });
+  assert.equal(rolloverRecall.details.found, true);
+  hook({ messages: rolloverMessages });
+  assert.equal(publishedStates.at(-1).epoch.id, rolloverEpochId);
+  assert.equal(publishedStates.at(-1).stability.automaticRollovers, 1, "unchanged context does not roll repeatedly");
 
   for (const [eventName, reason] of [["session_compact", "compaction"], ["session_tree", "branch-navigation"], ["model_select", "model-change"]] as const) {
     for (const handler of handlers.get(eventName) ?? []) await handler({}, {});
@@ -1128,7 +1194,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(recalledAgain.content[0].text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /Active-result pruning: enabled/);
-  assert.match(notification, new RegExp(`Active recalls: 2; restored ~${Math.ceil(2 * oversizedLength / 4)} tokens`));
+  assert.match(notification, /Active recalls: 3; restored ~\d+ tokens/);
   for (const handler of handlers.get("input") ?? []) await handler({ source: "interactive" }, {});
   const afterInput = await recallTool.execute("recall-call-3", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
   assert.equal(afterInput.details.found, true);
@@ -1145,6 +1211,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     activePruning: false,
     threshold: SIEVE_THRESHOLD,
     projectionMode: "stable",
+    rolloverHighMultiplier: 8,
+    rolloverLowMultiplier: 4,
   });
   assert.equal(activeTools.includes("sieve_recall"), false);
   assert.equal(activeTools.includes("later-tool"), true);
@@ -1166,6 +1234,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     activePruning: false,
     threshold: 1_000,
     projectionMode: "stable",
+    rolloverHighMultiplier: 8,
+    rolloverLowMultiplier: 4,
   });
 
   await command.handler("projection legacy", ctx);

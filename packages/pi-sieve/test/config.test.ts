@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   configuredActivePruning,
   configuredProjectionMode,
+  configuredRolloverHighMultiplier,
+  configuredRolloverLowMultiplier,
   configuredThreshold,
   loadConfig,
   saveConfig,
@@ -37,15 +39,25 @@ test("web settings round-trip projection mode", async () => {
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
     projectionMode: "stable",
+    rolloverHighMultiplier: 8,
+    rolloverLowMultiplier: 4,
   });
-  await updateSettings({ kind: "sieve", activePruning: false, threshold: 12_000, projectionMode: "legacy" }, { agentDir });
+  await updateSettings({
+    kind: "sieve", activePruning: false, threshold: 12_000, projectionMode: "legacy",
+    rolloverHighMultiplier: 10, rolloverLowMultiplier: 5,
+  }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
     kind: "sieve",
     activePruning: false,
     threshold: 12_000,
     projectionMode: "legacy",
+    rolloverHighMultiplier: 10,
+    rolloverLowMultiplier: 5,
   });
-  await assert.rejects(updateSettings({ kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "invalid" }, { agentDir }));
+  await assert.rejects(updateSettings({
+    kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "invalid",
+    rolloverHighMultiplier: 8, rolloverLowMultiplier: 4,
+  }, { agentDir }));
 });
 
 test("sieve config defaults safely and quarantines invalid settings", async () => {
@@ -53,6 +65,8 @@ test("sieve config defaults safely and quarantines invalid settings", async () =
   assert.equal(configuredThreshold({ version: 1 }), SIEVE_THRESHOLD);
   assert.equal(configuredProjectionMode({ version: 1 }), "stable");
   assert.equal(configuredProjectionMode({ version: 1, projectionMode: "legacy" }), "legacy");
+  assert.equal(configuredRolloverHighMultiplier({ version: 1 }), 8);
+  assert.equal(configuredRolloverLowMultiplier({ version: 1 }), 4);
 
   for (const value of [
     [],
@@ -61,6 +75,9 @@ test("sieve config defaults safely and quarantines invalid settings", async () =
     { version: 1, threshold: 999 },
     { version: 1, threshold: 50_001 },
     { version: 1, threshold: 1_000.5 },
+    { version: 1, rolloverHighMultiplier: 4, rolloverLowMultiplier: 4 },
+    { version: 1, rolloverHighMultiplier: 65 },
+    { version: 1, rolloverLowMultiplier: 0 },
   ]) {
     const directory = await mkdtemp(join(tmpdir(), "pi-sieve-invalid-"));
     const path = join(directory, "config.json");

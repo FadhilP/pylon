@@ -44,9 +44,10 @@ test("command validation allowlists bounded v26 commands and attachments", () =>
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "", enabled: false, commandId: "package", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "pi-verify", enabled: "yes", commandId: "package", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-advisor", settings: { kind: "advisor", mode: "session", thinking: "high" }, commandId: "settings", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "stable" }, commandId: "settings", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 999, projectionMode: "stable" }, commandId: "settings", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "invalid" }, commandId: "settings", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "stable", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 999, projectionMode: "stable", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "invalid", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "stable", rolloverHighMultiplier: 4, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "rebuildDiscoverIndex", commandId: "index", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({
     type: "applySessionChanges",

@@ -18,11 +18,14 @@ export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
   "With active pruning, eligible ages 0–1 share a three-threshold retained-source budget; without it, age 0 is preserved and age 1 keeps the three-threshold cap.";
 export const GIANT_ERROR_TAIL_CHARS = 2_048;
-export const PROJECTION_POLICY_VERSION = 1;
+export const DEFAULT_ROLLOVER_HIGH_MULTIPLIER = 8;
+export const DEFAULT_ROLLOVER_LOW_MULTIPLIER = 4;
+export const PROJECTION_POLICY_VERSION = 2;
 
 export type SieveOptions = {
   pruneActive?: boolean;
   cwd?: string;
+  retainedSourceCap?: number;
 };
 
 export type EligibleToolName = (typeof ELIGIBLE_TOOL_NAMES)[number];
@@ -105,6 +108,7 @@ export type EpochReason =
   | "prompt-fingerprint"
   | "configuration-change"
   | "explicit-reflow"
+  | "budget-rollover"
   | "source-mismatch"
   | "history-mismatch"
   | "ambiguous-id";
@@ -112,6 +116,8 @@ export type EpochReason =
 export type EpochConfig = {
   threshold: number;
   activePruning: boolean;
+  rolloverHighMultiplier: number;
+  rolloverLowMultiplier: number;
   policyVersion: number;
 };
 
@@ -126,6 +132,8 @@ export type ProjectionEntry = {
   projectedMessage: ContextMessage;
   sourceChars: number;
   retainedChars: number;
+  retainedSourceChars: number;
+  budgetEligible: boolean;
   recoverable: boolean;
   transformed: boolean;
   projectionKind?: ProjectionKind;
@@ -531,6 +539,7 @@ function sliceActiveResult(
   source: SieveSource,
   toolCallId: string,
   threshold: number,
+  maxRetainedChars = Number.POSITIVE_INFINITY,
 ): ActiveSlice | undefined {
   const text = blocks.map((block) => block.text).join("");
   const separators = source.isError ? 1 : 2;
@@ -539,7 +548,7 @@ function sliceActiveResult(
   // Only omittedChars' decimal width affects the next value, so this reaches a fixed point.
   for (;;) {
     const marker = activeOmissionMarker(source.toolName, toolCallId, text.length, omittedChars);
-    const retainedChars = threshold - marker.length - separators;
+    const retainedChars = Math.min(maxRetainedChars, threshold - marker.length - separators);
     if (retainedChars <= 0) return undefined;
     const nextOmittedChars = text.length - retainedChars;
     if (nextOmittedChars !== omittedChars) {
@@ -585,16 +594,18 @@ function sliceMixedActive<T extends ContextMessage>(
   source: SieveSource,
   toolCallId: string,
   threshold: number,
+  maxRetainedChars = Number.POSITIVE_INFINITY,
 ): { message: T; omittedChars: number; retainedChars: number; netCharsSaved: number } | undefined {
   const mixed = mixedContentBlocks((message as Record<string, unknown>).content);
   if (!mixed || mixed.sourceChars <= threshold) return undefined;
   const share = Math.max(1, Math.floor(threshold / mixed.textIndexes.length));
+  const retainedShare = Math.max(0, Math.floor(maxRetainedChars / mixed.textIndexes.length));
   const content = mixed.blocks.map((block) => ({ ...block }));
   let omittedChars = 0;
   for (const index of mixed.textIndexes) {
     const block = mixed.blocks[index] as TextBlock;
-    if (block.text.length <= share) continue;
-    const sliced = sliceActiveResult([block], source, toolCallId, share);
+    if (block.text.length <= share && block.text.length <= retainedShare) continue;
+    const sliced = sliceActiveResult([block], source, toolCallId, share, retainedShare);
     if (!sliced) return undefined;
     content[index] = { ...block, text: sliced.outboundText };
     omittedChars += sliced.omittedText.length;
@@ -1413,13 +1424,19 @@ export function projectionSourceHash<T extends ContextMessage>(
 
 export function createProjectionEpoch(
   reason: EpochReason,
-  config: Omit<EpochConfig, "policyVersion"> & { policyVersion?: number },
+  config: Pick<EpochConfig, "threshold" | "activePruning"> & Partial<Omit<EpochConfig, "threshold" | "activePruning">>,
   promptFingerprint: string,
 ): ProjectionEpoch {
   return {
     id: randomUUID(),
     reason,
-    config: { ...config, policyVersion: config.policyVersion ?? PROJECTION_POLICY_VERSION },
+    config: {
+      threshold: config.threshold,
+      activePruning: config.activePruning,
+      rolloverHighMultiplier: config.rolloverHighMultiplier ?? DEFAULT_ROLLOVER_HIGH_MULTIPLIER,
+      rolloverLowMultiplier: config.rolloverLowMultiplier ?? DEFAULT_ROLLOVER_LOW_MULTIPLIER,
+      policyVersion: config.policyVersion ?? PROJECTION_POLICY_VERSION,
+    },
     promptFingerprint,
     startedAt: new Date().toISOString(),
     entries: new Map(),
@@ -1431,6 +1448,8 @@ export function createProjectionEpoch(
 type NewProjection<T extends ContextMessage> = {
   message: T;
   recoverable: boolean;
+  budgetEligible: boolean;
+  retainedSourceChars: number;
   projectionKind?: ProjectionKind;
 };
 
@@ -1442,76 +1461,131 @@ export function projectNewResult<T extends ContextMessage>(
   options: SieveOptions = {},
 ): NewProjection<T> {
   const message = messages[resultIndex];
+  const unchanged = (budgetEligible = false, retainedSourceChars = 0): NewProjection<T> => ({
+    message, recoverable: false, budgetEligible, retainedSourceChars,
+  });
   const fields = message as Record<string, unknown>;
-  if (fields?.role !== "toolResult") return { message, recoverable: false };
+  if (fields?.role !== "toolResult") return unchanged();
   const cwd = options.cwd ?? process.cwd();
   const prefix = messages.slice(0, resultIndex + 1);
+  const toolCallId = fields.toolCallId;
+  if (typeof toolCallId !== "string" || !toolCallId) return unchanged();
+  const resultCount = prefix.reduce((count, candidate) => {
+    const value = candidate as Record<string, unknown>;
+    return count + (value.role === "toolResult" && value.toolCallId === toolCallId ? 1 : 0);
+  }, 0);
+  if (resultCount !== 1) return unchanged();
   const duplicate = exactDuplicateReplacements(prefix, cwd, new Map(), options.pruneActive === true)
     .find((replacement) => replacement.messageIndex === resultIndex);
   if (duplicate) {
     return {
       message: duplicate.message,
       recoverable: duplicate.recoverable !== undefined,
+      budgetEligible: false,
+      retainedSourceChars: 0,
       projectionKind: "duplicate",
     };
   }
-  if (!options.pruneActive) return { message, recoverable: false };
+  if (!options.pruneActive) return unchanged();
 
   const source = sieveSource(message, false);
-  if (!source) return { message, recoverable: false };
-  const toolCallId = fields.toolCallId;
-  if (typeof toolCallId !== "string" || !toolCallId) return { message, recoverable: false };
-  const resultCount = prefix.reduce((count, candidate) => {
-    const value = candidate as Record<string, unknown>;
-    return count + (value.role === "toolResult" && value.toolCallId === toolCallId ? 1 : 0);
-  }, 0);
-  if (resultCount !== 1) return { message, recoverable: false };
-
+  if (!source) return unchanged();
   const blocks = textOnlyBlocks(fields.content);
   const mixed = !blocks && source.kind === "plain" ? mixedContentBlocks(fields.content) : undefined;
   const sourceLength = blocks?.reduce((length, block) => length + block.text.length, 0) ?? mixed?.sourceChars;
-  if (sourceLength === undefined) return { message, recoverable: false };
+  if (sourceLength === undefined) return unchanged();
+  const budgetEligible = !source.isError;
+  const retainedCap = budgetEligible
+    ? Math.max(0, Math.min(sourceLength, options.retainedSourceCap ?? sourceLength))
+    : sourceLength;
   const cap = source.isError ? Math.max(SIEVE_THRESHOLD, threshold) : threshold;
-  if (sourceLength <= cap) return { message, recoverable: false };
-  if (source.kind !== "plain" && (!blocks || !validStructuredContent(blocks, source.kind)))
-    return { message, recoverable: false };
+  if (sourceLength <= cap && sourceLength <= retainedCap) return unchanged(budgetEligible, sourceLength);
+  if (source.kind !== "plain" && (!blocks || !validStructuredContent(blocks, source.kind))) return unchanged();
+  const projectionKind: ProjectionKind = retainedCap < Math.min(sourceLength, cap) ? "budget" : "activeThreshold";
 
   if (mixed) {
-    const sliced = sliceMixedActive(message, source, toolCallId, cap);
+    const sliced = sliceMixedActive(message, source, toolCallId, cap, retainedCap);
     return sliced
-      ? { message: sliced.message, recoverable: true, projectionKind: source.isError ? "errorCap" : "mixedText" }
-      : { message, recoverable: false };
+      ? {
+        message: sliced.message,
+        recoverable: true,
+        budgetEligible,
+        retainedSourceChars: budgetEligible ? sliced.retainedChars : 0,
+        projectionKind: source.isError ? "errorCap" : "mixedText",
+      }
+      : unchanged();
   }
-  if (!blocks) return { message, recoverable: false };
+  if (!blocks) return unchanged();
   if (source.kind === "rankedSearch" && !source.isError) {
-    const sliced = sliceRankedSearch(blocks, source, cap, toolCallId);
+    const sliced = sliceRankedSearch(blocks, source, cap, toolCallId, retainedCap);
     const outbound = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
     return outbound.length < sourceLength
-      ? { message: replaceWithMarker(message, outbound), recoverable: true, projectionKind: "activeThreshold" }
-      : { message, recoverable: false };
+      ? {
+        message: replaceWithMarker(message, outbound), recoverable: true, budgetEligible: true,
+        retainedSourceChars: sliced?.retainedChars ?? 0, projectionKind,
+      }
+      : unchanged();
   }
   if (source.kind === "relationshipGraph" && !source.isError) {
-    const sliced = sliceRelationshipGraph(blocks, source, cap, Number.POSITIVE_INFINITY, toolCallId);
+    const sliced = sliceRelationshipGraph(blocks, source, cap, retainedCap, toolCallId);
     const outbound = sliced?.outboundText ?? structuredMarker(source, sourceLength, toolCallId);
     return outbound.length < sourceLength
-      ? { message: replaceWithMarker(message, outbound), recoverable: true, projectionKind: "activeThreshold" }
-      : { message, recoverable: false };
+      ? {
+        message: replaceWithMarker(message, outbound), recoverable: true, budgetEligible: true,
+        retainedSourceChars: sliced?.retainedChars ?? 0, projectionKind,
+      }
+      : unchanged();
   }
-  const sliced = sliceActiveResult(blocks, source, toolCallId, cap);
+  const sliced = sliceActiveResult(blocks, source, toolCallId, cap, retainedCap);
   const outbound = sliced?.outboundText ?? activeOmissionMarker(source.toolName, toolCallId, sourceLength, sourceLength);
   return outbound.length < sourceLength
     ? {
       message: replaceWithMarker(message, outbound),
       recoverable: true,
-      projectionKind: source.isError ? "errorCap" : "activeThreshold",
+      budgetEligible,
+      retainedSourceChars: budgetEligible && sliced ? sourceLength - sliced.omittedText.length : 0,
+      projectionKind: source.isError ? "errorCap" : projectionKind,
     }
-    : { message, recoverable: false };
+    : unchanged();
 }
 
 function contentCharacters(content: unknown): number {
   return textOnlyContentLength(content)
     ?? mixedContentBlocks(content)?.sourceChars
     ?? serializedContentLength(content);
+}
+
+function projectionEntry<T extends ContextMessage>(
+  messages: readonly T[],
+  index: number,
+  decision: NewProjection<T>,
+  cwd?: string,
+): ProjectionEntry {
+  const fields = messages[index] as Record<string, unknown>;
+  const projectedMessage = cloneProjectionValue(decision.message);
+  const projectedFields = projectedMessage as Record<string, unknown>;
+  return {
+    toolCallId: fields.toolCallId as string,
+    sourceHash: projectionSourceHash(messages, index, cwd),
+    toolName: typeof fields.toolName === "string" ? fields.toolName : "unknown",
+    isError: fields.isError === true,
+    projectedContent: cloneProjectionValue((projectedFields.content as ContentBlock[]) ?? []),
+    projectedMessage,
+    sourceChars: contentCharacters(fields.content),
+    retainedChars: contentCharacters(projectedFields.content),
+    retainedSourceChars: decision.retainedSourceChars,
+    budgetEligible: decision.budgetEligible,
+    recoverable: decision.recoverable,
+    transformed: !isDeepStrictEqual(fields.content, projectedFields.content),
+    ...(decision.projectionKind ? { projectionKind: decision.projectionKind } : {}),
+  };
+}
+
+export function retainedProjectionBudget(epoch: ProjectionEpoch): number {
+  return [...epoch.entries.values()].reduce(
+    (sum, entry) => sum + (entry.budgetEligible ? entry.retainedSourceChars : 0),
+    0,
+  );
 }
 
 function recordProjectionStats(stats: TransformStats, entry: ProjectionEntry) {
@@ -1657,32 +1731,53 @@ export function stableSieveMessages<T extends ContextMessage>(
       pruneActive: epoch.config.activePruning,
       cwd: options.cwd,
     });
-    const projectedMessage = cloneProjectionValue(decision.message);
-    const projectedFields = projectedMessage as Record<string, unknown>;
-    const sourceChars = contentCharacters(fields.content);
-    const retainedChars = contentCharacters(projectedFields.content);
-    const entry: ProjectionEntry = {
-      toolCallId,
-      sourceHash,
-      toolName: typeof fields.toolName === "string" ? fields.toolName : "unknown",
-      isError: fields.isError === true,
-      projectedContent: cloneProjectionValue((projectedFields.content as ContentBlock[]) ?? []),
-      projectedMessage,
-      sourceChars,
-      retainedChars,
-      recoverable: decision.recoverable,
-      transformed: !isDeepStrictEqual(fields.content, projectedFields.content),
-      ...(decision.projectionKind ? { projectionKind: decision.projectionKind } : {}),
-    };
+    const entry = projectionEntry(messages, index, decision, options.cwd);
     epoch.entries.set(toolCallId, entry);
-    output[index] = cloneProjectionValue(projectedMessage) as T;
+    output[index] = cloneProjectionValue(entry.projectedMessage) as T;
     diagnostics.newProjections++;
     recordProjectionStats(stats, entry);
     if (entry.recoverable) recoverableActiveResults.push({ toolCallId, toolName: entry.toolName, isError: entry.isError });
   }
 
   epoch.rawMessageHashes = rawMessageHashes;
-  const retained = [...epoch.entries.values()].reduce((sum, entry) => sum + entry.retainedChars, 0);
-  diagnostics.softBudgetExceeded = retained > 3 * threshold;
+  diagnostics.softBudgetExceeded = retainedProjectionBudget(epoch) > epoch.config.rolloverHighMultiplier * threshold;
   return { messages: output, stats, recoverableActiveResults, diagnostics };
+}
+
+/** Seeds an empty stable epoch newest-to-oldest under one retained-source target, then freezes it. */
+export function rolloverStableSieveMessages<T extends ContextMessage>(
+  messages: readonly T[],
+  epoch: ProjectionEpoch,
+  retainedSourceTarget: number,
+  options: SieveOptions = {},
+): StableTransformResult<T> {
+  if (epoch.entries.size || epoch.rawMessageHashes.length) throw new Error("rollover epoch must be empty");
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    const fields = message as Record<string, unknown>;
+    if (fields.role === "toolResult" && typeof fields.toolCallId === "string" && fields.toolCallId)
+      counts.set(fields.toolCallId, (counts.get(fields.toolCallId) ?? 0) + 1);
+  }
+
+  let remaining = Math.max(0, retainedSourceTarget);
+  let seeded = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const fields = messages[index] as Record<string, unknown>;
+    const toolCallId = fields.toolCallId;
+    if (fields.role !== "toolResult" || typeof toolCallId !== "string" || !toolCallId || counts.get(toolCallId) !== 1) continue;
+    const decision = projectNewResult(messages, index, epoch.config.threshold, {
+      pruneActive: epoch.config.activePruning,
+      cwd: options.cwd,
+      retainedSourceCap: remaining,
+    });
+    const entry = projectionEntry(messages, index, decision, options.cwd);
+    epoch.entries.set(toolCallId, entry);
+    if (entry.budgetEligible) remaining = Math.max(0, remaining - entry.retainedSourceChars);
+    seeded++;
+  }
+
+  const result = stableSieveMessages(messages, epoch, options);
+  result.diagnostics.newProjections = seeded;
+  result.diagnostics.cacheHits = Math.max(0, result.diagnostics.cacheHits - seeded);
+  return result;
 }

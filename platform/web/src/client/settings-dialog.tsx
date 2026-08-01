@@ -313,6 +313,18 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
           onUpdate({ ...settings, threshold });
         }
       }} /></label>
+      <label>Rollover high multiplier<input key={settings.rolloverHighMultiplier} type="number" min={2} max={64} step={1} defaultValue={settings.rolloverHighMultiplier} disabled={disabled || settings.projectionMode !== "stable"} onBlur={(event) => {
+        const high = Number(event.target.value);
+        if (Number.isSafeInteger(high) && high > settings.rolloverLowMultiplier && high <= 64 && high !== settings.rolloverHighMultiplier) {
+          onUpdate({ ...settings, rolloverHighMultiplier: high });
+        }
+      }} /></label>
+      <label>Rollover target multiplier<input key={settings.rolloverLowMultiplier} type="number" min={1} max={63} step={1} defaultValue={settings.rolloverLowMultiplier} disabled={disabled || settings.projectionMode !== "stable"} onBlur={(event) => {
+        const low = Number(event.target.value);
+        if (Number.isSafeInteger(low) && low >= 1 && low < settings.rolloverHighMultiplier && low !== settings.rolloverLowMultiplier) {
+          onUpdate({ ...settings, rolloverLowMultiplier: low });
+        }
+      }} /></label>
     </div>;
   }
   if (settings.kind === "timeline") {
