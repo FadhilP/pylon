@@ -42,6 +42,30 @@ function ui(method: string, payload: Record<string, unknown>, requestId = method
   return { type: "ui.event" as const, sessionId: "session", sessionGeneration: 1, payload: { kind: "request", requestId, method, payload, createdAt: new Date().toISOString() } };
 }
 
+test("metrics projection retains bounded per-tool usage", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({
+    type: "usage",
+    inputTokens: 120,
+    toolUsage: [
+      { name: "read", calls: 3, tokens: 80 },
+      { name: "invalid", calls: -1, tokens: 20 },
+    ],
+  }));
+  assert.equal(projection.snapshot().metrics.inputTokens, 120);
+  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, tokens: 80 }]);
+  projection.apply(session({
+    type: "usage",
+    toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, tokens: 1 })),
+  }));
+  assert.equal(projection.snapshot().metrics.toolUsage?.length, 200);
+  projection.apply(session({
+    type: "usage",
+    toolUsage: [{ name: "read", calls: 3, tokens: 80 }, { name: "read", calls: 2, tokens: 40 }],
+  }));
+  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, tokens: 80 }]);
+});
+
 test("session status projects completion as a separate pulse", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));

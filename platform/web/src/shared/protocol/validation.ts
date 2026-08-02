@@ -727,7 +727,11 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   const metrics = value.metrics;
   if (!record(metrics) || typeof metrics.model !== "string" || typeof metrics.provider !== "string"
     || !["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]
-      .every((key) => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number))) return false;
+      .every((key) => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number))
+    || (metrics.toolUsage !== undefined && (!Array.isArray(metrics.toolUsage) || metrics.toolUsage.length > 200
+      || !metrics.toolUsage.every((item) => record(item) && boundedString(item.name) && item.name.length > 0
+        && Number.isSafeInteger(item.calls) && (item.calls as number) >= 0
+        && Number.isSafeInteger(item.tokens) && (item.tokens as number) >= 0)))) return false;
   if (value.discoverIndex !== undefined) {
     const index = value.discoverIndex;
     if (!record(index) || !["idle", "indexing", "error"].includes(String(index.state))

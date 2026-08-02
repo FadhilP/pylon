@@ -862,6 +862,17 @@ export class RuntimeProjection {
     for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]) {
       if (typeof raw[key] === "number" && Number.isFinite(raw[key])) current[key] = raw[key];
     }
+    if (Array.isArray(raw.toolUsage)) {
+      const names = new Set<string>();
+      current.toolUsage = raw.toolUsage.slice(0, 200).flatMap((item) => {
+        const usage = object(item);
+        const name = typeof usage.name === "string" ? usage.name.slice(0, 200) : "";
+        if (!name || names.has(name) || !Number.isSafeInteger(usage.calls) || Number(usage.calls) < 0
+          || !Number.isSafeInteger(usage.tokens) || Number(usage.tokens) < 0) return [];
+        names.add(name);
+        return [{ name, calls: usage.calls, tokens: usage.tokens }];
+      });
+    }
     if (typeof raw.model === "string") current.model = raw.model.slice(0, 200);
     if (typeof raw.provider === "string") current.provider = raw.provider.slice(0, 200);
     this.publish("metrics.update", this.runtime.metrics);

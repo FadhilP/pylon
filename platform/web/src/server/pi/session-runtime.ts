@@ -12,6 +12,7 @@ import {
   parseWorktreeSummary,
   readPersistedWorktreeSummaries,
 } from "pylon-core/src/worktree.ts";
+import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts";
 import {
   createAgentSessionRuntime,
   createEventBus,
@@ -29,7 +30,7 @@ import {
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
-import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
@@ -393,6 +394,7 @@ export class SessionRuntime implements PiDriver {
   private gitBranch?: string;
   private runtimePolicy: RuntimePolicyReadModel = defaultRuntimePolicy();
   private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
+  private toolUsageCache?: { sessionId: string; leafId: string | null; items: ToolUsageReadModel[] };
   private undoPromptEntryIds = new Set<string>();
   private forkPromptEntryIds = new Set<string>();
   private forkPromptCheckpoints = new Map<string, string>();
@@ -2198,6 +2200,7 @@ export class SessionRuntime implements PiDriver {
         userMessages: stats.userMessages,
         assistantMessages: stats.assistantMessages,
         toolCalls: stats.toolCalls,
+        toolUsage: this.sessionToolUsage(session),
       },
       ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
@@ -2419,6 +2422,24 @@ export class SessionRuntime implements PiDriver {
         })));
     this.transcriptCache = { sessionId, leafId, messages };
     return messages;
+  }
+
+  private sessionToolUsage(session: AgentSession): ToolUsageReadModel[] {
+    const sessionId = session.sessionId;
+    const leafId = session.sessionManager.getLeafId();
+    const cached = this.toolUsageCache;
+    if (cached?.sessionId === sessionId && cached.leafId === leafId) return cached.items;
+    const meter = meterFromBranch(session.sessionManager.getBranch());
+    const items = [...meter.byTool.entries()]
+      .map(([name, usage]) => ({
+        name,
+        calls: usage.calls,
+        tokens: estimatedTokens(usage.argumentChars + usage.resultChars),
+      }))
+      .sort((left, right) => right.calls - left.calls || right.tokens - left.tokens || left.name.localeCompare(right.name))
+      .slice(0, 200);
+    this.toolUsageCache = { sessionId, leafId, items };
+    return items;
   }
 
   private latestAssistantEntryId(session: AgentSession): string | undefined {

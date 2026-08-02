@@ -123,6 +123,12 @@ export interface ConversationReadModel {
   compaction: CompactionReadModel;
 }
 
+export interface ToolUsageReadModel {
+  name: string;
+  calls: number;
+  tokens: number;
+}
+
 export interface SessionMetricsReadModel {
   model: string;
   provider: string;
@@ -136,6 +142,7 @@ export interface SessionMetricsReadModel {
   userMessages: number;
   assistantMessages: number;
   toolCalls: number;
+  toolUsage?: ToolUsageReadModel[];
 }
 
 export type ThinkingLevelReadModel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

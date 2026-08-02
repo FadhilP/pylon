@@ -110,6 +110,10 @@ Use `/sieve projection stable` to try the experimental immutable projections and
 - per-tool transformations, retained characters, and savings
 - recall totals and restored characters
 
+Cumulative transformation totals, recall totals, per-tool recall totals, and stability counters are stored as compact custom entries on the active session branch. They survive reload/resume, follow branch navigation, and `/sieve reset-stats` persists a zero snapshot. Latest-call stats, epoch ledgers, and current gauges remain runtime state.
+
+Recall payload caches are not duplicated in telemetry entries. Pi Sieve rebuilds them from the active raw session context before each model call; compaction can make a historical source unavailable even though its recall totals remain recorded.
+
 The critical stable-mode invariant is `prefix-churn violations: 0`. Provider-reported input and cache-read usage remains authoritative; Pi Sieve does not attribute provider usage to individual tools.
 
 Pi Sieve does not trigger automatic compaction. Rollover controls reducible retained tool source only; context usage and unprunable content remain operational signals.

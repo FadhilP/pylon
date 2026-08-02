@@ -1031,6 +1031,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   let runtimeInitialized = false;
   const eventHandlers = new Map<string, Function[]>();
   const publishedStates: any[] = [];
+  const branch: any[] = [];
+  const sessionManager = { getBranch: () => branch };
   extension({
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
@@ -1047,6 +1049,9 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
       assert.equal(runtimeInitialized, true, "action API called during extension loading");
       activeTools = [...names];
     },
+    appendEntry: (customType: string, data: unknown) => {
+      branch.push({ type: "custom", customType, data: structuredClone(data) });
+    },
     events: {
       on: (name: string, handler: Function) => {
         eventHandlers.set(name, [...(eventHandlers.get(name) ?? []), handler]);
@@ -1060,7 +1065,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   } as any, { configPath: settingsPath });
   assert.equal(activeTools.includes("sieve_recall"), true);
   runtimeInitialized = true;
-  for (const handler of handlers.get("session_start") ?? []) await handler({}, {});
+  for (const handler of handlers.get("session_start") ?? []) await handler({}, { sessionManager });
   assert.equal(activeTools.includes("sieve_recall"), true);
   const hook = handlers.get("context")![0];
   const command = commands.get("sieve");
@@ -1069,7 +1074,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   const expectedGrossTokens = 10;
   const expectedNetTokens = 1;
   let notification = "";
-  const ctx: any = { ui: { notify: (text: string) => { notification = text; } } };
+  const ctx: any = { sessionManager, ui: { notify: (text: string) => { notification = text; } } };
 
   await Promise.all([
     command.handler("active enable", ctx),
@@ -1168,7 +1173,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(publishedStates.at(-1).stability.automaticRollovers, 1, "unchanged context does not roll repeatedly");
 
   for (const [eventName, reason] of [["session_compact", "compaction"], ["session_tree", "branch-navigation"], ["model_select", "model-change"]] as const) {
-    for (const handler of handlers.get(eventName) ?? []) await handler({}, {});
+    for (const handler of handlers.get(eventName) ?? []) await handler({}, { sessionManager });
     hook({ messages: [user("first"), activeSource] });
     assert.equal(publishedStates.at(-1).epoch.reason, reason);
     assert.notEqual(publishedStates.at(-1).epoch.id, firstEpoch);
@@ -1273,9 +1278,10 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     registerTool: (tool: any) => { resumedActiveTools.push(tool.name); },
     getActiveTools: () => [...resumedActiveTools],
     setActiveTools: (names: string[]) => { resumedActiveTools = [...names]; },
+    appendEntry: () => {},
     events: { on: () => () => {}, emit: () => {} },
   } as any, { configPath: settingsPath });
-  for (const handler of resumedHandlers.get("session_start") ?? []) await handler({}, {});
+  for (const handler of resumedHandlers.get("session_start") ?? []) await handler({}, { sessionManager });
   assert.equal(resumedActiveTools.includes("sieve_recall"), true);
   let resumedStatus = "";
   await resumedCommands.get("sieve").handler("status", {
@@ -1283,4 +1289,105 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   });
   assert.match(resumedStatus, /Threshold: > ~250 tokens \(1000 JS characters/);
   assert.match(resumedStatus, /Active-result pruning: enabled/);
+});
+
+test("persists branch-aware telemetry while rebuilding recall caches from raw context", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-sieve-telemetry-"));
+  const settingsPath = join(directory, "config.json");
+  const createRuntime = (initialBranch: any[] = []) => {
+    const handlers = new Map<string, Function[]>();
+    const commands = new Map<string, any>();
+    const tools = new Map<string, any>();
+    let activeTools = ["bash", "read"];
+    let branch = structuredClone(initialBranch);
+    let notification = "";
+    const sessionManager = { getBranch: () => branch };
+    const ctx = {
+      cwd: resolve("telemetry-runtime"),
+      sessionManager,
+      ui: { notify: (text: string) => { notification = text; } },
+    };
+    extension({
+      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerCommand: (name: string, command: any) => commands.set(name, command),
+      registerTool: (tool: any) => { tools.set(tool.name, tool); activeTools.push(tool.name); },
+      getActiveTools: () => [...activeTools],
+      getAllTools: () => [
+        { name: "bash", description: "Run command", parameters: { type: "object" } },
+        { name: "read", description: "Read file", parameters: { type: "object" } },
+        { name: "sieve_recall", description: "Recall", parameters: { type: "object" } },
+      ],
+      setActiveTools: (names: string[]) => { activeTools = [...names]; },
+      appendEntry: (customType: string, data: unknown) => {
+        branch.push({ type: "custom", customType, data: structuredClone(data) });
+      },
+      events: { on: () => () => {}, emit: () => {} },
+    } as any, { configPath: settingsPath });
+    return {
+      handlers,
+      command: commands.get("sieve"),
+      recall: tools.get("sieve_recall"),
+      hook: handlers.get("context")![0],
+      ctx,
+      branch: () => branch,
+      setBranch: (entries: any[]) => { branch = structuredClone(entries); },
+      status: async () => {
+        await commands.get("sieve").handler("status", ctx);
+        return notification;
+      },
+    };
+  };
+  const start = async (runtime: ReturnType<typeof createRuntime>, reason = "startup") => {
+    for (const handler of runtime.handlers.get("session_start") ?? []) await handler({ reason }, runtime.ctx);
+  };
+
+  const source = textResult("bash", "z".repeat(SIEVE_THRESHOLD + 1), {
+    toolCallId: "persisted-recall", isError: false,
+  });
+  const messages = [user("first"), source];
+  const first = createRuntime();
+  await start(first);
+  first.hook({ messages }, first.ctx);
+  assert.equal((await first.recall.execute("recall-1", { toolCallId: "persisted-recall" })).details.found, true);
+  await first.command.handler("reflow", first.ctx);
+
+  const savedBranch = structuredClone(first.branch());
+  const saved = savedBranch.at(-1);
+  assert.equal(saved.customType, "pi-sieve-telemetry");
+  assert.equal(saved.data.cumulativeActual.transformed, 1);
+  assert.equal(saved.data.recalls, 1);
+  assert.equal(saved.data.stability.explicitReflows, 1);
+  assert.doesNotMatch(JSON.stringify(saved.data), /z{100}/, "telemetry must not duplicate raw recall payloads");
+
+  const resumed = createRuntime([
+    ...savedBranch,
+    { type: "custom", customType: "pi-sieve-telemetry", data: { version: 1, kind: "pi-sieve-telemetry" } },
+  ]);
+  await start(resumed, "reload");
+  assert.match(await resumed.status(), /actual transformations 1/);
+  assert.match(await resumed.status(), /Active recalls: 1;/);
+  assert.match(await resumed.status(), /explicit reflows 1/);
+  assert.equal((await resumed.recall.execute("recall-before-context", { toolCallId: "persisted-recall" })).details.found, false);
+
+  resumed.hook({ messages }, resumed.ctx);
+  assert.equal((await resumed.recall.execute("recall-2", { toolCallId: "persisted-recall" })).details.found, true);
+  assert.match(await resumed.status(), /actual transformations 2/);
+  assert.match(await resumed.status(), /Active recalls: 2;/);
+
+  resumed.setBranch([]);
+  for (const handler of resumed.handlers.get("session_tree") ?? []) await handler({}, resumed.ctx);
+  assert.match(await resumed.status(), /actual transformations 0/);
+  assert.match(await resumed.status(), /Active recalls: 0;/);
+  assert.equal((await resumed.recall.execute("recall-after-tree", { toolCallId: "persisted-recall" })).details.found, false);
+
+  resumed.setBranch(savedBranch);
+  for (const handler of resumed.handlers.get("session_tree") ?? []) await handler({}, resumed.ctx);
+  assert.match(await resumed.status(), /actual transformations 1/);
+  assert.match(await resumed.status(), /Active recalls: 1;/);
+
+  await resumed.command.handler("reset-stats", resumed.ctx);
+  const resetRuntime = createRuntime(resumed.branch());
+  await start(resetRuntime, "reload");
+  assert.match(await resetRuntime.status(), /actual transformations 0/);
+  assert.match(await resetRuntime.status(), /Active recalls: 0;/);
 });

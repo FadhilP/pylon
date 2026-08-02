@@ -50,7 +50,110 @@ type RawRecoverableResult = RecoverableActiveResult & {
   message: any;
 };
 
+type StabilityStats = {
+  newProjections: number;
+  projectionCacheHits: number;
+  recoverableEntries: number;
+  explicitReflows: number;
+  automaticRollovers: number;
+  softBudgetExceedances: number;
+  prefixChurnViolations: number;
+  earliestChangedPriorMessageIndex?: number;
+  estimatedInvalidatedChars: number;
+};
+
+type PersistedTelemetry = {
+  version: 1;
+  kind: "pi-sieve-telemetry";
+  cumulativeActual: TransformStats;
+  cumulativeProjected: TransformStats;
+  recalls: number;
+  recalledChars: number;
+  recallsByTool: Record<string, { recalls: number; recalledChars: number }>;
+  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex">;
+};
+
+const TELEMETRY_ENTRY_TYPE = "pi-sieve-telemetry";
 const CHARS_PER_ESTIMATED_TOKEN = 4;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]) => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+const isSafeToolName = (value: string) =>
+  !!value && value.length <= 200 && value !== "__proto__" && value !== "prototype" && value !== "constructor";
+
+function parseNumericShape(value: unknown, shape: Record<string, unknown>): Record<string, any> | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, Object.keys(shape))) return;
+  const parsed: Record<string, any> = {};
+  for (const [key, expected] of Object.entries(shape)) {
+    if (typeof expected === "number") {
+      if (!isCount(value[key])) return;
+      parsed[key] = value[key];
+      continue;
+    }
+    if (!isRecord(expected)) return;
+    const nested = parseNumericShape(value[key], expected);
+    if (!nested) return;
+    parsed[key] = nested;
+  }
+  return parsed;
+}
+
+function parseTransformStats(value: unknown): TransformStats | undefined {
+  if (!isRecord(value) || !isRecord(value.byTool)) return;
+  const { byTool: _valueByTool, ...fixed } = value;
+  const { byTool: _shapeByTool, ...shape } = emptyTransformStats();
+  const parsed = parseNumericShape(fixed, shape);
+  if (!parsed) return;
+  const entries = Object.entries(value.byTool);
+  if (entries.length > 1_000) return;
+  const byTool: TransformStats["byTool"] = {};
+  const toolShape = { scanned: 0, transformed: 0, sourceChars: 0, retainedChars: 0, netCharsSaved: 0 };
+  for (const [toolName, usage] of entries) {
+    if (!isSafeToolName(toolName)) return;
+    const parsedUsage = parseNumericShape(usage, toolShape);
+    if (!parsedUsage) return;
+    byTool[toolName] = parsedUsage as TransformStats["byTool"][string];
+  }
+  return { ...parsed, byTool } as TransformStats;
+}
+
+function parsePersistedTelemetry(value: unknown): PersistedTelemetry | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    "version", "kind", "cumulativeActual", "cumulativeProjected", "recalls", "recalledChars", "recallsByTool", "stability",
+  ]) || value.version !== 1 || value.kind !== TELEMETRY_ENTRY_TYPE || !isCount(value.recalls)
+    || !isCount(value.recalledChars) || !isRecord(value.recallsByTool) || !isRecord(value.stability)) return;
+  const cumulativeActual = parseTransformStats(value.cumulativeActual);
+  const cumulativeProjected = parseTransformStats(value.cumulativeProjected);
+  if (!cumulativeActual || !cumulativeProjected || Object.keys(value.recallsByTool).length > 1_000) return;
+  const recallsByTool: PersistedTelemetry["recallsByTool"] = {};
+  for (const [toolName, usage] of Object.entries(value.recallsByTool)) {
+    if (!isSafeToolName(toolName)) return;
+    const parsed = parseNumericShape(usage, { recalls: 0, recalledChars: 0 });
+    if (!parsed) return;
+    recallsByTool[toolName] = parsed as { recalls: number; recalledChars: number };
+  }
+  const stability = parseNumericShape(value.stability, {
+    newProjections: 0, projectionCacheHits: 0, explicitReflows: 0, automaticRollovers: 0,
+    softBudgetExceedances: 0, prefixChurnViolations: 0, estimatedInvalidatedChars: 0,
+  });
+  if (!stability) return;
+  return {
+    version: 1,
+    kind: TELEMETRY_ENTRY_TYPE,
+    cumulativeActual,
+    cumulativeProjected,
+    recalls: value.recalls,
+    recalledChars: value.recalledChars,
+    recallsByTool,
+    stability: stability as PersistedTelemetry["stability"],
+  };
+}
+
 const estimatedTokens = (characters: number) => Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
 const projectionModeLabel = (mode: ProjectionMode) => mode === "stable" ? "stable (experimental)" : "standard";
 
@@ -87,15 +190,7 @@ function statusText(
   rolloverHighMultiplier: number,
   rolloverLowMultiplier: number,
   epoch: ProjectionEpoch | undefined,
-  stability: {
-    newProjections: number;
-    projectionCacheHits: number;
-    explicitReflows: number;
-    automaticRollovers: number;
-    softBudgetExceedances: number;
-    prefixChurnViolations: number;
-    estimatedInvalidatedChars: number;
-  },
+  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex">,
 ) {
   const cumulative = emptyTransformStats();
   addTransformStats(cumulative, cumulativeActual);
@@ -176,7 +271,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let epoch: ProjectionEpoch | undefined;
   let pendingEpochReason: EpochReason | undefined = "session-start";
   let contextUsagePercent: number | undefined;
-  let stability = {
+  let stability: StabilityStats = {
     newProjections: 0,
     projectionCacheHits: 0,
     recoverableEntries: 0,
@@ -184,7 +279,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     automaticRollovers: 0,
     softBudgetExceedances: 0,
     prefixChurnViolations: 0,
-    earliestChangedPriorMessageIndex: undefined as number | undefined,
+    earliestChangedPriorMessageIndex: undefined,
     estimatedInvalidatedChars: 0,
   };
   let softBudgetExceededInEpoch = false;
@@ -256,6 +351,65 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     updatedAt: new Date().toISOString(),
     ...(configLoadError ? { error: (configLoadError as any)?.message ?? String(configLoadError) } : {}),
   });
+  const resetTelemetry = () => {
+    latestStats = emptyTransformStats();
+    cumulativeActual = emptyTransformStats();
+    cumulativeProjected = emptyTransformStats();
+    activeRecalls = 0;
+    activeRecalledChars = 0;
+    recallsByTool = {};
+    stability = {
+      newProjections: 0, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
+      automaticRollovers: 0, softBudgetExceedances: 0, prefixChurnViolations: 0,
+      earliestChangedPriorMessageIndex: undefined, estimatedInvalidatedChars: 0,
+    };
+  };
+  const telemetrySnapshot = (): PersistedTelemetry => ({
+    version: 1,
+    kind: TELEMETRY_ENTRY_TYPE,
+    cumulativeActual: structuredClone(cumulativeActual),
+    cumulativeProjected: structuredClone(cumulativeProjected),
+    recalls: activeRecalls,
+    recalledChars: activeRecalledChars,
+    recallsByTool: structuredClone(recallsByTool),
+    stability: {
+      newProjections: stability.newProjections,
+      projectionCacheHits: stability.projectionCacheHits,
+      explicitReflows: stability.explicitReflows,
+      automaticRollovers: stability.automaticRollovers,
+      softBudgetExceedances: stability.softBudgetExceedances,
+      prefixChurnViolations: stability.prefixChurnViolations,
+      estimatedInvalidatedChars: stability.estimatedInvalidatedChars,
+    },
+  });
+  const persistTelemetry = () => {
+    try { pi.appendEntry(TELEMETRY_ENTRY_TYPE, telemetrySnapshot()); }
+    catch { /* Telemetry persistence must never interrupt model calls. */ }
+  };
+  const restoreTelemetry = (ctx: any) => {
+    resetTelemetry();
+    let entries: unknown;
+    try { entries = ctx?.sessionManager?.getBranch?.(); }
+    catch { return; }
+    if (!Array.isArray(entries)) return;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (entry?.type !== "custom" || entry.customType !== TELEMETRY_ENTRY_TYPE) continue;
+      const restored = parsePersistedTelemetry(entry.data);
+      if (!restored) continue;
+      cumulativeActual = restored.cumulativeActual;
+      cumulativeProjected = restored.cumulativeProjected;
+      activeRecalls = restored.recalls;
+      activeRecalledChars = restored.recalledChars;
+      recallsByTool = restored.recallsByTool;
+      stability = {
+        ...restored.stability,
+        recoverableEntries: 0,
+        earliestChangedPriorMessageIndex: undefined,
+      };
+      break;
+    }
+  };
   const publishState = () => pi.events.emit("pi-sieve:state-change", stateSnapshot());
   const disposeStateRequest = pi.events.on("pi-sieve:state-request", (request: any) => {
     if (request?.version === 1 && typeof request.respond === "function") request.respond(stateSnapshot());
@@ -332,6 +486,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         ...recallsByTool,
         [registered.toolName]: { recalls: recallUsage.recalls + 1, recalledChars: recallUsage.recalledChars + sourceChars },
       };
+      persistTelemetry();
       publishState();
       return {
         content: structuredClone(source.message.content),
@@ -342,6 +497,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
 
   pi.on("session_start", async (event, ctx) => {
     await configQueue;
+    restoreTelemetry(ctx);
     requestEpoch(event?.reason === "reload" ? "reload" : event?.reason === "startup" ? "session-start" : "session-replacement");
     refreshRecallTool();
     publishState();
@@ -349,7 +505,11 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       ctx.ui.notify(`Could not load pi-sieve settings: ${(configLoadError as any)?.message ?? String(configLoadError)}`, "error");
   });
   pi.on("session_compact", () => requestEpoch("compaction"));
-  pi.on("session_tree", () => requestEpoch("branch-navigation"));
+  pi.on("session_tree", (_event, ctx) => {
+    restoreTelemetry(ctx);
+    requestEpoch("branch-navigation");
+    publishState();
+  });
   pi.on("model_select", () => requestEpoch("model-change"));
   pi.on("session_shutdown", () => {
     disposeStateRequest();
@@ -428,6 +588,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     }
     if (mode === "observe") {
       addTransformStats(cumulativeProjected, result.stats);
+      persistTelemetry();
       publishState();
       return;
     }
@@ -450,6 +611,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         message: structuredClone(message),
       });
     }
+    persistTelemetry();
     publishState();
     return { messages: result.messages };
   });
@@ -491,6 +653,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       if (action === "reflow" && hasNoValue) {
         stability.explicitReflows++;
         requestEpoch("explicit-reflow");
+        persistTelemetry();
         publishState();
         ctx.ui.notify("pi-sieve will rebuild projections on the next provider call; cached prefix will reset.", "info");
         return;
@@ -511,17 +674,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         return;
       }
       if (action === "reset-stats" && hasNoValue) {
-        latestStats = emptyTransformStats();
-        cumulativeActual = emptyTransformStats();
-        cumulativeProjected = emptyTransformStats();
-        activeRecalls = 0;
-        activeRecalledChars = 0;
-        recallsByTool = {};
-        stability = {
-          newProjections: 0, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
-          automaticRollovers: 0, softBudgetExceedances: 0, prefixChurnViolations: 0, earliestChangedPriorMessageIndex: undefined,
-          estimatedInvalidatedChars: 0,
-        };
+        resetTelemetry();
+        persistTelemetry();
         publishState();
         ctx.ui.notify("pi-sieve statistics reset.", "info");
         return;

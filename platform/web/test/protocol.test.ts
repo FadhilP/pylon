@@ -186,6 +186,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     metrics: {
       model: "model", provider: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
       contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0,
+      toolUsage: [{ name: "read", calls: 2, tokens: 320 }],
     },
     operational: {
       verification: { availability: "available", checks: [] }, jobs: { availability: "unavailable", items: [] },
@@ -198,6 +199,14 @@ test("event and snapshot validators reject incompatible versions", () => {
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
   assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    metrics: { ...snapshot.metrics, toolUsage: [{ name: "read", calls: -1, tokens: 320 }] },
+  }), false);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    metrics: { ...snapshot.metrics, toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, tokens: 1 })) },
+  }), false);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
     conversation: { ...snapshot.conversation, agentError: "provider rejected request" },
