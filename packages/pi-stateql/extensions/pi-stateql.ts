@@ -282,6 +282,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   let activeCredentialHost: StateQLCredentialHost | undefined;
   const brokeredTargets = new Map<string, RuntimeBrokeredTarget>();
   let stopping = false;
+  let approvalTiming: { guardEnabled: boolean; timeoutSeconds: number | null } = { guardEnabled: false, timeoutSeconds: null };
   let tail: Promise<void> = Promise.resolve();
 
   const exclusive = <T>(action: () => T | Promise<T>): Promise<T> => {
@@ -327,6 +328,15 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     return runtime;
   };
 
+  const disposePolicy = pi.events.on("pylon:runtime-policy", (event: any) => {
+    if (event?.version !== 2 || typeof event.sessionId !== "string" || event.sessionId !== runtime?.actorId) return;
+    const timeoutSeconds = event.dialogTimeouts?.guard;
+    approvalTiming = typeof event.guardEnabled === "boolean"
+      && (timeoutSeconds === null || typeof timeoutSeconds === "number" && Number.isInteger(timeoutSeconds) && timeoutSeconds >= 15 && timeoutSeconds <= 86_400)
+      ? { guardEnabled: event.guardEnabled, timeoutSeconds }
+      : { guardEnabled: false, timeoutSeconds: null };
+  });
+
   const disposeSnapshot = pi.events.on("pylon:stateql-snapshot-request", (value: unknown) => {
     const request = value && typeof value === "object" ? value as Partial<SnapshotRequest> : undefined;
     if (request?.version !== 1 || typeof request.sessionId !== "string" || request.sessionId !== runtime?.actorId
@@ -358,6 +368,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
 
   pi.on("session_start", async (_event, ctx) => {
     stopping = false;
+    approvalTiming = { guardEnabled: false, timeoutSeconds: null };
     brokeredTargets.clear();
     const id = sessionId(ctx);
     await exclusive(() => {
@@ -380,6 +391,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     brokeredTargets.clear();
     runtime?.controller.abort();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-stateql" });
+    disposePolicy();
     disposeSnapshot();
     disposeHealth();
     await exclusive(() => {
@@ -416,7 +428,10 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       if (requiresConfirmation) {
         if (!ctx.hasUI) throw new Error(`${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
-        if (!await ctx.ui.confirm(title, confirmationText(input, Boolean(target)))) {
+        const timeout = approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+          ? approvalTiming.timeoutSeconds * 1_000
+          : 0;
+        if (!await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), { timeout })) {
           return { content: [{ type: "text" as const, text: "User declined the StateQL operation; nothing was executed." }], details: { command: input.command, declined: true } };
         }
       }

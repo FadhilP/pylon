@@ -36,10 +36,13 @@ import {
   rolloverStableSieveMessages,
   sieveMessages,
   stableSieveMessages,
+  standardV2SieveMessages,
   type EpochReason,
   type ProjectionDiagnostics,
   type ProjectionEpoch,
   type RecoverableActiveResult,
+  type StandardProjectionDiagnostics,
+  type StandardProjectionKind,
   type TransformStats,
 } from "../src/sieve.ts";
 
@@ -49,6 +52,20 @@ type RawRecoverableResult = RecoverableActiveResult & {
   sourceHash: string;
   message: any;
 };
+
+const STANDARD_CHURN_KINDS = ["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"] as const;
+type StandardChurnKind = StandardProjectionKind | "history";
+type StandardChangesByKind = Record<StandardChurnKind, number>;
+
+const emptyStandardChangesByKind = (): StandardChangesByKind => ({
+  activeThreshold: 0,
+  ageThreshold: 0,
+  budget: 0,
+  staleRead: 0,
+  duplicate: 0,
+  errorCap: 0,
+  history: 0,
+});
 
 type StabilityStats = {
   newProjections: number;
@@ -60,6 +77,11 @@ type StabilityStats = {
   prefixChurnViolations: number;
   earliestChangedPriorMessageIndex?: number;
   estimatedInvalidatedChars: number;
+  standardComparisons: number;
+  standardPrefixChurn: number;
+  standardEarliestChangedPriorMessageIndex?: number;
+  standardEstimatedInvalidatedChars: number;
+  standardChangesByKind: StandardChangesByKind;
 };
 
 type PersistedTelemetry = {
@@ -70,7 +92,7 @@ type PersistedTelemetry = {
   recalls: number;
   recalledChars: number;
   recallsByTool: Record<string, { recalls: number; recalledChars: number }>;
-  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex">;
+  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex" | "standardEarliestChangedPriorMessageIndex">;
 };
 
 const TELEMETRY_ENTRY_TYPE = "pi-sieve-telemetry";
@@ -137,11 +159,31 @@ function parsePersistedTelemetry(value: unknown): PersistedTelemetry | undefined
     if (!parsed) return;
     recallsByTool[toolName] = parsed as { recalls: number; recalledChars: number };
   }
-  const stability = parseNumericShape(value.stability, {
+  const stabilityInput = value.stability;
+  const legacyStabilityShape = {
     newProjections: 0, projectionCacheHits: 0, explicitReflows: 0, automaticRollovers: 0,
     softBudgetExceedances: 0, prefixChurnViolations: 0, estimatedInvalidatedChars: 0,
-  });
+  };
+  const stabilityKeys = [
+    ...Object.keys(legacyStabilityShape),
+    "standardComparisons", "standardPrefixChurn", "standardEstimatedInvalidatedChars", "standardChangesByKind",
+  ];
+  if (!hasExactKeys(stabilityInput, Object.keys(legacyStabilityShape))
+    && !hasExactKeys(stabilityInput, stabilityKeys)) return;
+  const legacyStability = Object.fromEntries(Object.keys(legacyStabilityShape).map((key) => [key, stabilityInput[key]]));
+  const stability = parseNumericShape(legacyStability, legacyStabilityShape);
   if (!stability) return;
+  const standardChangesByKind = stabilityInput.standardChangesByKind === undefined
+    ? emptyStandardChangesByKind()
+    : parseNumericShape(stabilityInput.standardChangesByKind, emptyStandardChangesByKind());
+  if (!standardChangesByKind
+    || (stabilityInput.standardComparisons !== undefined && !isCount(stabilityInput.standardComparisons))
+    || (stabilityInput.standardPrefixChurn !== undefined && !isCount(stabilityInput.standardPrefixChurn))
+    || (stabilityInput.standardEstimatedInvalidatedChars !== undefined && !isCount(stabilityInput.standardEstimatedInvalidatedChars))) return;
+  stability.standardComparisons = stabilityInput.standardComparisons ?? 0;
+  stability.standardPrefixChurn = stabilityInput.standardPrefixChurn ?? 0;
+  stability.standardEstimatedInvalidatedChars = stabilityInput.standardEstimatedInvalidatedChars ?? 0;
+  stability.standardChangesByKind = standardChangesByKind;
   return {
     version: 1,
     kind: TELEMETRY_ENTRY_TYPE,
@@ -155,7 +197,9 @@ function parsePersistedTelemetry(value: unknown): PersistedTelemetry | undefined
 }
 
 const estimatedTokens = (characters: number) => Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
-const projectionModeLabel = (mode: ProjectionMode) => mode === "stable" ? "stable (experimental)" : "standard";
+const projectionModeLabel = (mode: ProjectionMode) => mode === "stable"
+  ? "stable (experimental)"
+  : mode === "standard-v2" ? "standard v2" : "standard";
 
 function statsText(stats: TransformStats, outcomeLabel: string) {
   const { skipped } = stats;
@@ -190,7 +234,7 @@ function statusText(
   rolloverHighMultiplier: number,
   rolloverLowMultiplier: number,
   epoch: ProjectionEpoch | undefined,
-  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex">,
+  stability: Omit<StabilityStats, "recoverableEntries" | "earliestChangedPriorMessageIndex" | "standardEarliestChangedPriorMessageIndex">,
 ) {
   const cumulative = emptyTransformStats();
   addTransformStats(cumulative, cumulativeActual);
@@ -205,15 +249,21 @@ function statusText(
     `Threshold: > ~${estimatedTokens(threshold)} tokens (${threshold} JS characters; estimated at ${CHARS_PER_ESTIMATED_TOKEN} characters/token)`,
     projectionMode === "stable"
       ? `Projection policy: append-only per-result caps; automatic newest-first rollover at >${rolloverHighMultiplier}T to ${rolloverLowMultiplier}T`
-      : "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
+      : projectionMode === "standard-v2"
+        ? "Age policy: ages 0–1 byte-identical and recallable; ages 2+ use fixed T with quantized T/T÷2/marker budget tiers"
+        : "Age policy: ages 2–5 base; 6+ half (minimum 1000 characters)",
     `Stable rollover: high ${rolloverHighMultiplier}T (${rolloverHighMultiplier * threshold} retained source chars); target ${rolloverLowMultiplier}T (${rolloverLowMultiplier * threshold} chars)`,
     `Eligible tools: ${ELIGIBLE_TOOL_NAMES.join(", ")}`,
     `Read policy: unique ${READ_TOOL_NAME} output is excluded from size/age pruning; only later exact duplicates may be replaced in stable mode`,
     `Active-result pruning: ${activePruning ? "enabled" : "disabled"}`,
     `Active recalls: ${activeRecalls}; restored ~${estimatedTokens(activeRecalledChars)} tokens`,
-    `Recent-window policy: ${projectionMode === "stable" ? "results freeze at first projection; user messages do not reflow them" : RECENT_WINDOW_POLICY}`,
+    `Recent-window policy: ${projectionMode === "stable"
+      ? "results freeze at first projection; user messages do not reflow them"
+      : projectionMode === "standard-v2"
+        ? "ages 0 and 1 reuse one recallable projection byte-for-byte"
+        : RECENT_WINDOW_POLICY}`,
     `Epoch: ${epoch?.id ?? "not started"}${epoch ? ` (${epoch.reason}, ${epoch.startedAt})` : ""}; frozen ${frozen.length}; source ${frozenSource} chars; retained ${frozenRetained} chars`,
-    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; automatic rollovers ${stability.automaticRollovers}; watermark crossings ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars`,
+    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; automatic rollovers ${stability.automaticRollovers}; watermark crossings ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars; standard comparisons ${stability.standardComparisons}; standard prefix churn ${stability.standardPrefixChurn}; standard estimated invalidated ${stability.standardEstimatedInvalidatedChars} chars; standard changes ${STANDARD_CHURN_KINDS.map((kind) => `${kind} ${stability.standardChangesByKind[kind]}`).join(", ")}`,
     `Latest call (${latestMode === "observe" ? "observe projections" : "enabled actual"}): ${statsText(latestStats, latestLabel)}`,
     `Cumulative outcomes: actual transformations ${cumulativeActual.transformed}; actual gross omitted ~${estimatedTokens(cumulativeActual.omittedChars)} tokens; actual net saved ~${estimatedTokens(cumulativeActual.netCharsSaved)} tokens; projected observe transformations ${cumulativeProjected.transformed}; projected observe gross omitted ~${estimatedTokens(cumulativeProjected.omittedChars)} tokens; projected observe net saved ~${estimatedTokens(cumulativeProjected.netCharsSaved)} tokens`,
     `Cumulative classifications: ${statsText(cumulative, "qualifying transformations")}`,
@@ -254,7 +304,7 @@ function fingerprint(
 
 export default function sieveExtension(pi: ExtensionAPI, options: { configPath?: string } = {}) {
   let mode: SieveMode = "enabled";
-  let projectionMode: ProjectionMode = "legacy";
+  let projectionMode: ProjectionMode = "standard-v2";
   let threshold = SIEVE_THRESHOLD;
   let rolloverHighMultiplier = DEFAULT_ROLLOVER_HIGH_MULTIPLIER;
   let rolloverLowMultiplier = DEFAULT_ROLLOVER_LOW_MULTIPLIER;
@@ -281,7 +331,16 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     prefixChurnViolations: 0,
     earliestChangedPriorMessageIndex: undefined,
     estimatedInvalidatedChars: 0,
+    standardComparisons: 0,
+    standardPrefixChurn: 0,
+    standardEarliestChangedPriorMessageIndex: undefined,
+    standardEstimatedInvalidatedChars: 0,
+    standardChangesByKind: emptyStandardChangesByKind(),
   };
+  let previousStandardProjection: {
+    messages: any[];
+    replacements: Map<number, StandardProjectionKind>;
+  } | undefined;
   let softBudgetExceededInEpoch = false;
   let persistedConfig = defaultConfig();
   const settingsPath = options.configPath ?? configPath();
@@ -308,12 +367,14 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     pendingEpochReason = undefined;
     recoverableActiveResults.clear();
     rawRecoverableResults.clear();
+    previousStandardProjection = undefined;
     softBudgetExceededInEpoch = false;
   };
   const requestEpoch = (reason: EpochReason) => {
     pendingEpochReason = reason;
     recoverableActiveResults.clear();
     rawRecoverableResults.clear();
+    previousStandardProjection = undefined;
   };
   const epochSnapshot = () => {
     const entries = [...(epoch?.entries.values() ?? [])];
@@ -362,6 +423,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       newProjections: 0, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
       automaticRollovers: 0, softBudgetExceedances: 0, prefixChurnViolations: 0,
       earliestChangedPriorMessageIndex: undefined, estimatedInvalidatedChars: 0,
+      standardComparisons: 0, standardPrefixChurn: 0, standardEarliestChangedPriorMessageIndex: undefined,
+      standardEstimatedInvalidatedChars: 0, standardChangesByKind: emptyStandardChangesByKind(),
     };
   };
   const telemetrySnapshot = (): PersistedTelemetry => ({
@@ -380,6 +443,10 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       softBudgetExceedances: stability.softBudgetExceedances,
       prefixChurnViolations: stability.prefixChurnViolations,
       estimatedInvalidatedChars: stability.estimatedInvalidatedChars,
+      standardComparisons: stability.standardComparisons,
+      standardPrefixChurn: stability.standardPrefixChurn,
+      standardEstimatedInvalidatedChars: stability.standardEstimatedInvalidatedChars,
+      standardChangesByKind: structuredClone(stability.standardChangesByKind),
     },
   });
   const persistTelemetry = () => {
@@ -406,6 +473,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         ...restored.stability,
         recoverableEntries: 0,
         earliestChangedPriorMessageIndex: undefined,
+        standardEarliestChangedPriorMessageIndex: undefined,
       };
       break;
     }
@@ -527,8 +595,15 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
 
     let result = projectionMode === "stable"
       ? stableSieveMessages(event.messages, epoch!, { cwd: ctx?.cwd })
-      : sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
-    let diagnostics = "diagnostics" in result ? result.diagnostics as ProjectionDiagnostics : undefined;
+      : projectionMode === "standard-v2"
+        ? standardV2SieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd })
+        : sieveMessages(event.messages, threshold, { pruneActive: activePruning, cwd: ctx?.cwd });
+    let diagnostics = projectionMode === "stable" && "diagnostics" in result
+      ? result.diagnostics as ProjectionDiagnostics
+      : undefined;
+    const standardDiagnostics = projectionMode === "standard-v2" && "diagnostics" in result
+      ? result.diagnostics as StandardProjectionDiagnostics
+      : undefined;
     if (projectionMode === "stable" && diagnostics?.requiresReflow) {
       // The mismatch is converted into a deliberate epoch boundary before anything is sent.
       stability.earliestChangedPriorMessageIndex ??= diagnostics.earliestChangedMessageIndex;
@@ -586,6 +661,33 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       stability.projectionCacheHits += diagnostics.cacheHits;
       stability.recoverableEntries = result.recoverableActiveResults.length;
     }
+    if (projectionMode === "standard-v2" && standardDiagnostics && mode === "enabled") {
+      const currentReplacements = new Map(standardDiagnostics.replacements.map((item) => [item.messageIndex, item.kind]));
+      if (previousStandardProjection) {
+        stability.standardComparisons++;
+        const priorLength = previousStandardProjection.messages.length;
+        const sharedLength = Math.min(priorLength, result.messages.length);
+        let changedIndex = 0;
+        while (changedIndex < sharedLength
+          && JSON.stringify(previousStandardProjection.messages[changedIndex]) === JSON.stringify(result.messages[changedIndex])) changedIndex++;
+        if (changedIndex < priorLength) {
+          const cause = currentReplacements.get(changedIndex)
+            ?? previousStandardProjection.replacements.get(changedIndex)
+            ?? "history";
+          stability.standardPrefixChurn++;
+          stability.standardChangesByKind[cause]++;
+          stability.standardEarliestChangedPriorMessageIndex = Math.min(
+            stability.standardEarliestChangedPriorMessageIndex ?? changedIndex,
+            changedIndex,
+          );
+          stability.standardEstimatedInvalidatedChars += JSON.stringify(previousStandardProjection.messages.slice(changedIndex)).length;
+        }
+      }
+      previousStandardProjection = {
+        messages: structuredClone(result.messages),
+        replacements: currentReplacements,
+      };
+    }
     if (mode === "observe") {
       addTransformStats(cumulativeProjected, result.stats);
       persistTelemetry();
@@ -637,8 +739,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         ctx.ui.notify(`pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}; cached prefix will reset.`, "info");
         return;
       }
-      if (action === "projection" && hasOnlyValue && (value === "stable" || value === "standard" || value === "legacy")) {
-        const nextProjectionMode: ProjectionMode = value === "standard" ? "legacy" : value;
+      if (action === "projection" && hasOnlyValue && (value === "stable" || value === "standard-v2" || value === "standard" || value === "legacy")) {
+        const nextProjectionMode: ProjectionMode = value === "standard" ? "standard-v2" : value;
         try {
           await updateConfig({ projectionMode: nextProjectionMode });
         } catch (error: any) {
@@ -724,7 +826,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         ), "info");
         return;
       }
-      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|projection <standard|stable>|reflow|rollover <high low|reset>|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
+      ctx.ui.notify("Usage: /sieve enable|observe|disable|status|projection <standard|standard-v2|stable>|reflow|rollover <high low|reset>|active <enable|disable>|threshold <1000-50000|reset>|reset-stats", "info");
     },
   });
 }

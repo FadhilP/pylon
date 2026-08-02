@@ -868,9 +868,12 @@ export class RuntimeProjection {
         const usage = object(item);
         const name = typeof usage.name === "string" ? usage.name.slice(0, 200) : "";
         if (!name || names.has(name) || !Number.isSafeInteger(usage.calls) || Number(usage.calls) < 0
-          || !Number.isSafeInteger(usage.tokens) || Number(usage.tokens) < 0) return [];
+          || !Number.isSafeInteger(usage.inputTokens) || Number(usage.inputTokens) < 0
+          || !Number.isSafeInteger(usage.outputTokens) || Number(usage.outputTokens) < 0
+          || !Number.isSafeInteger(usage.tokens) || Number(usage.tokens) < 0
+          || Number(usage.tokens) !== Number(usage.inputTokens) + Number(usage.outputTokens)) return [];
         names.add(name);
-        return [{ name, calls: usage.calls, tokens: usage.tokens }];
+        return [{ name, calls: usage.calls, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, tokens: usage.tokens }];
       });
     }
     if (typeof raw.model === "string") current.model = raw.model.slice(0, 200);

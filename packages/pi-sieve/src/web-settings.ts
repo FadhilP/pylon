@@ -14,7 +14,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
 
 export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (value?.kind !== "sieve" || typeof value.activePruning !== "boolean"
-    || (value.projectionMode !== "stable" && value.projectionMode !== "legacy")
+    || (value.projectionMode !== "stable" && value.projectionMode !== "standard-v2" && value.projectionMode !== "legacy")
     || !Number.isInteger(value.threshold)
     || value.threshold < MIN_SIEVE_THRESHOLD
     || value.threshold > MAX_SIEVE_THRESHOLD

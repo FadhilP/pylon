@@ -19,6 +19,7 @@ import {
   rolloverStableSieveMessages,
   sieveMessages,
   stableSieveMessages,
+  standardV2SieveMessages,
   staleReadMarker,
 } from "../src/sieve.ts";
 
@@ -230,6 +231,92 @@ test("enforces the retained successful-output budget at equality, overflow, and 
   const noExpansion = sieveMessages([user("before"), tiny, user("second"), user("third")], 10);
   assert.equal(noExpansion.messages[1], tiny, "marker larger than source fails open");
   assert.equal(noExpansion.stats.transformed, 0);
+});
+
+test("standard v2 keeps age-zero and age-one active projections byte-identical and recallable", () => {
+  const sources = [
+    textResult("bash", "x".repeat(8_001), { toolCallId: "standard-v2-plain", isError: false }),
+    {
+      ...textResult("bash", "unused", { toolCallId: "standard-v2-mixed", isError: false }),
+      content: [{ type: "text", text: "m".repeat(8_001) }, { type: "image", data: "image", mimeType: "image/png" }],
+    },
+    textResult("code_search", rankedSearchText("code", 50), { toolCallId: "standard-v2-ranked", isError: false }),
+    textResult("bash", "e".repeat(9_000), { toolCallId: "standard-v2-error", isError: true }),
+  ];
+
+  for (const source of sources) {
+    const ageZero = standardV2SieveMessages([user("before"), source], 4_000, { pruneActive: true });
+    const ageOne = standardV2SieveMessages([user("before"), source, user("after")], 4_000, { pruneActive: true });
+    assert.deepEqual(ageOne.messages[1], ageZero.messages[1]);
+    assert.deepEqual(ageOne.recoverableActiveResults, ageZero.recoverableActiveResults);
+    assert.deepEqual(ageOne.diagnostics.replacements, [{
+      messageIndex: 1,
+      kind: (source as any).isError ? "errorCap" : "activeThreshold",
+    }]);
+  }
+});
+
+test("standard v2 quantizes the shared budget and does not halve the age-six threshold", () => {
+  const budgetMessages = [
+    user("before"),
+    textResult("bash", "a".repeat(4_000), { toolCallId: "v2-oldest" }),
+    textResult("bash", "b".repeat(3_000), { toolCallId: "v2-newer-1" }),
+    textResult("bash", "c".repeat(3_000), { toolCallId: "v2-newer-2" }),
+    textResult("bash", "d".repeat(3_000), { toolCallId: "v2-newer-3" }),
+    user("second"),
+    user("third"),
+  ];
+  const quantized = standardV2SieveMessages(budgetMessages, 4_000);
+  const oldestOutput = (quantized.messages[1].content as any)[0].text as string;
+  const omitted = Number(oldestOutput.match(/; omitted (\d+)\/\d+ chars\]/)![1]);
+  assert.equal(4_000 - omitted, 2_000, "3,000 remaining source characters quantize to the 2,000-character tier");
+  assert.deepEqual(quantized.diagnostics.replacements, [{ messageIndex: 1, kind: "budget" }]);
+
+  const markerTier = standardV2SieveMessages([
+    user("before"),
+    textResult("bash", "a".repeat(4_000), { toolCallId: "v2-marker-oldest" }),
+    textResult("bash", "b".repeat(3_500), { toolCallId: "v2-marker-1" }),
+    textResult("bash", "c".repeat(3_500), { toolCallId: "v2-marker-2" }),
+    textResult("bash", "d".repeat(3_500), { toolCallId: "v2-marker-3" }),
+    user("second"), user("third"),
+  ], 4_000);
+  assert.equal((markerTier.messages[1].content as any)[0].text, omissionMarker("bash", 4_000));
+
+  const oddThreshold = standardV2SieveMessages([
+    user("before"),
+    textResult("bash", "a".repeat(4_001), { toolCallId: "v2-odd-oldest" }),
+    textResult("bash", "b".repeat(3_334), { toolCallId: "v2-odd-1" }),
+    textResult("bash", "c".repeat(3_334), { toolCallId: "v2-odd-2" }),
+    textResult("bash", "d".repeat(3_335), { toolCallId: "v2-odd-3" }),
+    user("second"), user("third"),
+  ], 4_001);
+  const oddOutput = (oddThreshold.messages[1].content as any)[0].text as string;
+  assert.equal(4_001 - Number(oddOutput.match(/; omitted (\d+)\/\d+ chars\]/)![1]), 2_000);
+
+  const tiny = textResult("bash", "tiny", { toolCallId: "v2-tiny" });
+  const markerLargerThanSource = standardV2SieveMessages([
+    user("before"),
+    tiny,
+    textResult("bash", "x".repeat(12_000), { toolCallId: "v2-budget-filler" }),
+    user("second"), user("third"),
+  ], 4_000);
+  assert.equal(markerLargerThanSource.messages[1], tiny, "a marker larger than its source still fails open");
+
+  const aged = standardV2SieveMessages([
+    user("before"),
+    textResult("bash", "x".repeat(4_001), { toolCallId: "v2-aged" }),
+    ...Array.from({ length: 6 }, (_, index) => user(`after-${index}`)),
+  ], 4_000);
+  assert.equal(((aged.messages[1].content as any)[0].text as string).length, 4_000);
+  assert.equal(aged.stats.transformedBy.ageThreshold, 1);
+
+  const agedGraph = standardV2SieveMessages([
+    user("before"),
+    textResult("relationship_graph", relationshipGraphText(30), { toolCallId: "v2-aged-graph", isError: false }),
+    ...Array.from({ length: 6 }, (_, index) => user(`graph-after-${index}`)),
+  ], 4_000);
+  assert.doesNotMatch((agedGraph.messages[1].content as any)[0].text, /^\[pi-sieve:/);
+  assert.doesNotThrow(() => JSON.parse((agedGraph.messages[1].content as any)[0].text));
 });
 
 test("caps eligible old errors at the configured threshold with diagnostic head and tail", () => {
@@ -1084,7 +1171,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: 12_000,
-    projectionMode: "legacy",
+    projectionMode: "standard-v2",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -1132,7 +1219,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     version: 1,
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
-    projectionMode: "legacy",
+    projectionMode: "standard-v2",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -1141,6 +1228,33 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(activeTools.includes("sieve_recall"), false);
   await command.handler("enable", ctx);
   assert.equal(activeTools.includes("sieve_recall"), true);
+
+  await command.handler("projection standard-v2", ctx);
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2");
+  const v2Source = textResult("bash", "v".repeat(oversizedLength), { toolCallId: "standard-v2-runtime", isError: false });
+  const v2AgeZero = hook({ messages: [user("v2-before"), v2Source] });
+  const v2AgeOne = hook({ messages: [user("v2-before"), v2Source, user("v2-after")] });
+  assert.deepEqual(v2AgeOne.messages[1], v2AgeZero.messages[1]);
+  assert.equal(publishedStates.at(-1).stability.standardComparisons, 1);
+  assert.equal(publishedStates.at(-1).stability.standardPrefixChurn, 0);
+  const v2Recall = await tools.get("sieve_recall").execute("v2-recall", { toolCallId: "standard-v2-runtime" });
+  assert.equal(v2Recall.details.found, true, "age-one standard v2 omissions remain recallable");
+  hook({ messages: [user("v2-before"), v2Source, user("v2-after"), user("v2-age-two")] });
+  assert.equal(publishedStates.at(-1).stability.standardComparisons, 2);
+  assert.equal(publishedStates.at(-1).stability.standardPrefixChurn, 1);
+  assert.equal(publishedStates.at(-1).stability.standardChangesByKind.ageThreshold, 1);
+
+  const comparisonsBeforeReset = publishedStates.at(-1).stability.standardComparisons;
+  await command.handler("projection standard", ctx);
+  await command.handler("projection standard-v2", ctx);
+  hook({ messages: [user("v2-before"), v2Source, user("v2-after"), user("v2-age-two")] });
+  assert.equal(publishedStates.at(-1).stability.standardComparisons, comparisonsBeforeReset, "mode changes reset consecutive comparison state");
+  await command.handler("observe", ctx);
+  hook({ messages: [user("v2-before"), v2Source] });
+  await command.handler("enable", ctx);
+  hook({ messages: [user("v2-before"), v2Source] });
+  assert.equal(publishedStates.at(-1).stability.standardComparisons, comparisonsBeforeReset, "observe interruptions reset consecutive comparison state");
+
   await command.handler("projection stable", ctx);
   const activeSource = textResult("bash", "z".repeat(oversizedLength), { toolCallId: "active-runtime" });
   const activeOutbound = hook({ messages: [user("first"), activeSource] });
@@ -1216,7 +1330,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(recalledAgain.content[0].text.length, oversizedLength);
   await command.handler("status", ctx);
   assert.match(notification, /Active-result pruning: enabled/);
-  assert.match(notification, /Active recalls: 3; restored ~\d+ tokens/);
+  assert.match(notification, /Active recalls: 4; restored ~\d+ tokens/);
   for (const handler of handlers.get("input") ?? []) await handler({ source: "interactive" }, {});
   const afterInput = await recallTool.execute("recall-call-3", { toolCallId: "active-runtime" }, undefined, undefined, toolCtx);
   assert.equal(afterInput.details.found, true);
@@ -1261,8 +1375,8 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   });
 
   await command.handler("projection standard", ctx);
-  assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy");
-  assert.match(notification, /projection mode set to standard/);
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2");
+  assert.match(notification, /projection mode set to standard v2/);
   await command.handler("projection legacy", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy", "legacy remains a compatibility alias");
   await command.handler("projection stable", ctx);
@@ -1357,7 +1471,24 @@ test("persists branch-aware telemetry while rebuilding recall caches from raw co
   assert.equal(saved.data.cumulativeActual.transformed, 1);
   assert.equal(saved.data.recalls, 1);
   assert.equal(saved.data.stability.explicitReflows, 1);
+  assert.equal(saved.data.stability.standardComparisons, 0);
+  assert.equal(saved.data.stability.standardPrefixChurn, 0);
+  assert.equal(saved.data.stability.standardEstimatedInvalidatedChars, 0);
+  assert.deepEqual(saved.data.stability.standardChangesByKind, {
+    activeThreshold: 0, ageThreshold: 0, budget: 0, staleRead: 0, duplicate: 0, errorCap: 0, history: 0,
+  });
   assert.doesNotMatch(JSON.stringify(saved.data), /z{100}/, "telemetry must not duplicate raw recall payloads");
+
+  const legacySavedBranch = structuredClone(savedBranch);
+  const legacyStability = legacySavedBranch.at(-1).data.stability;
+  delete legacyStability.standardComparisons;
+  delete legacyStability.standardPrefixChurn;
+  delete legacyStability.standardEstimatedInvalidatedChars;
+  delete legacyStability.standardChangesByKind;
+  const legacyRuntime = createRuntime(legacySavedBranch);
+  await start(legacyRuntime, "reload");
+  assert.match(await legacyRuntime.status(), /actual transformations 1/);
+  assert.match(await legacyRuntime.status(), /standard comparisons 0; standard prefix churn 0/);
 
   const resumed = createRuntime([
     ...savedBranch,

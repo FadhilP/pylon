@@ -2431,12 +2431,12 @@ export class SessionRuntime implements PiDriver {
     if (cached?.sessionId === sessionId && cached.leafId === leafId) return cached.items;
     const meter = meterFromBranch(session.sessionManager.getBranch());
     const items = [...meter.byTool.entries()]
-      .map(([name, usage]) => ({
-        name,
-        calls: usage.calls,
-        tokens: estimatedTokens(usage.argumentChars + usage.resultChars),
-      }))
-      .sort((left, right) => right.calls - left.calls || right.tokens - left.tokens || left.name.localeCompare(right.name))
+      .map(([name, usage]) => {
+        const inputTokens = estimatedTokens(usage.resultChars);
+        const outputTokens = estimatedTokens(usage.argumentChars);
+        return { name, calls: usage.calls, inputTokens, outputTokens, tokens: inputTokens + outputTokens };
+      })
+      .sort((left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name))
       .slice(0, 200);
     this.toolUsageCache = { sessionId, leafId, items };
     return items;

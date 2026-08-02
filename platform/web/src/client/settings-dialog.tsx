@@ -1,15 +1,16 @@
 import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, UiRequestReadModel } from "../shared/protocol/events";
-import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
+import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { HookSettingsFields } from "./hook-settings-fields";
+import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 
-export type SettingsTab = "providers" | "packages" | "hooks" | "notifications" | "appearance";
+export type SettingsTab = "providers" | "packages" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "hooks", "notifications", "appearance"];
+const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "hooks", "policy", "notifications", "appearance"];
 
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
@@ -18,6 +19,8 @@ interface SettingsDialogProps {
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
   hookSettings?: HookSettingsReadModel;
+  runtimePolicy?: RuntimePolicyReadModel;
+  policyDisabled: boolean;
   loading: boolean;
   hookLoading: boolean;
   busy: string;
@@ -34,9 +37,10 @@ interface SettingsDialogProps {
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
+  onUpdateGlobalPolicy: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
@@ -114,7 +118,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
   }}>
     <div ref={dialogRef} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" onKeyDown={onKeyDown}>
       <header>
-        <div><IconSettings size={18} /><strong id="settings-dialog-title">Settings</strong><span>Changes apply across this workspace</span></div>
+        <div><IconSettings size={18} /><strong id="settings-dialog-title">Settings</strong><span>Manage Pylon defaults and integrations</span></div>
         <button data-autofocus className="icon-button" type="button" onClick={onClose} aria-label="Close settings"><IconX size={17} /></button>
       </header>
       <div className="settings-layout">
@@ -231,6 +235,10 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
             <HookSettingsFields settings={hookSettings} loading={hookLoading} disabled={hookBusy} onUpdate={onUpdateHooks} />
           </section>
 
+          <section id="settings-panel-policy" className="settings-pane global-policy-pane" role="tabpanel" aria-labelledby="settings-tab-policy" hidden={activeTab !== "policy"}>
+            <GlobalPolicySettings policy={runtimePolicy} disabled={policyDisabled} onUpdate={onUpdateGlobalPolicy} />
+          </section>
+
           <section id="settings-panel-notifications" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-notifications" hidden={activeTab !== "notifications"}>
             <div className="settings-pane-header"><div><h2>Notifications</h2><p>Preview the cues Pylon uses when work finishes or needs your attention.</p></div></div>
             <h3>Sound cues</h3>
@@ -256,6 +264,111 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
       <footer><span>Changes save immediately</span><button type="button" onClick={onClose}>Done</button></footer>
     </div>
   </div>;
+}
+
+const defaultGlobalPolicy: RuntimePolicyReadModel["global"] = {
+  timelineEnabled: true,
+  guardEnabled: true,
+  workspace: "local",
+  guardTimeoutSeconds: 60,
+  clarifyTimeoutSeconds: 60,
+};
+
+function GlobalPolicySettings({ policy, disabled, onUpdate }: {
+  policy?: RuntimePolicyReadModel;
+  disabled: boolean;
+  onUpdate: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<RuntimePolicyReadModel["global"]>(policy?.global ?? defaultGlobalPolicy);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const latestPolicy = useRef(policy);
+  const saveRequest = useRef(0);
+
+  useEffect(() => {
+    latestPolicy.current = policy;
+    if (!policy) return;
+    saveRequest.current++;
+    setDraft(policy.global);
+    setBusy(false);
+    setError("");
+  }, [policy?.revision]);
+
+  if (!policy) return <div className="settings-empty"><strong>Global policy unavailable</strong><span>Connect to a registered project to edit policy defaults.</span></div>;
+
+  const save = async (next: RuntimePolicyReadModel["global"]) => {
+    const request = ++saveRequest.current;
+    setDraft(next);
+    setBusy(true);
+    setError("");
+    try {
+      await onUpdate(next, policy.revision);
+    } catch (cause) {
+      if (request !== saveRequest.current) return;
+      setDraft(latestPolicy.current?.global ?? policy.global);
+      setBusy(false);
+      setError(cause instanceof Error ? cause.message : "Global policy could not be saved");
+    }
+  };
+  const controlsDisabled = disabled || busy;
+
+  return <>
+    <div className="settings-pane-header">
+      <div><h2>Global policy defaults</h2><p>Set the starting behavior for every project and session. Existing project and session overrides stay unchanged. Verify is configured per project in Inspector.</p></div>
+    </div>
+
+    <div className="policy-inheritance" aria-label="Policy inheritance order">
+      <span><strong>Global</strong><i aria-hidden="true">›</i><b>Project</b><i aria-hidden="true">›</i><b>Session</b></span>
+      <small>The nearest override wins. Inherited values update when their source changes.</small>
+    </div>
+
+    <section className="settings-policy-group" aria-labelledby="global-policy-safety-title">
+      <header><h3 id="global-policy-safety-title">Activity and safety</h3><p>Defaults for checkpoints, approvals, and response windows.</p></header>
+      <div className="settings-policy-list">
+        <div className="settings-policy-row">
+          <span><strong>Timeline</strong><small>Keep recoverable checkpoints for session activity.</small></span>
+          <label className="settings-policy-switch"><input type="checkbox" role="switch" checked={draft.timelineEnabled} disabled={controlsDisabled} onChange={(event) => void save({ ...draft, timelineEnabled: event.target.checked })} /><span aria-hidden="true" /><small>{draft.timelineEnabled ? "Enabled" : "Disabled"}</small></label>
+        </div>
+        <div className="settings-policy-row">
+          <span><strong>Guard</strong><small>Ask before guarded commands and paths run.</small></span>
+          <label className="settings-policy-switch"><input type="checkbox" role="switch" checked={draft.guardEnabled} disabled={controlsDisabled} onChange={(event) => void save({ ...draft, guardEnabled: event.target.checked })} /><span aria-hidden="true" /><small>{draft.guardEnabled ? "Enabled" : "Disabled"}</small></label>
+        </div>
+        <RuntimePolicyTimeoutControl
+          label="Guard timeout"
+          description="How long a confirmation request stays open."
+          value={draft.guardTimeoutSeconds}
+          disabled={controlsDisabled}
+          onChange={(guardTimeoutSeconds) => void save({ ...draft, guardTimeoutSeconds })}
+        />
+        <RuntimePolicyTimeoutControl
+          label="Clarify timeout"
+          description="How long Pylon waits for a clarification answer."
+          value={draft.clarifyTimeoutSeconds}
+          disabled={controlsDisabled}
+          onChange={(clarifyTimeoutSeconds) => void save({ ...draft, clarifyTimeoutSeconds })}
+        />
+      </div>
+    </section>
+
+    <section className="settings-policy-group" aria-labelledby="global-policy-workspace-title">
+      <header><h3 id="global-policy-workspace-title">Workspace defaults</h3><p>Choose where sessions begin work when no closer override exists.</p></header>
+      <div className="settings-policy-list">
+        <label className="settings-policy-row">
+          <span><strong>Workspace</strong><small>Local does not create a branch or worktree.</small></span>
+          <select value={draft.workspace} disabled={controlsDisabled} onChange={(event) => void save({ ...draft, workspace: event.target.value as RuntimePolicyReadModel["global"]["workspace"] })}>
+            <option value="local">Local</option>
+            <option value="checkout">Project folder</option>
+            <option value="worktree">Session worktree</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <p className="settings-policy-note"><strong>Project and session overrides are not reset.</strong> Only inherited fields follow a new global default.</p>
+    {disabled && <p className="settings-policy-note">Global policy can change when every active session is idle.</p>}
+    {error && <p className="settings-policy-error" role="alert">{error}</p>}
+    {busy && <p className="settings-policy-saving" role="status">Saving…</p>}
+  </>;
 }
 
 function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
@@ -305,7 +418,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
     return <div className="package-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.activePruning} disabled={disabled} onChange={(event) => onUpdate({ ...settings, activePruning: event.target.checked })} />Active pruning</label>
       <label>Projection mode<select value={settings.projectionMode} disabled={disabled} onChange={(event) => onUpdate({ ...settings, projectionMode: event.target.value as typeof settings.projectionMode })}>
-        <option value="legacy">Standard</option><option value="stable">Stable (experimental)</option>
+        <option value="standard-v2">Standard (default)</option><option value="legacy">Standard V1 (legacy)</option><option value="stable">Stable (experimental)</option>
       </select></label>
       <label>Pruning threshold<input key={settings.threshold} type="number" min={1_000} max={50_000} step={1_000} defaultValue={settings.threshold} disabled={disabled} onBlur={(event) => {
         const threshold = Number(event.target.value);

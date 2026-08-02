@@ -708,16 +708,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Plan mode is read-only. Memory mutations are blocked; use memory list only.",
       };
-    if (
-      event.toolName === "continuity_update" &&
-      input.action === "state" &&
-      input.completion === true &&
-      !hasReplyBeforeCompletion(event, ctx)
-    )
-      return {
-        block: true,
-        reason: "Write the final user-facing response first, then retry completion as the last tool call in the same assistant message.",
-      };
     if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
       pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
@@ -918,9 +908,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     promptSnippet: "Planning, todo/state tracking, and clarification capability.",
     executionMode: "sequential",
     promptGuidelines: [
-      "Use set_plan for explicit /plan, risky or multi-phase work, handoffs/background jobs, or likely blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. During explicit planning, Continuity owns plan presentation; otherwise it maintains an internal task list.",
-      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use exact todo IDs; bulk-complete independent todos or atomically start the next todo when useful.",
-      "Keep verification out of new todo lists. Finish implementation todos before Verify; a sole verification-only todo completes automatically when Verify passes. Make nonterminal updates before final text without progress narration.",
+      "Use set_plan for explicit /plan, handoffs, or blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. Continuity owns plan presentation in explicit planning; otherwise use an internal task list.",
+      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint; never re-ask an answered question without new evidence. Use exact todo IDs and atomic transitions.",
+      "Keep verification out of new todo lists. Finish work before Verify; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
+      "Never call a completion tool. Write exactly one text-only final response when ready; Continuity completes automatically. For clean/no_checks, first acknowledge allowUnverified tool-only and disclose the limitation.",
       "After failed, stale, cancelled, or error Verify results, write one caveated text-only final response and stop without another tool call.",
     ],
     renderShell: "self",
@@ -940,6 +931,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (plan) return new Text(plan, 0, 0);
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
+      if (text && /^(?:Cannot |Verification is unavailable|allowUnverified requires)/.test(text))
+        return new Text(theme.fg("warning", `⚠ ${text}`), 0, 0);
       return text?.startsWith("Work completed") || text?.startsWith("Work already completed")
         ? new Text(theme.fg("success", "✓ Task completed"), 0, 0)
         : new Container();
@@ -1002,12 +995,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
         status: Type.Optional(Status),
         currentTodoId: Type.Optional(Type.String()),
         latestFailure: Type.Optional(Type.String({ maxLength: 1000 })),
-        nextAction: Type.Optional(Type.String({ maxLength: 1000 })),        completion: Type.Optional(Type.Boolean()),
-        allowUnverified: Type.Optional(Type.Boolean({ description: "Explicitly allow completion only when Verify reports clean or no declared checks." })),
+        nextAction: Type.Optional(Type.String({ maxLength: 1000 })),
+        allowUnverified: Type.Optional(Type.Boolean({ description: "Acknowledge clean or no_checks in a tool-only state update; disclose the limitation in the final response." })),
       },
       { additionalProperties: false },
     ),
-    async execute(_i, p, _s, _u, ctx): Promise<any> {
+    async execute(_i, input, _s, _u, ctx): Promise<any> {
+      // Keep direct legacy callers working without advertising explicit completion to models.
+      const p = input as typeof input & { completion?: boolean };
+      const legacyCompletionWithReply = p.completion === true &&
+        hasReplyBeforeCompletion({ toolCallId: _i }, ctx);
+      if (p.allowUnverified && p.action !== "state")
+        return {
+          content: [{ type: "text", text: "allowUnverified requires action \"state\"." }],
+        };
       if (p.action === "state") {
         const todoFields = (["todoId", "todoIds", "status", "nextTodoId"] as const)
           .filter((field) => p[field] !== undefined);
@@ -1192,6 +1193,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               content: [
                 { type: "text", text: "Cannot complete while todos remain." },
               ],
+              ...(legacyCompletionWithReply ? { terminate: true } : {}),
             };
           if (needsVerification && latestVerification?.state !== "passed") {
             const explicitlyAllowed = p.allowUnverified && ["clean", "no_checks"].includes(latestVerification?.state);
@@ -1201,10 +1203,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
                   {
                     type: "text",
                     text: ["clean", "no_checks"].includes(latestVerification?.state)
-                      ? "Verification is unavailable for this worktree. Repeat completion with allowUnverified only after reviewing that limitation."
+                      ? "Verification is unavailable for this worktree. Acknowledge allowUnverified in a tool-only state update after reviewing that limitation."
                       : "Cannot complete until current-session verification passes.",
                   },
                 ],
+                ...(legacyCompletionWithReply ? { terminate: true } : {}),
               };
           }
           await completeWork(ctx);
@@ -1214,6 +1217,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
             ],
             terminate: true,
           };
+        }
+        if (p.allowUnverified) {
+          if (hasRemainingTodos(work))
+            return {
+              content: [{ type: "text", text: "Cannot acknowledge verification while todos remain." }],
+            };
+          if (!needsVerification)
+            return {
+              content: [{ type: "text", text: "No verification acknowledgement is required." }],
+            };
+          if (!["clean", "no_checks"].includes(latestVerification?.state))
+            return {
+              content: [{ type: "text", text: "allowUnverified requires a current clean or no_checks Verify result." }],
+            };
+          needsVerification = false;
         }
       }
       work.updatedAt = new Date().toISOString();

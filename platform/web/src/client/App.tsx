@@ -1003,6 +1003,12 @@ export function App() {
               overlay={inspectorOverlay}
               onClose={() => setRightPanel(null)}
               onNavigate={selectView}
+              onOpenGlobalPolicy={() => {
+                setRightPanel(null);
+                setSettingsTab("policy");
+                setSettingsProviderQuery("");
+                setSettingsOpen(true);
+              }}
             />}
           {rightPanel === "database" && <DatabasePanel
             key={`database:${live.runtime?.sessionId ?? "loading"}`}
@@ -1082,6 +1088,11 @@ export function App() {
         pendingUi={live.pendingUi}
         packages={packages}
         hookSettings={hookSettings}
+        runtimePolicy={live.runtime?.runtimePolicy}
+        policyDisabled={live.connection !== "connected"
+          || live.runtime?.ready !== true
+          || Boolean(live.pendingUi)
+          || activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         loading={packagesLoading}
         hookLoading={hooksLoading}
         busy={packageBusy}
@@ -1101,6 +1112,16 @@ export function App() {
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
         onUpdateHooks={updateHookSettings}
+        onUpdateGlobalPolicy={(settings, expectedRevision) => runtimeStore.updateRuntimePolicy(
+          "global",
+          "inherit",
+          settings.timelineEnabled,
+          settings.guardEnabled,
+          settings.workspace,
+          settings.guardTimeoutSeconds,
+          settings.clarifyTimeoutSeconds,
+          expectedRevision,
+        )}
       />}
     </div>
   );

@@ -3,20 +3,16 @@ import { soundPattern, type WebAudioCueKind } from "../shared/sound-cues";
 const pending: WebAudioCueKind[] = [];
 let context: AudioContext | undefined;
 let resuming = false;
-let unavailable = false;
 let nextStartAt = 0;
 
 export function unlockWebAudio(): void {
-  if (unavailable) return;
+  if (context?.state === "closed") resetContext(context);
   if (!context) {
     const AudioContextConstructor = window.AudioContext
       ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextConstructor) {
-      unavailable = true;
-      return;
-    }
+    if (!AudioContextConstructor) return;
     try { context = new AudioContextConstructor(); }
-    catch { unavailable = true; return; }
+    catch { return; }
   }
   flush();
 }
@@ -28,35 +24,72 @@ export function enqueueWebAudioCues(cues: readonly WebAudioCueKind[]): void {
 }
 
 function flush(): void {
-  if (!context) return;
-  if (context.state !== "running") {
-    if (resuming) return;
-    resuming = true;
-    void context.resume().then(() => {
-      resuming = false;
-      flush();
-    }).catch(() => { resuming = false; });
+  const audio = context;
+  if (!audio) return;
+  if (audio.state === "closed") {
+    resetContext(audio);
     return;
   }
-  while (pending.length) schedule(context, pending.shift()!);
+  if (audio.state !== "running") {
+    if (resuming) return;
+    resuming = true;
+    void audio.resume().then(() => {
+      if (context !== audio) return;
+      resuming = false;
+      if (audio.state === "running") flush();
+    }).catch(() => {
+      if (context !== audio) return;
+      resuming = false;
+      if (audio.state === "closed") resetContext(audio);
+    });
+    return;
+  }
+  while (pending.length) {
+    try { schedule(audio, pending[0]!); }
+    catch {
+      return;
+    }
+    pending.shift();
+  }
+}
+
+function resetContext(audio: AudioContext): void {
+  if (context !== audio) return;
+  context = undefined;
+  resuming = false;
+  nextStartAt = 0;
 }
 
 function schedule(audio: AudioContext, kind: WebAudioCueKind): void {
   const pattern = soundPattern(kind);
   const start = Math.max(audio.currentTime + .02, nextStartAt);
-  for (const tone of pattern) {
-    const oscillator = audio.createOscillator();
-    const gain = audio.createGain();
-    const toneStart = start + tone.offset;
-    const toneEnd = toneStart + tone.duration;
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
-    gain.gain.setValueAtTime(.0001, toneStart);
-    gain.gain.exponentialRampToValueAtTime(.3, toneStart + .01);
-    gain.gain.exponentialRampToValueAtTime(.0001, toneEnd);
-    oscillator.connect(gain).connect(audio.destination);
-    oscillator.start(toneStart);
-    oscillator.stop(toneEnd + .01);
+  const nodes: Array<{ oscillator: OscillatorNode; gain: GainNode }> = [];
+  try {
+    for (const tone of pattern) {
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      nodes.push({ oscillator, gain });
+      const toneStart = start + tone.offset;
+      const toneEnd = toneStart + tone.duration;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
+      gain.gain.setValueAtTime(.0001, toneStart);
+      gain.gain.exponentialRampToValueAtTime(.3, toneStart + .01);
+      gain.gain.exponentialRampToValueAtTime(.0001, toneEnd);
+      oscillator.connect(gain).connect(audio.destination);
+      oscillator.addEventListener("ended", () => {
+        oscillator.disconnect();
+        gain.disconnect();
+      }, { once: true });
+      oscillator.start(toneStart);
+      oscillator.stop(toneEnd + .01);
+    }
+  } catch (error) {
+    for (const { oscillator, gain } of nodes) {
+      oscillator.disconnect();
+      gain.disconnect();
+    }
+    throw error;
   }
   nextStartAt = start + Math.max(...pattern.map((tone) => tone.offset + tone.duration)) + .08;
 }

@@ -99,7 +99,12 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
         ? Object.fromEntries(Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [name, { ...usage }]))
         : undefined,
       epoch: value.sieve.epoch ? { ...value.sieve.epoch } : undefined,
-      stability: value.sieve.stability ? { ...value.sieve.stability } : undefined,
+      stability: value.sieve.stability ? {
+        ...value.sieve.stability,
+        standardChangesByKind: value.sieve.stability.standardChangesByKind
+          ? { ...value.sieve.stability.standardChangesByKind }
+          : undefined,
+      } : undefined,
     },
     health: { ...value.health, issues: [...value.health.issues] },
   };
@@ -201,14 +206,30 @@ function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
 function sieveStability(value: unknown): SieveReadModel["stability"] | undefined {
   const input = record(value);
   const metrics = ["newProjections", "projectionCacheHits", "recoverableEntries", "explicitReflows", "softBudgetExceedances", "prefixChurnViolations", "estimatedInvalidatedChars"];
+  const standardChangeKinds = ["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"] as const;
+  const standardChangesByKind = record(input?.standardChangesByKind);
   if (!input || !metrics.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)
-    || input.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(input.earliestChangedPriorMessageIndex) || Number(input.earliestChangedPriorMessageIndex) < 0)) return undefined;
+    || input.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(input.earliestChangedPriorMessageIndex) || Number(input.earliestChangedPriorMessageIndex) < 0)
+    || input.standardComparisons !== undefined && (!Number.isSafeInteger(input.standardComparisons) || Number(input.standardComparisons) < 0)
+    || input.standardPrefixChurn !== undefined && (!Number.isSafeInteger(input.standardPrefixChurn) || Number(input.standardPrefixChurn) < 0)
+    || input.standardEarliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(input.standardEarliestChangedPriorMessageIndex) || Number(input.standardEarliestChangedPriorMessageIndex) < 0)
+    || input.standardEstimatedInvalidatedChars !== undefined && (!Number.isSafeInteger(input.standardEstimatedInvalidatedChars) || Number(input.standardEstimatedInvalidatedChars) < 0)
+    || input.standardChangesByKind !== undefined && (!standardChangesByKind || !standardChangeKinds.every((key) => Number.isSafeInteger(standardChangesByKind[key]) && Number(standardChangesByKind[key]) >= 0))) return undefined;
   return {
     newProjections: Number(input.newProjections), projectionCacheHits: Number(input.projectionCacheHits),
     recoverableEntries: Number(input.recoverableEntries), explicitReflows: Number(input.explicitReflows),
     softBudgetExceedances: Number(input.softBudgetExceedances), prefixChurnViolations: Number(input.prefixChurnViolations),
     estimatedInvalidatedChars: Number(input.estimatedInvalidatedChars),
     ...(input.earliestChangedPriorMessageIndex !== undefined ? { earliestChangedPriorMessageIndex: Number(input.earliestChangedPriorMessageIndex) } : {}),
+    ...(input.standardComparisons !== undefined ? { standardComparisons: Number(input.standardComparisons) } : {}),
+    ...(input.standardPrefixChurn !== undefined ? { standardPrefixChurn: Number(input.standardPrefixChurn) } : {}),
+    ...(input.standardEarliestChangedPriorMessageIndex !== undefined ? { standardEarliestChangedPriorMessageIndex: Number(input.standardEarliestChangedPriorMessageIndex) } : {}),
+    ...(input.standardEstimatedInvalidatedChars !== undefined ? { standardEstimatedInvalidatedChars: Number(input.standardEstimatedInvalidatedChars) } : {}),
+    ...(standardChangesByKind ? { standardChangesByKind: {
+      activeThreshold: Number(standardChangesByKind.activeThreshold), ageThreshold: Number(standardChangesByKind.ageThreshold),
+      budget: Number(standardChangesByKind.budget), staleRead: Number(standardChangesByKind.staleRead),
+      duplicate: Number(standardChangesByKind.duplicate), errorCap: Number(standardChangesByKind.errorCap), history: Number(standardChangesByKind.history),
+    } } : {}),
   };
 }
 
@@ -225,7 +246,7 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   const stability = input.stability === undefined ? undefined : sieveStability(input.stability);
   const contextUsagePercent = input.contextUsagePercent;
   if (input.available !== true
-    || !["stable", "legacy"].includes(String(input.projectionMode))
+    || !["stable", "legacy", "standard-v2"].includes(String(input.projectionMode))
     || input.epoch !== undefined && !epoch
     || input.stability !== undefined && !stability
     || contextUsagePercent !== undefined && (typeof contextUsagePercent !== "number" || !Number.isFinite(contextUsagePercent) || contextUsagePercent < 0 || contextUsagePercent > 100)

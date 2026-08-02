@@ -34,7 +34,7 @@ Prefer profiles and credential environment variables. A `secret_env` value repla
 
 ### Confirmations and Data Disclosure
 
-StateQL safety checks remain authoritative. Connection changes, database writes, plan application, transaction commit/rollback, and profile removal require interactive confirmation; they fail closed when confirmation is unavailable. SQL, parameters, and database results may be sent to the selected model provider and retained in Pi session history.
+StateQL safety checks remain authoritative. Connection changes, database writes, plan application, transaction commit/rollback, and profile removal require interactive confirmation; they fail closed when confirmation is unavailable. In Pylon Web, these confirmations use the configured Guard timeout while Guard is enabled; otherwise they do not time out. SQL, parameters, and database results may be sent to the selected model provider and retained in Pi session history.
 
 ### Pylon Web
 

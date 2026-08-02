@@ -28,6 +28,12 @@ export type SieveOptions = {
   retainedSourceCap?: number;
 };
 
+export type StandardProjectionKind = "activeThreshold" | "ageThreshold" | "budget" | "staleRead" | "duplicate" | "errorCap";
+
+export type StandardProjectionDiagnostics = {
+  replacements: Array<{ messageIndex: number; kind: StandardProjectionKind }>;
+};
+
 export type EligibleToolName = (typeof ELIGIBLE_TOOL_NAMES)[number];
 
 export type ContextMessage = {
@@ -96,6 +102,10 @@ export type TransformResult<T extends ContextMessage> = {
   messages: T[];
   stats: TransformStats;
   recoverableActiveResults: RecoverableActiveResult[];
+};
+
+export type StandardV2TransformResult<T extends ContextMessage> = TransformResult<T> & {
+  diagnostics: StandardProjectionDiagnostics;
 };
 
 export type EpochReason =
@@ -302,6 +312,12 @@ function textOnlyContentTail(content: unknown, characters: number): string | und
 export function effectiveThresholdForAge(age: number, threshold: number) {
   if (age <= 5) return threshold;
   return Math.max(1_000, Math.floor(threshold / 2));
+}
+
+function standardV2BudgetCapacity(remaining: number, desired: number, threshold: number) {
+  if (remaining >= desired) return desired;
+  const half = Math.min(desired, Math.max(1, Math.floor(threshold / 2)));
+  return remaining >= half ? half : 0;
 }
 
 type SieveKind = "plain" | "rankedSearch" | "relationshipGraph";
@@ -1024,11 +1040,12 @@ function staleReadReplacements<T extends ContextMessage>(messages: readonly T[],
  * ineligible message objects remain untouched. The optional threshold keeps
  * existing callers on the default while allowing runtime configuration.
  */
-export function sieveMessages<T extends ContextMessage>(
+function standardSieveMessages<T extends ContextMessage>(
   messages: readonly T[],
-  threshold = SIEVE_THRESHOLD,
-  options: SieveOptions = {},
-): TransformResult<T> {
+  threshold: number,
+  options: SieveOptions,
+  standardV2: boolean,
+): StandardV2TransformResult<T> {
   const userIndexes = messages.reduce<number[]>((indexes, message, index) => {
     if (message.role === "user") indexes.push(index);
     return indexes;
@@ -1046,6 +1063,9 @@ export function sieveMessages<T extends ContextMessage>(
   const cwd = options.cwd ?? process.cwd();
   const staleReads = staleReadReplacements(messages, cwd);
   const replacements = staleReads.replacements;
+  const replacementKinds = new Map<number, StandardProjectionKind>(
+    [...replacements.keys()].map((messageIndex) => [messageIndex, "staleRead"]),
+  );
   stats.scanned += replacements.size;
   stats.transformed += replacements.size;
   stats.transformedBy.staleRead += replacements.size;
@@ -1053,6 +1073,7 @@ export function sieveMessages<T extends ContextMessage>(
   stats.netCharsSaved += staleReads.netCharsSaved;
   for (const duplicate of exactDuplicateReplacements(messages, cwd, replacements, options.pruneActive === true)) {
     replacements.set(duplicate.messageIndex, duplicate.message);
+    replacementKinds.set(duplicate.messageIndex, "duplicate");
     if (duplicate.recoverable) recoverableActiveResults.push(duplicate.recoverable);
     stats.scanned++;
     stats.transformed++;
@@ -1064,7 +1085,7 @@ export function sieveMessages<T extends ContextMessage>(
   if (options.pruneActive) {
     for (let index = 0; index < messages.length; index++) {
       const fields = messages[index] as Record<string, unknown>;
-      if (fields.role !== "toolResult" || usersAfter[index] !== 0) continue;
+      if (fields.role !== "toolResult" || usersAfter[index] > (standardV2 ? 1 : 0)) continue;
       if (typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
       activeToolCallIdCounts.set(fields.toolCallId, (activeToolCallIdCounts.get(fields.toolCallId) ?? 0) + 1);
     }
@@ -1077,7 +1098,7 @@ export function sieveMessages<T extends ContextMessage>(
     const message = messages[index];
     if (message.role !== "toolResult" || replacements.has(index)) continue;
     const age = usersAfter[index];
-    if (age === 0 && options.pruneActive) {
+    if (age <= (standardV2 ? 1 : 0) && options.pruneActive) {
       stats.scanned++;
       const source = sieveSource(message, false);
       if (!source) {
@@ -1122,6 +1143,7 @@ export function sieveMessages<T extends ContextMessage>(
           continue;
         }
         replacements.set(index, sliced.message);
+        replacementKinds.set(index, source.isError ? "errorCap" : "activeThreshold");
         recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
         stats.transformed++;
         stats.transformedBy.activeThreshold++;
@@ -1143,6 +1165,7 @@ export function sieveMessages<T extends ContextMessage>(
           continue;
         }
         replacements.set(index, replaceWithMarker(message, outboundText));
+        replacementKinds.set(index, "activeThreshold");
         recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: false });
         stats.transformed++;
         stats.transformedBy.activeThreshold++;
@@ -1157,6 +1180,7 @@ export function sieveMessages<T extends ContextMessage>(
         continue;
       }
       replacements.set(index, replaceWithMarker(message, outboundText));
+      replacementKinds.set(index, source.isError ? "errorCap" : "activeThreshold");
       recoverableActiveResults.push({ toolCallId, toolName: source.toolName, isError: source.isError });
       stats.transformed++;
       stats.transformedBy.activeThreshold++;
@@ -1198,6 +1222,7 @@ export function sieveMessages<T extends ContextMessage>(
         const text = textBlocks!.map((block) => block.text).join("");
         const outbound = marker + text.slice(0, headChars) + "\n" + text.slice(-tailChars);
         replacements.set(index, replaceWithMarker(message, outbound));
+        replacementKinds.set(index, "errorCap");
         stats.transformed++;
         stats.transformedBy.errorCap++;
         stats.omittedChars += sourceLength - headChars - tailChars;
@@ -1213,9 +1238,13 @@ export function sieveMessages<T extends ContextMessage>(
       continue;
     }
     if (mixed) {
-      const effectiveThreshold = effectiveThresholdForAge(age, threshold);
+      const effectiveThreshold = standardV2 ? threshold : effectiveThresholdForAge(age, threshold);
       const remainingBudget = retainedBudget - retainedChars;
-      if (sourceLength <= effectiveThreshold && sourceLength <= remainingBudget) {
+      const desiredRetained = Math.min(sourceLength, effectiveThreshold);
+      const availableBudget = standardV2
+        ? standardV2BudgetCapacity(remainingBudget, desiredRetained, threshold)
+        : remainingBudget;
+      if (sourceLength <= effectiveThreshold && sourceLength <= availableBudget) {
         retainedChars += sourceLength;
         stats.skipped.atOrBelowThreshold++;
         continue;
@@ -1224,13 +1253,14 @@ export function sieveMessages<T extends ContextMessage>(
         message,
         source,
         sourceLength > effectiveThreshold ? effectiveThreshold : Math.max(0, sourceLength - 1),
-        Math.max(0, remainingBudget),
+        Math.max(0, availableBudget),
       );
       if (!sliced) {
         stats.skipped.nonTextMixedOrEmptyContent++;
         continue;
       }
       replacements.set(index, sliced.message);
+      replacementKinds.set(index, sourceLength > effectiveThreshold && availableBudget >= desiredRetained ? "ageThreshold" : "budget");
       retainedChars += sliced.retainedChars;
       stats.transformed++;
       stats.transformedBy[sourceLength > effectiveThreshold ? "ageThreshold" : "budget"]++;
@@ -1252,8 +1282,8 @@ export function sieveMessages<T extends ContextMessage>(
 
     const effectiveThreshold = age === 1
       ? (options.pruneActive ? threshold : 3 * threshold)
-      : effectiveThresholdForAge(age, threshold);
-    if (source.kind === "relationshipGraph" && age >= 6) {
+      : standardV2 ? threshold : effectiveThresholdForAge(age, threshold);
+    if (!standardV2 && source.kind === "relationshipGraph" && age >= 6) {
       const marker = structuredMarker(source, sourceLength);
       if (marker.length >= sourceLength) {
         retainedChars += sourceLength;
@@ -1261,6 +1291,7 @@ export function sieveMessages<T extends ContextMessage>(
         continue;
       }
       replacements.set(index, replaceWithMarker(message, marker));
+      replacementKinds.set(index, "ageThreshold");
       stats.transformed++;
       stats.transformedBy.ageThreshold++;
       stats.omittedChars += sourceLength;
@@ -1273,7 +1304,11 @@ export function sieveMessages<T extends ContextMessage>(
     }
 
     const remainingBudget = age === 1 ? sourceLength : retainedBudget - retainedChars;
-    if (age > 1 && sourceLength <= effectiveThreshold && sourceLength <= remainingBudget) {
+    const desiredRetained = Math.min(sourceLength, effectiveThreshold);
+    const availableBudget = standardV2 && age > 1
+      ? standardV2BudgetCapacity(remainingBudget, desiredRetained, threshold)
+      : remainingBudget;
+    if (age > 1 && sourceLength <= effectiveThreshold && sourceLength <= availableBudget) {
       retainedChars += sourceLength;
       stats.skipped.atOrBelowThreshold++;
       continue;
@@ -1282,12 +1317,13 @@ export function sieveMessages<T extends ContextMessage>(
     const byAgeThreshold = sourceLength > effectiveThreshold;
     const maxOutboundChars = byAgeThreshold ? effectiveThreshold : Math.max(0, sourceLength - 1);
     if (source.kind !== "plain") {
-      const maxRetainedChars = age === 1 ? Number.POSITIVE_INFINITY : Math.max(0, remainingBudget);
+      const maxRetainedChars = age === 1 ? Number.POSITIVE_INFINITY : Math.max(0, availableBudget);
       const sliced = source.kind === "rankedSearch"
         ? sliceRankedSearch(blocks, source, maxOutboundChars, undefined, maxRetainedChars)
         : sliceRelationshipGraph(blocks, source, maxOutboundChars, maxRetainedChars);
       if (sliced && sliced.outboundText.length < sourceLength) {
         replacements.set(index, replaceWithMarker(message, sliced.outboundText));
+        replacementKinds.set(index, byAgeThreshold && availableBudget >= desiredRetained ? "ageThreshold" : "budget");
         if (age > 1) retainedChars += sliced.retainedChars;
         stats.omittedChars += sliced.omittedChars;
         stats.netCharsSaved += sourceLength - sliced.outboundText.length;
@@ -1299,6 +1335,7 @@ export function sieveMessages<T extends ContextMessage>(
           continue;
         }
         replacements.set(index, replaceWithMarker(message, marker));
+        replacementKinds.set(index, byAgeThreshold && availableBudget >= desiredRetained ? "ageThreshold" : "budget");
         stats.omittedChars += sourceLength;
         stats.netCharsSaved += sourceLength - marker.length;
       }
@@ -1308,9 +1345,10 @@ export function sieveMessages<T extends ContextMessage>(
       continue;
     }
 
-    const sliced = sliceOldSuccess(blocks, source, maxOutboundChars, remainingBudget);
+    const sliced = sliceOldSuccess(blocks, source, maxOutboundChars, availableBudget);
     if (sliced) {
       replacements.set(index, replaceWithMarker(message, sliced.outboundText));
+      replacementKinds.set(index, byAgeThreshold && availableBudget >= desiredRetained ? "ageThreshold" : "budget");
       if (age > 1) retainedChars += sliced.retainedChars;
       stats.omittedChars += sliced.omittedText.length;
       stats.netCharsSaved += Math.max(0, sourceLength - sliced.outboundText.length);
@@ -1324,6 +1362,7 @@ export function sieveMessages<T extends ContextMessage>(
         continue;
       }
       replacements.set(index, replaceWithMarker(message, marker));
+      replacementKinds.set(index, byAgeThreshold && availableBudget >= desiredRetained ? "ageThreshold" : "budget");
       stats.omittedChars += sourceLength;
       stats.netCharsSaved += sourceLength - marker.length;
     }
@@ -1362,7 +1401,27 @@ export function sieveMessages<T extends ContextMessage>(
     messages: messages.map((message, index) => replacements.get(index) ?? message),
     stats,
     recoverableActiveResults,
+    diagnostics: {
+      replacements: [...replacementKinds].map(([messageIndex, kind]) => ({ messageIndex, kind })),
+    },
   };
+}
+
+export function sieveMessages<T extends ContextMessage>(
+  messages: readonly T[],
+  threshold = SIEVE_THRESHOLD,
+  options: SieveOptions = {},
+): TransformResult<T> {
+  const { diagnostics: _diagnostics, ...result } = standardSieveMessages(messages, threshold, options, false);
+  return result;
+}
+
+export function standardV2SieveMessages<T extends ContextMessage>(
+  messages: readonly T[],
+  threshold = SIEVE_THRESHOLD,
+  options: SieveOptions = {},
+): StandardV2TransformResult<T> {
+  return standardSieveMessages(messages, threshold, options, true);
 }
 
 function cloneProjectionValue<T>(value: T): T {

@@ -129,7 +129,7 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   }
   if (value.kind === "sieve") {
     return typeof value.activePruning === "boolean"
-      && (value.projectionMode === "stable" || value.projectionMode === "legacy")
+      && (value.projectionMode === "stable" || value.projectionMode === "legacy" || value.projectionMode === "standard-v2")
       && Number.isSafeInteger(value.threshold)
       && (value.threshold as number) >= 1_000
       && (value.threshold as number) <= 50_000
@@ -731,7 +731,9 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || (metrics.toolUsage !== undefined && (!Array.isArray(metrics.toolUsage) || metrics.toolUsage.length > 200
       || !metrics.toolUsage.every((item) => record(item) && boundedString(item.name) && item.name.length > 0
         && Number.isSafeInteger(item.calls) && (item.calls as number) >= 0
-        && Number.isSafeInteger(item.tokens) && (item.tokens as number) >= 0)))) return false;
+        && Number.isSafeInteger(item.inputTokens) && (item.inputTokens as number) >= 0
+        && Number.isSafeInteger(item.outputTokens) && (item.outputTokens as number) >= 0
+        && Number.isSafeInteger(item.tokens) && item.tokens === (item.inputTokens as number) + (item.outputTokens as number))))) return false;
   if (value.discoverIndex !== undefined) {
     const index = value.discoverIndex;
     if (!record(index) || !["idle", "indexing", "error"].includes(String(index.state))
@@ -768,7 +770,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
           Number.isSafeInteger(transformedBy[key]) && (transformedBy[key] as number) >= 0);
     };
     if (!["enabled", "observe", "disabled"].includes(String(operational.sieve.mode))
-      || !["stable", "legacy"].includes(String(operational.sieve.projectionMode))
+      || !["stable", "legacy", "standard-v2"].includes(String(operational.sieve.projectionMode))
       || !Number.isSafeInteger(operational.sieve.threshold) || (operational.sieve.threshold as number) < 1_000
       || typeof operational.sieve.activePruning !== "boolean"
       || !["enabled", "observe"].includes(String(operational.sieve.latestMode))
@@ -793,8 +795,18 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       || epoch!.startedAt !== undefined && (typeof epoch!.startedAt !== "string" || Number.isNaN(Date.parse(epoch!.startedAt))))) return false;
     const rawStability = operational.sieve.stability;
     const stability = record(rawStability) ? rawStability : undefined;
+    const standardChangesByKind = record(stability?.standardChangesByKind)
+      ? stability.standardChangesByKind
+      : undefined;
     if (operational.sieve.stability !== undefined && (!metrics(stability, ["newProjections", "projectionCacheHits", "recoverableEntries", "explicitReflows", "softBudgetExceedances", "prefixChurnViolations", "estimatedInvalidatedChars"])
-      || stability!.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(stability!.earliestChangedPriorMessageIndex) || (stability!.earliestChangedPriorMessageIndex as number) < 0))) return false;
+      || stability!.earliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(stability!.earliestChangedPriorMessageIndex) || (stability!.earliestChangedPriorMessageIndex as number) < 0)
+      || stability!.standardComparisons !== undefined && (!Number.isSafeInteger(stability!.standardComparisons) || (stability!.standardComparisons as number) < 0)
+      || stability!.standardPrefixChurn !== undefined && (!Number.isSafeInteger(stability!.standardPrefixChurn) || (stability!.standardPrefixChurn as number) < 0)
+      || stability!.standardEarliestChangedPriorMessageIndex !== undefined && (!Number.isSafeInteger(stability!.standardEarliestChangedPriorMessageIndex) || (stability!.standardEarliestChangedPriorMessageIndex as number) < 0)
+      || stability!.standardEstimatedInvalidatedChars !== undefined && (!Number.isSafeInteger(stability!.standardEstimatedInvalidatedChars) || (stability!.standardEstimatedInvalidatedChars as number) < 0)
+      || stability!.standardChangesByKind !== undefined && (!standardChangesByKind
+        || !["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"].every((key) =>
+          Number.isSafeInteger(standardChangesByKind[key]) && (standardChangesByKind[key] as number) >= 0)))) return false;
     if (operational.sieve.contextUsagePercent !== undefined && (typeof operational.sieve.contextUsagePercent !== "number" || !Number.isFinite(operational.sieve.contextUsagePercent) || operational.sieve.contextUsagePercent < 0 || operational.sieve.contextUsagePercent > 100)) return false;
   }
   if (operational.continuity.memory !== undefined

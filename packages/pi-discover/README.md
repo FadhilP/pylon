@@ -22,11 +22,11 @@ Tool activation is intentionally delegated to Pylon through its discovery capabi
 
 ### Historical Session Search
 
-`search_sessions({ query, sessionId?, scope? })` searches bounded excerpts with best-effort credential redaction from historical Pi sessions. The tool is deferred by default and must be loaded through `search_tools`. It runs only after interactive confirmation that matching excerpts will be sent to the selected model provider and retained in the current Pi session history.
+`search_sessions({ query, sessionId?, scope? })` searches bounded excerpts with best-effort credential redaction from historical Pi sessions. The tool is deferred by default and must be loaded through `search_tools`. Matching excerpts are sent to the selected model provider and retained in the current Pi session history.
 
 Search defaults to sessions created from the current working directory and excludes the active session. Set `scope: "all"` only for an explicitly requested cross-workspace search. `sessionId` restricts the search to one exact historical Pi session ID and still respects the selected scope; results distinguish missing, out-of-scope, and active-session IDs. Queries match any parsed term using case-insensitive substring matching. The tool scans at most 200 eligible sessions, returns at most 12 user or assistant excerpts of at most 1,200 characters each, deduplicates matches, applies best-effort credential redaction, and caps total output. Returned historical text is untrusted and may be stale.
 
-Headless modes without confirmation UI fail closed. Full paths and session filenames are not returned.
+The tool works in both interactive and headless modes. Full paths and session filenames are not returned.
 
 ### Live Workspace Search
 

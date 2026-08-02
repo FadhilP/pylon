@@ -18,6 +18,7 @@ Run `/reload` after installation.
 /sieve observe
 /sieve disable
 /sieve projection standard
+/sieve projection standard-v2
 /sieve projection stable
 /sieve reflow
 /sieve rollover 8 4
@@ -29,9 +30,20 @@ Run `/reload` after installation.
 /sieve reset-stats
 ```
 
-Pi Sieve is enabled in `standard` projection mode by default. The threshold, active-pruning setting, projection mode, and rollover multipliers persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192. Stable rollover defaults to a high watermark of `8T` and a newest-first target of `4T`, where `T` is the configured threshold. Multipliers are integers from 1 through 64 and the high value must exceed the target.
+Pi Sieve is enabled in Standard V2 (`standard`) projection mode by default. The threshold, active-pruning setting, projection mode, and rollover multipliers persist in `<agent-dir>/pi-sieve/config.json`. Thresholds are integer JavaScript-character counts from 1,000 through 50,000; the default is 8,192. Stable rollover defaults to a high watermark of `8T` and a newest-first target of `4T`, where `T` is the configured threshold. Multipliers are integers from 1 through 64 and the high value must exceed the target.
 
 `observe` computes projections and telemetry without changing outbound context. `disable` does neither. Moving between runtime modes starts a fresh projection epoch before the next provider call.
+
+## Standard V2 (default)
+
+`/sieve projection standard` or `/sieve projection standard-v2` selects the cache-friendlier default policy while preserving the compact shared `3T` old-result budget:
+
+- age-0 and age-1 active projections are byte-identical and remain recallable while their raw source is available
+- age-2+ results keep the configured threshold instead of halving at age 6
+- shared-budget boundaries use fixed full, half, or marker tiers instead of arbitrary reslicing
+- telemetry compares consecutive outbound projections and attributes prefix churn to active threshold, age threshold, budget, stale read, duplicate, error cap, or unrelated history
+
+`/sieve projection legacy` selects the previous Standard V1 policy for compatibility. Switching projection mode starts a new epoch and resets the provider prefix once.
 
 ## Stable projections (experimental)
 
@@ -93,7 +105,7 @@ Missing, stale, ambiguous, or mismatched IDs fail closed. A successful recall is
 
 ## Standard projection
 
-`/sieve projection standard` uses the default mutable age/budget implementation. Age-0 results use independent per-result caps, age 1 uses an independent threshold, and only older results consume the shared retained-output budget. Standard mode may still reslice prior results as they age. Switching projection mode starts a new epoch and reports that the cached prefix will reset. The old `legacy` command name remains accepted for compatibility.
+`/sieve projection standard` and `/sieve projection standard-v2` use the default cache-friendlier mutable age/budget implementation described above. `/sieve projection legacy` retains Standard V1 compatibility. Standard mode may still reslice prior results as they age. Switching projection mode starts a new epoch and reports that the cached prefix will reset.
 
 Use `/sieve projection stable` to try the experimental immutable projections and automatic rollover.
 

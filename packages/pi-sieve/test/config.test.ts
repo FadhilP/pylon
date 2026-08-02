@@ -38,7 +38,7 @@ test("web settings round-trip projection mode", async () => {
     kind: "sieve",
     activePruning: true,
     threshold: SIEVE_THRESHOLD,
-    projectionMode: "legacy",
+    projectionMode: "standard-v2",
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
@@ -54,6 +54,11 @@ test("web settings round-trip projection mode", async () => {
     rolloverHighMultiplier: 10,
     rolloverLowMultiplier: 5,
   });
+  await updateSettings({
+    kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "standard-v2",
+    rolloverHighMultiplier: 8, rolloverLowMultiplier: 4,
+  }, { agentDir });
+  assert.equal((await readSettings({ agentDir })).projectionMode, "standard-v2");
   await assert.rejects(updateSettings({
     kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "invalid",
     rolloverHighMultiplier: 8, rolloverLowMultiplier: 4,
@@ -63,8 +68,9 @@ test("web settings round-trip projection mode", async () => {
 test("sieve config defaults safely and quarantines invalid settings", async () => {
   assert.equal(configuredActivePruning({ version: 1 }), true);
   assert.equal(configuredThreshold({ version: 1 }), SIEVE_THRESHOLD);
-  assert.equal(configuredProjectionMode({ version: 1 }), "legacy");
+  assert.equal(configuredProjectionMode({ version: 1 }), "standard-v2");
   assert.equal(configuredProjectionMode({ version: 1, projectionMode: "legacy" }), "legacy");
+  assert.equal(configuredProjectionMode({ version: 1, projectionMode: "standard-v2" }), "standard-v2");
   assert.equal(configuredRolloverHighMultiplier({ version: 1 }), 8);
   assert.equal(configuredRolloverLowMultiplier({ version: 1 }), 4);
 

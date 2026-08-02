@@ -376,7 +376,7 @@ export type PackageSettingsReadModel =
       kind: "sieve";
       activePruning: boolean;
       threshold: number;
-      projectionMode: "stable" | "legacy";
+      projectionMode: "stable" | "legacy" | "standard-v2";
       rolloverHighMultiplier: number;
       rolloverLowMultiplier: number;
     }

@@ -454,6 +454,55 @@ test("confirmed operations fail closed and declined commands do not execute", as
   assert.equal(value.instances[0].commands.length, 0);
 });
 
+test("confirmed operations use the Guard timeout only while Guard is enabled", async () => {
+  const value = await start();
+  const tool = value.tools.get("stateql");
+  const dialogOptions: any[] = [];
+  const ctx = context({
+    ui: {
+      async confirm(_title: string, _message: string, options: unknown) { dialogOptions.push(options); return false; },
+      setStatus() {},
+    },
+  });
+  const attempt = async (id: string) => {
+    const result = await tool.execute(id, { command: "profile.remove", name: "unused" }, undefined, undefined, ctx);
+    assert.equal(result.details.declined, true);
+    return dialogOptions.at(-1);
+  };
+
+  assert.deepEqual(await attempt("default"), { timeout: 0 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "pi-session", guardEnabled: true, dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("enabled"), { timeout: 90_000 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "pi-session", guardEnabled: true, dialogTimeouts: { guard: null, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("never"), { timeout: 0 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "pi-session", guardEnabled: false, dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("disabled"), { timeout: 0 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "other", guardEnabled: true, dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("foreign"), { timeout: 0 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, guardEnabled: true, dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("sessionless"), { timeout: 0 });
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "pi-session", guardEnabled: true, dialogTimeouts: { guard: 10, clarify: 60 },
+  });
+  assert.deepEqual(await attempt("malformed"), { timeout: 0 });
+
+  value.events.get("pylon:runtime-policy")![0]({
+    version: 2, sessionId: "pi-session", guardEnabled: true, dialogTimeouts: { guard: 90, clarify: 60 },
+  });
+  await value.handlers.get("session_start")![0]({}, context());
+  assert.deepEqual(await attempt("reset"), { timeout: 0 });
+});
+
 test("rejects irrelevant, ambiguous, and oversized inputs before StateQL", async () => {
   const value = await start();
   const tool = value.tools.get("stateql");
@@ -564,6 +613,7 @@ test("shutdown aborts work, closes StateQL, and unregisters bridges", async () =
   const value = await start();
   await value.handlers.get("session_shutdown")![0]({}, context());
   assert.equal(value.instances.at(-1)?.closed, true);
+  assert.equal(value.events.get("pylon:runtime-policy")?.length, 0);
   assert.equal(value.events.get("pylon:stateql-snapshot-request")?.length, 0);
   assert.equal(value.events.get("pylon:health-request")?.length, 0);
   assert.equal(value.emitted.at(-1)?.value.kind, "unregister");

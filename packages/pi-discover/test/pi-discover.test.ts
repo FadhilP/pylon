@@ -124,43 +124,30 @@ test("session search reports truncation only when session or match limits overfl
   assert.equal(overflow.truncated, true);
 });
 
-test("search_sessions confirms disclosure and reports declined or approved searches", async () => {
+test("search_sessions runs without UI and reports bounded searches", async () => {
   const tools = new Map<string, any>();
-  let listed = 0;
   const source = sessionSource([
     { id: "chosen", path: "chosen", cwd: process.cwd(), modified: new Date("2026-01-01"), allMessagesText: "release decision" },
   ], {
     chosen: [{ type: "message", message: { role: "user", content: "release decision" } }],
   });
-  const countedSource: SessionSource = { ...source, async listAll() { listed++; return source.listAll(); } };
-  registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, countedSource);
+  registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const tool = tools.get("search_sessions");
-  let confirmation = "";
-  const ctx = (approved: boolean) => ({
-    cwd: process.cwd(), hasUI: true,
+  const ctx = {
+    cwd: process.cwd(),
     sessionManager: { getSessionId: () => "current" },
-    ui: { async confirm(_title: string, message: string) { confirmation = message; return approved; } },
-  });
+  };
 
-  const declined = await tool.execute("declined", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx(false));
-  assert.equal(declined.details.declined, true);
-  assert.equal(listed, 0);
-  assert.match(confirmation, /all workspaces.*sent to the selected model provider.*retained/i);
-
-  const approved = await tool.execute("approved", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx(true));
-  assert.equal(approved.details.sessionId, "chosen");
-  assert.equal(JSON.parse(approved.content[0].text).matches[0].sessionId, "chosen");
+  const result = await tool.execute("headless", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx);
+  assert.equal(result.details.sessionId, "chosen");
+  assert.equal(JSON.parse(result.content[0].text).matches[0].sessionId, "chosen");
 
   const cappedTools = new Map<string, any>();
-  registerSessionSearch({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, countedSource, 200);
-  const capped = await cappedTools.get("search_sessions").execute("capped", { query: "release" }, undefined, undefined, ctx(true));
+  registerSessionSearch({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, source, 200);
+  const capped = await cappedTools.get("search_sessions").execute("capped", { query: "release" }, undefined, undefined, ctx);
+  assert.equal(capped.details.scope, "current_cwd");
   assert.ok(Buffer.byteLength(capped.content[0].text, "utf8") <= 200);
   assert.doesNotThrow(() => JSON.parse(capped.content[0].text));
-
-  await assert.rejects(
-    () => tool.execute("headless", { query: "release" }, undefined, undefined, { ...ctx(true), hasUI: false }),
-    /interactive confirmation/i,
-  );
 });
 
 test("indexed searches display only model-useful fields", async () => {
@@ -643,7 +630,7 @@ test("host refreshes its SQLite index after each turn", async () => {
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
-      search_sessions: "search historical Pi sessions after explicit user confirmation",
+      search_sessions: "search historical Pi sessions when explicitly requested",
     });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));

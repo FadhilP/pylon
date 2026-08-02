@@ -9,7 +9,7 @@ export const MAX_SIEVE_THRESHOLD = 50_000;
 export const MIN_ROLLOVER_MULTIPLIER = 1;
 export const MAX_ROLLOVER_MULTIPLIER = 64;
 
-export type ProjectionMode = "stable" | "legacy";
+export type ProjectionMode = "stable" | "standard-v2" | "legacy";
 
 export type SieveConfig = {
   version: 1;
@@ -32,7 +32,7 @@ export function configuredThreshold(config: SieveConfig): number {
 }
 
 export function configuredProjectionMode(config: SieveConfig): ProjectionMode {
-  return config.projectionMode ?? "legacy";
+  return config.projectionMode ?? "standard-v2";
 }
 
 export function configuredRolloverHighMultiplier(config: SieveConfig): number {
@@ -60,7 +60,10 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
       Array.isArray(value) ||
       value.version !== 1 ||
       (value.activePruning !== undefined && typeof value.activePruning !== "boolean") ||
-      (value.projectionMode !== undefined && value.projectionMode !== "stable" && value.projectionMode !== "legacy") ||
+      (value.projectionMode !== undefined
+        && value.projectionMode !== "stable"
+        && value.projectionMode !== "standard-v2"
+        && value.projectionMode !== "legacy") ||
       (value.threshold !== undefined &&
         (!Number.isInteger(value.threshold) ||
           value.threshold < MIN_SIEVE_THRESHOLD ||

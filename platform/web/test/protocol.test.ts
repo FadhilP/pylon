@@ -45,6 +45,7 @@ test("command validation allowlists bounded v26 commands and attachments", () =>
   assert.equal(validateCommand({ type: "setPackageEnabled", packageId: "pi-verify", enabled: "yes", commandId: "package", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-advisor", settings: { kind: "advisor", mode: "session", thinking: "high" }, commandId: "settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "stable", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "standard-v2", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 999, projectionMode: "stable", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "invalid", rolloverHighMultiplier: 8, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-sieve", settings: { kind: "sieve", activePruning: true, threshold: 8_000, projectionMode: "stable", rolloverHighMultiplier: 4, rolloverLowMultiplier: 4 }, commandId: "settings", expectedGeneration: 1 }).ok, false);
@@ -186,7 +187,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     metrics: {
       model: "model", provider: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
       contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0,
-      toolUsage: [{ name: "read", calls: 2, tokens: 320 }],
+      toolUsage: [{ name: "read", calls: 2, inputTokens: 300, outputTokens: 20, tokens: 320 }],
     },
     operational: {
       verification: { availability: "available", checks: [] }, jobs: { availability: "unavailable", items: [] },
@@ -201,11 +202,15 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
-    metrics: { ...snapshot.metrics, toolUsage: [{ name: "read", calls: -1, tokens: 320 }] },
+    metrics: { ...snapshot.metrics, toolUsage: [{ name: "read", calls: -1, inputTokens: 300, outputTokens: 20, tokens: 320 }] },
   }), false);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
-    metrics: { ...snapshot.metrics, toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, tokens: 1 })) },
+    metrics: { ...snapshot.metrics, toolUsage: [{ name: "read", calls: 2, inputTokens: 300, outputTokens: 20, tokens: 319 }] },
+  }), false);
+  assert.equal(isRuntimeSnapshot({
+    ...snapshot,
+    metrics: { ...snapshot.metrics, toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, inputTokens: 1, outputTokens: 0, tokens: 1 })) },
   }), false);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,

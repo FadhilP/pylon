@@ -104,12 +104,19 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(guidance, /internal task list/i);
   assert.match(guidance, /Keep verification out of new todo lists/i);
   assert.match(guidance, /sole verification-only todo completes automatically/i);
-  assert.match(guidance, /nonterminal updates before final text/i);
+  assert.match(guidance, /every Continuity update tool-only and before final text/i);
+  assert.match(guidance, /Never call a completion tool/i);
+  assert.match(guidance, /exactly one text-only final response/i);
+  assert.match(guidance, /acknowledge allowUnverified tool-only/i);
+  assert.match(guidance, /disclose the limitation/i);
   assert.match(guidance, /After failed, stale, cancelled, or error Verify results/i);
   assert.match(guidance, /one caveated text-only final response and stop without another tool call/i);
   assert.ok(guidance.length < 1_000);
   assert.doesNotMatch(guidance, /memory|durable/i);
   assert.deepEqual(continuity.parameters.properties.action.enum, ["clarify", "set_plan", "todo", "state"]);
+  assert.equal(continuity.parameters.properties.completion, undefined);
+  assert.match(continuity.parameters.properties.allowUnverified.description, /tool-only state update/i);
+  assert.match(continuity.parameters.properties.allowUnverified.description, /disclose the limitation/i);
   for (const field of ["key", "kind", "text", "source", "confidence", "scope", "evidencePaths"])
     assert.equal(continuity.parameters.properties[field], undefined);
   assert.equal(continuity.parameters.properties.todoIds.maxItems, 12);
@@ -149,42 +156,48 @@ test("state rejects todo fields before mutation or circuit breaking", async () =
   assert.match(valid.content[0].text, /No active work/);
 });
 
-test("completion requires response text before its tool call", async () => {
-  const app = runtime();
-  const guard = app.handlers.get("tool_call")?.[0];
-  const event = {
-    toolName: "continuity_update",
-    toolCallId: "complete",
-    input: { action: "state", completion: true },
-  };
-  const check = (content: any[]) => guard?.(event, {
+test("failed legacy completion after final prose terminates without a duplicate reply", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-legacy-completion-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  let content: any[] = [];
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
     sessionManager: {
-      getLeafEntry: () => ({
-        type: "message",
-        message: { role: "assistant", content },
-      }),
+      getSessionId: () => "legacy-completion-session",
+      getEntries: () => [],
+      getLeafEntry: () => ({ type: "message", message: { role: "assistant", content } }),
     },
-  });
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
 
-  assert.match((await check([
-    { type: "toolCall", id: "complete", name: "continuity_update" },
-  ])).reason, /Write the final user-facing response first/);
-  assert.match((await check([
-    { type: "text", text: "  " },
-    { type: "toolCall", id: "complete", name: "continuity_update" },
-  ])).reason, /Write the final user-facing response first/);
-  assert.match((await check([
-    { type: "toolCall", id: "complete", name: "continuity_update" },
-    { type: "text", text: "Done" },
-  ])).reason, /Write the final user-facing response first/);
-  assert.match((await check([
-    { type: "text", text: "Done" },
-    { type: "toolCall", id: "other", name: "continuity_update" },
-  ])).reason, /Write the final user-facing response first/);
-  assert.equal(await check([
-    { type: "text", text: "Done" },
-    { type: "toolCall", id: "complete", name: "continuity_update" },
-  ]), undefined);
+    content = [
+      { type: "text", text: "Final answer" },
+      { type: "toolCall", id: "complete-with-reply", name: "continuity_update" },
+    ];
+    const stopped = await tool.execute(
+      "complete-with-reply", { action: "state", completion: true }, undefined, undefined, ctx,
+    );
+    assert.match(stopped.content[0].text, /Cannot complete while todos remain/);
+    assert.equal(stopped.terminate, true);
+
+    content = [{ type: "toolCall", id: "complete-tool-only", name: "continuity_update" }];
+    const recoverable = await tool.execute(
+      "complete-tool-only", { action: "state", completion: true }, undefined, undefined, ctx,
+    );
+    assert.match(recoverable.content[0].text, /Cannot complete while todos remain/);
+    assert.equal(recoverable.terminate, undefined);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
 });
 
 test("text-only final response automatically completes ready work", async () => {
@@ -288,6 +301,72 @@ test("automatic completion waits for required verification", async () => {
   }
 });
 
+test("clean Verify requires a tool-only acknowledgement before automatic completion", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-acknowledgement-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
+    sessionManager: { getSessionId: () => "verify-acknowledgement-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("tool_call") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
+    for (const handler of app.handlers.get("tool_result") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
+    const finalMessage = { message: {
+      role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }],
+    } };
+    app.emit("pi-verify:result", { version: 1, cwd, state: "failed", runId: "failed", results: [] });
+    let rejected = await tool.execute(
+      "failed-ack", { action: "state", allowUnverified: true }, undefined, undefined, ctx,
+    );
+    assert.match(rejected.content[0].text, /requires a current clean or no_checks/);
+
+    app.emit("pi-verify:result", { version: 1, cwd, state: "clean", runId: "clean", results: [] });
+    await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
+    let context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(context.messages.at(-1).content, /Work: executing/);
+
+    rejected = await tool.execute(
+      "bad-ack", { action: "todo", todoId: "todo_1", status: "done", allowUnverified: true },
+      undefined, undefined, ctx,
+    );
+    assert.match(rejected.content[0].text, /allowUnverified requires action "state"/);
+
+    const acknowledged = await tool.execute(
+      "ack", { action: "state", allowUnverified: true }, undefined, undefined, ctx,
+    );
+    assert.match(acknowledged.content[0].text, /Continuity state updated/);
+    assert.equal(acknowledged.terminate, undefined);
+
+    for (const handler of app.handlers.get("tool_call") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit-after-ack", input: {} }, ctx);
+    for (const handler of app.handlers.get("tool_result") ?? [])
+      await handler({ toolName: "edit", toolCallId: "edit-after-ack", input: {} }, ctx);
+    await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
+    context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(context.messages.at(-1).content, /Work: executing/);
+
+    app.emit("pi-verify:result", { version: 1, cwd, state: "no_checks", runId: "no-checks", results: [] });
+    await tool.execute("ack-again", { action: "state", allowUnverified: true }, undefined, undefined, ctx);
+    await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
+    context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.equal(context, undefined);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
 test("passing Verify completes a sole remaining verification todo", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-verification-todo-"));
@@ -371,6 +450,7 @@ test("TUI keeps routine updates hidden but shows memory and terminal outcomes", 
   ).render(80).map((line: string) => line.trimEnd()).join("\n");
   assert.equal(render("Continuity state updated."), "");
   assert.match(render("Work completed. No further continuity updates needed."), /Task completed/);
+  assert.match(render("Cannot complete while todos remain."), /Cannot complete while todos remain/);
   assert.match(render("Continuity circuit breaker stopped 3 identical calls within 30 seconds."), /loop stopped/);
   assert.equal(
     render("Small", { clarification: { question: "Pick scope?", answer: "Small" } }),

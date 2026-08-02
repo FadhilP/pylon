@@ -66,8 +66,22 @@ test("completion and attention sounds use distinct short patterns", () => {
 
 test("first user gesture resumes audio even before a cue is pending", async () => {
   const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
-  assert.match(source, /function flush\(\): void \{\s*if \(!context\) return;\s*if \(context\.state !== "running"\)/);
+  assert.match(source, /function flush\(\): void \{\s*const audio = context;\s*if \(!audio\) return;[\s\S]*?if \(audio\.state !== "running"\)/);
   assert.doesNotMatch(source, /if \(!context \|\| !pending\.length\) return/);
+});
+
+test("closed audio contexts and scheduling failures remain recoverable", async () => {
+  const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(context && isClosed\(context\)\) resetContext\(context\)/);
+  assert.match(source, /try \{ schedule\(audio, pending\[0\]!\); \}[\s\S]*?pending\.shift\(\)/);
+  assert.match(source, /function isClosed\(audio: AudioContext\): boolean \{\s*return audio\.state === "closed"/);
+  assert.match(source, /if \(isClosed\(audio\)\) resetContext\(audio\)/);
+  assert.doesNotMatch(source, /unavailable/);
+});
+
+test("finished audio nodes disconnect after playback", async () => {
+  const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
+  assert.match(source, /oscillator\.addEventListener\("ended", \(\) => \{\s*oscillator\.disconnect\(\);\s*gain\.disconnect\(\);\s*\}, \{ once: true \}\)/);
 });
 
 test("live cues drain by ID while bootstrap and reset clear stale cues", async () => {

@@ -135,7 +135,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     assert.deepEqual(capabilities[0].catalog(), [
       { name: "index_status", usage: "inspect local repository code-index status" },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
-      { name: "search_sessions", usage: "search historical Pi sessions after explicit user confirmation" },
+      { name: "search_sessions", usage: "search historical Pi sessions when explicitly requested" },
       { name: "web_scout", usage: "research current public web pages with bounded URL-cited evidence" },
     ]);
     capabilities[0].select(["web_scout"]);

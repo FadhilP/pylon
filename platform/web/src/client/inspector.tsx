@@ -28,6 +28,8 @@ import { highlightSource } from "../shared/markdown";
 import type { JobReadModel, VerificationReadModel } from "../shared/protocol/events";
 import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
+import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
+import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
@@ -44,7 +46,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
 
 const viewDescriptions: Record<ViewId, string> = {
   overview: "Live state for the active Pylon session.",
-  policy: "Project and session behavior for Verify and Timeline.",
+  policy: "Project and session behavior. Global defaults live in Settings.",
   timeline: "Recoverable checkpoints across the current run.",
   memory: "Durable facts Continuity keeps for this project.",
   tools: "Tool usage, package policies, and availability.",
@@ -59,9 +61,10 @@ interface InspectorProps {
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
+  onOpenGlobalPolicy: () => void;
 }
 
-export function Inspector({ current, live, availableViews, timelineEnabled, isOpen, overlay, onClose, onNavigate }: InspectorProps) {
+export function Inspector({ current, live, availableViews, timelineEnabled, isOpen, overlay, onClose, onNavigate, onOpenGlobalPolicy }: InspectorProps) {
   const items = navigation.filter((item) => availableViews.has(item.id));
   return (
     <aside id="session-inspector" className={`inspector ${isOpen ? "is-open" : ""}`} aria-label="Session inspector" aria-hidden={!isOpen} inert={!isOpen}>
@@ -80,7 +83,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, isOp
       <p className="inspector-description">{viewDescriptions[current]}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
-        {current === "policy" && live.runtime && <RuntimePolicy live={live} />}
+        {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
         {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
         {current === "memory" && <Memory live={live} />}
         {current === "tools" && <Tools live={live} pylonPolicies={live.runtime?.operational.tools.availability === "available"} />}
@@ -167,51 +170,55 @@ function Verification({ verification }: { verification: VerificationReadModel })
   </>;
 }
 
-function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
+type EditablePolicyScope = "project" | "session";
+type TogglePolicyDraft = "inherit" | "enabled" | "disabled";
+type TimeoutPolicyDraft = DialogTimeoutSeconds | "inherit";
+
+const workspaceLabels: Record<WorkspacePolicyMode, string> = {
+  local: "Local",
+  checkout: "Project folder",
+  worktree: "Session worktree",
+};
+
+function verifyPolicyLabel(value: VerifyPolicyReadModel): string {
+  return value.mode === "auto" ? "Automatic detection" : `${value.checks.length} selected check${value.checks.length === 1 ? "" : "s"}`;
+}
+
+function togglePolicyLabel(value: boolean): string {
+  return value ? "Enabled" : "Disabled";
+}
+
+function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapshot; onOpenGlobalPolicy: () => void }) {
   const runtime = live.runtime!;
   const policy = runtime.runtimePolicy;
-  const [scope, setScope] = useState<"global" | "project" | "session">("project");
+  const [scope, setScope] = useState<EditablePolicyScope>("project");
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
-  const [timeline, setTimeline] = useState<"inherit" | "enabled" | "disabled">("enabled");
-  const [guard, setGuard] = useState<"inherit" | "enabled" | "disabled">("enabled");
-  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("local");
-  const [guardTimeout, setGuardTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
-  const [clarifyTimeout, setClarifyTimeout] = useState<DialogTimeoutSeconds | "inherit">(60);
+  const [timeline, setTimeline] = useState<TogglePolicyDraft>("inherit");
+  const [guard, setGuard] = useState<TogglePolicyDraft>("inherit");
+  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("inherit");
+  const [guardTimeout, setGuardTimeout] = useState<TimeoutPolicyDraft>("inherit");
+  const [clarifyTimeout, setClarifyTimeout] = useState<TimeoutPolicyDraft>("inherit");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const resetDraft = () => {
-    const value = scope === "global" ? undefined : scope === "project" ? policy.project.verify : policy.session.verify;
-    setVerify(value ?? "inherit");
-    setTimeline(scope === "global"
-      ? policy.global.timelineEnabled ? "enabled" : "disabled"
-      : scope === "project"
-        ? policy.project.timelineEnabled === undefined ? "inherit" : policy.project.timelineEnabled ? "enabled" : "disabled"
-      : policy.session.timelineEnabled === undefined
-        ? "inherit"
-        : policy.session.timelineEnabled ? "enabled" : "disabled");
-    setGuard(scope === "global"
-      ? policy.global.guardEnabled ? "enabled" : "disabled"
-      : scope === "project"
-        ? policy.project.guardEnabled === undefined ? "inherit" : policy.project.guardEnabled ? "enabled" : "disabled"
-      : policy.session.guardEnabled === undefined
-        ? "inherit"
-        : policy.session.guardEnabled ? "enabled" : "disabled");
-    setWorkspace(scope === "global"
-      ? policy.global.workspace
-      : scope === "project"
-        ? policy.project.workspace ?? "inherit"
-      : policy.session.workspace ?? "inherit");
-    setGuardTimeout(scope === "global"
-      ? policy.global.guardTimeoutSeconds
-      : scope === "project"
-        ? policy.project.guardTimeoutSeconds === undefined ? "inherit" : policy.project.guardTimeoutSeconds
+    setVerify(scope === "project" ? policy.project.verify : policy.session.verify ?? "inherit");
+    setTimeline(scope === "project"
+      ? policy.project.timelineEnabled === undefined ? "inherit" : policy.project.timelineEnabled ? "enabled" : "disabled"
+      : policy.session.timelineEnabled === undefined ? "inherit" : policy.session.timelineEnabled ? "enabled" : "disabled");
+    setGuard(scope === "project"
+      ? policy.project.guardEnabled === undefined ? "inherit" : policy.project.guardEnabled ? "enabled" : "disabled"
+      : policy.session.guardEnabled === undefined ? "inherit" : policy.session.guardEnabled ? "enabled" : "disabled");
+    setWorkspace(scope === "project" ? policy.project.workspace ?? "inherit" : policy.session.workspace ?? "inherit");
+    setGuardTimeout(scope === "project"
+      ? policy.project.guardTimeoutSeconds === undefined ? "inherit" : policy.project.guardTimeoutSeconds
       : policy.session.guardTimeoutSeconds === undefined ? "inherit" : policy.session.guardTimeoutSeconds);
-    setClarifyTimeout(scope === "global"
-      ? policy.global.clarifyTimeoutSeconds
-      : scope === "project"
-        ? policy.project.clarifyTimeoutSeconds === undefined ? "inherit" : policy.project.clarifyTimeoutSeconds
+    setClarifyTimeout(scope === "project"
+      ? policy.project.clarifyTimeoutSeconds === undefined ? "inherit" : policy.project.clarifyTimeoutSeconds
       : policy.session.clarifyTimeoutSeconds === undefined ? "inherit" : policy.session.clarifyTimeoutSeconds);
+    setError("");
   };
+
   useEffect(() => {
     resetDraft();
   }, [policy.revision, scope]);
@@ -221,17 +228,22 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     && !runtime.conversation.workStartedAt
     && !live.pendingUi
     && !busy;
-  const displayedVerify = verify === "inherit" ? policy.effective.verify : verify;
-  const checks = displayedVerify.mode === "selected"
-    ? displayedVerify.checks
-    : policy.availableVerifyChecks.slice(0, 6).map((check) => check.id);
+  const inheritedFrom = scope === "project" ? "Global" : "Project";
+  const inheritedTimeline = scope === "project" ? policy.global.timelineEnabled : policy.project.timelineEnabled ?? policy.global.timelineEnabled;
+  const inheritedGuard = scope === "project" ? policy.global.guardEnabled : policy.project.guardEnabled ?? policy.global.guardEnabled;
+  const inheritedWorkspace = scope === "project" ? policy.global.workspace : policy.project.workspace ?? policy.global.workspace;
+  const inheritedGuardTimeout = scope === "project" ? policy.global.guardTimeoutSeconds : policy.project.guardTimeoutSeconds ?? policy.global.guardTimeoutSeconds;
+  const inheritedClarifyTimeout = scope === "project" ? policy.global.clarifyTimeoutSeconds : policy.project.clarifyTimeoutSeconds ?? policy.global.clarifyTimeoutSeconds;
+  const displayedVerify = verify === "inherit" ? policy.project.verify : verify;
+  const checks = displayedVerify.mode === "selected" ? displayedVerify.checks : [];
+
   const save = async (
     nextVerify: VerifyPolicyReadModel | "inherit",
-    nextTimeline: "inherit" | "enabled" | "disabled",
+    nextTimeline: TogglePolicyDraft,
     nextWorkspace: WorkspacePolicyMode | "inherit" = workspace,
-    nextGuardTimeout: DialogTimeoutSeconds | "inherit" = guardTimeout,
-    nextClarifyTimeout: DialogTimeoutSeconds | "inherit" = clarifyTimeout,
-    nextGuard: "inherit" | "enabled" | "disabled" = guard,
+    nextGuardTimeout: TimeoutPolicyDraft = guardTimeout,
+    nextClarifyTimeout: TimeoutPolicyDraft = clarifyTimeout,
+    nextGuard: TogglePolicyDraft = guard,
   ) => {
     setVerify(nextVerify);
     setTimeline(nextTimeline);
@@ -240,6 +252,7 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     setGuardTimeout(nextGuardTimeout);
     setClarifyTimeout(nextClarifyTimeout);
     setBusy(true);
+    setError("");
     try {
       await runtimeStore.updateRuntimePolicy(
         scope,
@@ -251,13 +264,26 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
         nextClarifyTimeout,
         policy.revision,
       );
-    } catch (error) {
+    } catch (cause) {
       resetDraft();
-      throw error;
+      setError(cause instanceof Error ? cause.message : "Policy could not be saved");
+      throw cause;
     } finally {
       setBusy(false);
     }
   };
+
+  const changeVerifyMode = (mode: "inherit" | "auto" | "selected") => {
+    const next = mode === "inherit"
+      ? "inherit" as const
+      : mode === "auto"
+        ? { mode: "auto" } as const
+        : { mode: "selected", checks: displayedVerify.mode === "selected"
+          ? displayedVerify.checks
+          : policy.availableVerifyChecks.slice(0, 6).map((check) => check.id) } as const;
+    void save(next, timeline, workspace).catch(() => undefined);
+  };
+
   const toggleCheck = (id: string) => {
     const next = checks.includes(id)
       ? checks.filter((item) => item !== id)
@@ -265,189 +291,131 @@ function RuntimePolicy({ live }: { live: RuntimeStoreSnapshot }) {
     if (next === checks) return;
     void save({ mode: "selected", checks: next }, timeline, workspace).catch(() => undefined);
   };
-  const canResetVerify = scope === "project"
-    ? verify !== "inherit" && verify.mode !== "auto"
-    : scope === "session" && verify !== "inherit";
+
+  const sources = runtimePolicySources(policy);
+  const effectiveItems = [
+    { label: "Verify", value: verifyPolicyLabel(policy.effective.verify), source: sources.verify },
+    { label: "Guard", value: togglePolicyLabel(policy.effective.guardEnabled), source: sources.guard },
+    { label: "Timeline", value: togglePolicyLabel(policy.effective.timelineEnabled), source: sources.timeline },
+    { label: "Workspace", value: workspaceLabels[policy.effective.workspace], source: sources.workspace },
+    { label: "Guard wait", value: formatPolicyTimeout(policy.effective.guardTimeoutSeconds), source: sources.guardTimeout },
+    { label: "Clarify wait", value: formatPolicyTimeout(policy.effective.clarifyTimeoutSeconds), source: sources.clarifyTimeout },
+  ];
 
   return <InspectorSection title="Runtime Policy" className="runtime-policy">
-    <div className="policy-scope" role="group" aria-label="Policy scope">
-      <button type="button" disabled={busy} className={scope === "global" ? "is-active" : ""} onClick={() => setScope("global")}>Global</button>
-      <button type="button" disabled={busy} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
-      <button type="button" disabled={busy} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
+    <div className="policy-toolbar">
+      <div className="policy-scope" role="tablist" aria-label="Policy scope">
+        <button type="button" role="tab" disabled={busy} aria-selected={scope === "project"} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
+        <button type="button" role="tab" disabled={busy} aria-selected={scope === "session"} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
+      </div>
+      <button className="policy-global-link" type="button" disabled={busy} onClick={onOpenGlobalPolicy}>Global defaults <span aria-hidden="true">›</span></button>
     </div>
-    {scope !== "global" && <><div className="policy-label-row">
-      <span>Verify</span>
-      {canResetVerify && <button
-        className="text-button"
-        type="button"
-        disabled={!idle}
-        onClick={() => void save(scope === "project" ? { mode: "auto" } : "inherit", timeline, workspace).catch(() => undefined)}
-      >{scope === "project" ? "Use automatic detection" : "Use project defaults"}</button>}
-    </div>
-    <div className="policy-checks">
-      {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}>
-        <input
-          type="checkbox"
-          checked={checks.includes(check.id)}
-          disabled={!idle || !checks.includes(check.id) && checks.length >= 6}
-          onChange={() => toggleCheck(check.id)}
-        />
-        <span className="mono">{check.label}</span>
-      </label>)}
-      {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
-        .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
-      {policy.availableVerifyChecks.length === 0 && checks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
-    </div></>}
-    <label>Timeline
-      <select
-        value={timeline}
-        disabled={!idle}
-        onChange={(event) => void save(verify, event.target.value as typeof timeline, workspace).catch(() => undefined)}
-      >
-        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
-        <option value="enabled">Enabled</option>
-        <option value="disabled">Disabled</option>
-      </select>
-    </label>
-    <label>Guard
-      <select
+
+    <section className="policy-effective" aria-labelledby="policy-effective-title">
+      <div className="policy-effective-header"><strong id="policy-effective-title">Effective for this session</strong><small>Value and source</small></div>
+      <div className="policy-effective-grid">
+        {effectiveItems.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong><small>{item.source}</small></div>)}
+      </div>
+    </section>
+
+    <section className="policy-group" aria-labelledby="policy-verify-title">
+      <header><strong id="policy-verify-title">Verification</strong><small>Choose automatic detection or up to six declared checks.</small></header>
+      <div className="policy-field">
+        <div><strong>Verify checks</strong><small>{scope === "project" ? "Choose verification for this project." : "This session can inherit the Project choice."}</small></div>
+        <div className="policy-field-control">
+          <select value={verify === "inherit" ? "inherit" : verify.mode} disabled={!idle} aria-label="Verify policy" onChange={(event) => changeVerifyMode(event.target.value as "inherit" | "auto" | "selected")}>
+            {scope === "session" && <option value="inherit">Inherit from Project ({verifyPolicyLabel(policy.project.verify)})</option>}
+            <option value="auto">Automatic detection</option>
+            <option value="selected">Selected checks</option>
+          </select>
+          <small>{scope === "project" ? "Required project policy" : verify === "inherit" ? `From Project · ${verifyPolicyLabel(policy.project.verify)}` : "Session override"}</small>
+        </div>
+      </div>
+      {verify !== "inherit" && verify.mode === "selected" && <div className="policy-checks">
+        {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}>
+          <input type="checkbox" checked={checks.includes(check.id)} disabled={!idle || !checks.includes(check.id) && checks.length >= 6} onChange={() => toggleCheck(check.id)} />
+          <span className="mono">{check.label}</span>
+        </label>)}
+        {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
+          .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
+        {policy.availableVerifyChecks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
+      </div>}
+    </section>
+
+    <section className="policy-group" aria-labelledby="policy-safety-title">
+      <header><strong id="policy-safety-title">Safety and interaction</strong><small>Control approvals, questions, and recoverable session history.</small></header>
+      <PolicySelectField
+        label="Guard"
+        description="Confirm guarded commands and paths."
         value={guard}
+        inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedGuard)})`}
         disabled={!idle}
-        onChange={(event) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, event.target.value as typeof guard).catch(() => undefined)}
-      >
-        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
-        <option value="enabled">Enabled</option>
-        <option value="disabled">Disabled</option>
-      </select>
-    </label>
-    <label>Workspace
-      <select
+        options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]}
+        onChange={(value) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(() => undefined)}
+      />
+      <RuntimePolicyTimeoutControl
+        label="Guard timeout"
+        value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout}
+        inheritedFrom={guardTimeout === "inherit" ? inheritedFrom : undefined}
+        disabled={!idle}
+        onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
+        onReset={guardTimeout !== "inherit" ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined) : undefined}
+      />
+      <RuntimePolicyTimeoutControl
+        label="Clarify timeout"
+        value={clarifyTimeout === "inherit" ? inheritedClarifyTimeout : clarifyTimeout}
+        inheritedFrom={clarifyTimeout === "inherit" ? inheritedFrom : undefined}
+        disabled={!idle}
+        onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
+        onReset={clarifyTimeout !== "inherit" ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined) : undefined}
+      />
+      <PolicySelectField
+        label="Timeline"
+        description="Keep recoverable checkpoints for this run."
+        value={timeline}
+        inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedTimeline)})`}
+        disabled={!idle}
+        options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]}
+        onChange={(value) => void save(verify, value as TogglePolicyDraft, workspace).catch(() => undefined)}
+      />
+    </section>
+
+    <section className="policy-group" aria-labelledby="policy-environment-title">
+      <header><strong id="policy-environment-title">Environment</strong><small>Session changes apply immediately when possible.</small></header>
+      <PolicySelectField
+        label="Workspace"
+        description="Choose where this scope works by default."
         value={workspace}
+        inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`}
         disabled={!idle}
-        onChange={(event) => void save(verify, timeline, event.target.value as typeof workspace).catch(() => undefined)}
-      >
-        {scope !== "global" && <option value="inherit">{scope === "project" ? "Inherit global" : "Inherit project"}</option>}
-        <option value="local">Local</option>
-        <option value="checkout">Project folder</option>
-        <option value="worktree">Session worktree</option>
-      </select>
-      <small>{scope !== "session"
-        ? "Applies to new sessions. Local does not create a branch or worktree."
-        : "Changing this session moves it immediately when possible."}</small>
-    </label>
-    <TimeoutPolicyControl
-      label="Guard timeout"
-      value={guardTimeout === "inherit" ? policy.effective.guardTimeoutSeconds : guardTimeout}
-      inherited={guardTimeout === "inherit"}
-      disabled={!idle}
-      onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
-      onReset={scope !== "global" && guardTimeout !== "inherit"
-        ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined)
-        : undefined}
-    />
-    <TimeoutPolicyControl
-      label="Clarify timeout"
-      value={clarifyTimeout === "inherit" ? policy.effective.clarifyTimeoutSeconds : clarifyTimeout}
-      inherited={clarifyTimeout === "inherit"}
-      disabled={!idle}
-      onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
-      onReset={scope !== "global" && clarifyTimeout !== "inherit"
-        ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined)
-        : undefined}
-    />
+        options={Object.entries(workspaceLabels).map(([value, label]) => ({ value, label }))}
+        onChange={(value) => void save(verify, timeline, value as WorkspacePolicyMode | "inherit").catch(() => undefined)}
+      />
+    </section>
+
+    {error && <p className="policy-error" role="alert">{error}</p>}
     {busy && <small className="policy-saving" role="status">Saving…</small>}
   </InspectorSection>;
 }
 
-type TimeoutUnit = "seconds" | "minutes" | "hours";
-const timeoutUnitSeconds: Record<TimeoutUnit, number> = { seconds: 1, minutes: 60, hours: 3_600 };
-
-function timeoutParts(value: number): { amount: number; unit: TimeoutUnit } {
-  if (value % 3_600 === 0) return { amount: value / 3_600, unit: "hours" };
-  if (value % 60 === 0) return { amount: value / 60, unit: "minutes" };
-  return { amount: value, unit: "seconds" };
-}
-
-function TimeoutPolicyControl({
-  label,
-  value,
-  inherited,
-  disabled,
-  onChange,
-  onReset,
-}: {
+function PolicySelectField({ label, description, value, inheritedLabel, disabled, options, onChange }: {
   label: string;
-  value: DialogTimeoutSeconds;
-  inherited: boolean;
+  description: string;
+  value: string;
+  inheritedLabel: string;
   disabled: boolean;
-  onChange(value: DialogTimeoutSeconds): void;
-  onReset?: () => void;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
 }) {
-  const initial = timeoutParts(value ?? 60);
-  const [amount, setAmount] = useState(String(initial.amount));
-  const [unit, setUnit] = useState<TimeoutUnit>(initial.unit);
-  useEffect(() => {
-    const next = timeoutParts(value ?? 60);
-    setAmount(String(next.amount));
-    setUnit(next.unit);
-  }, [value]);
-  const commit = (nextAmount = amount, nextUnit = unit) => {
-    const seconds = Number(nextAmount) * timeoutUnitSeconds[nextUnit];
-    if (!Number.isInteger(seconds) || seconds < 15 || seconds > 86_400) {
-      const previous = timeoutParts(value ?? 60);
-      setAmount(String(previous.amount));
-      setUnit(previous.unit);
-      return;
-    }
-    onChange(seconds);
-  };
-
-  return <div className="policy-timeout">
-    <div className="policy-label-row">
-      <span>{label}{inherited ? " · Project default" : ""}</span>
-      {onReset && <button className="text-button" type="button" disabled={disabled} onClick={onReset}>Use project default</button>}
+  return <div className="policy-field">
+    <div><strong>{label}</strong><small>{description}</small></div>
+    <div className="policy-field-control">
+      <select value={value} disabled={disabled} aria-label={`${label} policy`} onChange={(event) => onChange(event.target.value)}>
+        <option value="inherit">{inheritedLabel}</option>
+        {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+      </select>
+      <small>{value === "inherit" ? inheritedLabel.replace("Inherit from ", "From ") : "Override"}</small>
     </div>
-    <div className="policy-timeout-controls">
-      {value === null
-        ? <span className="policy-timeout-never">Never</span>
-        : <>
-          <input
-            type="number"
-            min={unit === "seconds" ? 15 : 1}
-            max={unit === "hours" ? 24 : unit === "minutes" ? 1_440 : 86_400}
-            step="1"
-            value={amount}
-            disabled={disabled}
-            aria-label={`${label} duration`}
-            onChange={(event) => setAmount(event.target.value)}
-            onBlur={() => commit()}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              commit();
-              event.currentTarget.blur();
-            }}
-          />
-          <select
-            value={unit}
-            disabled={disabled}
-            aria-label={`${label} unit`}
-            onChange={(event) => {
-              const next = event.target.value as TimeoutUnit;
-              setUnit(next);
-              commit(amount, next);
-            }}
-          >
-            <option value="seconds">Seconds</option>
-            <option value="minutes">Minutes</option>
-            <option value="hours">Hours</option>
-          </select>
-        </>}
-      <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value === null ? 60 : null)}>
-        {value === null ? "Use timeout" : "Never"}
-      </button>
-    </div>
-    <small>Paused while the response tab is visible and focused.</small>
   </div>;
 }
 
@@ -734,10 +702,9 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
   const policies = runtime?.operational.tools.policies ?? [];
   const tools = runtime?.availableTools ?? [];
   const toolUsage = [...(metrics?.toolUsage ?? [])]
-    .sort((left, right) => right.calls - left.calls || right.tokens - left.tokens || left.name.localeCompare(right.name));
+    .sort((left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name));
   const totalTokens = (metrics?.inputTokens ?? 0) + (metrics?.outputTokens ?? 0);
   const inputPercent = totalTokens > 0 ? (metrics?.inputTokens ?? 0) / totalTokens * 100 : 0;
-  const maxCalls = toolUsage[0]?.calls ?? 0;
   const visibleTools = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const items = tools.map((name) => ({ name, active: runtime?.activeTools.includes(name) === true }));
@@ -760,7 +727,7 @@ function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolic
         <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Estimated from serialized tool arguments and text results">Tokens / calls</span></div>
         {toolUsage.length > 0 ? <div className="session-tool-usage-list">
           {toolUsage.map((usage) => <div className="session-tool-usage-row" key={usage.name}>
-            <div><strong>{usage.name}</strong><span><i style={{ width: `${maxCalls > 0 ? Math.max(4, usage.calls / maxCalls * 100) : 0}%` }} /></span></div>
+            <div><strong>{usage.name}</strong><span aria-label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens`}><i className="input" style={{ width: `${usage.tokens > 0 ? usage.inputTokens / usage.tokens * 100 : 0}%` }} /><i className="output" style={{ width: `${usage.tokens > 0 ? usage.outputTokens / usage.tokens * 100 : 0}%` }} /></span></div>
             <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span>
             <span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
           </div>)}
@@ -862,6 +829,28 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
           {healthy && <IconCheck size={13} aria-hidden="true" />}
           {healthy ? "No prefix churn or budget exceedances" : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
         </p>
+      </section>
+    </>}
+
+    {sieve.projectionMode === "standard-v2" && <>
+      <section className="sieve-group" aria-labelledby="sieve-standard-v2-heading">
+        <header className="sieve-group-heading"><h3 id="sieve-standard-v2-heading">Standard V2</h3></header>
+        <div className="sieve-inline-metrics">
+          <span><strong>{formatCompactNumber(sieve.stability?.standardComparisons ?? 0)}</strong> comparisons</span>
+          <span><strong>{formatCompactNumber(sieve.stability?.standardPrefixChurn ?? 0)}</strong> prefix changes</span>
+          <span><strong>{formatCompactNumber(sieve.stability?.standardEstimatedInvalidatedChars ?? 0)}</strong> chars invalidated</span>
+        </div>
+        {sieve.stability?.standardEarliestChangedPriorMessageIndex !== undefined
+          && <p className="sieve-epoch-reason">Earliest changed prior message: {sieve.stability.standardEarliestChangedPriorMessageIndex}</p>}
+      </section>
+      <section className="sieve-group" aria-labelledby="sieve-standard-v2-churn-heading">
+        <header className="sieve-group-heading"><h3 id="sieve-standard-v2-churn-heading">Churn causes</h3></header>
+        <div className="sieve-inline-metrics">
+          {([
+            ["activeThreshold", "active threshold"], ["ageThreshold", "age threshold"], ["budget", "budget"],
+            ["staleRead", "stale read"], ["duplicate", "duplicate"], ["errorCap", "error cap"], ["history", "history"],
+          ] as const).map(([kind, label]) => <span key={kind}><strong>{formatCompactNumber(sieve.stability?.standardChangesByKind?.[kind] ?? 0)}</strong> {label}</span>)}
+        </div>
       </section>
     </>}
 

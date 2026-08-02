@@ -126,6 +126,8 @@ export interface ConversationReadModel {
 export interface ToolUsageReadModel {
   name: string;
   calls: number;
+  inputTokens: number;
+  outputTokens: number;
   tokens: number;
 }
 
@@ -390,7 +392,7 @@ export interface SieveTransformStatsReadModel {
 export interface SieveReadModel {
   availability: FeatureState;
   mode?: "enabled" | "observe" | "disabled";
-  projectionMode?: "stable" | "legacy";
+  projectionMode?: "stable" | "legacy" | "standard-v2";
   threshold?: number;
   activePruning?: boolean;
   latestMode?: "enabled" | "observe";
@@ -420,6 +422,19 @@ export interface SieveReadModel {
     prefixChurnViolations: number;
     estimatedInvalidatedChars: number;
     earliestChangedPriorMessageIndex?: number;
+    standardComparisons?: number;
+    standardPrefixChurn?: number;
+    standardEarliestChangedPriorMessageIndex?: number;
+    standardEstimatedInvalidatedChars?: number;
+    standardChangesByKind?: {
+      activeThreshold: number;
+      ageThreshold: number;
+      budget: number;
+      staleRead: number;
+      duplicate: number;
+      errorCap: number;
+      history: number;
+    };
   };
   contextUsagePercent?: number;
   updatedAt?: string;

@@ -118,6 +118,34 @@ test("Sieve projections retain bounded per-tool telemetry", () => {
   assert.equal(invalid.sieve.availability, "unavailable");
 });
 
+test("Sieve standard-v2 projections expose bounded churn telemetry", () => {
+  const stats = {
+    scanned: 1, transformed: 1, omittedChars: 100, netCharsSaved: 100,
+    transformedBy: { ageThreshold: 0, budget: 0, giantError: 0, activeThreshold: 1, staleRead: 0, duplicate: 0, errorCap: 0, mixedText: 0 },
+    byTool: {},
+  };
+  const changes = { activeThreshold: 1, ageThreshold: 2, budget: 3, staleRead: 4, duplicate: 5, errorCap: 6, history: 7 };
+  const payload = {
+    version: 1, available: true, mode: "enabled", projectionMode: "standard-v2", threshold: 8_192,
+    activePruning: true, latestMode: "enabled", latest: stats, cumulativeActual: stats, cumulativeProjected: stats,
+    recalls: 0, recalledChars: 0, recallsByTool: {}, updatedAt: new Date(0).toISOString(),
+    stability: {
+      newProjections: 1, projectionCacheHits: 0, recoverableEntries: 0, explicitReflows: 0,
+      softBudgetExceedances: 0, prefixChurnViolations: 0, estimatedInvalidatedChars: 0,
+      standardComparisons: 12, standardPrefixChurn: 3, standardEarliestChangedPriorMessageIndex: 4,
+      standardEstimatedInvalidatedChars: 9_000, standardChangesByKind: changes,
+    },
+  };
+  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", payload);
+  assert.equal(state.sieve.projectionMode, "standard-v2");
+  assert.equal(state.sieve.stability?.standardComparisons, 12);
+  assert.equal(state.sieve.stability?.standardPrefixChurn, 3);
+  assert.equal(state.sieve.stability?.standardEarliestChangedPriorMessageIndex, 4);
+  assert.equal(state.sieve.stability?.standardEstimatedInvalidatedChars, 9_000);
+  assert.deepEqual(state.sieve.stability?.standardChangesByKind, changes);
+  assert.equal(applyOperationalEvent(state, "pi-sieve:state-change", { ...payload, stability: { ...payload.stability, standardChangesByKind: { ...changes, history: -1 } } }).sieve.availability, "unavailable");
+});
+
 test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {
   let state = initialOperational([], ["pi-heartbeat.ts"]);
   state = applyOperationalEvent(state, "pi-heartbeat:job", {

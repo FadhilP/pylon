@@ -48,22 +48,22 @@ test("metrics projection retains bounded per-tool usage", () => {
     type: "usage",
     inputTokens: 120,
     toolUsage: [
-      { name: "read", calls: 3, tokens: 80 },
-      { name: "invalid", calls: -1, tokens: 20 },
+      { name: "read", calls: 3, inputTokens: 72, outputTokens: 8, tokens: 80 },
+      { name: "invalid", calls: -1, inputTokens: 18, outputTokens: 2, tokens: 20 },
     ],
   }));
   assert.equal(projection.snapshot().metrics.inputTokens, 120);
-  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, tokens: 80 }]);
+  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, inputTokens: 72, outputTokens: 8, tokens: 80 }]);
   projection.apply(session({
     type: "usage",
-    toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, tokens: 1 })),
+    toolUsage: Array.from({ length: 201 }, (_, index) => ({ name: `tool-${index}`, calls: 1, inputTokens: 1, outputTokens: 0, tokens: 1 })),
   }));
   assert.equal(projection.snapshot().metrics.toolUsage?.length, 200);
   projection.apply(session({
     type: "usage",
-    toolUsage: [{ name: "read", calls: 3, tokens: 80 }, { name: "read", calls: 2, tokens: 40 }],
+    toolUsage: [{ name: "read", calls: 3, inputTokens: 72, outputTokens: 8, tokens: 80 }, { name: "read", calls: 2, inputTokens: 36, outputTokens: 4, tokens: 40 }],
   }));
-  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, tokens: 80 }]);
+  assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, inputTokens: 72, outputTokens: 8, tokens: 80 }]);
 });
 
 test("session status projects completion as a separate pulse", () => {
