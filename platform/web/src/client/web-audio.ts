@@ -6,7 +6,7 @@ let resuming = false;
 let nextStartAt = 0;
 
 export function unlockWebAudio(): void {
-  if (context?.state === "closed") resetContext(context);
+  if (context && isClosed(context)) resetContext(context);
   if (!context) {
     const AudioContextConstructor = window.AudioContext
       ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -26,7 +26,7 @@ export function enqueueWebAudioCues(cues: readonly WebAudioCueKind[]): void {
 function flush(): void {
   const audio = context;
   if (!audio) return;
-  if (audio.state === "closed") {
+  if (isClosed(audio)) {
     resetContext(audio);
     return;
   }
@@ -40,7 +40,7 @@ function flush(): void {
     }).catch(() => {
       if (context !== audio) return;
       resuming = false;
-      if (audio.state === "closed") resetContext(audio);
+      if (isClosed(audio)) resetContext(audio);
     });
     return;
   }
@@ -51,6 +51,10 @@ function flush(): void {
     }
     pending.shift();
   }
+}
+
+function isClosed(audio: AudioContext): boolean {
+  return audio.state === "closed";
 }
 
 function resetContext(audio: AudioContext): void {
