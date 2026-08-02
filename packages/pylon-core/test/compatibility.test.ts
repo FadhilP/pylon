@@ -131,10 +131,11 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     const capabilities: any[] = [];
     events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => capabilities.push(value) });
     assert.equal(capabilities.length, 1);
-    assert.deepEqual(capabilities[0].eligible(), ["index_status", "relationship_graph", "web_scout"]);
+    assert.deepEqual(capabilities[0].eligible(), ["index_status", "relationship_graph", "search_sessions", "web_scout"]);
     assert.deepEqual(capabilities[0].catalog(), [
       { name: "index_status", usage: "inspect local repository code-index status" },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
+      { name: "search_sessions", usage: "search historical Pi sessions after explicit user confirmation" },
       { name: "web_scout", usage: "research current public web pages with bounded URL-cited evidence" },
     ]);
     capabilities[0].select(["web_scout"]);
