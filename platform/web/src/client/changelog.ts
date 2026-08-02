@@ -8,6 +8,41 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.3.0",
+    date: "Aug 2, 2026",
+    title: "Cache-friendly context and unified policy controls",
+    summary: "Pylon reduces avoidable context churn, preserves session diagnostics, and makes runtime policy easier to manage across global, project, and session scopes.",
+    notes: [
+      "Made Sieve Standard V2 the default with steadier active-result projections, fixed shared-budget tiers, detailed churn attribution, and Standard V1 compatibility alongside experimental stable epochs.",
+      "Persisted cumulative Sieve transformation, recall, per-tool, and stability statistics across reloads and branch navigation while rebuilding recall sources from the active raw session.",
+      "Added global policy settings and redesigned the Policy inspector around inherited Timeline, Guard, workspace, Guard-timeout, and clarification-timeout controls for project and session scopes.",
+      "Added session token totals and per-tool token and call estimates to the Tools inspector, with clearer separation between usage, available tools, and package policies.",
+      "Simplified Continuity completion so a single final response settles finished work automatically, and allowed explicitly requested bounded historical-session searches in headless sessions.",
+    ],
+  },
+  {
+    version: "1.2.2",
+    date: "Aug 2, 2026",
+    title: "Session-search compatibility",
+    summary: "A maintenance release aligned package metadata and compatibility coverage with the new deferred historical-session search tool.",
+    notes: [
+      "Updated the published package version and lockfile metadata.",
+      "Corrected Pylon's compatibility test to include search_sessions in Discover's deferred tool catalog.",
+    ],
+  },
+  {
+    version: "1.2.1",
+    date: "Aug 2, 2026",
+    title: "Bounded session search and Sieve rollover",
+    summary: "Pylon adds safer access to historical Pi sessions and gives experimental stable Sieve projections a configurable context rollover boundary.",
+    notes: [
+      "Added the deferred search_sessions tool to Discover with current-workspace defaults, bounded excerpts, best-effort credential redaction, and explicit interactive confirmation.",
+      "Consolidated historical-session search in Discover and removed Scout's duplicate session-search path.",
+      "Added configurable high-watermark and target multipliers so stable Sieve epochs can perform one deliberate newest-first rollover before beginning another cache-stable period.",
+      "Exposed rollover controls and telemetry in the web workspace while keeping the standard mutable projection policy as the default and stable epochs experimental.",
+    ],
+  },
+  {
     version: "1.2.0",
     date: "Aug 1, 2026",
     title: "Stable context and database diagnostics",
