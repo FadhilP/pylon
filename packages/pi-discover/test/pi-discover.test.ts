@@ -12,7 +12,7 @@ import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuer
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
-import { registerSessionSearch, searchSessions, type SessionSource } from "../src/sessions.ts";
+import { registerSessionSearch, registerSessionStats, searchSessions, sessionStats, type SessionSource } from "../src/sessions.ts";
 
 class Bus {
   handlers = new Map<string, ((...values: any[]) => any)[]>();
@@ -33,7 +33,7 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
   const commands = new Map<string, any>();
   const events = new Bus();
   const lifecycle = new Bus();
-  const active = ["read", "rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_sessions", "search_tools"];
+  const active = ["read", "rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_sessions", "session_stats", "search_tools"];
   let setActiveCalls = 0;
   const pi: any = {
     events,
@@ -49,6 +49,7 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
       { name: "code_search", description: "Search indexed code" },
       { name: "index_status", description: "Report index status" },
       { name: "search_sessions", description: "Search historical Pi sessions" },
+      { name: "session_stats", description: "Inspect historical Pi session statistics" },
       { name: "search_tools", description: "Find inactive tools" },
       { name: "git_history", description: "Search commit history and changes" },
       { name: "web_lookup", description: "Search public web pages" },
@@ -122,6 +123,103 @@ test("session search reports truncation only when session or match limits overfl
   const overflow = await searchSessions({ query: "needle", cwd }, sessionSource(oneSession, { "session-0": messages }));
   assert.equal(overflow.matches.length, 12);
   assert.equal(overflow.truncated, true);
+});
+
+test("session stats aggregates branch usage and completed tool results without returning content", async () => {
+  const cwd = process.cwd();
+  const sessions = [
+    { id: "target", path: "target", cwd, modified: new Date("2026-01-01"), allMessagesText: "" },
+    { id: "current", path: "current", cwd, modified: new Date("2026-01-02"), allMessagesText: "" },
+    { id: "other", path: "other", cwd: join(cwd, "other"), modified: new Date("2026-01-03"), allMessagesText: "" },
+    { id: "broken", path: "broken", cwd, modified: new Date("2026-01-04"), allMessagesText: "" },
+  ];
+  const source: SessionSource = {
+    async listAll() { return sessions as any; },
+    open(path) {
+      if (path === "broken") throw new Error("unreadable");
+      return { getBranch: () => path === "target" ? [
+        { type: "message", message: {
+          role: "assistant",
+          usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 100, cost: { total: 0.5 } },
+          content: [
+            { type: "toolCall", id: "advisor-call", name: "advisor", arguments: { request: "private request" } },
+            { type: "toolCall", id: "read-call", name: "read", arguments: { path: "private.ts" } },
+            { type: "toolCall", id: "pending-call", name: "write", arguments: { path: "private.ts" } },
+          ],
+        } },
+        { type: "message", message: {
+          role: "toolResult", toolCallId: "advisor-call", toolName: "advisor",
+          content: [{ type: "text", text: "private advice" }], isError: false,
+          details: { usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 10, cost: 0.1 } },
+        } },
+        { type: "message", message: {
+          role: "toolResult", toolCallId: "read-call", toolName: "read",
+          content: [{ type: "image", data: "private image" }], isError: true,
+        } },
+      ] : [] } as any;
+    },
+  };
+
+  const result = await sessionStats({ sessionId: "target", cwd, currentSessionId: "current" }, source);
+  assert.equal(result.sessionLookup, "found");
+  assert.equal(result.branchScope, "current");
+  assert.equal(result.branchEntries, 3);
+  assert.deepEqual(result.usage?.main, {
+    turns: 1, input: 100, output: 20, cacheRead: 300, cacheWrite: 100, cost: 0.5, cacheReadRate: 0.6,
+  });
+  assert.deepEqual(result.usage?.children, {
+    turns: 1, input: 10, output: 2, cacheRead: 30, cacheWrite: 10, cost: 0.1, cacheReadRate: 0.6,
+  });
+  assert.deepEqual(result.usage?.total, {
+    turns: 2, input: 110, output: 22, cacheRead: 330, cacheWrite: 110, cost: 0.6, cacheReadRate: 0.6,
+  });
+  assert.deepEqual(result.tools, {
+    completedCalls: 2, errors: 1, images: 1, truncated: false,
+    byName: [
+      { name: "advisor", calls: 1, errors: 0, images: 0 },
+      { name: "read", calls: 1, errors: 1, images: 1 },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(result), /private/);
+  assert.equal((await sessionStats({ sessionId: "missing", cwd }, source)).sessionLookup, "not_found");
+  assert.equal((await sessionStats({ sessionId: "current", cwd, currentSessionId: "current" }, source)).sessionLookup, "active_session");
+  assert.equal((await sessionStats({ sessionId: "other", cwd }, source)).sessionLookup, "outside_scope");
+  const empty = await sessionStats({ sessionId: "other", cwd, scope: "all" }, source);
+  assert.equal(empty.sessionLookup, "found");
+  assert.equal(empty.usage?.main.cacheReadRate, null);
+  assert.equal((await sessionStats({ sessionId: "broken", cwd }, source)).sessionLookup, "unreadable");
+});
+
+test("session stats bounds per-tool rows and registered output", async () => {
+  const cwd = process.cwd();
+  const calls = Array.from({ length: 26 }, (_, index) => ({ type: "toolCall", id: `call-${index}`, name: `tool-${index}`, arguments: {} }));
+  const results = calls.map((call) => ({
+    type: "message", message: { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [], isError: false },
+  }));
+  const source = sessionSource([
+    { id: "target", path: "target", cwd, modified: new Date("2026-01-01"), allMessagesText: "" },
+  ], {
+    target: [{ type: "message", message: { role: "assistant", content: calls } }, ...results],
+  });
+  const stats = await sessionStats({ sessionId: "target", cwd }, source);
+  assert.equal(stats.tools?.completedCalls, 26);
+  assert.equal(stats.tools?.byName.length, 25);
+  assert.equal(stats.tools?.truncated, true);
+
+  const context = { cwd, sessionManager: { getSessionId: () => "current" } };
+  const tools = new Map<string, any>();
+  registerSessionStats({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
+  const output = await tools.get("session_stats").execute("stats", { sessionId: "target" }, undefined, undefined, context);
+  assert.equal(JSON.parse(output.content[0].text).truncated, true);
+  assert.equal(output.details.truncated, true);
+  assert.equal(output.details.sessionLookup, "found");
+  assert.equal(output.details.completedCalls, 26);
+
+  const cappedTools = new Map<string, any>();
+  registerSessionStats({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, source, 200);
+  const capped = await cappedTools.get("session_stats").execute("stats-capped", { sessionId: "target" }, undefined, undefined, context);
+  assert.ok(Buffer.byteLength(capped.content[0].text, "utf8") <= 200);
+  assert.equal(JSON.parse(capped.content[0].text).sessionLookup, "found");
 });
 
 test("search_sessions runs without UI and reports bounded searches", async () => {
@@ -626,15 +724,17 @@ test("host refreshes its SQLite index after each turn", async () => {
   runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status", "search_sessions"]);
+    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status", "search_sessions", "session_stats"]);
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
       search_sessions: "search historical Pi sessions when explicitly requested",
+      session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
     });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
     assert.ok(!runtime.active.includes("search_sessions"));
+    assert.ok(!runtime.active.includes("session_stats"));
     await waitFor(() => indexStates.at(-1)?.state === "idle");
     assert.equal(indexStates.at(-1)?.state, "idle");
     assert.equal(indexStates.at(-1)?.files, 1);

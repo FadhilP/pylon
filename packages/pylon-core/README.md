@@ -22,6 +22,10 @@ This installs the complete Pylon bundle, including pylon-core. Run `/reload` aft
 
 Guard remains the independent final safety authority; Pylon never approves or weakens it.
 
+## Library API
+
+`pylon-core/token-meter` exports the side-effect-free `meterFromBranch()` helper and aggregate token-meter types for packages that need the same branch-scoped usage accounting as `/tokens`.
+
 ## Runtime Behavior
 
 - Merges independently enabled tools without lost updates.

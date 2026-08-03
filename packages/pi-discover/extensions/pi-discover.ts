@@ -9,7 +9,7 @@ import { registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 import { registerRg } from "../src/rg.ts";
 import { boundedError } from "../src/search-common.ts";
-import { registerSessionSearch } from "../src/sessions.ts";
+import { registerSessionSearch, registerSessionStats } from "../src/sessions.ts";
 
 const discoverChildToolsExtension = fileURLToPath(new URL("../src/discover-child-tools.ts", import.meta.url));
 
@@ -170,6 +170,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
   registerFd(pi);
   registerRelationshipGraph(pi);
   registerSessionSearch(pi);
+  registerSessionStats(pi);
   const indexes = new Map<string, WorkspaceIndex>();
   const indexFor = (cwd: string) => {
     let index = indexes.get(cwd);
@@ -185,7 +186,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
   registerIndexTools(pi, indexFor);
   const configureDeferredTools = () => {
     let coordinated = false;
-    const deferredTools = ["relationship_graph", "index_status", "search_sessions"];
+    const deferredTools = ["relationship_graph", "index_status", "search_sessions", "session_stats"];
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -197,6 +198,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
         relationship_graph: "map source symbols or tokens to related files and source locations",
         index_status: "inspect local repository code-index status",
         search_sessions: "search historical Pi sessions when explicitly requested",
+        session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
       },
       acknowledge: () => { coordinated = true; },
     });

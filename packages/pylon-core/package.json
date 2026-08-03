@@ -6,6 +6,11 @@
   "keywords": ["pi-package"],
   "engines": { "node": ">=22.18.0" },
   "files": ["extensions", "src", "README.md", "LICENSE"],
+  "exports": {
+    "./token-meter": "./src/token-meter.ts",
+    "./extensions/*": "./extensions/*",
+    "./src/*": "./src/*"
+  },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit"

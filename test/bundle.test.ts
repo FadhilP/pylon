@@ -14,6 +14,7 @@ import helios from "../packages/pi-helios/extensions/pi-helios.ts";
 import stateql from "../packages/pi-stateql/extensions/pi-stateql.ts";
 import discover from "../packages/pi-discover/extensions/pi-discover.ts";
 import scout from "../packages/pi-scout/extensions/pi-scout.ts";
+import spawn from "../packages/pi-spawn/extensions/pi-spawn.ts";
 import sieve from "../packages/pi-sieve/extensions/pi-sieve.ts";
 import timeline from "../packages/pi-timeline/extensions/pi-timeline.ts";
 import verify from "../packages/pi-verify/extensions/pi-verify.ts";
@@ -63,6 +64,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./packages/pi-stateql/extensions/pi-stateql.ts",
     "./packages/pi-discover/extensions/pi-discover.ts",
     "./packages/pi-scout/extensions/pi-scout.ts",
+    "./packages/pi-spawn/extensions/pi-spawn.ts",
     "./packages/pi-sieve/extensions/pi-sieve.ts",
     "./packages/pi-timeline/extensions/pi-timeline.ts",
     "./packages/pi-verify/extensions/pi-verify.ts",
@@ -99,14 +101,14 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, sieve, timeline, verify]
+    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]
       .forEach((extension) => extension(pi));
 
     assert.deepEqual([...commands.keys()].sort(), [
       "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "sieve_recall", "stateql", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
     ]);
 
     let notification = "";
@@ -126,6 +128,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(!active.includes("grunt"));
     assert.ok(!active.includes("index_status"));
     assert.ok(!active.includes("search_sessions"));
+    assert.ok(!active.includes("session_stats"));
     assert.ok(!active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
     assert.ok(!active.includes("advisor"));

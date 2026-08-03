@@ -226,6 +226,7 @@ export class PublicNetworkProxy {
     this.sockets.add(upstream);
     upstream.once("close", () => this.sockets.delete(upstream));
     upstream.setTimeout(15_000, () => upstream.destroy());
+    client.on("error", () => upstream.destroy());
     upstream.once("error", () => client.destroy());
     upstream.once("connect", () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");

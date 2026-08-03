@@ -9,10 +9,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { meterFromBranch, type ProviderUsage } from "pylon-core/token-meter";
 
 const MAX_SESSIONS = 200;
 const MAX_MATCHES = 12;
 const MAX_EXCERPT_CHARS = 1_200;
+const MAX_TOOL_STATS = 25;
 
 const REDACTION_PATTERNS: RegExp[] = [
   /-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/gi,
@@ -36,6 +38,27 @@ export type SessionSearchResult = {
   redactionCount: number;
   truncated: boolean;
   sessionLookup?: "found" | "not_found" | "outside_scope" | "active_session";
+};
+export type SessionStatsLookup = "found" | "not_found" | "outside_scope" | "active_session" | "unreadable";
+export type SessionUsageSummary = ProviderUsage & { cacheReadRate: number | null };
+export type SessionStatsResult = {
+  sessionId: string;
+  scope: SessionSearchScope;
+  sessionLookup: SessionStatsLookup;
+  branchScope?: "current";
+  branchEntries?: number;
+  usage?: {
+    main: SessionUsageSummary;
+    children: SessionUsageSummary;
+    total: SessionUsageSummary;
+  };
+  tools?: {
+    completedCalls: number;
+    errors: number;
+    images: number;
+    byName: Array<{ name: string; calls: number; errors: number; images: number }>;
+    truncated: boolean;
+  };
 };
 export type SessionSource = {
   listAll(): Promise<SessionInfo[]>;
@@ -153,6 +176,89 @@ export async function searchSessions(
   };
 }
 
+function usageSummary(usage: ProviderUsage): SessionUsageSummary {
+  const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+  return { ...usage, cacheReadRate: promptTokens ? usage.cacheRead / promptTokens : null };
+}
+
+function addUsage(left: ProviderUsage, right: ProviderUsage): ProviderUsage {
+  return {
+    turns: left.turns + right.turns,
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    cost: left.cost + right.cost,
+  };
+}
+
+export async function sessionStats(
+  options: {
+    sessionId: string;
+    cwd: string;
+    currentSessionId?: string;
+    scope?: SessionSearchScope;
+    signal?: AbortSignal;
+  },
+  source: SessionSource = defaultSource,
+): Promise<SessionStatsResult> {
+  const scope = options.scope ?? "current_cwd";
+  const base = { sessionId: options.sessionId, scope };
+  const selected = (await source.listAll()).find((session) => session.id === options.sessionId);
+  if (!selected) return { ...base, sessionLookup: "not_found" };
+  if (selected.id === options.currentSessionId) return { ...base, sessionLookup: "active_session" };
+  if (scope !== "all" && (!selected.cwd || canonicalPath(selected.cwd) !== canonicalPath(options.cwd)))
+    return { ...base, sessionLookup: "outside_scope" };
+  if (options.signal?.aborted) throw new DOMException("Session stats aborted", "AbortError");
+
+  let branch: ReturnType<Pick<SessionManager, "getBranch">["getBranch"]>;
+  try { branch = source.open(selected.path).getBranch(); }
+  catch { return { ...base, sessionLookup: "unreadable" }; }
+  const meter = meterFromBranch(branch);
+  const empty: ProviderUsage = { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const children = [...meter.byPackage.values()].reduce<ProviderUsage>(addUsage, empty);
+  const total = addUsage(meter.provider, children);
+  const toolRows = [...meter.byTool.entries()]
+    .map(([name, usage]) => ({ name, calls: usage.calls, errors: usage.errors, images: usage.images }))
+    .sort((left, right) => right.calls - left.calls || left.name.localeCompare(right.name));
+  const byName = toolRows.slice(0, MAX_TOOL_STATS);
+
+  return {
+    ...base,
+    sessionLookup: "found",
+    branchScope: "current",
+    branchEntries: branch.length,
+    usage: {
+      main: usageSummary(meter.provider),
+      children: usageSummary(children),
+      total: usageSummary(total),
+    },
+    tools: {
+      completedCalls: toolRows.reduce((sum, usage) => sum + usage.calls, 0),
+      errors: toolRows.reduce((sum, usage) => sum + usage.errors, 0),
+      images: toolRows.reduce((sum, usage) => sum + usage.images, 0),
+      byName,
+      truncated: toolRows.length > byName.length,
+    },
+  };
+}
+
+function boundedStatsResult(result: SessionStatsResult, maxBytes: number): string {
+  const byName = [...(result.tools?.byName ?? [])];
+  let truncated = result.tools?.truncated ?? false;
+  while (true) {
+    const tools = result.tools ? { ...result.tools, byName, truncated } : undefined;
+    const text = JSON.stringify({ ...result, ...(tools ? { tools } : {}), truncated });
+    if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+    if (!byName.length) {
+      const minimal = JSON.stringify({ sessionId: result.sessionId, sessionLookup: result.sessionLookup, truncated: true });
+      return Buffer.byteLength(minimal, "utf8") <= maxBytes ? minimal : JSON.stringify({ truncated: true });
+    }
+    byName.pop();
+    truncated = true;
+  }
+}
+
 function boundedResult(result: SessionSearchResult, maxBytes: number): string {
   const matches = [...result.matches];
   let truncated = result.truncated;
@@ -168,6 +274,48 @@ function boundedResult(result: SessionSearchResult, maxBytes: number): string {
     matches.pop();
     truncated = true;
   }
+}
+
+export function registerSessionStats(
+  pi: ExtensionAPI,
+  source: SessionSource = defaultSource,
+  maxBytes = DEFAULT_MAX_BYTES,
+): void {
+  if (maxBytes < Buffer.byteLength(JSON.stringify({ truncated: true }), "utf8"))
+    throw new Error("Session stats output cap is too small");
+  pi.registerTool({
+    name: "session_stats",
+    label: "Pi session stats",
+    description: `Inspect aggregate model usage, provider-reported cache-read rate, and completed tool-call statistics for one exact historical Pi session's current branch. No message, argument, or result content is returned. Output capped at ${formatSize(maxBytes)}.`,
+    parameters: Type.Object({
+      sessionId: Type.String({ minLength: 1, maxLength: 200, description: "Exact historical Pi session ID" }),
+      scope: Type.Optional(StringEnum(["current_cwd", "all"] as const)),
+    }, { additionalProperties: false }),
+    executionMode: "sequential",
+    async execute(_id, params, signal, _update, ctx) {
+      const scope = params.scope ?? "current_cwd";
+      const result = await sessionStats({
+        sessionId: params.sessionId,
+        cwd: ctx.cwd,
+        currentSessionId: ctx.sessionManager.getSessionId(),
+        scope,
+        signal,
+      }, source);
+      const text = boundedStatsResult(result, maxBytes);
+      const displayed = JSON.parse(text);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          sessionId: params.sessionId,
+          scope,
+          sessionLookup: result.sessionLookup,
+          branchEntries: result.branchEntries,
+          completedCalls: result.tools?.completedCalls,
+          truncated: displayed.truncated,
+        },
+      };
+    },
+  });
 }
 
 export function registerSessionSearch(

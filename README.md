@@ -85,6 +85,7 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 - **[pi-stateql](./packages/pi-stateql)** — Provides safe stateful database queries, durable result handles, confirmed writes, and bounded web status/history.
 - **[pi-discover](./packages/pi-discover)** — Indexes supported source files, provides read-only repository and historical Pi-session search, and coordinates inactive-tool discovery.
 - **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance and fresh-browser isolated public-web research.
+- **[pi-spawn](./packages/pi-spawn)** — Creates private resumable subagent threads and first-class child sessions that remain promptable from their parent.
 - **[pi-sieve](./packages/pi-sieve)** — Limits old bulky successful tool output in outbound context without modifying stored session messages.
 - **[pi-timeline](./packages/pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
 - **[pi-verify](./packages/pi-verify)** — Detects and runs existing project checks with bounded time and output.

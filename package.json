@@ -72,6 +72,7 @@
       "./packages/pi-stateql/extensions/pi-stateql.ts",
       "./packages/pi-discover/extensions/pi-discover.ts",
       "./packages/pi-scout/extensions/pi-scout.ts",
+      "./packages/pi-spawn/extensions/pi-spawn.ts",
       "./packages/pi-sieve/extensions/pi-sieve.ts",
       "./packages/pi-timeline/extensions/pi-timeline.ts",
       "./packages/pi-verify/extensions/pi-verify.ts"

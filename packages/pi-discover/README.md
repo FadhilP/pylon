@@ -28,6 +28,12 @@ Search defaults to sessions created from the current working directory and exclu
 
 The tool works in both interactive and headless modes. Full paths and session filenames are not returned.
 
+### Historical Session Statistics
+
+`session_stats({ sessionId, scope? })` returns bounded aggregate statistics for one exact historical Pi session. It is deferred by default and must be loaded through `search_tools`. The tool uses the saved session's current branch, excludes the active session, defaults to the current working directory, and requires `scope: "all"` for an explicitly requested cross-workspace lookup.
+
+Results separate main-assistant and child-package model usage, include their combined totals and cost, and report `cacheReadRate` as `cacheRead / (input + cacheRead + cacheWrite)` or `null` when no prompt tokens were reported. Tool statistics count completed tool results only and return bounded per-tool call, error, and image totals. Message text, tool arguments, tool results, paths, and telemetry context are not returned.
+
 ### Live Workspace Search
 
 `rg` and `fd` are read-only workspace searches. They use bounded output and direct models to built-in `grep` or `find` when their optional executables are unavailable. `rg` also limits matches per file and skips files over 512 KiB before collecting output. Their implementations, plus `relationship_graph`, live in separate `src` modules shared by the host extension and pi-discover's child entrypoint. The host advertises that entrypoint through a versioned capability so Repo Scout can load these tools only when pi-discover is present.

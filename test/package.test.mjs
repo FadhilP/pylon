@@ -77,8 +77,11 @@ test("packed package installs and launches its production web app", { timeout: 2
        const packageRoot = process.argv[1];
        const installedRequire = createRequire(join(packageRoot, "package.json"));
        const { createJiti } = await import(pathToFileURL(installedRequire.resolve("jiti")).href);
-       const settings = await createJiti(join(packageRoot, "package.json")).import(join(packageRoot, "packages", "pi-advisor", "src", "web-settings.ts"));
-       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function") process.exit(1);`,
+       const jiti = createJiti(join(packageRoot, "package.json"));
+       const settings = await jiti.import(join(packageRoot, "packages", "pi-advisor", "src", "web-settings.ts"));
+       const tokenMeter = await jiti.import(installedRequire.resolve("pylon-core/token-meter"));
+       installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
+       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function") process.exit(1);`,
       packageRoot,
     ], { encoding: "utf8", timeout: 30_000 });
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
