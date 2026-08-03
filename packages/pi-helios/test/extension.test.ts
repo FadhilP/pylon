@@ -62,9 +62,18 @@ function context(overrides: Record<string, unknown> = {}) {
 test("registers native capture and constrained browser tools", () => {
   const { tools } = runtime();
   assert.deepEqual([...tools.keys()].sort(), ["helios_browser", "helios_capture"]);
-  assert.match(tools.get("helios_capture").description, /Windows window/);
-  assert.doesNotMatch(tools.get("helios_capture").description, /browser viewport/);
+  const captureDescription = tools.get("helios_capture").description;
+  assert.match(captureDescription, /Windows window/);
+  assert.match(captureDescription, /user asks/);
+  assert.match(captureDescription, /fresh visible confirmation/);
+  assert.match(captureDescription, /Never use for monitoring/);
+  assert.doesNotMatch(captureDescription, /browser viewport/);
   const browser = tools.get("helios_browser");
+  assert.match(browser.description, /only for user-requested browser work/);
+  assert.match(browser.description, /user supervision/);
+  assert.match(browser.description, /returned element refs/);
+  assert.match(browser.description, /continuation cursors/);
+  assert.match(browser.description, /Batch only predetermined non-consequential actions/);
   assert.equal(browser.parameters.anyOf, undefined);
   assert.ok(browser.parameters.properties.actions);
   const targetPattern = new RegExp(browser.parameters.properties.target.pattern);

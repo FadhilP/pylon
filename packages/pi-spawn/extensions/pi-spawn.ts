@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { configPath, loadConfig } from "../src/config.ts";
 import { runSpawn, spawnTimeoutMs, type SpawnActivity, type SpawnRun } from "../src/runner.ts";
 import {
   agentPolicy,
@@ -31,6 +34,18 @@ const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max
 const SPECIALIST_TOOLS = ["advisor", "grunt", "repo_scout", "web_scout"];
 const SPAWN_TOOLS = ["spawn_agent", "spawn_session"];
 const MAX_DEPTH = 4;
+const AGENT_PROMPT_GUIDELINES = [
+  "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
+  "When using spawn_agent, create one thread with a self-contained prompt and the narrowest useful policy, then continue that thread by ID for follow-ups because its model, system prompt, thinking level, and tools are immutable.",
+  "Use spawn_agent list only to recover private thread IDs available from the current parent branch; review the child response and any workspace changes before relying on them.",
+];
+const SESSION_PROMPT_GUIDELINES = [
+  "Use spawn_session only when the child conversation must be an ordinary Pi session the user can inspect, open, or continue separately; do not use spawn_session as the default delegation tool when a private spawn_agent thread or focused specialist tool is sufficient.",
+  "When starting independent work with spawn_session, use create with a self-contained kickoff prompt and a concise purpose-based name; use continue with the returned ID for follow-ups, and use list only to recover sessions available from the current parent branch.",
+  "Set spawn_session project only when the user explicitly requests work in another project; relative project paths resolve from the current project.",
+  "Use spawn_session adopt only when the user explicitly asks to resume an existing session in the current or selected project and provides its exact ID; adopt claims and immediately prompts that existing transcript while preserving its model, name, and native parent metadata.",
+  "Do not use spawn_session to customize system instructions, thinking, tools, or extensions because it loads the selected project's normal runtime; never prompt or adopt a session concurrently open in another Pi process.",
+];
 
 type RunChild = typeof runSpawn;
 
@@ -55,6 +70,7 @@ const createSessionParameters = () => Type.Object({
   ...threadParameters,
   name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Concise purpose-based display name for a newly created standard Pi session" })),
   model: Type.Optional(Type.String({ minLength: 3, maxLength: 300, description: "Optional provider/model fixed when the standard session is created" })),
+  project: Type.Optional(Type.String({ minLength: 1, maxLength: 32_768, description: "Existing project directory for create or adopt; relative paths resolve from the current project, and omission uses the current project" })),
 }, { additionalProperties: false });
 
 const SCIENTIST_NAMES = [
@@ -96,10 +112,23 @@ const creationOnlyAgentFields = (params: any) =>
   || params.systemPrompt !== undefined || params.tools !== undefined || params.disableSpecialists !== undefined;
 const creationOnlySessionFields = (params: any) => params.name !== undefined || params.model !== undefined;
 
+class ProjectDirectoryError extends Error {}
+
+function projectCwd(currentCwd: string, project?: string): string {
+  if (project === undefined) return currentCwd;
+  const requested = resolve(currentCwd, project.startsWith("@") ? project.slice(1) : project);
+  try {
+    const target = realpathSync.native(requested);
+    if (statSync(target).isDirectory()) return target;
+  } catch { /* Report one stable validation error below. */ }
+  throw new ProjectDirectoryError(`Project directory does not exist or is not a directory: ${requested}`);
+}
+
 function invalidInput(kind: SpawnKind, params: any): string | undefined {
   if (params.action === "create") {
     if (params.id !== undefined) return `${kind} create does not accept id.`;
     if (!params.prompt?.trim()) return `${kind} create requires prompt.`;
+    if (kind === "session" && params.project !== undefined && !params.project.trim()) return "session project must not be empty.";
     if (kind === "agent" && params.tools !== undefined) {
       const excluded = new Set([...SPAWN_TOOLS, ...(params.disableSpecialists === false ? [] : SPECIALIST_TOOLS)]);
       const forbidden = params.tools.find((tool: string) => excluded.has(tool));
@@ -111,6 +140,7 @@ function invalidInput(kind: SpawnKind, params: any): string | undefined {
     if (kind !== "session") return "Only standard sessions can be adopted.";
     if (!params.id) return "session adopt requires id.";
     if (!params.prompt?.trim()) return "session adopt requires prompt.";
+    if (params.project !== undefined && !params.project.trim()) return "session project must not be empty.";
     if (creationOnlySessionFields(params)) return "Session name and model cannot be changed on adopt.";
     return;
   }
@@ -118,12 +148,12 @@ function invalidInput(kind: SpawnKind, params: any): string | undefined {
     if (!params.id) return `${kind} continue requires id.`;
     if (!params.prompt?.trim()) return `${kind} continue requires prompt.`;
     if (kind === "agent" && creationOnlyAgentFields(params)) return "Agent creation policy cannot change on continue.";
-    if (kind === "session" && creationOnlySessionFields(params)) return "Session name and model can only be set on create.";
+    if (kind === "session" && (creationOnlySessionFields(params) || params.project !== undefined)) return "Session name, model, and project can only be set on create or adopt.";
     return;
   }
   if (params.action !== "list") return `Unknown ${kind} action.`;
   if (params.id !== undefined || params.prompt !== undefined
-    || (kind === "agent" ? creationOnlyAgentFields(params) : creationOnlySessionFields(params)))
+    || (kind === "agent" ? creationOnlyAgentFields(params) : creationOnlySessionFields(params) || params.project !== undefined))
     return `${kind} list does not accept thread or creation fields.`;
 }
 
@@ -161,7 +191,8 @@ function requestSpawnHooks(pi: ExtensionAPI): SpawnHooks | undefined {
   return hooks;
 }
 
-export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = runSpawn, agentDir = getAgentDir()) {
+export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChild = runSpawn, agentDir = getAgentDir()) {
+  const { agentAvailability, sessionAvailability } = await loadConfig(configPath(agentDir));
   const AgentParameters = createAgentParameters();
   const SessionParameters = createSessionParameters();
 
@@ -246,17 +277,22 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
   };
 
   pi.on("session_start", () => {
+    const deferredTools = [
+      ...(agentAvailability === "deferred" ? ["spawn_agent"] : []),
+      ...(sessionAvailability === "deferred" ? ["spawn_session"] : []),
+    ];
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-spawn",
       managedTools: SPAWN_TOOLS,
       enabledTools: SPAWN_TOOLS,
-      deferredTools: SPAWN_TOOLS,
-      deferredToolUsage: {
-        spawn_agent: "create or continue private customized subagent conversations",
-        spawn_session: "create, adopt, or continue inspectable Pi sessions",
-      },
+      ...(deferredTools.length ? {
+        deferredTools,
+        deferredToolUsage: Object.fromEntries(deferredTools.map((tool) => [tool, tool === "spawn_agent"
+          ? "create or continue private customized subagent conversations"
+          : "create, adopt, or continue inspectable Pi sessions"])),
+      } : {}),
     });
   });
   pi.on("session_shutdown", () => {
@@ -266,7 +302,8 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
   const agentTool = defineTool({
     name: "spawn_agent",
     label: "Spawn Agent",
-    description: "Create, continue, or list private persistent subagent threads owned by the current parent-session branch. Use for specialized, resumable delegated conversations whose transcript should remain private. Creation may fix a custom model, system prompt, tool allowlist, and specialist-tool policy. Creation policy is immutable; continue an existing agent by ID when follow-up context matters. Threads never appear in Pi's normal session list.",
+    description: "Create, continue, or list private persistent subagent threads owned by the current parent-session branch. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups and use list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
+    ...(agentAvailability === "active" ? { promptGuidelines: AGENT_PROMPT_GUIDELINES } : {}),
     parameters: AgentParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("agent", params);
@@ -306,7 +343,8 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
   const sessionTool = defineTool({
     name: "spawn_session",
     label: "Spawn Session",
-    description: "Create, adopt, continue, or list ordinary Pi sessions when the child conversation should be inspectable or openable. Creation may fix a custom model; otherwise it inherits the current model. Adopt only when the user explicitly asks to resume an existing project session; it resolves an exact current-project session ID and must never target the active parent or a session open in another Pi process. Sessions use the normal project runtime and appear in Pi/Pylon's standard session list. For customized private runtimes, use spawn_agent instead; this tool cannot replace system prompts or disable tools and extensions.",
+    description: "Create, adopt, continue, or list ordinary Pi sessions when the child must be inspectable or openable separately. Use create with a self-contained kickoff and purpose-based name, continue the returned ID for follow-ups, and list only to recover sessions available from the current parent branch. Set project only when the user explicitly requests another project; relative paths resolve from the current project. Adopt only on the user's explicit request with an exact session ID from the current or selected project; adoption claims and immediately prompts that transcript while preserving its model and metadata. Never prompt or adopt a session open in another Pi process. Sessions use the selected project's normal runtime and cannot customize system instructions, thinking, tools, or extensions; use spawn_agent for a private customized runtime.",
+    ...(sessionAvailability === "active" ? { promptGuidelines: SESSION_PROMPT_GUIDELINES } : {}),
     parameters: SessionParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("session", params);
@@ -316,35 +354,43 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
       const parent = requireParent(ctx.sessionManager);
       const allowed = branchSpawnIds(ctx.sessionManager, "session");
       if (params.action === "list") {
-        const entries = await listSpawnedSessions(ctx.cwd, parent, allowed);
+        const entries = await listSpawnedSessions(parent, allowed);
         const threads = entries.map(({ info }) => threadInfo("session", info));
         return { content: [{ type: "text" as const, text: threads.length ? threads.map((item) => `${item.id} ${item.name ?? "Session"} (${item.messageCount} messages)`).join("\n") : "No spawned sessions on this parent branch." }], details: { threads } };
       }
       if (params.action === "create") {
         if (Number(process.env.PI_SPAWN_DEPTH ?? 0) >= MAX_DEPTH)
           return { content: [{ type: "text" as const, text: `pi-spawn depth limit (${MAX_DEPTH}) reached.` }], details: { failureCode: "depth_limit" } };
-        const created = createSpawnedSession(ctx.cwd, parent, params.name?.trim() || defaultName(params.prompt!), {
+        let cwd: string;
+        try { cwd = projectCwd(ctx.cwd, params.project); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { content: [{ type: "text" as const, text: message }], details: { failureCode: "invalid_project" } };
+        }
+        const created = createSpawnedSession(cwd, parent, params.name?.trim() || defaultName(params.prompt!), {
           model: params.model ?? currentModel(ctx),
           hooks: requestSpawnHooks(pi),
         });
-        return executeTurn("session", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate);
+        return executeTurn("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, signal, onUpdate);
       }
       if (params.action === "adopt") {
         try {
-          const existing = await findSessionForAdoption(ctx.cwd, params.id!, parent);
+          const cwd = projectCwd(ctx.cwd, params.project);
+          const existing = await findSessionForAdoption(cwd, params.id!, parent);
           const hooks = requestSpawnHooks(pi);
-          return executeTurn("session", existing.id, existing.path, ctx.cwd, params.prompt!, undefined, signal, onUpdate, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
+          return executeTurn("session", existing.id, existing.path, cwd, params.prompt!, undefined, signal, onUpdate, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          return { content: [{ type: "text" as const, text: message }], details: { failureCode: error instanceof SessionAdoptionError ? error.code : "adopt_error" } };
+          return { content: [{ type: "text" as const, text: message }], details: { failureCode: error instanceof SessionAdoptionError ? error.code : error instanceof ProjectDirectoryError ? "invalid_project" : "adopt_error" } };
         }
       }
-      const matches = await listSpawnedSessions(ctx.cwd, parent, allowed);
-      const selected = matches.find(({ info }) => info.id === params.id);
-      if (!selected) return { content: [{ type: "text" as const, text: "Spawned session is unavailable from this parent branch." }], details: { failureCode: "not_found" } };
-      const policy = sessionPolicy(selected.manager, parent);
-      if (!policy) return { content: [{ type: "text" as const, text: "Spawned session policy is invalid." }], details: { ...resultDetails("session", selected.info.id), failureCode: "invalid_policy" } };
-      return executeTurn("session", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate);
+      const matches = await listSpawnedSessions(parent, allowed);
+      const selected = matches.filter(({ info }) => info.id === params.id);
+      if (selected.length !== 1) return { content: [{ type: "text" as const, text: selected.length ? "Spawned session ID is ambiguous." : "Spawned session is unavailable from this parent branch." }], details: { failureCode: selected.length ? "invalid" : "not_found" } };
+      const [{ info, manager }] = selected;
+      const policy = sessionPolicy(manager, parent);
+      if (!policy) return { content: [{ type: "text" as const, text: "Spawned session policy is invalid." }], details: { ...resultDetails("session", info.id), failureCode: "invalid_policy" } };
+      return executeTurn("session", info.id, info.path, info.cwd, params.prompt!, policy, signal, onUpdate);
     },
   });
   pi.registerTool(sessionTool);

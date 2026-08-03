@@ -141,7 +141,10 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && (value.rolloverHighMultiplier as number) > (value.rolloverLowMultiplier as number);
   }
   if (value.kind === "helios") return typeof value.headed === "boolean";
-  return value.kind === "timeline" && typeof value.editRollbackDefault === "boolean";
+  if (value.kind === "timeline") return typeof value.editRollbackDefault === "boolean";
+  return value.kind === "spawn"
+    && (value.agentAvailability === "deferred" || value.agentAvailability === "active")
+    && (value.sessionAvailability === "deferred" || value.sessionAvailability === "active");
 }
 
 export function validateCommand(value: unknown): ValidationResult<WebCommand> {

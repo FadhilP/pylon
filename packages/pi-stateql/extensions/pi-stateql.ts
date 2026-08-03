@@ -403,7 +403,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   pi.registerTool({
     name: "stateql",
     label: "StateQL",
-    description: "Safely connect to SQLite, PostgreSQL, or MySQL; run bounded reads; reuse durable result handles; inspect schemas and StateQL storage health; plan or confirm writes; manage transactions; and inspect receipts/history. Cross-session lifecycle, purge, and arbitrary export commands are unavailable. Output is capped at 40 KB.",
+    description: "Perform user-requested SQLite, PostgreSQL, or MySQL work. Prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT; reuse durable result handles instead of rerunning queries. For PostgreSQL/MySQL, never put passwords in target: use Pylon's masked prompt or secret_env for a complete source already stored in an environment variable. Never weaken TLS verification or set replay, unbounded, or destructive overrides without explicit user authorization. Plan consequential writes when practical; use doctor for storage-integrity failures. Supports schemas, confirmed writes, transactions, receipts, and history; cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",

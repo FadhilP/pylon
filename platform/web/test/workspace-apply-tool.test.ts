@@ -55,6 +55,9 @@ function loadTool(bridge: WorkspaceApplyTool) {
 test("workspace apply tool policy fails closed without coordination and unregisters", () => {
   const runtime = loadTool(new WorkspaceApplyTool());
   runtime.emit("session_start");
+  assert.match(runtime.registered.description, /only when the user explicitly asks/);
+  assert.match(runtime.registered.description, /final workspace-mutating tool call/);
+  assert.match(runtime.registered.description, /do not modify workspace files afterward/);
   assert.deepEqual(runtime.policies[0], {
     version: 1,
     kind: "register",

@@ -351,7 +351,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
   pi.registerTool({
     name: "helios_capture",
     label: "Helios Capture",
-    description: "Capture one named Windows window after visible user confirmation, then attach it for visual debugging. Never captures whole desktop, runs in background, or controls input.",
+    description: "Capture one named Windows window for visual debugging only when the user asks to inspect it. Every capture requires fresh visible confirmation. Never use for monitoring; it cannot capture the whole desktop, run in the background, or control input.",
     promptSnippet: "Capture one consented Windows window for visual debugging",
     promptGuidelines: [
       "Use helios_capture only when user asks to inspect a named Windows window.",
@@ -384,7 +384,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
   pi.registerTool({
     name: "helios_browser",
     label: "Helios Browser",
-    description: "Use one owned browser session with an isolated profile, or one consented attached browser session, for constrained navigation, targeted snapshot search, bounded/continued page snapshots, element-reference interaction, screenshots, and tabs. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
+    description: "Use one owned isolated or consented attached browser only for user-requested browser work: start or attach first, then close or detach when done; never monitor, and require user supervision for purchases, messages, publishing, destructive actions, and other consequential clicks. Act through returned element refs rather than guessed selectors, reuse adequate snapshots, and use continuation cursors for truncated output because each chunk replaces prior usable refs. Batch only predetermined non-consequential actions with known refs. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
     promptSnippet: "Use one owned browser with an isolated profile or one consented attached browser through constrained Playwright actions",
     promptGuidelines: [
       "Use only for user-requested browser work; start or attach first, then close or detach when done. Never monitor. User must supervise purchases, messages, publishing, destructive actions, and other consequential clicks.",

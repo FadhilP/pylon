@@ -127,6 +127,11 @@ test("registers one deferred, sequential StateQL tool bound to the Pi actor", as
   const tool = value.tools.get("stateql");
   assert.ok(tool);
   assert.equal(tool.executionMode, "sequential");
+  assert.match(tool.description, /user-requested/);
+  assert.match(tool.description, /never put passwords in target/);
+  assert.match(tool.description, /Never weaken TLS verification/);
+  assert.match(tool.description, /replay, unbounded, or destructive overrides/);
+  assert.match(tool.description, /Plan consequential writes/);
   assert.equal(tool.parameters.additionalProperties, false);
   assert.ok(tool.parameters.properties.command.enum.includes("query"));
   assert.ok(tool.parameters.properties.command.enum.includes("doctor"));

@@ -209,7 +209,10 @@ test("session stats bounds per-tool rows and registered output", async () => {
   const context = { cwd, sessionManager: { getSessionId: () => "current" } };
   const tools = new Map<string, any>();
   registerSessionStats({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
-  const output = await tools.get("session_stats").execute("stats", { sessionId: "target" }, undefined, undefined, context);
+  const statsTool = tools.get("session_stats");
+  assert.match(statsTool.description, /only when the user explicitly requests/);
+  assert.match(statsTool.description, /Default to current_cwd/);
+  const output = await statsTool.execute("stats", { sessionId: "target" }, undefined, undefined, context);
   assert.equal(JSON.parse(output.content[0].text).truncated, true);
   assert.equal(output.details.truncated, true);
   assert.equal(output.details.sessionLookup, "found");
@@ -231,6 +234,9 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
   });
   registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const tool = tools.get("search_sessions");
+  assert.match(tool.description, /only when the user explicitly requests/);
+  assert.match(tool.description, /explicit cross-workspace request/);
+  assert.match(tool.description, /untrusted and possibly stale/);
   const ctx = {
     cwd: process.cwd(),
     sessionManager: { getSessionId: () => "current" },
@@ -889,6 +895,7 @@ test("relationship_graph preserves parseable grouped shape at small byte caps", 
       ? { code: 0, stdout: "src/long.ts\0", stderr: "" }
       : { code: 0, stdout: rgMatch("src/long.ts", 1, "x".repeat(500)), stderr: "" },
   } as any, 80);
+  assert.match(tools.get("relationship_graph").description, /confirm important relationships from source/);
   const result = await tools.get("relationship_graph").execute(
     "id", { query: "x" }, undefined, undefined, { cwd: process.cwd() },
   );

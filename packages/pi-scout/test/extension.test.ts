@@ -342,7 +342,11 @@ test("Scout registers separate repo and web tools", async () => {
     assert.match(taskDescription, /Evidence-only repository search, mapping, or tracing task/i);
     assert.match(taskDescription, /exclude design, recommendation, prioritization, and architecture-choice requests/i);
     assert.match(retryDescription, /not a decision or recommendation request/i);
-    assert.match(runtime.tools.get("web_scout").description, /fresh temporary Helios browser/);
+    const webDescription = runtime.tools.get("web_scout").description;
+    assert.match(webDescription, /fresh temporary Helios browser/);
+    assert.match(webDescription, /only when the user requests it/);
+    assert.match(webDescription, /Never use for login, accounts, purchases/);
+    assert.match(webDescription, /main model to evaluate/);
   } finally { runtime.restore(); }
 });
 

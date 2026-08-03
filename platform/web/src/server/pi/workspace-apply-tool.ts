@@ -53,7 +53,7 @@ export class WorkspaceApplyTool {
       pi.registerTool({
         name: "apply_session_changes",
         label: "Apply session changes",
-        description: "Request applying this session's changes to the registered project's current branch. Use only when the user explicitly asks. Requires confirmation and runs after the current turn settles.",
+        description: "Request applying this session's changes to the registered project's current branch only when the user explicitly asks. Requires confirmation and runs after the current turn settles. Make this the final workspace-mutating tool call of the turn and do not modify workspace files afterward.",
         promptSnippet: "Apply this session's changes to the original project branch after approval",
         promptGuidelines: [
           "Call apply_session_changes only after the user explicitly requests applying this session to their original project branch. Make it the final workspace-mutating tool call of the turn.",

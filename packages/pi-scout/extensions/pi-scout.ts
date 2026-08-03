@@ -531,7 +531,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
   pi.registerTool({
     name: "web_scout",
     label: "Web Scout",
-    description: "Isolated public-web research using a fresh temporary Helios browser and a separate Scout model. Public HTTP(S) only; blocks private/reserved networks and exposes no user browser state. Returns bounded URL-cited evidence.",
+    description: "Research current browser-rendered public HTTP(S) pages only when the user requests it, using a fresh temporary Helios browser and separate Scout model without per-call confirmation. Give a concrete evidence task and useful starting URLs when known. Private/reserved networks and user browser state are unavailable. Never use for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, or monitoring. Returns bounded URL-cited evidence for the main model to evaluate and use in any consequential decision.",
     promptSnippet: "Research public web pages in a fresh isolated browser and return bounded URL-cited evidence",
     promptGuidelines: [
       "Use web_scout only when user asks for current public-web research needing browser-rendered pages. It launches a fresh isolated browser without per-call confirmation. Give a concrete research task and useful starting URLs when known. Keep evaluation and consequential decisions in main model. Never use web_scout for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, private networks, or monitoring.",

@@ -133,7 +133,7 @@ export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_M
   pi.registerTool({
     name: "relationship_graph",
     label: "Relationship map",
-    description: "Build a bounded grouped heuristic map of files and source locations mentioning a function, type, variable, command, or token. Roles are candidates, not semantic resolution.",
+    description: "Build a bounded grouped heuristic map of files and source locations mentioning a function, type, variable, command, or token. Roles are candidates, not semantic resolution; confirm important relationships from source before relying on them.",
     promptSnippet: "Map a query token to grouped file and source-location relationships",
     promptGuidelines: ["Use relationship_graph to orient around a known symbol or token. Treat roles as heuristics; confirm important relationships from source."],
     parameters: Type.Object({

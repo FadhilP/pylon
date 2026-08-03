@@ -101,8 +101,9 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]
-      .forEach((extension) => extension(pi));
+    for (const extension of [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]) {
+      await extension(pi);
+    }
 
     assert.deepEqual([...commands.keys()].sort(), [
       "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",

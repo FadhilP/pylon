@@ -14,7 +14,7 @@ function persist(manager: SessionManager): void {
   });
 }
 
-test("web session index includes standard spawned sessions but not private agents", async () => {
+test("web session index attributes only pi-spawn marked sessions to their owner", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-spawn-index-"));
   const cwd = join(root, "repo");
   const otherCwd = join(root, "other-repo");
@@ -27,9 +27,27 @@ test("web session index includes standard spawned sessions but not private agent
     persist(parentManager);
     const parent = { id: parentManager.getSessionId(), file: parentManager.getSessionFile()! };
     parentManager.appendSessionInfo("Parent work");
-    const standard = SessionManager.create(cwd, undefined, { parentSession: parent.file });
-    standard.appendSessionInfo("Visible child");
-    persist(standard);
+    const ordinary = SessionManager.create(cwd, undefined, { parentSession: parent.file });
+    ordinary.appendSessionInfo("Ordinary child");
+    persist(ordinary);
+    const spawned = SessionManager.create(cwd, undefined, { parentSession: parent.file });
+    spawned.appendCustomEntry("pi-spawn-session", {
+      version: 1, ownerSessionId: parent.id, ownerSessionFile: parent.file, createdAt: new Date().toISOString(),
+    });
+    spawned.appendSessionInfo("Visible child");
+    persist(spawned);
+    const adopted = SessionManager.create(cwd);
+    adopted.appendCustomEntry("pi-spawn-session", {
+      version: 1, ownerSessionId: parent.id, ownerSessionFile: parent.file, createdAt: new Date().toISOString(),
+    });
+    adopted.appendSessionInfo("Adopted child");
+    persist(adopted);
+    const malformed = SessionManager.create(cwd);
+    malformed.appendCustomEntry("pi-spawn-session", {
+      version: 1, ownerSessionId: parent.id, ownerSessionFile: parent.file, model: "", createdAt: new Date().toISOString(),
+    });
+    malformed.appendSessionInfo("Malformed child");
+    persist(malformed);
     const privateAgent = SessionManager.create(cwd, join(agentDir, "pi-spawn", "agents", encodeURIComponent(parent.id)), { parentSession: parent.file });
     privateAgent.appendSessionInfo("Private child");
     persist(privateAgent);
@@ -37,19 +55,36 @@ test("web session index includes standard spawned sessions but not private agent
     foreignParent.appendSessionInfo("Other parent");
     persist(foreignParent);
     const crossProjectChild = SessionManager.create(cwd, undefined, { parentSession: foreignParent.getSessionFile()! });
+    crossProjectChild.appendCustomEntry("pi-spawn-session", {
+      version: 1,
+      ownerSessionId: foreignParent.getSessionId(),
+      ownerSessionFile: foreignParent.getSessionFile()!,
+      createdAt: new Date().toISOString(),
+    });
     crossProjectChild.appendSessionInfo("Cross-project child");
     persist(crossProjectChild);
 
-    const snapshot = await new SessionIndex().list({}, {
+    const index = new SessionIndex();
+    const list = () => index.list({}, {
       activeId: parent.id,
       generation: 1,
-      stateFor: () => "sleeping",
+      stateFor: () => "sleeping" as const,
     });
+    const snapshot = await list();
     const sessions = snapshot.projects.flatMap((project) => project.sessions);
-    const child = sessions.find((session) => session.id === standard.getSessionId());
-    assert.deepEqual(child?.parentSession, { id: parent.id, title: "Parent work" });
+    assert.equal(sessions.find((session) => session.id === ordinary.getSessionId())?.parentSession, undefined);
+    assert.deepEqual(sessions.find((session) => session.id === spawned.getSessionId())?.parentSession, { id: parent.id, title: "Parent work" });
+    assert.deepEqual(sessions.find((session) => session.id === adopted.getSessionId())?.parentSession, { id: parent.id, title: "Parent work" });
+    assert.equal(sessions.find((session) => session.id === malformed.getSessionId())?.parentSession, undefined);
     assert.equal(sessions.find((session) => session.id === crossProjectChild.getSessionId())?.parentSession, undefined);
     assert.ok(!sessions.some((session) => session.id === privateAgent.getSessionId()));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    ordinary.appendCustomEntry("pi-spawn-session", {
+      version: 1, ownerSessionId: parent.id, ownerSessionFile: parent.file, createdAt: new Date().toISOString(),
+    });
+    const updated = (await list()).projects.flatMap((project) => project.sessions);
+    assert.deepEqual(updated.find((session) => session.id === ordinary.getSessionId())?.parentSession, { id: parent.id, title: "Parent work" });
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

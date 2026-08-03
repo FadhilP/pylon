@@ -135,7 +135,7 @@ export async function findSessionForAdoption(
   parent: { id: string; file: string },
 ): Promise<SessionInfo> {
   const matches = (await SessionManager.list(cwd)).filter((session) => session.id === id);
-  if (matches.length === 0) throw new SessionAdoptionError("not_found", "Existing session was not found in the current project.");
+  if (matches.length === 0) throw new SessionAdoptionError("not_found", "Existing session was not found in the selected project.");
   if (matches.length > 1) throw new SessionAdoptionError("invalid", "Existing session ID is ambiguous.");
   const info = matches[0];
   if (info.id === parent.id || canonical(info.path) === canonical(parent.file))
@@ -271,11 +271,10 @@ export async function listPrivateAgents(
 }
 
 export async function listSpawnedSessions(
-  cwd: string,
   parent: { id: string; file: string },
   allowedIds: Set<string>,
 ) {
-  return authorized(await SessionManager.list(cwd), allowedIds, parent, SESSION_MARKER);
+  return authorized(await SessionManager.listAll(), allowedIds, parent, SESSION_MARKER);
 }
 
 export function agentPolicy(manager: SessionManager, parent: { id: string; file: string }): AgentPolicy | undefined {

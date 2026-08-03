@@ -436,8 +436,16 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       </>}
     </div>;
   }
-  if (settings.kind === "timeline") {
-    return null;
+  if (settings.kind === "timeline") return null;
+  if (settings.kind === "spawn") {
+    return <div className="package-fields">
+      <label>spawn_agent for new sessions<select value={settings.agentAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, agentAvailability: event.target.value as typeof settings.agentAvailability })}>
+        <option value="deferred">Deferred (recommended)</option><option value="active">Always active</option>
+      </select></label>
+      <label>spawn_session for new sessions<select value={settings.sessionAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, sessionAvailability: event.target.value as typeof settings.sessionAvailability })}>
+        <option value="deferred">Deferred (recommended)</option><option value="active">Always active</option>
+      </select></label>
+    </div>;
   }
   if (settings.kind !== "helios") return null;
   return <div className="package-fields">

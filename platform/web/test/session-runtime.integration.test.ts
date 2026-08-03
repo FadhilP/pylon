@@ -508,7 +508,13 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.equal(first.operational.continuity.availability, "available");
     assert.equal(first.operational.timeline.availability, "available");
     assert.ok(first.operational.tools.policies.length > 0);
-    assert.ok((await driver.listPackages()).packages.some((item) => item.id === "pi-timeline" && item.active));
+    const initialPackages = await driver.listPackages();
+    assert.ok(initialPackages.packages.some((item) => item.id === "pi-timeline" && item.active));
+    assert.deepEqual(initialPackages.packages.find((item) => item.id === "pi-spawn")?.settings, {
+      kind: "spawn",
+      agentAvailability: "deferred",
+      sessionAvailability: "deferred",
+    });
 
     const initialActiveTools = first.activeTools;
     const initialHooks = (await driver.listHookSettings()).settings;
@@ -536,7 +542,17 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       { ...sieve, threshold },
     );
 
+    const spawnConfigured = await driver.updatePackageSettings({
+      packageId: "pi-spawn",
+      settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred" },
+    });
+    assert.deepEqual(
+      (await driver.listPackages()).packages.find((item) => item.id === "pi-spawn")?.settings,
+      { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred" },
+    );
+
     const generation = configured.sessionGeneration;
+    assert.equal(spawnConfigured.sessionGeneration, generation);
     for (const [packageId, settings] of [
       ["pi-advisor", { kind: "advisor", mode: "session" }],
       ["pi-scout", { kind: "scout", mode: "session" }],
@@ -580,8 +596,15 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     const next = new SessionRuntime();
     try {
       await next.start({ cwd, agentDir, repositoryRoot, inMemory: true });
-      assert.equal((await next.snapshot()).operational.timeline.availability, "unavailable");
-      assert.ok((await next.listPackages()).packages.some((item) => item.id === "pi-timeline" && !item.enabled && !item.active));
+      const nextSnapshot = await next.snapshot();
+      assert.equal(nextSnapshot.operational.timeline.availability, "unavailable");
+      const nextPackages = await next.listPackages();
+      assert.ok(nextPackages.packages.some((item) => item.id === "pi-timeline" && !item.enabled && !item.active));
+      assert.deepEqual(nextPackages.packages.find((item) => item.id === "pi-spawn")?.settings, {
+        kind: "spawn",
+        agentAvailability: "active",
+        sessionAvailability: "deferred",
+      });
       assert.deepEqual((next as any).hookInjection.settings, futureHooks);
     } finally {
       await next.dispose();

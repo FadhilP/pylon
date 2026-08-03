@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
@@ -7,7 +8,35 @@ import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
 
 const REFRESH_MS = 60_000;
+const SPAWN_SESSION_MARKER = "pi-spawn-session";
 const canonicalPath = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+
+type SpawnOwner = { id: string; file: string };
+
+const boundedText = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max;
+const validHooks = (value: any) => value !== undefined && value !== null
+  && typeof value === "object" && !Array.isArray(value)
+  && (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024))
+  && (value.sessionStart === undefined || boundedText(value.sessionStart?.customType, 128)
+    && boundedText(value.sessionStart?.content, 300 * 1024));
+
+function markerOwner(value: any): SpawnOwner | undefined {
+  if (value?.version !== 1
+    || !boundedText(value.ownerSessionId, 128)
+    || !boundedText(value.ownerSessionFile, 32_768)
+    || typeof value.createdAt !== "string" || Number.isNaN(Date.parse(value.createdAt))
+    || value.model !== undefined && !boundedText(value.model, 300)
+    || value.hooks !== undefined && !validHooks(value.hooks)) return;
+  return { id: value.ownerSessionId, file: value.ownerSessionFile };
+}
+
+function readSpawnOwner(manager: SessionManager): SpawnOwner | undefined {
+  const owners = manager.getEntries().flatMap((entry) =>
+    entry.type === "custom" && entry.customType === SPAWN_SESSION_MARKER ? [markerOwner(entry.data)] : []);
+  const owner = owners[0];
+  return owner && owners.every((candidate) => candidate?.id === owner.id
+    && canonicalPath(candidate.file) === canonicalPath(owner.file)) ? owner : undefined;
+}
 
 export { projectIdForCwd } from "./project-registry.ts";
 
@@ -39,6 +68,7 @@ export interface SessionIndexOptions {
 export class SessionIndex {
   private sessions: SessionInfo[] = [];
   private userCounts = new Map<string, number>();
+  private spawnOwners = new Map<string, { mtimeMs: number; owner?: SpawnOwner }>();
   private scannedAt = 0;
   private scan?: Promise<void>;
 
@@ -61,6 +91,7 @@ export class SessionIndex {
   remove(sessionId: string): void {
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
     this.userCounts.delete(sessionId);
+    this.spawnOwners.delete(sessionId);
   }
 
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
@@ -187,22 +218,25 @@ export class SessionIndex {
   }
 
   private summary(session: SessionInfo, options: SessionIndexOptions): SessionSummary {
+    let manager: SessionManager | undefined;
+    const open = () => manager ??= SessionManager.open(session.path);
     let userMessageCount = options.userCountFor?.(session.id) ?? this.userCounts.get(session.id);
     if (userMessageCount === undefined) {
       try {
-        userMessageCount = SessionManager.open(session.path).getEntries()
+        userMessageCount = open().getEntries()
           .filter((entry) => entry.type === "message" && entry.message.role === "user").length;
       } catch {
         userMessageCount = 0;
       }
       this.userCounts.set(session.id, userMessageCount);
     }
+    const owner = this.spawnOwnerFor(session, open);
     const project = this.registry?.projectForSession(session.id, session.cwd);
     const workStartedAt = options.workStartedAtFor?.(session.id);
-    const parent = session.parentSessionPath
-      ? this.sessions.find((candidate) => candidate.id !== session.id
+    const parent = owner
+      ? this.sessions.find((candidate) => candidate.id === owner.id
         && canonicalPath(candidate.cwd) === canonicalPath(session.cwd)
-        && canonicalPath(candidate.path) === canonicalPath(session.parentSessionPath!))
+        && canonicalPath(candidate.path) === canonicalPath(owner.file))
       : undefined;
     const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
     return {
@@ -220,6 +254,19 @@ export class SessionIndex {
       pinned: options.pinnedFor?.(session.id) ?? false,
       runtimeState: options.stateFor(session.id),
     };
+  }
+
+  private spawnOwnerFor(session: SessionInfo, open: () => SessionManager): SpawnOwner | undefined {
+    try {
+      const mtimeMs = statSync(session.path).mtimeMs;
+      const cached = this.spawnOwners.get(session.id);
+      if (cached?.mtimeMs === mtimeMs) return cached.owner;
+      const owner = readSpawnOwner(open());
+      this.spawnOwners.set(session.id, { mtimeMs, ...(owner ? { owner } : {}) });
+      return owner;
+    } catch {
+      return undefined;
+    }
   }
 
   private projectLabels(sessions: SessionInfo[]): Map<string, string> {

@@ -388,6 +388,11 @@ export type PackageSettingsReadModel =
   | {
       kind: "timeline";
       editRollbackDefault: boolean;
+    }
+  | {
+      kind: "spawn";
+      agentAvailability: "deferred" | "active";
+      sessionAvailability: "deferred" | "active";
     };
 
 export interface PackageModelProfileReadModel {
