@@ -51,7 +51,7 @@ export function initialOperational(availableTools: Iterable<string>, loadedExten
     verification: { availability: tools.has("verify") ? "available" : "unavailable", checks: [] },
     jobs: { availability: tools.has("heartbeat_start") ? "available" : "unavailable", items: [] },
     guard: { availability: loaded.has("pi-guard.ts") ? "available" : "unavailable", blocked: 0, confirmed: 0 },
-    continuity: { availability: "unavailable", revision: 0, memory: [] },
+    continuity: { availability: "unavailable", revision: 0, memory: [], globalMemory: [] },
     timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
     tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
     sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
@@ -83,6 +83,10 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
     continuity: {
       ...value.continuity,
       memory: value.continuity.memory.map((fact) => ({
+        ...fact,
+        evidencePaths: fact.evidencePaths?.map((item) => ({ ...item })),
+      })),
+      globalMemory: value.continuity.globalMemory.map((fact) => ({
         ...fact,
         evidencePaths: fact.evidencePaths?.map((item) => ({ ...item })),
       })),
@@ -341,10 +345,10 @@ function guard(old: GuardReadModel, value: unknown): GuardReadModel {
 
 function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?: string): ContinuityReadModel {
   const input = record(value);
-  if (!input || input.version !== 2 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 2 ? old : { availability: "unavailable", revision: old.revision, memory: old.memory };
-  if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, memory: [] };
+  if (!input || input.version !== 3 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 3 ? old : { availability: "unavailable", revision: old.revision, memory: old.memory, globalMemory: old.globalMemory };
+  if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, memory: [], globalMemory: [] };
   const kinds = new Set(["workflow", "structure", "architecture", "warning", "preference"]);
-  const memory = Array.isArray(input.memory) ? input.memory.slice(0, 30).flatMap((value) => {
+  const parseMemory = (value: unknown) => Array.isArray(value) ? value.slice(0, 30).flatMap((value) => {
     const fact = record(value);
     const key = string(fact?.key, 200);
     const text = string(fact?.text, 1_000);
@@ -370,15 +374,16 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
       ...(evidencePaths?.length ? { evidencePaths } : {}),
     }];
   }) : [];
+  const memory = parseMemory(input.memory), globalMemory = parseMemory(input.globalMemory);
   const work = record(input.work);
-  if (!work) return { availability: "available", revision: input.revision as number, memory };
-  if (!workModes.has(String(work.mode)) || typeof work.goal !== "string" || typeof work.approved !== "boolean" || typeof work.planSummary !== "string" || !Array.isArray(work.todos)) return { availability: "unavailable", revision: input.revision as number, memory };
+  if (!work) return { availability: "available", revision: input.revision as number, memory, globalMemory };
+  if (!workModes.has(String(work.mode)) || typeof work.goal !== "string" || typeof work.approved !== "boolean" || typeof work.planSummary !== "string" || !Array.isArray(work.todos)) return { availability: "unavailable", revision: input.revision as number, memory, globalMemory };
   const todos = work.todos.slice(0, 12).flatMap((value) => {
     const item = record(value); const id = identifier(item?.id); const text = string(item?.text, 500);
     if (!item || !id || !text || !todoStates.has(String(item.status)) || typeof item.updatedAt !== "string") return [];
     return [{ id, text, status: item.status as "pending" | "in_progress" | "done" | "blocked", updatedAt: item.updatedAt.slice(0, 64) }];
   });
-  return { availability: "available", revision: input.revision as number, memory, work: {
+  return { availability: "available", revision: input.revision as number, memory, globalMemory, work: {
     mode: work.mode as NonNullable<ContinuityReadModel["work"]>["mode"], goal: work.goal.slice(0, 2_000), approved: work.approved, planSummary: work.planSummary.slice(0, 4_000), todos,
     ...(identifier(work.currentTodoId) ? { currentTodoId: identifier(work.currentTodoId) } : {}), ...(string(work.latestFailure, 1_000) ? { latestFailure: string(work.latestFailure, 1_000) } : {}), ...(string(work.nextAction, 1_000) ? { nextAction: string(work.nextAction, 1_000) } : {}), ...(identifier(work.runId) ? { runId: identifier(work.runId) } : {}),
     createdAt: string(work.createdAt, 64) ?? "", updatedAt: string(work.updatedAt, 64) ?? "", ...(string(work.completedAt, 64) ? { completedAt: string(work.completedAt, 64) } : {}),

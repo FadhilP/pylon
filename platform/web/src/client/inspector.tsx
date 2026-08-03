@@ -413,6 +413,7 @@ function PolicySelectField({ label, description, value, inheritedLabel, disabled
 
 function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   const memory = live.runtime?.operational.continuity.memory ?? [];
+  const globalMemory = live.runtime?.operational.continuity.globalMemory ?? [];
   const [editing, setEditing] = useState("");
   const [text, setText] = useState("");
   const [kind, setKind] = useState<(typeof memory)[number]["kind"]>("workflow");
@@ -457,7 +458,22 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   };
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
   return <div className="memory-page">
-    <InspectorSection title="Saved Facts" meta={`${memory.length} project facts`} className="memory-panel">
+    <InspectorSection title="Global Facts" meta={`${globalMemory.length} user facts`} className="memory-panel">
+      {globalMemory.map((fact) => <article className="memory-fact" key={fact.key}>
+        <header>
+          <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
+          <time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time>
+        </header>
+        <p>{fact.text}</p>
+        <dl>
+          <div><dt>Confidence</dt><dd>{Math.round(fact.confidence * 100)}%</dd></div>
+          <div><dt>Source</dt><dd>{fact.source}</dd></div>
+        </dl>
+      </article>)}
+      {globalMemory.length === 0 && <div className="empty-state"><IconThinkingMedium size={20} /><strong>No global memory</strong><span>Continuity has not saved durable user facts.</span></div>}
+      <p className="settings-note">Global facts apply across projects and are read-only here.</p>
+    </InspectorSection>
+    <InspectorSection title="Project Facts" meta={`${memory.length} project facts`} className="memory-panel">
       {memory.map((fact) => <article className="memory-fact" key={fact.key}>
         <header>
           <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
@@ -706,7 +722,7 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
         <div><small>Input + output</small><strong className="mono">{formatCompactNumber(inputOutputTokens)}</strong></div>
         <div className="session-token-stack" aria-label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`}><span className="input" style={{ width: `${inputPercent}%` }} /><span className="output" style={{ width: `${100 - inputPercent}%` }} /></div>
         <div className="session-token-key"><span><strong>Input</strong> {formatCompactNumber(inputTokens)}</span><span><strong>Output</strong> {formatCompactNumber(outputTokens)}</span></div>
-        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache read hit: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache read hit</strong> {cacheHitRate}</span></div>
+        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache input</strong> {cacheHitRate}</span></div>
       </div>
     </div>
     <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Estimated from serialized tool arguments and text results">Tokens / calls</span></div>

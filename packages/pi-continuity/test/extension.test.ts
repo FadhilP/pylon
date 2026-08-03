@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -131,6 +131,69 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(memoryGuidance, /Never save .*secrets/i);
   assert.match(memoryGuidance, /user scope for cross-project preferences and project scope otherwise/i);
   assert.ok(memoryGuidance.length < 700);
+});
+
+test("session recall tool is sequential, read-only, and handles ephemeral state without side effects", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-recall-extension-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  let persisted = false;
+  let getEntriesCalls = 0;
+  const visible = [{
+    id: "visible",
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    type: "message",
+    message: { role: "user", content: "Visible evidence", timestamp: Date.now() },
+  }];
+  const ctx: any = {
+    cwd,
+    hasUI: false,
+    mode: "json",
+    sessionManager: {
+      getSessionId: () => "recall-session",
+      getSessionFile: () => persisted ? join(root, "session.jsonl") : undefined,
+      getEntries: () => { getEntriesCalls++; return visible; },
+      getBranch: () => visible,
+      buildContextEntries: () => visible,
+    },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    const recall = app.tools.get("continuity_recall");
+    assert.equal(recall.executionMode, "sequential");
+    assert.match(recall.description, /historical evidence/i);
+    assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*text.*files.*touched/);
+    for (const handler of app.handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, ctx);
+    await app.tools.get("continuity_update").execute(
+      "plan",
+      { action: "set_plan", goal: "Recall", todos: ["Recall history"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    const ephemeral = await recall.execute("recall", {}, undefined, undefined, ctx);
+    assert.match(ephemeral.content[0].text, /ephemeral.*no persisted history/i);
+
+    persisted = true;
+    const callsBefore = getEntriesCalls;
+    const appendedBefore = app.appended.length;
+    const messagesBefore = app.customMessages.length;
+    const downgraded = await recall.execute("recall", { scope: "all" }, undefined, undefined, ctx);
+    assert.match(downgraded.content[0].text, /effective scope: visible/);
+    assert.equal(getEntriesCalls, callsBefore, "all entries must not be read before boundary proof");
+    assert.equal(app.appended.length, appendedBefore);
+    assert.equal(app.customMessages.length, messagesBefore);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("state rejects todo fields before mutation or circuit breaking", async () => {
@@ -531,6 +594,20 @@ test("memory list is owner-safe, settles candidates, and status uses durable fac
     await app.commands.get("memory").handler("status", first);
     assert.match(notifications.at(-1)!, /4 current-owner stored facts, 3 visible/);
     assert.match(notifications.at(-1)!, /0 current-owner pending candidates .*normally compacted at settlement/);
+
+    const stored = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v4", "memory.json"), "utf8"));
+    const global = stored.facts.find((fact: any) => fact.scope === "user" && fact.key === "preference.reply");
+    let globalMutation: Promise<unknown> | undefined;
+    app.emit("pi-continuity:memory-mutation", {
+      version: 1,
+      sessionId: "first",
+      action: "delete",
+      key: global.key,
+      expectedUpdatedAt: global.updatedAt,
+      respond: (operation: Promise<unknown>) => { globalMutation = operation; },
+    });
+    assert.ok(globalMutation);
+    await assert.rejects(globalMutation, /memory fact is unavailable/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -1168,6 +1245,7 @@ test("explicit plan resets model context without replacing the visible session",
     assert.equal(executorRun.timelineId, executorRun.runId);
     const boundary = app.customMessages[0]!;
     assert.equal(boundary.message.customType, "pi-continuity-handoff");
+    assert.equal(boundary.message.details.timelineId, executorRun.timelineId);
     assert.equal(boundary.message.display, false);
     assert.equal(boundary.options.triggerTurn, false);
     assert.match(boundary.message.content, /Earlier messages remain visible but are excluded/);

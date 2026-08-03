@@ -229,7 +229,8 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                     const effective = capable ? override ?? packageDefault : "disabled";
                     const locked = tool === "search_tools";
                     return <label className="workbench-tool-row" data-effective={effective} key={tool}>
-                      <span><strong>{tool}</strong><small className="workbench-tool-status"><i aria-hidden="true" />Current: {effective}</small></span>
+                      <span><strong>{tool}</strong></span>
+                      <span className="workbench-tool-effective" aria-label={`Current setting: ${effective}`}><i aria-hidden="true" /><strong>{effective}</strong></span>
                       <select value={override ?? "inherit"} disabled={locked || policyDisabled || toolPolicyBusy === tool || (!capable && !override)} onChange={(event) => {
                         if (!runtimePolicy) return;
                         const mode = event.target.value as ToolExposureMode | "inherit";

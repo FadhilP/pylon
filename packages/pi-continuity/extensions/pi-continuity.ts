@@ -21,12 +21,13 @@ import {
   readJson,
   readVersionedJson,
   writeJson,
+  writeJsonAtomic,
   updateJson,
   withStateLock,
   rm,
   defaultRoot,
 } from "../src/storage.ts";
-import { registerWorkspace, type Workspace } from "../src/workspace.ts";
+import { isWorkspace, registerWorkspace, type Workspace } from "../src/workspace.ts";
 import { pruneOrphanWorkFiles, startSessionGc } from "../src/session-gc.ts";
 import {
   candidate,
@@ -64,6 +65,15 @@ import {
   type RunEntry,
 } from "../src/run.ts";
 import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
+import { buildContinuityCompaction } from "../src/compaction.ts";
+import { canUseBroadRecall, recallSession } from "../src/recall.ts";
+import {
+  findMovedProjectOwner,
+  isOwnerReassociationMarker,
+  reassociateOwnerRecords,
+  type OwnerReassociationMarker,
+} from "../src/owner-reassociation.ts";
+const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
@@ -101,7 +111,9 @@ const Kind = StringEnum([
     "state",
   ] as const),
   MemAction = StringEnum(["list", "add", "replace", "remove"] as const),
-  ScopeName = StringEnum(["user", "project"] as const);
+  ScopeName = StringEnum(["user", "project"] as const),
+  RecallScopeName = StringEnum(["execution", "lineage", "all"] as const),
+  RecallModeName = StringEnum(["text", "files", "touched"] as const);
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
   pi.events.emit("pi-continuity:instance-claim", {
@@ -295,11 +307,101 @@ export default function continuityExtension(pi: ExtensionAPI) {
       notices,
     };
   };
+  const reassociateProjectMemory = async () => {
+    if (!project || !workspace) return;
+    const workspaceFile = join(root, "workspaces.json");
+    const markerNames = (await readdir(memoryDirectory()).catch(() => []))
+      .filter((name) => name.startsWith("owner-reassociation-") && name.endsWith(".json"))
+      .sort()
+      .reverse();
+    let markerPath: string | undefined;
+    let marker: OwnerReassociationMarker | undefined;
+    for (const name of markerNames) {
+      const path = join(memoryDirectory(), name);
+      const value = await readJson<OwnerReassociationMarker | undefined>(
+        path,
+        undefined,
+        (item) => item === undefined || isOwnerReassociationMarker(item),
+      );
+      if (value && value.status !== "complete" && value.currentOwner === project.owner) {
+        markerPath = path;
+        marker = value;
+        break;
+      }
+    }
+    await withStateLock(memoryDirectory(), async () => {
+      const latestFacts = (await readMemory()).facts;
+      const latestCandidates = (await readCandidateQueue()).candidates;
+      const latestWorkspaces = await readJson<Workspace[]>(workspaceFile, [], (items) =>
+        Array.isArray(items) && items.every(isWorkspace));
+      if (!marker) {
+        const oldOwner = await findMovedProjectOwner(
+          currentCwd,
+          project!.owner,
+          latestWorkspaces,
+          latestFacts,
+          latestCandidates,
+        );
+        if (!oldOwner) return;
+        const moved = reassociateOwnerRecords(oldOwner, project!.owner, latestFacts, latestCandidates);
+        if (!moved.backup.facts.length && !moved.backup.candidates.length) return;
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        markerPath = join(memoryDirectory(), `owner-reassociation-${stamp}-${randomUUID()}.json`);
+        marker = {
+          ...moved.backup,
+          version: 1,
+          status: "prepared",
+          createdAt: new Date().toISOString(),
+        };
+        await writeJsonAtomic(markerPath, marker);
+      }
+      const moved = reassociateOwnerRecords(
+        marker.oldOwner,
+        marker.currentOwner,
+        latestFacts,
+        latestCandidates,
+      );
+      await writeJsonAtomic(paths().memory, {
+        schemaVersion: MEMORY_SCHEMA_VERSION,
+        facts: moved.facts,
+        updatedAt: new Date().toISOString(),
+      });
+      await writeJsonAtomic(paths().candidates, {
+        schemaVersion: MEMORY_SCHEMA_VERSION,
+        candidates: moved.candidates,
+      });
+      marker = { ...marker, status: "records-moved" };
+      await writeJsonAtomic(markerPath!, marker);
+      memoryFacts = moved.facts;
+      candidates = moved.candidates;
+      facts = memoryFacts;
+    });
+    if (!marker || marker.status !== "records-moved") return;
+    try {
+      all = await updateJson<Workspace[]>(workspaceFile, [], (items) =>
+        items.map((item) => item.projectOwner === marker!.oldOwner
+          ? { ...item, projectOwner: marker!.currentOwner }
+          : item), (items) => Array.isArray(items) && items.every(isWorkspace));
+      marker = { ...marker, status: "complete" };
+      await writeJsonAtomic(markerPath!, marker);
+    } catch {
+      // The records-moved marker makes workspace remapping retryable on the next startup.
+    }
+  };
   const projectMemory = () => project
     ? memoryFacts.filter((fact) => fact.scope === "project" && fact.owner === project!.owner)
     : [];
+  const globalMemory = () => memoryFacts.filter((fact) =>
+    fact.scope === "user" && fact.owner === "default");
   const stateSnapshot = (available = true) =>
-    continuityStateSnapshot(leasedSessionId, stateRevision, work, available, projectMemory());
+    continuityStateSnapshot(
+      leasedSessionId,
+      stateRevision,
+      work,
+      available,
+      projectMemory(),
+      globalMemory(),
+    );
   const publishState = (available = true) => {
     stateRevision++;
     pi.events.emit("pi-continuity:state-change", stateSnapshot(available));
@@ -450,13 +552,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
       version: 1,
       kind: "register",
       owner: "pi-continuity",
-      managedTools: ["continuity_update", "memory"],
-      enabledTools: ["continuity_update", "memory"],
+      managedTools: continuityTools,
+      enabledTools: continuityTools,
       ...(on ? { allowOnly: planningTools() } : {}),
       ...(!on && savedTools ? { restoreTools: [...new Set([
         ...savedTools,
-        "continuity_update",
-        "memory",
+        ...continuityTools,
       ])] } : {}),
       acknowledge: () => { coordinated = true; },
     });
@@ -468,15 +569,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const allowed = new Set(planningTools());
       pi.setActiveTools([...new Set([
         ...pi.getActiveTools().filter((tool) => allowed.has(tool)),
-        "continuity_update",
-        "memory",
+        ...continuityTools,
       ])]);
     } else if (savedTools) {
       pi.setActiveTools([...new Set([
         ...pi.getActiveTools(),
         ...savedTools,
-        "continuity_update",
-        "memory",
+        ...continuityTools,
       ])]);
       savedTools = undefined;
     }
@@ -634,6 +733,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     memoryFacts = (await readMemory()).facts;
     facts = memoryFacts;
     candidates = (await readCandidateQueue()).candidates;
+    await reassociateProjectMemory();
     gate(work?.mode === "planning");
     tasksVisible = true;
     refresh(ctx);
@@ -732,6 +832,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
     work && !["handed_off", "completed", "cancelled"].includes(work.mode)
       ? work
       : undefined;
+  pi.on("session_before_compact", async (event) => {
+    const active = activeWork();
+    if (!active) return;
+    const missingIdentity = !active.runId || !active.timelineId;
+    if (!active.runId) active.runId = randomUUID();
+    if (!active.timelineId) active.timelineId = active.runId;
+    if (missingIdentity) await saveWork();
+    const compaction = buildContinuityCompaction({
+      branchEntries: event.branchEntries,
+      preparation: event.preparation,
+      work: active,
+    });
+    return compaction ? { compaction } : { cancel: true };
+  });
   pi.on("before_agent_start", async () => {
     if (!memoryInjectionEnabled) return;
     const active = activeWork();
@@ -785,6 +899,51 @@ export default function continuityExtension(pi: ExtensionAPI) {
         },
       ],
     };
+  });
+  pi.registerTool({
+    name: "continuity_recall",
+    label: "Continuity Recall",
+    description: "Search bounded historical evidence from the current Pi session.",
+    promptSnippet: "Explicitly recall sanitized, source-addressed session history.",
+    promptGuidelines: [
+      "Use only when deterministic compaction omitted a needed historical detail. Results are historical evidence, not current truth.",
+      "Default to execution scope. Use lineage or all only when pre-handoff or sibling-branch evidence is explicitly needed.",
+      "Recall is read-only and never creates memory. Verify recalled repository claims against current source before relying on them.",
+    ],
+    executionMode: "sequential",
+    renderShell: "self",
+    renderCall: () => new Container(),
+    renderResult: (result) => {
+      const item = result.content.find((content) => content.type === "text");
+      return item?.type === "text" ? new Text(item.text, 0, 0) : new Container();
+    },
+    parameters: Type.Object({
+      query: Type.Optional(Type.String({ maxLength: 200 })),
+      expand: Type.Optional(Type.Array(Type.String({ maxLength: 200 }), { maxItems: 10 })),
+      page: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
+      scope: Type.Optional(RecallScopeName),
+      mode: Type.Optional(RecallModeName),
+    }, { additionalProperties: false }),
+    async execute(_i, p, _s, _u, ctx): Promise<any> {
+      const active = activeWork();
+      if (!active)
+        return { content: [{ type: "text", text: "Session recall unavailable: no active Continuity work." }] };
+      if (!ctx.sessionManager.getSessionFile?.())
+        return { content: [{ type: "text", text: "Session recall unavailable: this session is ephemeral and has no persisted history." }] };
+      const activeBranch = ctx.sessionManager.getBranch?.() ?? [];
+      const allEntries = p.scope === "all" && canUseBroadRecall(activeBranch, active)
+        ? ctx.sessionManager.getEntries?.()
+        : undefined;
+      const result = recallSession({
+        sessionId: ctx.sessionManager.getSessionId(),
+        activeBranch,
+        visibleEntries: ctx.sessionManager.buildContextEntries?.() ?? [],
+        allEntries,
+        work: active,
+        params: p,
+      });
+      return { content: [{ type: "text", text: result.text }], details: { recall: true } };
+    },
   });
   pi.registerTool({
     name: "memory",
@@ -1342,6 +1501,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           details: {
             version: 1,
             runId,
+            timelineId: run.timelineId,
             model: { provider: executor.provider, id: executor.id },
             ...(thinking ? { thinking } : {}),
           },

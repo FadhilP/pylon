@@ -2156,7 +2156,7 @@
   .session-tool-usage-row > span { color: var(--text-soft); font-size: 12px; text-align: right; white-space: nowrap; }
   .session-tool-usage-row small { margin-left: 3px; color: var(--text-muted); font: 12px "OpenAI Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .session-tool-usage-empty { padding: 22px 4px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 12px; text-align: center; }
-  .session-usage-expand { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: center; gap: 5px; border: 0; border-top: 1px solid var(--line); color: var(--accent-text); font-size: 12px; font-weight: 620; }
+  .session-usage-expand { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: center; gap: 5px; border: 0; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 12px; }
   .session-usage-expand:hover { background: var(--surface-subtle); }
   .session-usage-expand[aria-expanded="true"] svg { transform: rotate(180deg); }
 
@@ -2330,16 +2330,17 @@
   .workbench-section .package-fields { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
   .workbench-empty { padding: 16px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text-muted); font-size: 12px; }
   .workbench-tool-list { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-  .workbench-tool-row { display: grid; min-height: 57px; grid-template-columns: minmax(0, 1fr) 150px; align-items: center; gap: 14px; padding: 8px 11px; }
+  .workbench-tool-row { display: grid; min-height: 57px; grid-template-columns: minmax(70px, 1fr) minmax(66px, .6fr) minmax(88px, 150px); align-items: center; gap: 6px; padding: 8px 11px; }
   .workbench-tool-row + .workbench-tool-row { border-top: 1px solid var(--line); }
   .workbench-tool-row:hover { background: var(--surface-hover); }
   .workbench-tool-row > span { display: grid; min-width: 0; gap: 3px; }
   .workbench-tool-row strong { overflow: hidden; font: 12px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
   .workbench-tool-row small { color: var(--text-muted); font-size: 12px; text-transform: capitalize; }
-  .workbench-tool-status { display: flex; align-items: center; gap: 6px; }
-  .workbench-tool-status i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--red); }
-  .workbench-tool-row[data-effective="active"] .workbench-tool-status i { background: var(--green); }
-  .workbench-tool-row[data-effective="deferred"] .workbench-tool-status i { background: var(--amber); }
+  .workbench-tool-row > .workbench-tool-effective { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--text-soft); text-transform: capitalize; }
+  .workbench-tool-effective i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--red); }
+  .workbench-tool-effective strong { overflow: hidden; font: inherit; font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+  .workbench-tool-row[data-effective="active"] .workbench-tool-effective i { background: var(--green); }
+  .workbench-tool-row[data-effective="deferred"] .workbench-tool-effective i { background: var(--amber); }
   .workbench-tool-row select { width: 100%; height: 31px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-raised); color: var(--text); font-size: 12px; }
 
   .settings-package-list { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
@@ -2488,7 +2489,6 @@
     .package-workbench-index { display: flex; border-right: 0; border-bottom: 1px solid var(--line); }
     .package-workbench-index button { min-width: 170px; }
     .package-workbench-detail { padding: 16px 14px 24px; }
-    .workbench-tool-row { grid-template-columns: minmax(0, 1fr) 126px; }
     .tool-override-toolbar { grid-template-columns: 1fr; }
   }
 

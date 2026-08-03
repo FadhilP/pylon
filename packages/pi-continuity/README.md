@@ -2,6 +2,8 @@
 
 Opt-in planning, structured clarification, visible todos, external workspace memory, and compact ephemeral context for [Pi](https://pi.dev).
 
+Its boundary-aware deterministic compaction and bounded session recall are inspired by [pi-blackhole](https://github.com/k0valik/pi-blackhole), while remaining Continuity-owned and using Pi's public session and compaction lifecycle APIs.
+
 ## Installation
 
 ```sh
@@ -20,6 +22,8 @@ Commands:
 - `/memory [status]|on|off|show|owners|backups|compact|forget <key>|forget [user|project] <key>|forget project|forget suspect|forget owner <id>`
 
 The dedicated `memory` tool uses `memory list|add|replace|remove`. Its read-only `list` action shows the current user/project owner's exact `scope/key` facts, transient applicability status and reason, and pending candidates for duplicate avoidance, replacement, or evidence-based removal.
+
+The sequential, read-only `continuity_recall` tool searches bounded historical evidence from the current session. Execution scope is the default; explicit lineage scope includes pre-handoff active ancestry, and explicit all scope includes validated sibling branches. Text recall excludes thinking, tool arguments/results, and unrelated custom messages. File-result expansion requires exact in-scope entry IDs and returns only bounded, credential-redacted evidence already stored by Pi; it never reads workspace files or creates session or memory entries.
 
 ## Planning
 
@@ -53,7 +57,7 @@ Read-only work can complete without Verify. Verification is a completion gate, n
 
 ### Storage and Ownership
 
-State lives under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-continuity`, never in the project. Per-session work files are protected by process leases. On session startup, Continuity compares them with Pi's persisted sessions and live leases, then removes work owned by deleted sessions; failed session discovery skips cleanup. Ephemeral-session work is removed on clean shutdown. Persistent memory, candidates, workspace metadata, and configuration are never part of this garbage collection. Experimental Memory V4 stores one shared collection under `memory-v4` with only `user` and `project` scopes. User facts are global. Git project identity is a hash of Git's canonical common directory; non-Git project identity falls back to the canonical workspace. Remote URLs are never stored. A capture commit and branch-at-capture are provenance only, never project identity.
+State lives under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-continuity`, never in the project. Per-session work files are protected by process leases. On session startup, Continuity compares them with Pi's persisted sessions and live leases, then removes work owned by deleted sessions; failed session discovery skips cleanup. Ephemeral-session work is removed on clean shutdown. Persistent memory, candidates, workspace metadata, and configuration are never part of this garbage collection. Experimental Memory V4 stores one shared collection under `memory-v4` with only `user` and `project` scopes. User facts are global. Git project identity is a hash of Git's canonical common directory; non-Git project identity falls back to the canonical workspace. When a repository moves, Continuity conservatively reassociates an unambiguous orphan owner only after a grace period and local commit/evidence proof, with a recoverable migration marker and backup. Remote URLs are never read or stored for identity. A capture commit and branch-at-capture are provenance only, never project identity.
 
 ### Writing and Compacting Memory
 
@@ -65,11 +69,13 @@ At injection and during `memory list`, all current-owner project facts are class
 
 ### Inspecting and Removing Memory
 
-`/memory` (or `/memory status`) reports only the current user/project owner's durable stored facts, currently visible active/unchecked facts, and pending candidates; pending candidates normally compact at settlement. `/memory show` displays current user/project facts with transient status, reason, and concise provenance. `/memory forget suspect` confirms and reclassifies under lock before deleting only currently suspect project facts (never unverifiable ones). `/memory owners` lists owner IDs and counts; `/memory forget owner <id>` confirms removal of that exact owner's facts and candidates. `/memory backups` lists reset backups. Key forget defaults to the current project; specify `user` or `project` to target one scope explicitly. Continuity caches each workspace's last Git project owner so a transient Git failure exposes existing facts as unverifiable instead of silently switching owners.
+`/memory` (or `/memory status`) reports only the current user/project owner's durable stored facts, currently visible active/unchecked facts, and pending candidates; pending candidates normally compact at settlement. `/memory show` displays current user/project facts with transient status, reason, and concise provenance. The web Memory tab separates editable project facts from read-only global user facts. `/memory forget suspect` confirms and reclassifies under lock before deleting only currently suspect project facts (never unverifiable ones). `/memory owners` lists owner IDs and counts; `/memory forget owner <id>` confirms removal of that exact owner's facts and candidates. `/memory backups` lists reset backups. Key forget defaults to the current project; specify `user` or `project` to target one scope explicitly. Continuity caches each workspace's last Git project owner so a transient Git failure exposes existing facts as unverifiable instead of silently switching owners.
+
+See [High-Precision Automatic Memory Extraction Plan](docs/high-precision-automatic-memory-extraction.md) for the candidate-only automatic extraction proposal.
 
 ### File Integrity and Run Metadata
 
-Memory and candidate files have explicit V4 schemas. Unsupported V4 files are renamed to `*.reset-unsupported-*` backups and replaced with empty V4 state. Malformed individual V4 records are dropped while valid records remain. Writes use unique temporary files and short cross-process locks. Pi owns sessions and compaction. Explicit planner, executor, and reviewer phases carry versioned `pylon-run` custom entries. Each plan has a unique `runId`; later plans inherit its `timelineId`, allowing consumers such as pi-timeline to keep one history across execution boundaries and older child sessions.
+Memory and candidate files have explicit V4 schemas. Unsupported V4 files are renamed to `*.reset-unsupported-*` backups and replaced with empty V4 state. Malformed individual V4 records are dropped while valid records remain. Writes use unique temporary files and short cross-process locks. Pi owns sessions and decides when compaction runs; Continuity supplies one deterministic `session_before_compact` result for active work. It retains the latest scoped request and valid tool ordering, rejects summaries from other run/timeline boundaries, excludes pre-handoff planning context, redacts credential-like text, and stores versioned boundary metadata. Explicit planner, executor, and reviewer phases carry versioned `pylon-run` custom entries. Each plan has a unique `runId`; later plans inherit its `timelineId`, allowing consumers such as pi-timeline to keep one history across execution boundaries and older child sessions.
 
 ## Security and Limitations
 

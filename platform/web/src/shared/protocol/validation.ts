@@ -841,15 +841,17 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
           Number.isSafeInteger(standardChangesByKind[key]) && (standardChangesByKind[key] as number) >= 0)))) return false;
     if (operational.sieve.contextUsagePercent !== undefined && (typeof operational.sieve.contextUsagePercent !== "number" || !Number.isFinite(operational.sieve.contextUsagePercent) || operational.sieve.contextUsagePercent < 0 || operational.sieve.contextUsagePercent > 100)) return false;
   }
-  if (operational.continuity.memory !== undefined
-    && (!Array.isArray(operational.continuity.memory) || operational.continuity.memory.length > 30
-      || !operational.continuity.memory.every((fact) => record(fact)
-        && boundedString(fact.key, 200)
-        && memoryKinds.has(String(fact.kind))
-        && boundedString(fact.text, 1_000)
-        && boundedString(fact.source, 500)
-        && typeof fact.confidence === "number" && fact.confidence >= 0 && fact.confidence <= 1
-        && typeof fact.updatedAt === "string" && !Number.isNaN(Date.parse(fact.updatedAt))))) return false;
+  for (const facts of [operational.continuity.memory, operational.continuity.globalMemory]) {
+    if (facts !== undefined
+      && (!Array.isArray(facts) || facts.length > 30
+        || !facts.every((fact) => record(fact)
+          && boundedString(fact.key, 200)
+          && memoryKinds.has(String(fact.kind))
+          && boundedString(fact.text, 1_000)
+          && boundedString(fact.source, 500)
+          && typeof fact.confidence === "number" && fact.confidence >= 0 && fact.confidence <= 1
+          && typeof fact.updatedAt === "string" && !Number.isNaN(Date.parse(fact.updatedAt))))) return false;
+  }
   const extensionUi = value.extensionUi;
   return record(extensionUi)
     && Array.isArray(extensionUi.notifications) && extensionUi.notifications.length <= 10

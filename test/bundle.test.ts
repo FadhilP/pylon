@@ -78,6 +78,8 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
   process.env.STQL_HOME = join(root, "stateql");
   try {
     const events = new Bus();
+    const toolPolicies: any[] = [];
+    const disposeToolPolicyCapture = events.on("pylon:tool-policy", (message) => toolPolicies.push(message));
     const handlers = new Map<string, Function[]>();
     const commands = new Map<string, any>();
     const tools = new Map<string, any>();
@@ -109,7 +111,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
     ]);
 
     let notification = "";
@@ -123,7 +125,13 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+    const continuityPolicy = [...toolPolicies].reverse().find((message) =>
+      message?.kind === "register" && message.owner === "pi-continuity");
+    assert.deepEqual(continuityPolicy?.managedTools, ["continuity_recall", "continuity_update", "memory"]);
+    assert.deepEqual(continuityPolicy?.enabledTools, ["continuity_recall", "continuity_update", "memory"]);
+    disposeToolPolicyCapture();
     assert.ok(active.includes("search_tools"));
+    assert.ok(active.includes("continuity_recall"));
     assert.ok(active.includes("continuity_update"));
     assert.ok(active.includes("memory"));
     assert.ok(!active.includes("grunt"));

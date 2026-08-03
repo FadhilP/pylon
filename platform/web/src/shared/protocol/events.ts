@@ -337,6 +337,7 @@ export interface ContinuityReadModel {
   availability: FeatureState;
   revision: number;
   memory: ContinuityMemoryFactReadModel[];
+  globalMemory: ContinuityMemoryFactReadModel[];
   work?: ContinuityWorkReadModel;
 }
 

@@ -39,15 +39,22 @@ test("operational projections bound package payloads and isolate malformed versi
 test("state snapshots reject stale revisions and policy unregister removes owner", () => {
   let state = initialOperational([], ["pylon-core.ts"]);
   state = applyOperationalEvent(state, "pi-continuity:state-change", {
-    version: 2, revision: 2, sessionId: "session", available: true,
+    version: 3, revision: 2, sessionId: "session", available: true,
     memory: [{ key: "project.arch", kind: "architecture", text: "Use the coordinator", source: "test", confidence: 0.9, updatedAt: new Date(0).toISOString() }],
+    globalMemory: [{ key: "user.preference", kind: "preference", text: "Keep output concise", source: "user", confidence: 1, updatedAt: new Date(0).toISOString() }],
     work: { mode: "executing", goal: "Ship", approved: true, planSummary: "Implement", createdAt: "now", updatedAt: "now", todos: [{ id: "todo_1", text: "Build", status: "in_progress", updatedAt: "now" }] },
   }, [], "session");
-  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 2, revision: 2, sessionId: "session", available: false, memory: [] }, [], "session");
-  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 2, revision: 3, sessionId: "old-session", available: false, memory: [] }, [], "session");
+  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 3, revision: 2, sessionId: "session", available: false, memory: [], globalMemory: [] }, [], "session");
+  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 3, revision: 3, sessionId: "old-session", available: false, memory: [], globalMemory: [] }, [], "session");
   assert.equal(state.continuity.revision, 2);
   assert.equal(state.continuity.work?.goal, "Ship");
   assert.equal(state.continuity.memory[0]?.key, "project.arch");
+  assert.equal(state.continuity.globalMemory[0]?.key, "user.preference");
+  state = applyOperationalEvent(state, "pi-continuity:state-change", {
+    version: 2, revision: 3, sessionId: "session", available: true, memory: [],
+  }, [], "session");
+  assert.equal(state.continuity.availability, "unavailable");
+  assert.equal(state.continuity.globalMemory[0]?.key, "user.preference");
 
   state = applyOperationalEvent(state, "pi-timeline:state-change", {
     version: 4,

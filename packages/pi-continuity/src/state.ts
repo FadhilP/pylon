@@ -1,7 +1,7 @@
 import type { Work } from "./active-work.ts";
 import type { Fact } from "./memory.ts";
 
-export const CONTINUITY_STATE_VERSION = 2 as const;
+export const CONTINUITY_STATE_VERSION = 3 as const;
 
 export interface ContinuityStateSnapshot {
   version: typeof CONTINUITY_STATE_VERSION;
@@ -9,6 +9,7 @@ export interface ContinuityStateSnapshot {
   sessionId: string;
   available: boolean;
   memory: Array<Pick<Fact, "key" | "kind" | "text" | "source" | "confidence" | "updatedAt" | "captureCommit" | "branchAtCapture" | "evidencePaths">>;
+  globalMemory: Array<Pick<Fact, "key" | "kind" | "text" | "source" | "confidence" | "updatedAt">>;
   work?: Pick<Work, "mode" | "goal" | "approved" | "planSummary" | "currentTodoId" | "latestFailure" | "nextAction" | "runId" | "createdAt" | "updatedAt" | "completedAt"> & {
     todos: Array<Pick<Work["todos"][number], "id" | "text" | "status" | "updatedAt">>;
   };
@@ -20,28 +21,47 @@ export interface ContinuityStateRequest {
   respond(value: ContinuityStateSnapshot): void;
 }
 
-export function continuityStateSnapshot(sessionId: string, revision: number, work?: Work, available = true, memory: Fact[] = []): ContinuityStateSnapshot {
+const globalMemoryFact = (fact: Fact) => ({
+  key: fact.key.slice(0, 200),
+  kind: fact.kind,
+  text: fact.text.slice(0, 1_000),
+  source: fact.source.slice(0, 500),
+  confidence: fact.confidence,
+  updatedAt: fact.updatedAt,
+});
+
+const memoryFact = (fact: Fact) => ({
+  key: fact.key.slice(0, 200),
+  kind: fact.kind,
+  text: fact.text.slice(0, 1_000),
+  source: fact.source.slice(0, 500),
+  confidence: fact.confidence,
+  updatedAt: fact.updatedAt,
+  ...(fact.captureCommit ? { captureCommit: fact.captureCommit.slice(0, 128) } : {}),
+  ...(fact.branchAtCapture ? { branchAtCapture: fact.branchAtCapture.slice(0, 240) } : {}),
+  ...(fact.evidencePaths?.length ? {
+    evidencePaths: fact.evidencePaths.slice(0, 5).map((item) => ({
+      path: item.path.slice(0, 500),
+      sha256: item.sha256.slice(0, 128),
+    })),
+  } : {}),
+});
+
+export function continuityStateSnapshot(
+  sessionId: string,
+  revision: number,
+  work?: Work,
+  available = true,
+  memory: Fact[] = [],
+  globalMemory: Fact[] = [],
+): ContinuityStateSnapshot {
   return {
     version: CONTINUITY_STATE_VERSION,
     revision,
     sessionId,
     available,
-    memory: memory.slice(0, 30).map((fact) => ({
-      key: fact.key.slice(0, 200),
-      kind: fact.kind,
-      text: fact.text.slice(0, 1_000),
-      source: fact.source.slice(0, 500),
-      confidence: fact.confidence,
-      updatedAt: fact.updatedAt,
-      ...(fact.captureCommit ? { captureCommit: fact.captureCommit.slice(0, 128) } : {}),
-      ...(fact.branchAtCapture ? { branchAtCapture: fact.branchAtCapture.slice(0, 240) } : {}),
-      ...(fact.evidencePaths?.length ? {
-        evidencePaths: fact.evidencePaths.slice(0, 5).map((item) => ({
-          path: item.path.slice(0, 500),
-          sha256: item.sha256.slice(0, 128),
-        })),
-      } : {}),
-    })),
+    memory: memory.slice(0, 30).map(memoryFact),
+    globalMemory: globalMemory.slice(0, 30).map(globalMemoryFact),
     ...(work ? {
       work: {
         mode: work.mode,

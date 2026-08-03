@@ -2526,7 +2526,7 @@ export class SessionRuntime implements PiDriver {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 2,
+          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 3,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
