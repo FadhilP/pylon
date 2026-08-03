@@ -124,13 +124,16 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.equal(memory.executionMode, "sequential");
   assert.match(JSON.stringify(memory.parameters), /list.*add.*replace.*remove/);
   assert.match(memory.promptSnippet, /durable memory/i);
-  assert.match(memoryGuidance, /Before the final response, assess whether durable memory/i);
-  assert.match(memoryGuidance, /do nothing when no stable, reusable, evidenced fact qualifies/i);
+  assert.match(memoryGuidance, /Before Verify—or before the final response when Verify is unnecessary/i);
+  assert.match(memoryGuidance, /up to three stable facts that would change a future decision/i);
+  assert.match(memoryGuidance, /explicit user rules and non-obvious verified workflows, boundaries, or warnings/i);
+  assert.match(memoryGuidance, /Use memory list to avoid duplicates, then add or replace valid candidates/i);
+  assert.match(memoryGuidance, /continue without a memory call when none qualify/i);
   assert.match(memoryGuidance, /List memory when the current key is uncertain/i);
   assert.match(memoryGuidance, /one fact per stable named key/i);
   assert.match(memoryGuidance, /Never save .*secrets/i);
   assert.match(memoryGuidance, /user scope for cross-project preferences and project scope otherwise/i);
-  assert.ok(memoryGuidance.length < 700);
+  assert.ok(memoryGuidance.length < 900);
 });
 
 test("session recall tool is sequential, read-only, and handles ephemeral state without side effects", async () => {

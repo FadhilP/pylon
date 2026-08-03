@@ -952,7 +952,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     promptSnippet: "Inspect or propose durable memory candidates.",
     executionMode: "sequential",
     promptGuidelines: [
-      "Before the final response, assess whether durable memory would change a future decision; do nothing when no stable, reusable, evidenced fact qualifies. Never save task progress, guesses, temporary state, generic facts, duplicates, or secrets.",
+      "Before Verify—or before the final response when Verify is unnecessary—review completed work for up to three stable facts that would change a future decision. Strong candidates are explicit user rules and non-obvious verified workflows, boundaries, or warnings. Use memory list to avoid duplicates, then add or replace valid candidates; continue without a memory call when none qualify. Never save task progress, guesses, temporary state, generic facts, duplicates, or secrets.",
       "Use one fact per stable named key. List memory when the current key is uncertain; replace or remove facts only with direct user or repository evidence. Include the source and repository evidencePaths when applicable. Use user scope for cross-project preferences and project scope otherwise.",
     ],
     renderShell: "self",

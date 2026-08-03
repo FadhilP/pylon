@@ -29,6 +29,7 @@ import type { JobReadModel, SessionMetricsReadModel, VerificationReadModel } fro
 import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
+import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -418,7 +419,16 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
   const [text, setText] = useState("");
   const [kind, setKind] = useState<(typeof memory)[number]["kind"]>("workflow");
   const [busy, setBusy] = useState("");
+  const [deleting, setDeleting] = useState<(typeof memory)[number]>();
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const matches = (fact: (typeof memory)[number]) => !query || [fact.key, fact.kind, fact.text, fact.source, ...(fact.evidencePaths ?? []).map((evidence) => evidence.path)]
+    .some((value) => value.toLowerCase().includes(query));
+  const visibleGlobalMemory = globalMemory.filter(matches);
+  const visibleMemory = memory.filter(matches);
+  const total = globalMemory.length + memory.length;
+  const shown = visibleGlobalMemory.length + visibleMemory.length;
   const idle = live.connection === "connected"
     && live.runtime?.ready === true
     && live.runtime.conversation.streaming === false
@@ -444,7 +454,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
     }
   };
   const remove = async (fact: (typeof memory)[number]) => {
-    if (!idle || !window.confirm(`Delete project memory "${fact.key}"?`)) return;
+    if (!idle) return;
     setBusy(fact.key);
     setError("");
     try {
@@ -454,51 +464,84 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
       setError(cause instanceof Error ? cause.message : "Unable to delete memory");
     } finally {
       setBusy("");
+      setDeleting(undefined);
     }
   };
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
-  return <div className="memory-page">
-    <InspectorSection title="Global Facts" meta={`${globalMemory.length} user facts`} className="memory-panel">
-      {globalMemory.map((fact) => <article className="memory-fact" key={fact.key}>
-        <header>
-          <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
-          <time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time>
-        </header>
-        <p>{fact.text}</p>
-        <dl>
-          <div><dt>Confidence</dt><dd>{Math.round(fact.confidence * 100)}%</dd></div>
-          <div><dt>Source</dt><dd>{fact.source}</dd></div>
-        </dl>
-      </article>)}
-      {globalMemory.length === 0 && <div className="empty-state"><IconThinkingMedium size={20} /><strong>No global memory</strong><span>Continuity has not saved durable user facts.</span></div>}
-      <p className="settings-note">Global facts apply across projects and are read-only here.</p>
-    </InspectorSection>
-    <InspectorSection title="Project Facts" meta={`${memory.length} project facts`} className="memory-panel">
-      {memory.map((fact) => <article className="memory-fact" key={fact.key}>
-        <header>
-          <div><strong>{fact.key}</strong><span>{fact.kind}</span></div>
-          <time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time>
-        </header>
-        {editing === fact.key ? <div className="memory-editor">
-          <label>Kind<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}>
-            {["workflow", "structure", "architecture", "warning", "preference"].map((value) => <option value={value} key={value}>{value}</option>)}
-          </select></label>
-          <label>Fact<textarea value={text} maxLength={1_000} rows={5} onChange={(event) => setText(event.target.value)} /></label>
-          <div><button className="primary-button" type="button" disabled={!idle || !text.trim()} onClick={() => void save(fact)}>{busy === fact.key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
-        </div> : <>
-          <p>{fact.text}</p>
-          <dl>
-            <div><dt>Confidence</dt><dd>{Math.round(fact.confidence * 100)}%</dd></div>
-            <div><dt>Source</dt><dd>{fact.source}</dd></div>
-            <div><dt>Evidence</dt><dd>{fact.evidencePaths?.length ?? 0} files</dd></div>
-          </dl>
-          <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(fact)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => void remove(fact)}><IconTrash size={13} />Delete</button></footer>
-        </>}
-      </article>)}
-      {memory.length === 0 && <div className="empty-state"><IconThinkingMedium size={20} /><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
-      {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
-      {error && <p className="ui-request-error" role="alert">{error}</p>}
-    </InspectorSection>
+  return <div className="memory-page memory-ledger">
+    <label className="memory-ledger-search">
+      <IconSearch size={13} />
+      <span className="sr-only">Search memory</span>
+      <input type="search" value={search} placeholder={`Search ${total} fact${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} />
+      <span className="mono">{query ? `${shown}/${total}` : total}</span>
+    </label>
+
+    <section className="memory-ledger-scope" aria-labelledby="global-memory-title">
+      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>{globalMemory.length} · memory</span></header>
+      <div className="memory-ledger-list">
+        {visibleGlobalMemory.map((fact) => <details className="memory-ledger-row" key={fact.key}>
+          <summary>
+            <div><strong>{fact.key}</strong><span>{fact.kind.toUpperCase()}</span></div>
+            <span className="memory-ledger-confidence mono">{Math.round(fact.confidence * 100)}%</span>
+            <IconChevronDown className="memory-ledger-chevron" size={13} />
+            <p>{fact.text}</p>
+          </summary>
+          <div className="memory-ledger-detail">
+            <dl>
+              <div><dt>Source</dt><dd title={fact.source}>{fact.source}</dd></div>
+              <div><dt>Updated</dt><dd><time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time></dd></div>
+            </dl>
+            <p className="memory-ledger-note">Available in every project · read-only here</p>
+          </div>
+        </details>)}
+        {!query && globalMemory.length === 0 && <div className="memory-ledger-empty"><strong>No global memory</strong><span>Continuity has not saved durable user facts.</span></div>}
+      </div>
+    </section>
+
+    <section className="memory-ledger-scope" aria-labelledby="project-memory-title">
+      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>{memory.length} · memory</span></header>
+      <div className="memory-ledger-list">
+        {visibleMemory.map((fact) => <details className="memory-ledger-row" key={fact.key} open={editing === fact.key || undefined}>
+          <summary>
+            <div><strong>{fact.key}</strong><span>{fact.kind.toUpperCase()}</span></div>
+            <span className="memory-ledger-confidence mono">{Math.round(fact.confidence * 100)}%</span>
+            <IconChevronDown className="memory-ledger-chevron" size={13} />
+            <p>{fact.text}</p>
+          </summary>
+          <div className="memory-ledger-detail">
+            {editing === fact.key ? <div className="memory-editor">
+              <label>Kind<select value={kind} disabled={Boolean(busy)} onChange={(event) => setKind(event.target.value as typeof kind)}>
+                {["workflow", "structure", "architecture", "warning", "preference"].map((value) => <option value={value} key={value}>{value}</option>)}
+              </select></label>
+              <label>Fact<textarea value={text} maxLength={1_000} rows={5} disabled={Boolean(busy)} onChange={(event) => setText(event.target.value)} /></label>
+              <div><button className="primary-button" type="button" disabled={!idle || !text.trim()} onClick={() => void save(fact)}>{busy === fact.key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
+            </div> : <>
+              <dl>
+                <div><dt>Source</dt><dd title={fact.source}>{fact.source}</dd></div>
+                <div><dt>Evidence</dt><dd title={(fact.evidencePaths ?? []).map((evidence) => evidence.path).join("\n")}>{fact.evidencePaths?.length ?? 0} files</dd></div>
+                <div><dt>Updated</dt><dd><time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time></dd></div>
+              </dl>
+              <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(fact)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => { setError(""); setDeleting(fact); }}><IconTrash size={13} />Delete</button></footer>
+            </>}
+          </div>
+        </details>)}
+        {!query && memory.length === 0 && <div className="memory-ledger-empty"><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
+      </div>
+    </section>
+
+    {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a key, kind, source, or evidence path.</span></div>}
+    {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
+    {error && <p className="ui-request-error" role="alert">{error}</p>}
+    {deleting && <ActionDialog
+      title="Delete project memory?"
+      description={`“${deleting.key}” will be removed from Continuity memory for this project.`}
+      confirmLabel="Delete memory"
+      busyLabel="Deleting…"
+      busy={busy === deleting.key}
+      danger
+      onCancel={() => setDeleting(undefined)}
+      onConfirm={() => void remove(deleting)}
+    />}
   </div>;
 }
 
