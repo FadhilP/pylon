@@ -8,6 +8,28 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.4.0",
+    date: "Aug 3, 2026",
+    title: "Persistent agents and configurable tools",
+    summary: "Pylon adds resumable child conversations, deeper session diagnostics, and direct control over which tools stay active, deferred, or disabled.",
+    notes: [
+      "Added pi-spawn with private resumable agents plus inspectable child sessions that can be created, adopted, continued, and explicitly targeted at another trusted project.",
+      "Integrated spawned work into the web workspace with parent links, stable agent identities and colors, live activity, conversation history, usage, and clearer completion state.",
+      "Added inherited global, project, and session tool controls for active, deferred, or disabled exposure while preserving package capabilities and restrictive safety gates.",
+      "Improved delegated-agent progress and retry accounting, bounded spawn failures and output, session status feedback, and runtime snapshot consistency.",
+    ],
+  },
+  {
+    version: "1.3.1",
+    date: "Aug 2, 2026",
+    title: "Web audio compatibility",
+    summary: "A maintenance release fixed web notification audio compatibility and refreshed the published package metadata.",
+    notes: [
+      "Corrected closed AudioContext checks so web notification sounds remain compatible with the project's browser typings.",
+      "Removed superseded internal Continuity design documents.",
+    ],
+  },
+  {
     version: "1.3.0",
     date: "Aug 2, 2026",
     title: "Cache-friendly context and unified policy controls",
