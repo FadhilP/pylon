@@ -44,21 +44,50 @@ async function fixture(runOverride?: (args: string[], options: any) => Promise<S
   const parent = SessionManager.create(cwd);
   persistSession(parent);
   const tools = new Map<string, any>();
-  const calls: Array<{ args: string[]; prompt: string }> = [];
-  const pi: any = { registerTool: (tool: any) => tools.set(tool.name, tool) };
+  const handlers = new Map<string, Function[]>();
+  const emitted: Array<{ name: string; value: any }> = [];
+  const busHandlers = new Map<string, Function[]>();
+  const calls: Array<{ args: string[]; prompt: string; env: NodeJS.ProcessEnv }> = [];
+  const sentMessages: any[] = [];
+  const pi: any = {
+    events: {
+      emit: (name: string, value: any) => {
+        emitted.push({ name, value });
+        for (const handler of busHandlers.get(name) ?? []) handler(value);
+      },
+      on: (name: string, handler: Function) => {
+        busHandlers.set(name, [...(busHandlers.get(name) ?? []), handler]);
+        return () => busHandlers.set(name, (busHandlers.get(name) ?? []).filter((item) => item !== handler));
+      },
+    },
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    sendMessage: (message: any) => sentMessages.push(message),
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+  };
   const run: any = async (args: string[], options: any) => {
-    calls.push({ args, prompt: options.prompt });
+    calls.push({ args, prompt: options.prompt, env: options.env });
     return runOverride ? runOverride(args, options) : completed(`reply:${options.prompt}`);
   };
   spawnExtension(pi, run, agentDir);
+  const models = [
+    { provider: "fake", id: "model" },
+    { provider: "custom", id: "model" },
+    { provider: "blocked", id: "model" },
+  ];
+  const configuredModels = new Set(["fake/model", "custom/model"]);
   const ctx: any = {
     cwd,
-    model: { provider: "fake", id: "model" },
+    model: models[0],
+    modelRegistry: {
+      getAvailable: () => models,
+      hasConfiguredAuth: (model: any) => configuredModels.has(`${model.provider}/${model.id}`),
+    },
+    scopedModels: [],
     thinkingLevel: "high",
     sessionManager: parent,
   };
   return {
-    root, cwd, agentDir, parent, tools, calls, ctx,
+    root, cwd, agentDir, parent, tools, handlers, busHandlers, emitted, calls, sentMessages, ctx, models, configuredModels,
     restore: () => {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -74,7 +103,95 @@ test("extension registers exactly the private-agent and standard-session tools",
     assert.deepEqual(f.tools.get("spawn_session").parameters.properties.action.enum, ["create", "adopt", "continue", "list"]);
     assert.equal(f.tools.get("spawn_session").parameters.properties.path, undefined);
     assert.equal(f.tools.get("spawn_session").parameters.properties.systemPrompt, undefined);
+    assert.ok(f.tools.get("spawn_session").parameters.properties.model);
     assert.ok(f.tools.get("spawn_agent").parameters.properties.systemPrompt);
+    assert.equal(f.tools.get("spawn_agent").promptSnippet, undefined);
+    assert.equal(f.tools.get("spawn_agent").promptGuidelines, undefined);
+    assert.equal(f.tools.get("spawn_session").promptSnippet, undefined);
+    assert.equal(f.tools.get("spawn_session").promptGuidelines, undefined);
+    assert.match(f.tools.get("spawn_agent").description, /Creation policy is immutable/);
+    assert.match(f.tools.get("spawn_session").description, /Adopt only when the user explicitly asks/);
+  } finally { f.restore(); }
+});
+
+test("spawn tools advertise deferred discovery without disabling standalone use", async () => {
+  const f = await fixture();
+  try {
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    const policy = f.emitted.find(({ name, value }) => name === "pylon:tool-policy" && value.kind === "register")?.value;
+    assert.deepEqual(policy, {
+      version: 1,
+      kind: "register",
+      owner: "pi-spawn",
+      managedTools: ["spawn_agent", "spawn_session"],
+      enabledTools: ["spawn_agent", "spawn_session"],
+      deferredTools: ["spawn_agent", "spawn_session"],
+      deferredToolUsage: {
+        spawn_agent: "create or continue private customized subagent conversations",
+        spawn_session: "create, adopt, or continue inspectable Pi sessions",
+      },
+    });
+    assert.deepEqual([...f.tools.keys()].sort(), ["spawn_agent", "spawn_session"]);
+
+    for (const handler of f.handlers.get("session_shutdown") ?? []) await handler({}, f.ctx);
+    assert.deepEqual(f.emitted.at(-1), {
+      name: "pylon:tool-policy",
+      value: { version: 1, kind: "unregister", owner: "pi-spawn" },
+    });
+  } finally { f.restore(); }
+});
+
+test("spawn model choices include only authenticated models in session scope", async () => {
+  const f = await fixture();
+  try {
+    f.ctx.scopedModels = [
+      { model: f.models[0] },
+      { model: f.models[2] },
+      { model: f.models[0] },
+    ];
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.model.enum, ["fake/model"]);
+    assert.deepEqual(f.tools.get("spawn_session").parameters.properties.model.enum, ["fake/model"]);
+
+    f.ctx.scopedModels = [{ model: f.models[2] }];
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    assert.equal(f.tools.get("spawn_agent").parameters.properties.model, undefined);
+    assert.equal(f.tools.get("spawn_session").parameters.properties.model, undefined);
+  } finally { f.restore(); }
+});
+
+test("explicit models are revalidated before a child is created", async () => {
+  const f = await fixture();
+  try {
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.model.enum, ["fake/model", "custom/model"]);
+    f.configuredModels.delete("custom/model");
+
+    for (const name of ["spawn_agent", "spawn_session"]) {
+      const rejected = await f.tools.get(name).execute("create", {
+        action: "create", prompt: "do not start", model: "custom/model",
+      }, undefined, undefined, f.ctx);
+      assert.equal(rejected.details.failureCode, "model_unavailable");
+      assert.match(rejected.content[0].text, /Available models: fake\/model/);
+    }
+    assert.equal(f.calls.length, 0);
+  } finally { f.restore(); }
+});
+
+test("explicit models honor scope changes after schema registration", async () => {
+  const f = await fixture();
+  try {
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    assert.deepEqual(f.tools.get("spawn_session").parameters.properties.model.enum, ["fake/model", "custom/model"]);
+    f.ctx.scopedModels = [{ model: f.models[0] }];
+
+    for (const name of ["spawn_agent", "spawn_session"]) {
+      const rejected = await f.tools.get(name).execute("create", {
+        action: "create", prompt: "out of scope", model: "custom/model",
+      }, undefined, undefined, f.ctx);
+      assert.equal(rejected.details.failureCode, "model_unavailable");
+    }
+    assert.equal(f.calls.length, 0);
   } finally { f.restore(); }
 });
 
@@ -88,6 +205,8 @@ test("private agents stay outside the normal session index and preserve creation
     }, undefined, undefined, f.ctx);
     const id = created.details.piSpawn.id;
     assert.match(created.content[0].text, /reply:inspect auth/);
+    assert.match(created.details.agentName, /^[A-Za-z-]+$/);
+    assert.doesNotMatch(created.details.agentName, /^(Agent|Thread)-/);
     assert.ok(!(await SessionManager.list(f.cwd)).some((session) => session.id === id));
     assert.ok((await SessionManager.list(f.cwd, privateAgentDir(f.parent.getSessionId(), f.agentDir))).some((session) => session.id === id));
     assert.deepEqual(f.calls[0].args.slice(0, 4), ["--mode", "rpc", "--session", f.calls[0].args[3]]);
@@ -100,6 +219,7 @@ test("private agents stay outside the normal session index and preserve creation
     persist(f.parent, "spawn_agent", created);
     const continued = await tool.execute("continue", { action: "continue", id, prompt: "go deeper" }, undefined, undefined, f.ctx);
     assert.match(continued.content[0].text, /reply:go deeper/);
+    assert.equal(continued.details.agentName, created.details.agentName);
     assert.ok(f.calls[1].args.includes("private system"));
     const listed = await tool.execute("list", { action: "list" }, undefined, undefined, f.ctx);
     assert.match(listed.content[0].text, new RegExp(id));
@@ -110,7 +230,7 @@ test("private agents stay outside the normal session index and preserve creation
   } finally { f.restore(); }
 });
 
-test("spawned sessions use standard storage and expose no runtime-policy CLI overrides", async () => {
+test("spawned sessions use standard storage and preserve their chosen model", async () => {
   const f = await fixture();
   try {
     const tool = f.tools.get("spawn_session");
@@ -121,15 +241,46 @@ test("spawned sessions use standard storage and expose no runtime-policy CLI ove
     assert.ok(info);
     assert.equal(info.name, "Visible thread");
     assert.equal(info.parentSessionPath, f.parent.getSessionFile());
-    assert.deepEqual(f.calls[0].args, ["--mode", "rpc", "--session", info.path]);
+    assert.deepEqual(f.calls[0].args, ["--mode", "rpc", "--session", info.path, "--model", "fake/model"]);
+    assert.equal(f.calls[0].env.PI_SPAWN_CHILD, "session");
 
     persist(f.parent, "spawn_session", created);
     const continued = await tool.execute("continue", { action: "continue", id, prompt: "second turn" }, undefined, undefined, f.ctx);
     assert.match(continued.content[0].text, /reply:second turn/);
-    assert.deepEqual(f.calls[1].args, ["--mode", "rpc", "--session", info.path]);
+    assert.deepEqual(f.calls[1].args, ["--mode", "rpc", "--session", info.path, "--model", "fake/model"]);
     const listed = await tool.execute("list", { action: "list" }, undefined, undefined, f.ctx);
     assert.match(listed.content[0].text, new RegExp(id));
   } finally { f.restore(); }
+});
+
+test("spawned sessions snapshot Pylon hooks and apply before-agent-start context", async () => {
+  const f = await fixture();
+  const previousChild = process.env.PI_SPAWN_CHILD;
+  try {
+    f.busHandlers.set("pylon:spawn-hooks-request", [(request: any) => request.provide({
+      sessionStart: { customType: "pylon-session-start-hook", content: "SESSION HOOK" },
+      beforeAgentStart: "BEFORE HOOK",
+    })]);
+    const created = await f.tools.get("spawn_session").execute("create", {
+      action: "create", prompt: "hooked child", name: "Hooked child", model: "custom/model",
+    }, undefined, undefined, f.ctx);
+    const child = (await SessionManager.list(f.cwd)).find((session) => session.id === created.details.piSpawn.id)!;
+    assert.deepEqual(f.calls[0].args, ["--mode", "rpc", "--session", child.path, "--model", "custom/model"]);
+    const manager = SessionManager.open(child.path);
+    assert.equal(manager.getEntries().filter((entry) => entry.type === "custom_message").length, 0);
+
+    process.env.PI_SPAWN_CHILD = "session";
+    const childContext = { sessionManager: manager };
+    (f.handlers.get("session_start") ?? [])[0]?.({}, childContext);
+    assert.deepEqual(f.sentMessages, [{ customType: "pylon-session-start-hook", content: "SESSION HOOK", display: false }]);
+    const before = (f.handlers.get("before_agent_start") ?? [])[0];
+    assert.ok(before);
+    assert.equal(before({ systemPrompt: "BASE" }, childContext).systemPrompt, "BASE\n\nBEFORE HOOK");
+  } finally {
+    if (previousChild === undefined) delete process.env.PI_SPAWN_CHILD;
+    else process.env.PI_SPAWN_CHILD = previousChild;
+    f.restore();
+  }
 });
 
 test("existing project sessions can be adopted, prompted, listed, and continued", async () => {

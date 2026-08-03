@@ -9,10 +9,17 @@ const settings = {
 
 test("hook bridge persists session-start context once per branch and composes transient prompts", () => {
   const handlers = new Map<string, Function[]>();
+  const busHandlers = new Map<string, Function>();
   const messages: unknown[] = [];
   const extension = new HookInjectionBridge(settings).extension;
   if (typeof extension === "function") throw new Error("expected named inline extension");
   extension.factory({
+    events: {
+      on(name: string, handler: Function) {
+        busHandlers.set(name, handler);
+        return () => busHandlers.delete(name);
+      },
+    },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
     sendMessage(message: unknown) { messages.push(message); },
   } as any);
@@ -27,4 +34,12 @@ test("hook bridge persists session-start context once per branch and composes tr
   const result = handlers.get("before_agent_start")![0]!({ systemPrompt: "BASE" }, context);
   assert.match(result.systemPrompt, /^BASE\n\n<pylon-hook/);
   assert.match(result.systemPrompt, /BEFORE/);
+
+  let spawnHooks: any;
+  busHandlers.get("pylon:spawn-hooks-request")!({ version: 1, provide: (value: unknown) => { spawnHooks = value; } });
+  assert.equal(spawnHooks.sessionStart.customType, SESSION_START_HOOK_CUSTOM_TYPE);
+  assert.match(spawnHooks.sessionStart.content, /START/);
+  assert.match(spawnHooks.beforeAgentStart, /BEFORE/);
+  handlers.get("session_shutdown")![0]!();
+  assert.equal(busHandlers.has("pylon:spawn-hooks-request"), false);
 });

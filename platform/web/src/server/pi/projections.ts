@@ -12,7 +12,8 @@ const MAX_TOOLS = 100;
 const MAX_DELEGATED_RUNS = 100;
 const MAX_PAYLOAD_TEXT = 8 * 1024;
 const MAX_AGENT_ACTIVITY_TEXT = 2_000;
-const delegatedAgentKinds = new Set<DelegatedAgentKind>(["advisor", "grunt", "repo_scout", "web_scout"]);
+const delegatedAgentKinds = new Set<DelegatedAgentKind>(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
+const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
 export const HISTORY_PAGE_SIZE = MAX_MESSAGES;
 
@@ -126,8 +127,13 @@ export function browserValue(value: unknown, depth = 0): unknown {
   return undefined;
 }
 
-function delegatedAgentKind(value: unknown): DelegatedAgentKind | undefined {
-  return delegatedAgentKinds.has(value as DelegatedAgentKind) ? value as DelegatedAgentKind : undefined;
+function delegatedAgentKind(value: unknown, input?: unknown): DelegatedAgentKind | undefined {
+  if (!delegatedAgentKinds.has(value as DelegatedAgentKind)) return undefined;
+  const kind = value as DelegatedAgentKind;
+  if (kind !== "spawn_agent" && kind !== "spawn_session") return kind;
+  const action = object(input).action;
+  if (!spawnExecutionActions.has(String(action)) || action === "adopt" && kind !== "spawn_session") return undefined;
+  return kind;
 }
 
 function boundedNumber(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
@@ -177,7 +183,23 @@ function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | 
 
 function delegatedRequest(input: unknown): string | undefined {
   const raw = object(input);
-  return text(raw.request ?? raw.task, MAX_PAYLOAD_TEXT) || undefined;
+  return text(raw.request ?? raw.task ?? raw.prompt, MAX_PAYLOAD_TEXT) || undefined;
+}
+
+function spawnMetadata(kind: DelegatedAgentKind, input: unknown, details: Record<string, unknown>) {
+  if (kind !== "spawn_agent" && kind !== "spawn_session") return {};
+  const action = object(input).action;
+  const validAction = spawnExecutionActions.has(String(action)) && (action !== "adopt" || kind === "spawn_session");
+  const marker = object(details.piSpawn);
+  const expectedKind = kind === "spawn_agent" ? "agent" : "session";
+  const threadId = marker.version === 1 && marker.kind === expectedKind
+    && typeof marker.id === "string" && marker.id.length > 0 && marker.id.length <= 128
+    ? marker.id
+    : undefined;
+  return {
+    ...(validAction ? { action: action as "create" | "continue" | "adopt" } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 function equalDelegatedRunExceptDuration(
@@ -232,6 +254,7 @@ function updateDelegatedRun(
     ...(response ? { response } : {}),
     ...(modelName ? { modelName } : {}),
     ...(level ? { thinkingLevel: level } : {}),
+    ...spawnMetadata(kind, input, details),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage } : {}),
     activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
@@ -286,7 +309,7 @@ export function projectConversation(
         if (item.type !== "toolCall" || typeof item.id !== "string") continue;
         const name = text(item.name, 200) || "Tool";
         toolCalls.set(item.id, { name, rawInput: item.arguments, turn: userTurn });
-        const kind = delegatedAgentKind(name);
+        const kind = delegatedAgentKind(name, item.arguments);
         if (includeDelegated && kind) {
           delegatedRuns.set(item.id, updateDelegatedRun(undefined, kind, item.id, userTurn, item.arguments, undefined, "running"));
           trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
@@ -310,7 +333,7 @@ export function projectConversation(
       const toolId = id(raw.toolCallId, fallbackId);
       const call = toolCalls.get(toolId);
       const name = text(raw.toolName, 200) || call?.name || "Tool";
-      const kind = delegatedAgentKind(name);
+      const kind = delegatedAgentKind(name, call?.rawInput);
       if (includeDelegated && kind) {
         const details = object(raw.details);
         const failed = raw.isError === true || Boolean(details.failureCode)
@@ -821,7 +844,7 @@ export class RuntimeProjection {
     const input = raw.args ?? raw.input;
     const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running" };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.start", item);
-    const kind = delegatedAgentKind(name);
+    const kind = delegatedAgentKind(name, input);
     if (kind) this.setDelegatedRun(updateDelegatedRun(undefined, kind, toolId, this.runtime.metrics.userMessages, input, undefined, "running"));
   }
   private toolUpdate(raw: Record<string, unknown>): void {

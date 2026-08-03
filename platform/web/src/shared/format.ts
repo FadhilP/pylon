@@ -1,5 +1,7 @@
 import type { ModelOptionReadModel } from "./protocol/events.ts";
 
+export const agentColorId = (agent: { id: string; threadId?: string }): string => agent.threadId ?? agent.id;
+
 export function formatWorkDuration(value: number): string {
   const seconds = Math.max(0, Math.floor(value / 1_000));
   if (seconds < 60) return `${seconds}s`;

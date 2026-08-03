@@ -39,7 +39,8 @@ export interface ToolActivityReadModel {
   summary?: string;
 }
 
-export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout";
+export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout" | "spawn_agent" | "spawn_session";
+export type SpawnExecutionActionReadModel = "create" | "continue" | "adopt";
 
 export interface DelegatedAgentActivityReadModel {
   kind: "call" | "result";
@@ -67,6 +68,8 @@ export interface DelegatedAgentRunReadModel {
   status: "running" | "completed" | "failed";
   modelName?: string;
   thinkingLevel?: ThinkingLevelReadModel;
+  threadId?: string;
+  action?: SpawnExecutionActionReadModel;
   durationMs?: number;
   usage?: DelegatedAgentUsageReadModel;
   activity: DelegatedAgentActivityReadModel[];

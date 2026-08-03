@@ -129,8 +129,8 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
       eventHandlers.set(name, values);
       return () => values.delete(handler);
     },
-    emit(name: string, value: any) {
-      for (const handler of eventHandlers.get(name) ?? []) handler(value);
+    async emit(name: string, value: any) {
+      await Promise.all([...eventHandlers.get(name) ?? []].map((handler) => handler(value)));
     },
   };
   const pi: any = {
@@ -153,15 +153,13 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
   try {
     await handlers.get("session_start")![0]({}, ctx);
     await handlers.get("agent_start")![0]({}, ctx);
-    events.emit("pi-heartbeat:job", { version: 1, id: "foreign-job", sessionId: "other-session", cwd: root, state: "running" });
-    events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "running" });
+    await events.emit("pi-heartbeat:job", { version: 1, id: "foreign-job", sessionId: "other-session", cwd: root, state: "running" });
+    await events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "running" });
     await handlers.get("tool_result")![0]({ toolName: "heartbeat_start", toolCallId: "heartbeat" }, ctx);
     await handlers.get("agent_settled")![0]({}, ctx);
     assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
     await writeFile(join(root, "tracked.txt"), "background\n");
-    events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "completed" });
-    for (let attempt = 0; attempt < 100 && !appended.some((entry) => entry.customType === "pi-prompt-checkpoint"); attempt++)
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    await events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "completed" });
     assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 1);
 
     entries.push({ type: "message", id: "user-2", message: { role: "user", content: "Delegate edit" } });
@@ -182,12 +180,10 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
     const settling = handlers.get("agent_settled")![0]({}, ctx);
     await writeFile(join(root, "tracked.txt"), "race-two\n");
     await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-race" }, ctx);
-    await settling;
-    for (let attempt = 0; attempt < 200 && appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length < 4; attempt++)
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    const shutdown = handlers.get("session_shutdown")![0]();
+    await Promise.all([settling, shutdown]);
     checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
-    assert.equal(checkpoints.length, 4, "a mutation arriving during capture gets a later checkpoint");
-    await handlers.get("session_shutdown")![0]();
+    assert.equal(checkpoints.length, 4, "shutdown drains a mutation arriving during capture");
     for (const checkpoint of checkpoints)
       await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
   } finally {

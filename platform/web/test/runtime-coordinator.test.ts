@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
+import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
+import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
@@ -30,6 +32,19 @@ async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(check());
+}
+
+function runtime(sessionId: string, messages: RuntimeSnapshot["conversation"]["messages"] = []): RuntimeSnapshot {
+  return {
+    protocolVersion: PROTOCOL_VERSION, sessionId, sessionGeneration: 1, ready: true, cwdLabel: "repo",
+    activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [],
+    conversation: { messages, tools: [], delegatedRuns: [], streaming: false, queue: { steering: 0, followUp: 0 }, retry: { active: false }, compaction: { active: false } },
+    sessionControls: { model: { provider: "mock", id: "test", name: "Test" }, models: [{ provider: "mock", id: "test", name: "Test" }], thinkingLevel: "medium", thinkingLevels: ["low", "medium", "high"] },
+    runtimePolicy: { revision: 1, global: { timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, project: { verify: { mode: "auto" }, timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
+    metrics: { model: "test", provider: "mock", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, contextTokens: 0, contextLimit: 1, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0 },
+    operational: initialOperational([], []),
+    extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
+  };
 }
 
 function persistSession(session: SessionManager, name: string): void {
@@ -111,6 +126,64 @@ test("session index pages projects, counts user messages, and searches unloaded 
   }
 });
 
+test("session selection retries a snapshot invalidated by a background completion", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  const internal = coordinator as any;
+  const stale = runtime("background");
+  const fresh = runtime("background", [
+    { id: "history-1", entryId: "assistant-entry", role: "assistant", text: "Completed while switching", streaming: false },
+  ]);
+  const slot = {
+    id: "background",
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    driver: {
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+    },
+    lastState: "running",
+    lastWorkStartedAt: undefined,
+  };
+  internal.generation = 1;
+  internal.selectedId = "selected";
+  internal.slots.set(slot.id, slot);
+  internal.invalidateWorkspaceInventory = () => {};
+  internal.refreshWorkspace = async () => {};
+  let releaseSettlement!: () => void;
+  internal.settleAgentRun = () => new Promise<void>((resolve) => { releaseSettlement = resolve; });
+  let snapshots = 0;
+  let releaseFirst!: () => void;
+  internal.snapshotFor = () => {
+    snapshots++;
+    if (snapshots > 1) return Promise.resolve(fresh);
+    return new Promise<RuntimeSnapshot>((resolve) => { releaseFirst = () => resolve(stale); });
+  };
+
+  const selecting = internal.select(slot);
+  for (const type of ["message_end", "agent_end"]) {
+    internal.onSlotEvent(slot, {
+      type: "session.event",
+      sessionId: slot.id,
+      sessionGeneration: 1,
+      payload: { type, stopped: false },
+    });
+  }
+  releaseFirst();
+  await selecting;
+  releaseSettlement();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const replacement = events.find((event) => event.type === "session.replaced");
+  const completion = events.find((event) => event.type === "session.status" && event.completed === true);
+  assert.equal(snapshots, 2);
+  assert.equal(events.some((event) => event.type === "session.event"), false);
+  assert.equal(replacement.runtime.conversation.messages[0]?.text, "Completed while switching");
+  assert.equal(completion?.cue, "turn-complete");
+});
+
 test("session status publishes work timer changes even when runtime state is unchanged", () => {
   const coordinator = new RuntimeCoordinator();
   const events: Array<{ workStartedAt?: string | null }> = [];
@@ -159,6 +232,7 @@ test("background completion preserves its sound cue when selection changes durin
   internal.selectedId = "selected";
   const slot = {
     id: "background",
+    eventRevision: 0,
     driver: {
       runtimeState: () => "idle",
       runtimeDetails: () => ({ workStartedAt: undefined }),
@@ -199,6 +273,7 @@ test("background attention status carries explicit sound cue intent", () => {
   internal.selectedId = "selected";
   const slot = {
     id: "background",
+    eventRevision: 0,
     driver: {
       runtimeState: () => "attention",
       runtimeDetails: () => ({ workStartedAt: undefined }),

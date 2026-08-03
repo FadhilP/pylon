@@ -55,25 +55,32 @@ export default function (pi) {
   try {
     const parent = SessionManager.create(cwd);
     persistParent(parent);
-    const child = createSpawnedSession(cwd, { id: parent.getSessionId(), file: parent.getSessionFile()! }, "RPC child");
+    const child = createSpawnedSession(cwd, { id: parent.getSessionId(), file: parent.getSessionFile()! }, "RPC child", {
+      hooks: {
+        sessionStart: { customType: "pylon-session-start-hook", content: "SESSION HOOK" },
+        beforeAgentStart: "BEFORE HOOK",
+      },
+    });
     const args = [
       "--mode", "rpc", "--session", child.info.path,
-      "--no-extensions", "-e", extension,
+      "--no-extensions", "-e", extension, "-e", join(import.meta.dirname, "../extensions/pi-spawn.ts"),
       "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-tools",
       "--model", "pi-spawn-test/model",
     ];
-    const env = { PI_CODING_AGENT_DIR: agentDir };
+    const env = { PI_CODING_AGENT_DIR: agentDir, PI_SPAWN_CHILD: "session" };
     const first = await runSpawn(args, { cwd, prompt: "first", env, timeoutMs: 30_000 });
     assert.equal(first.error, undefined);
-    assert.equal(first.text, "users:1");
+    assert.equal(first.text, "users:2");
     assert.doesNotThrow(() => SessionManager.open(child.info.path));
 
     const second = await runSpawn(args, { cwd, prompt: "second", env, timeoutMs: 30_000 });
     assert.equal(second.error, undefined);
-    assert.equal(second.text, "users:2");
+    assert.equal(second.text, "users:3");
     const entries = SessionManager.open(child.info.path).getEntries();
     assert.equal(entries.filter(entry => entry.type === "message" && entry.message.role === "user").length, 2);
     assert.equal(entries.filter(entry => entry.type === "message" && entry.message.role === "assistant").length, 2);
+    assert.equal(entries.filter(entry => entry.type === "model_change").length, 1);
+    assert.equal(entries.filter(entry => entry.type === "custom_message" && entry.customType === "pylon-session-start-hook").length, 1);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

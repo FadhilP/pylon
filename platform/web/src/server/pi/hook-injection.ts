@@ -37,13 +37,26 @@ export class HookInjectionBridge {
     name: "pylon-hook-injection",
     hidden: true,
     factory: (pi) => {
+      const unsubscribe = pi.events.on("pylon:spawn-hooks-request", (value) => {
+        const request = value as { version?: unknown; provide?: unknown };
+        if (request?.version !== 1 || typeof request.provide !== "function") return;
+        const sessionStart = formatHookSources(this.settings.sessionStart, "sessionStart");
+        const beforeAgentStart = formatHookSources(this.settings.beforeAgentStart, "beforeAgentStart");
+        request.provide({
+          ...(sessionStart ? { sessionStart: { customType: SESSION_START_HOOK_CUSTOM_TYPE, content: sessionStart } } : {}),
+          ...(beforeAgentStart ? { beforeAgentStart } : {}),
+        });
+      });
+      pi.on("session_shutdown", unsubscribe);
       pi.on("session_start", (_event, ctx) => {
+        if (process.env.PI_SPAWN_CHILD === "session") return;
         const content = formatHookSources(this.settings.sessionStart, "sessionStart");
         if (!content || branchHasSessionStartMessage(ctx.sessionManager.getBranch())) return;
         // No trigger: persist hidden session context without starting an agent turn.
         pi.sendMessage({ customType: SESSION_START_HOOK_CUSTOM_TYPE, content, display: false });
       });
       pi.on("before_agent_start", (event) => {
+        if (process.env.PI_SPAWN_CHILD === "session") return;
         const content = formatHookSources(this.settings.beforeAgentStart, "beforeAgentStart");
         if (!content) return;
         return { systemPrompt: `${event.systemPrompt}\n\n${content}` };

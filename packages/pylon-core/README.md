@@ -29,7 +29,7 @@ Guard remains the independent final safety authority; Pylon never approves or we
 ## Runtime Behavior
 
 - Merges independently enabled tools without lost updates.
-- Keeps optional browser and capture tools inactive until pi-discover selects them; configured workflow tools remain active so their guidance stays visible.
+- Keeps optional browser, capture, and spawn tools inactive until pi-discover selects them; configured workflow tools remain active so their guidance stays visible.
 - Replaces bounded discovery selections without bypassing restrictive gates.
 - Tracks unmanaged baseline tools separately from package-managed tools.
 - Supports explicit baseline tool enable/disable without bypassing package policies.

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runSpawn, spawnTimeoutMs, type SpawnActivity, type SpawnRun } from "../src/runner.ts";
 import {
@@ -13,11 +14,15 @@ import {
   listSpawnedSessions,
   requireParent,
   resultDetails,
+  sessionPolicy,
+  spawnedHooks,
   threadInfo,
   withThreadLock,
   SessionAdoptionError,
   type AgentPolicy,
+  type SpawnHooks,
   type SpawnKind,
+  type SpawnMarker,
 } from "../src/sessions.ts";
 
 const agentActions = ["create", "continue", "list"] as const;
@@ -34,10 +39,10 @@ const threadParameters = {
   prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000, description: "Prompt for create, adopt, or continue" })),
 };
 
-const AgentParameters = Type.Object({
+const createAgentParameters = () => Type.Object({
   action: StringEnum(agentActions, { description: "Create a thread, continue one, or list threads available from the current parent branch" }),
   ...threadParameters,
-  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Display name fixed when the private thread is created" })),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Concise purpose-based display name fixed when the private thread is created" })),
   model: Type.Optional(Type.String({ minLength: 3, maxLength: 300, description: "Optional provider/model fixed when the private thread is created" })),
   thinking: Type.Optional(StringEnum(thinkingLevels, { description: "Thinking level fixed when the private thread is created" })),
   systemPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Replacement system prompt fixed when the private thread is created" })),
@@ -45,22 +50,51 @@ const AgentParameters = Type.Object({
   disableSpecialists: Type.Optional(Type.Boolean({ description: "Disable Advisor, Grunt, and Scout in this private thread; default true" })),
 }, { additionalProperties: false });
 
-const SessionParameters = Type.Object({
+const createSessionParameters = () => Type.Object({
   action: StringEnum(sessionActions, { description: "Create a session, adopt an existing project session by ID, continue one, or list sessions available from the current parent branch" }),
   ...threadParameters,
-  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Display name for a newly created standard Pi session" })),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Concise purpose-based display name for a newly created standard Pi session" })),
+  model: Type.Optional(Type.String({ minLength: 3, maxLength: 300, description: "Optional provider/model fixed when the standard session is created" })),
 }, { additionalProperties: false });
+
+const SCIENTIST_NAMES = [
+  "Ada", "Marie", "Charles", "Jane", "Alan", "Grace", "Emmy", "Vera", "Carl",
+  "Tu", "Rosalind", "Katherine", "Ibn", "Srinivasa", "Chien-Shiung", "Dorothy",
+  "Rachel", "Jagadish",
+] as const;
 
 const preview = (value: string, max = 72) => {
   const text = value.trim().replace(/\s+/g, " ");
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 };
-const defaultName = (kind: SpawnKind, prompt: string) => `${kind === "agent" ? "Agent" : "Thread"}: ${preview(prompt, 100)}`;
+const defaultName = (prompt: string) => preview(prompt, 100);
+const scientistName = (id: string) => SCIENTIST_NAMES[createHash("sha256").update(id).digest().readUInt32BE(0) % SCIENTIST_NAMES.length];
 const currentModel = (ctx: any): string | undefined =>
   ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+const availableModels = (ctx: any): string[] => {
+  const models = ctx.scopedModels.length
+    ? ctx.scopedModels.map(({ model }: any) => model)
+    : ctx.modelRegistry.getAvailable();
+  return [...new Set<string>(models
+    .filter((model: any) => ctx.modelRegistry.hasConfiguredAuth(model))
+    .map((model: any) => `${model.provider}/${model.id}`))];
+};
+const modelError = (requested: string, ctx: any): string | undefined => {
+  const available = availableModels(ctx);
+  if (available.includes(requested)) return;
+  const shown = available.slice(0, 20);
+  return `Unavailable model: ${requested}.${shown.length
+    ? ` Available models: ${shown.join(", ")}${available.length > shown.length ? `, and ${available.length - shown.length} more` : ""}.`
+    : " No models are currently available."}`;
+};
+const setModelChoices = (parameters: any, models: string[], description: string) => {
+  if (!models.length) delete parameters.properties.model;
+  else parameters.properties.model = Type.Optional(StringEnum(models, { description }));
+};
 const creationOnlyAgentFields = (params: any) =>
   params.name !== undefined || params.model !== undefined || params.thinking !== undefined
   || params.systemPrompt !== undefined || params.tools !== undefined || params.disableSpecialists !== undefined;
+const creationOnlySessionFields = (params: any) => params.name !== undefined || params.model !== undefined;
 
 function invalidInput(kind: SpawnKind, params: any): string | undefined {
   if (params.action === "create") {
@@ -77,61 +111,91 @@ function invalidInput(kind: SpawnKind, params: any): string | undefined {
     if (kind !== "session") return "Only standard sessions can be adopted.";
     if (!params.id) return "session adopt requires id.";
     if (!params.prompt?.trim()) return "session adopt requires prompt.";
-    if (params.name !== undefined) return "Session name cannot be changed on adopt.";
+    if (creationOnlySessionFields(params)) return "Session name and model cannot be changed on adopt.";
     return;
   }
   if (params.action === "continue") {
     if (!params.id) return `${kind} continue requires id.`;
     if (!params.prompt?.trim()) return `${kind} continue requires prompt.`;
     if (kind === "agent" && creationOnlyAgentFields(params)) return "Agent creation policy cannot change on continue.";
-    if (kind === "session" && params.name !== undefined) return "Session name can only be set on create.";
+    if (kind === "session" && creationOnlySessionFields(params)) return "Session name and model can only be set on create.";
     return;
   }
   if (params.action !== "list") return `Unknown ${kind} action.`;
-  if (params.id !== undefined || params.prompt !== undefined || params.name !== undefined
-    || (kind === "agent" && creationOnlyAgentFields(params))) return `${kind} list does not accept thread or creation fields.`;
+  if (params.id !== undefined || params.prompt !== undefined
+    || (kind === "agent" ? creationOnlyAgentFields(params) : creationOnlySessionFields(params)))
+    return `${kind} list does not accept thread or creation fields.`;
 }
 
-function childArgs(kind: SpawnKind, path: string, policy?: AgentPolicy): string[] {
+function childArgs(kind: SpawnKind, path: string, policy?: AgentPolicy | SpawnMarker): string[] {
   const args = ["--mode", "rpc", "--session", path];
-  if (kind === "session") return args;
-  const excluded = [...SPAWN_TOOLS, ...(policy?.disableSpecialists ? SPECIALIST_TOOLS : [])];
+  if (kind === "session") {
+    if (policy?.model) args.push("--model", policy.model);
+    return args;
+  }
+  const agentPolicy = policy as AgentPolicy | undefined;
+  const excluded = [...SPAWN_TOOLS, ...(agentPolicy?.disableSpecialists ? SPECIALIST_TOOLS : [])];
   args.push("--exclude-tools", excluded.join(","));
-  if (policy?.model) args.push("--model", policy.model);
-  if (policy?.thinking) args.push("--thinking", policy.thinking);
-  if (policy?.systemPrompt) args.push("--system-prompt", policy.systemPrompt);
-  if (policy?.tools !== undefined) {
-    if (policy.tools.length) args.push("--tools", policy.tools.join(","));
+  if (agentPolicy?.model) args.push("--model", agentPolicy.model);
+  if (agentPolicy?.thinking) args.push("--thinking", agentPolicy.thinking);
+  if (agentPolicy?.systemPrompt) args.push("--system-prompt", agentPolicy.systemPrompt);
+  if (agentPolicy?.tools !== undefined) {
+    if (agentPolicy.tools.length) args.push("--tools", agentPolicy.tools.join(","));
     else args.push("--no-tools");
   }
   return args;
 }
 
-function runText(kind: SpawnKind, id: string, run: SpawnRun): string {
+function runText(kind: SpawnKind, id: string, name: string, run: SpawnRun): string {
   const label = kind === "agent" ? "Subagent" : "Session";
-  const status = run.error ? `${label} ${id} turn failed: ${run.error}` : `${label} ${id}:`;
+  const status = run.error ? `${label} ${name} (${id}) turn failed: ${run.error}` : `${label} ${name} (${id}):`;
   return `${status}${run.text ? `\n${run.text}` : ""}${run.truncated ? "\n[Response truncated.]" : ""}`;
 }
 
+function requestSpawnHooks(pi: ExtensionAPI): SpawnHooks | undefined {
+  let hooks: SpawnHooks | undefined;
+  pi.events.emit("pylon:spawn-hooks-request", {
+    version: 1,
+    provide: (value: SpawnHooks) => { if (hooks === undefined) hooks = value; },
+  });
+  return hooks;
+}
+
 export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = runSpawn, agentDir = getAgentDir()) {
+  const AgentParameters = createAgentParameters();
+  const SessionParameters = createSessionParameters();
+
+  pi.on("session_start", (_event, ctx) => {
+    if (process.env.PI_SPAWN_CHILD !== "session") return;
+    const sessionStart = spawnedHooks(ctx.sessionManager)?.sessionStart;
+    if (!sessionStart || ctx.sessionManager.getBranch()
+      .some((entry) => entry.type === "custom_message" && entry.customType === sessionStart.customType)) return;
+    pi.sendMessage({ customType: sessionStart.customType, content: sessionStart.content, display: false });
+  });
+  pi.on("before_agent_start", (event, ctx) => {
+    if (process.env.PI_SPAWN_CHILD !== "session") return;
+    const content = spawnedHooks(ctx.sessionManager)?.beforeAgentStart;
+    if (content) return { systemPrompt: `${event.systemPrompt}\n\n${content}` };
+  });
+
   const executeTurn = async (
     kind: SpawnKind,
     id: string,
     path: string,
     cwd: string,
     prompt: string,
-    policy: AgentPolicy | undefined,
+    policy: AgentPolicy | SpawnMarker | undefined,
     signal: AbortSignal | undefined,
     onUpdate: any,
     beforeRun?: () => void | Promise<void>,
   ) => {
     const started = Date.now();
-    const agentName = `${kind === "agent" ? "Agent" : "Thread"}-${id.slice(0, 8)}`;
+    const agentName = scientistName(id);
     let activity: readonly SpawnActivity[] = [];
     let authorized = beforeRun === undefined;
     const update = (value: unknown) => { try { onUpdate?.(value); } catch { /* UI updates must not control child lifecycle. */ } };
     update({
-      content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} ${id} is working…` }],
+      content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} ${agentName} is working…` }],
       details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", activity },
     });
     try {
@@ -154,7 +218,7 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
         });
       }, signal);
       return {
-        content: [{ type: "text" as const, text: runText(kind, id, run) }],
+        content: [{ type: "text" as const, text: runText(kind, id, agentName, run) }],
         details: {
           ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(),
           status: run.error ? "failed" : "completed", model: run.model, durationMs: run.durationMs,
@@ -176,19 +240,34 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
     }
   };
 
-  pi.registerTool({
+  pi.on("session_start", () => {
+    pi.events.emit("pylon:tool-policy", {
+      version: 1,
+      kind: "register",
+      owner: "pi-spawn",
+      managedTools: SPAWN_TOOLS,
+      enabledTools: SPAWN_TOOLS,
+      deferredTools: SPAWN_TOOLS,
+      deferredToolUsage: {
+        spawn_agent: "create or continue private customized subagent conversations",
+        spawn_session: "create, adopt, or continue inspectable Pi sessions",
+      },
+    });
+  });
+  pi.on("session_shutdown", () => {
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-spawn" });
+  });
+
+  const agentTool = defineTool({
     name: "spawn_agent",
     label: "Spawn Agent",
-    description: "Create, continue, or list private persistent subagent threads owned by the current parent-session branch. Creation may fix a custom model, system prompt, tool allowlist, and specialist-tool policy. Threads never appear in Pi's normal session list.",
-    promptSnippet: "Launch or continue a private persistent subagent thread accessible only through this parent session",
-    promptGuidelines: [
-      "Use spawn_agent for specialized, resumable delegated conversations whose transcript should remain private to the parent session.",
-      "Treat spawn_agent creation policy as immutable; continue an existing agent by ID rather than creating another when follow-up context matters.",
-    ],
+    description: "Create, continue, or list private persistent subagent threads owned by the current parent-session branch. Use for specialized, resumable delegated conversations whose transcript should remain private. Creation may fix a custom model, system prompt, tool allowlist, and specialist-tool policy. Creation policy is immutable; continue an existing agent by ID when follow-up context matters. Threads never appear in Pi's normal session list.",
     parameters: AgentParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("agent", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
+      const unavailable = params.action === "create" && params.model ? modelError(params.model, ctx) : undefined;
+      if (unavailable) return { content: [{ type: "text" as const, text: unavailable }], details: { failureCode: "model_unavailable" } };
       const parent = requireParent(ctx.sessionManager);
       const allowed = branchSpawnIds(ctx.sessionManager, "agent");
       if (params.action === "list") {
@@ -206,7 +285,7 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
           ...(params.tools !== undefined ? { tools: params.tools } : {}),
           disableSpecialists: params.disableSpecialists ?? true,
         };
-        const created = createPrivateAgent(ctx.cwd, parent, policy, params.name?.trim() || defaultName("agent", params.prompt!), agentDir);
+        const created = createPrivateAgent(ctx.cwd, parent, policy, params.name?.trim() || defaultName(params.prompt!), agentDir);
         return executeTurn("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate);
       }
       const matches = await listPrivateAgents(ctx.cwd, parent, allowed, agentDir);
@@ -217,21 +296,18 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
       return executeTurn("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate);
     },
   });
+  pi.registerTool(agentTool);
 
-  pi.registerTool({
+  const sessionTool = defineTool({
     name: "spawn_session",
     label: "Spawn Session",
-    description: "Create, adopt, continue, or list ordinary Pi sessions. Adopt resolves an existing session by exact ID in the current project and claims it for this parent branch. Sessions use the normal project runtime and appear in Pi/Pylon's standard session list. This tool cannot replace their system prompt or disable tools and extensions.",
-    promptSnippet: "Launch or continue a first-class inspectable Pi session with the normal project runtime",
-    promptGuidelines: [
-      "Use spawn_session when the user should be able to inspect or open the child conversation as an ordinary session.",
-      "Use spawn_session adopt only when the user explicitly asks to resume an existing project session; never adopt the active parent or a session open in another Pi process.",
-      "Do not use spawn_session to customize system instructions or tool policy; use spawn_agent for private specialized runtimes.",
-    ],
+    description: "Create, adopt, continue, or list ordinary Pi sessions when the child conversation should be inspectable or openable. Creation may fix a custom model; otherwise it inherits the current model. Adopt only when the user explicitly asks to resume an existing project session; it resolves an exact current-project session ID and must never target the active parent or a session open in another Pi process. Sessions use the normal project runtime and appear in Pi/Pylon's standard session list. For customized private runtimes, use spawn_agent instead; this tool cannot replace system prompts or disable tools and extensions.",
     parameters: SessionParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("session", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
+      const unavailable = params.action === "create" && params.model ? modelError(params.model, ctx) : undefined;
+      if (unavailable) return { content: [{ type: "text" as const, text: unavailable }], details: { failureCode: "model_unavailable" } };
       const parent = requireParent(ctx.sessionManager);
       const allowed = branchSpawnIds(ctx.sessionManager, "session");
       if (params.action === "list") {
@@ -242,13 +318,17 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
       if (params.action === "create") {
         if (Number(process.env.PI_SPAWN_DEPTH ?? 0) >= MAX_DEPTH)
           return { content: [{ type: "text" as const, text: `pi-spawn depth limit (${MAX_DEPTH}) reached.` }], details: { failureCode: "depth_limit" } };
-        const created = createSpawnedSession(ctx.cwd, parent, params.name?.trim() || defaultName("session", params.prompt!));
-        return executeTurn("session", created.info.id, created.info.path, ctx.cwd, params.prompt!, undefined, signal, onUpdate);
+        const created = createSpawnedSession(ctx.cwd, parent, params.name?.trim() || defaultName(params.prompt!), {
+          model: params.model ?? currentModel(ctx),
+          hooks: requestSpawnHooks(pi),
+        });
+        return executeTurn("session", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate);
       }
       if (params.action === "adopt") {
         try {
           const existing = await findSessionForAdoption(ctx.cwd, params.id!, parent);
-          return executeTurn("session", existing.id, existing.path, ctx.cwd, params.prompt!, undefined, signal, onUpdate, () => claimSpawnedSession(existing.path, existing.id, parent));
+          const hooks = requestSpawnHooks(pi);
+          return executeTurn("session", existing.id, existing.path, ctx.cwd, params.prompt!, undefined, signal, onUpdate, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return { content: [{ type: "text" as const, text: message }], details: { failureCode: error instanceof SessionAdoptionError ? error.code : "adopt_error" } };
@@ -257,7 +337,18 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
       const matches = await listSpawnedSessions(ctx.cwd, parent, allowed);
       const selected = matches.find(({ info }) => info.id === params.id);
       if (!selected) return { content: [{ type: "text" as const, text: "Spawned session is unavailable from this parent branch." }], details: { failureCode: "not_found" } };
-      return executeTurn("session", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, undefined, signal, onUpdate);
+      const policy = sessionPolicy(selected.manager, parent);
+      if (!policy) return { content: [{ type: "text" as const, text: "Spawned session policy is invalid." }], details: { ...resultDetails("session", selected.info.id), failureCode: "invalid_policy" } };
+      return executeTurn("session", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate);
     },
+  });
+  pi.registerTool(sessionTool);
+
+  pi.on("session_start", (_event, ctx) => {
+    const models = availableModels(ctx);
+    setModelChoices(AgentParameters, models, "Available provider/model fixed when the private thread is created");
+    setModelChoices(SessionParameters, models, "Available provider/model fixed when the standard session is created");
+    pi.registerTool(agentTool);
+    pi.registerTool(sessionTool);
   });
 }

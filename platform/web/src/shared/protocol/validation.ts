@@ -14,7 +14,8 @@ const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhig
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
 const memoryKinds = new Set(["workflow", "structure", "architecture", "warning", "preference"]);
-const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout"]);
+const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
+const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -442,6 +443,9 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     && identifier(value.projectId)
     && (projectId === undefined || value.projectId === projectId)
     && (value.name === undefined || typeof value.name === "string" && value.name.length <= 200)
+    && (value.parentSession === undefined || record(value.parentSession)
+      && identifier(value.parentSession.id)
+      && boundedString(value.parentSession.title, 200))
     && typeof value.cwdLabel === "string" && value.cwdLabel.length <= 500
     && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
     && typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt))
@@ -466,6 +470,10 @@ function validDelegatedRun(value: unknown): boolean {
   if (value.startedAt !== undefined && (typeof value.startedAt !== "string" || Number.isNaN(Date.parse(value.startedAt)))) return false;
   if (value.modelName !== undefined && (typeof value.modelName !== "string" || value.modelName.length > 200)) return false;
   if (value.thinkingLevel !== undefined && !thinkingLevels.has(String(value.thinkingLevel))) return false;
+  const spawned = value.kind === "spawn_agent" || value.kind === "spawn_session";
+  if (spawned !== spawnExecutionActions.has(String(value.action))) return false;
+  if (value.action === "adopt" && value.kind !== "spawn_session") return false;
+  if (value.threadId !== undefined && (!spawned || !identifier(value.threadId))) return false;
   if (value.durationMs !== undefined && (!Number.isSafeInteger(value.durationMs)
     || (value.durationMs as number) < 0 || (value.durationMs as number) > 7 * 24 * 60 * 60 * 1_000)) return false;
   if (value.usage !== undefined) {

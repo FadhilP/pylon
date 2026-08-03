@@ -21,7 +21,7 @@ test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
 });
 
-test("command validation allowlists bounded v26 commands and attachments", () => {
+test("command validation allowlists bounded v27 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -328,11 +328,20 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, messages: [{ ...timedSnapshot.conversation.messages[0], workDurationMs: 8 * 24 * 60 * 60 * 1_000 }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], kind: "unknown" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ kind: "result", tool: "read", text: "x".repeat(2_001) }] }] } }), false);
+  const spawnedRun = { ...timedSnapshot.conversation.delegatedRuns[0], kind: "spawn_session", action: "adopt", threadId: "child-session" };
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [spawnedRun] } }), true);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, action: undefined }] } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, kind: "spawn_agent" }] } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, threadId: "x".repeat(129) }] } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], action: "create" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...snapshot, optionalCapabilities: { verify: "maybe" } }), false);
 
   const session = { id: "session-1", projectId: "project-one", cwdLabel: "repo", createdAt: new Date(0).toISOString(), modifiedAt: new Date(0).toISOString(), userMessageCount: 1, preview: "hello", active: true, pinned: false, runtimeState: "idle" };
   const sessions = { protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, activeSessions: [session], projects: [{ id: "project-one", label: "repo", cwd: "/projects/repo", totalCount: 1, sessions: [session] }] };
   assert.equal(isSessionListSnapshot(sessions), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "parent-1", title: "Parent work" } }] }), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "", title: "Parent work" } }] }), false);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "parent-1", title: "x".repeat(201) } }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: new Date(1).toISOString() }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: "invalid" }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", cwd: "/projects/empty", totalCount: 0, sessions: [] }] }), true);

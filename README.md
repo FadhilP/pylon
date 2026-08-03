@@ -101,7 +101,7 @@ Packages coordinate through bounded, versioned event-bus metadata while remainin
 - Pylon fingerprints the worktree once around each model turn containing shell calls; Continuity and Timeline consume the shared mutation result while retaining standalone fallbacks.
 - Heartbeat publishes job lifecycle with optional todo and purpose metadata; Continuity tracks explicitly linked jobs.
 - Grunt performs sequential implementation in an isolated temporary Git worktree by default, applying successful non-stale patches back to the parent. Direct mode edits the current working directory without rollback guarantees; dynamic mode selects isolation when Git `HEAD` exists and direct execution otherwise. Main retains architecture, review, and final verification; Advisor consultation remains optional and evidence-driven.
-- Advisor, Grunt, repository Scout, Continuity, and Memory stay active when configured so their workflow guidance remains visible. Discover keeps `rg`, `fd`, and `search_tools` active while Pylon defers optional browser and capture schemas until discovery selects them; restrictive gates remain authoritative.
+- Advisor, Grunt, repository Scout, Continuity, and Memory stay active when configured so their workflow guidance remains visible. Discover keeps `rg`, `fd`, and `search_tools` active while Pylon defers optional browser, capture, and spawn schemas until discovery selects them; restrictive gates remain authoritative.
 - Scout receives bounded verification and checkpoint archaeology from parent session metadata.
 - Continuity supports `/plan review`, recording the shared run's `reviewer` phase for Timeline grouping.
 

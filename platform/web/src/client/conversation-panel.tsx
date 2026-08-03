@@ -1,4 +1,4 @@
-import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconRobot, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconBotId, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport } from "../shared/transcript";
@@ -1686,10 +1686,10 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
     {displayed.slice(0, 3).map((run) => {
       const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
       const elapsed = Number.isNaN(started) ? run.durationMs ?? 0 : Math.max(0, now - started);
-      return <button type="button" key={run.id} style={agentColor(run.id)} onClick={() => onSelect?.(run.id)}>
-        <span className="agent-state is-running" aria-hidden="true" />
-        <IconRobot size={14} />
-        <span><strong>{run.agentName || agentKindLabel(run.kind)}</strong><small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small></span>
+      return <button type="button" key={run.id} style={agentColor(run)} onClick={() => onSelect?.(run.id)}>
+        <span className="agent-state is-working" aria-hidden="true" />
+        <IconBotId size={14} />
+        <span><strong>{run.agentName ? <span className="agent-instance-name">{run.agentName}</span> : agentKindLabel(run.kind)}</strong><small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small></span>
         <time>{formatWorkDuration(elapsed)}</time>
       </button>;
     })}
@@ -1700,6 +1700,8 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
 function agentKindLabel(kind: DelegatedAgentKind): string {
   if (kind === "repo_scout") return "Repo Scout";
   if (kind === "web_scout") return "Web Scout";
+  if (kind === "spawn_agent") return "Private Agent";
+  if (kind === "spawn_session") return "Spawned Session";
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 

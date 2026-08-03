@@ -280,6 +280,7 @@ export interface SessionSummary {
   id: string;
   projectId: string;
   name?: string;
+  parentSession?: { id: string; title: string };
   cwdLabel: string;
   createdAt: string;
   modifiedAt: string;

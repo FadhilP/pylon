@@ -23,10 +23,17 @@ export type AgentPolicy = {
   createdAt: string;
 };
 
+export type SpawnHooks = {
+  sessionStart?: { customType: string; content: string };
+  beforeAgentStart?: string;
+};
+
 export type SpawnMarker = {
   version: 1;
   ownerSessionId: string;
   ownerSessionFile: string;
+  model?: string;
+  hooks?: SpawnHooks;
   createdAt: string;
 };
 
@@ -85,12 +92,26 @@ function customData<T>(manager: SessionManager, customType: string): T[] {
   return result;
 }
 
-function validOwner(value: any, parent: { id: string; file: string }): boolean {
+const boundedText = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max;
+const validHooks = (value: any): value is SpawnHooks => value !== undefined
+  && typeof value === "object" && !Array.isArray(value)
+  && (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024))
+  && (value.sessionStart === undefined || boundedText(value.sessionStart?.customType, 128)
+    && boundedText(value.sessionStart?.content, 300 * 1024));
+
+function validMarker(value: any): value is SpawnMarker {
   return value?.version === 1
+    && boundedText(value.ownerSessionId, 128)
+    && boundedText(value.ownerSessionFile, 32_768)
+    && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
+    && (value.model === undefined || boundedText(value.model, 300))
+    && (value.hooks === undefined || validHooks(value.hooks));
+}
+
+function validOwner(value: any, parent: { id: string; file: string }): boolean {
+  return validMarker(value)
     && value.ownerSessionId === parent.id
-    && typeof value.ownerSessionFile === "string"
-    && canonical(value.ownerSessionFile) === canonical(parent.file)
-    && typeof value.createdAt === "string";
+    && canonical(value.ownerSessionFile) === canonical(parent.file);
 }
 
 function ownedBy(manager: SessionManager, markerType: string, parent: { id: string; file: string }): boolean {
@@ -122,7 +143,12 @@ export async function findSessionForAdoption(
   return info;
 }
 
-export function claimSpawnedSession(path: string, expectedId: string, parent: { id: string; file: string }): void {
+export function claimSpawnedSession(
+  path: string,
+  expectedId: string,
+  parent: { id: string; file: string },
+  hooks?: SpawnHooks,
+): void {
   const manager = SessionManager.open(path);
   if (manager.getSessionId() !== expectedId || canonical(manager.getSessionFile() ?? path) !== canonical(path))
     throw new SessionAdoptionError("invalid", "Existing session identity changed before adoption.");
@@ -139,6 +165,7 @@ export function claimSpawnedSession(path: string, expectedId: string, parent: { 
     version: 1,
     ownerSessionId: parent.id,
     ownerSessionFile: parent.file,
+    ...(hooks ? { hooks } : {}),
     createdAt: new Date().toISOString(),
   } satisfies SpawnMarker);
 }
@@ -184,12 +211,15 @@ export function createSpawnedSession(
   cwd: string,
   parent: { id: string; file: string },
   name: string,
-): { manager: SessionManager; info: SessionInfo } {
+  options: { model?: string; hooks?: SpawnHooks } = {},
+): { manager: SessionManager; info: SessionInfo; policy: SpawnMarker } {
   const manager = SessionManager.create(cwd, undefined, { parentSession: parent.file });
   const marker: SpawnMarker = {
     version: 1,
     ownerSessionId: parent.id,
     ownerSessionFile: parent.file,
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.hooks ? { hooks: options.hooks } : {}),
     createdAt: new Date().toISOString(),
   };
   manager.appendCustomEntry(SESSION_MARKER, marker);
@@ -198,6 +228,7 @@ export function createSpawnedSession(
   const path = manager.getSessionFile()!;
   return {
     manager,
+    policy: marker,
     info: {
       path,
       id: manager.getSessionId(),
@@ -250,6 +281,19 @@ export async function listSpawnedSessions(
 export function agentPolicy(manager: SessionManager, parent: { id: string; file: string }): AgentPolicy | undefined {
   const policies = customData<AgentPolicy>(manager, AGENT_MARKER);
   return policies.length > 0 && policies.every((policy) => validOwner(policy, parent)) ? policies[0] : undefined;
+}
+
+export function sessionPolicy(manager: SessionManager, parent: { id: string; file: string }): SpawnMarker | undefined {
+  const policies = customData<SpawnMarker>(manager, SESSION_MARKER);
+  return policies.length > 0 && policies.every((policy) => validOwner(policy, parent)) ? policies.at(-1) : undefined;
+}
+
+export function spawnedHooks(manager: ParentSessionManager): SpawnHooks | undefined {
+  const policies: SpawnMarker[] = [];
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "custom" && entry.customType === SESSION_MARKER && validMarker(entry.data)) policies.push(entry.data);
+  }
+  return policies.length > 0 ? policies.at(-1)?.hooks : undefined;
 }
 
 export function threadInfo(kind: SpawnKind, info: SessionInfo): SpawnThreadInfo {

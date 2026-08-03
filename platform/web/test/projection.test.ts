@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { agentColorId } from "../src/shared/format.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { decodeHistoryCursor, encodeHistoryCursor, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
@@ -338,6 +339,104 @@ test("history projection reconstructs bounded delegated runs from tool details",
     activity: activity.slice(0, 100).map((item) => ({ ...item, text: item.text.slice(0, 2_000) })),
   });
   assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);
+});
+
+test("pi-spawn executions expose stable child metadata and ignore list actions", () => {
+  const projected = projectConversation([
+    { role: "user", content: "Delegate the investigation" },
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-create", name: "spawn_agent", arguments: { action: "create", prompt: "Inspect auth" } }] },
+    {
+      role: "toolResult", toolCallId: "spawn-create", toolName: "spawn_agent", isError: false,
+      content: [{ type: "text", text: "First report" }],
+      details: {
+        piSpawn: { version: 1, kind: "agent", id: "child-agent" }, agentName: "Agent-child", status: "completed",
+        model: "provider/child", durationMs: 20,
+        usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+        activity: [{ kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" }],
+      },
+    },
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-continue", name: "spawn_agent", arguments: { action: "continue", id: "child-agent", prompt: "Go deeper" } }] },
+    {
+      role: "toolResult", toolCallId: "spawn-continue", toolName: "spawn_agent", isError: false,
+      content: [{ type: "text", text: "Second report" }],
+      details: { piSpawn: { version: 1, kind: "agent", id: "child-agent" }, status: "completed", activity: [] },
+    },
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-list", name: "spawn_agent", arguments: { action: "list" } }] },
+    { role: "toolResult", toolCallId: "spawn-list", toolName: "spawn_agent", isError: false, content: [{ type: "text", text: "child-agent" }], details: { threads: [] } },
+  ]);
+
+  assert.equal(projected.delegatedRuns.length, 2);
+  assert.deepEqual(projected.delegatedRuns.map(({ id, action, threadId, request, response }) => ({ id, action, threadId, request, response })), [
+    { id: "spawn-create", action: "create", threadId: "child-agent", request: "Inspect auth", response: "First report" },
+    { id: "spawn-continue", action: "continue", threadId: "child-agent", request: "Go deeper", response: "Second report" },
+  ]);
+  assert.equal(agentColorId(projected.delegatedRuns[0]!), agentColorId(projected.delegatedRuns[1]!));
+  assert.deepEqual(projected.delegatedRuns[0]?.usage, { input: 3, output: 5, cacheRead: 1, cacheWrite: 0, cost: 0.02 });
+  assert.deepEqual(projected.delegatedRuns[0]?.activity, [{ kind: "call", tool: "read", text: "{\n  \"path\": \"auth.ts\"\n}" }]);
+});
+
+test("invalid pi-spawn actions remain ordinary tools", () => {
+  const projected = projectConversation([
+    { role: "assistant", content: [
+      { type: "toolCall", id: "agent-adopt", name: "spawn_agent", arguments: { action: "adopt", id: "child", prompt: "No" } },
+      { type: "toolCall", id: "session-list", name: "spawn_session", arguments: { action: "list" } },
+      { type: "toolCall", id: "session-unknown", name: "spawn_session", arguments: { action: "unknown", prompt: "No" } },
+    ] },
+  ]);
+  assert.deepEqual(projected.delegatedRuns, []);
+
+  const live = new RuntimeProjection(runtime(), () => undefined);
+  live.apply(session({ type: "tool_execution_start", toolCallId: "agent-list", toolName: "spawn_agent", args: { action: "list" } }));
+  live.apply(session({ type: "tool_execution_start", toolCallId: "session-list", toolName: "spawn_session", args: { action: "list" } }));
+  assert.deepEqual(live.snapshot().conversation.delegatedRuns, []);
+});
+
+test("live spawn-session adoption gains its authorized child ID from updates", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-adopt", toolName: "spawn_session",
+    args: { action: "adopt", id: "requested-session", prompt: "Resume this" },
+  }));
+  assert.deepEqual(projection.snapshot().conversation.delegatedRuns[0], {
+    id: "spawn-adopt", kind: "spawn_session", turn: 0, request: "Resume this", status: "running", action: "adopt", activity: [],
+  });
+
+  projection.apply(session({
+    type: "tool_execution_update", toolCallId: "spawn-adopt", toolName: "spawn_session",
+    partialResult: { content: [], details: { piSpawn: { version: 2, kind: "agent", id: "untrusted-session" }, state: "running" } },
+  }));
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.threadId, undefined);
+
+  projection.apply(session({
+    type: "tool_execution_update", toolCallId: "spawn-adopt", toolName: "spawn_session",
+    partialResult: {
+      content: [{ type: "text", text: "Session is working" }],
+      details: {
+        piSpawn: { version: 1, kind: "session", id: "existing-session" }, state: "running",
+        activity: [{ kind: "call", tool: "read", text: "{\"path\":\"README.md\"}" }],
+      },
+    },
+  }));
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.threadId, "existing-session");
+  assert.notEqual(projection.snapshot().conversation.delegatedRuns[0]?.threadId, "requested-session");
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.response, undefined);
+
+  projection.apply(session({
+    type: "tool_execution_end", toolCallId: "spawn-adopt", toolName: "spawn_session", isError: false,
+    result: {
+      content: [{ type: "text", text: "Resumed" }],
+      details: {
+        piSpawn: { version: 1, kind: "session", id: "existing-session" }, status: "completed",
+        model: "provider/child", durationMs: 50,
+        usage: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
+        activity: [{ kind: "call", tool: "read", text: "{}" }],
+      },
+    },
+  }));
+  const completed = projection.snapshot().conversation.delegatedRuns[0];
+  assert.equal(completed?.status, "completed");
+  assert.equal(completed?.threadId, "existing-session");
+  assert.equal(completed?.response, "Resumed");
 });
 
 test("delegated activity remains bounded when redaction expands text", () => {

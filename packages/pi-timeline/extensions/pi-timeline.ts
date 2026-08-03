@@ -144,6 +144,7 @@ export default function timelineExtension(
     automaticMutation = false,
     automaticMutationGeneration = 0,
     agentRunning = false,
+    shuttingDown = false,
     automaticCheckpoint: Promise<void> | undefined,
     releaseSessionLease: ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
     ephemeralSession = false,
@@ -747,6 +748,7 @@ export default function timelineExtension(
     automaticMutation = false;
     automaticMutationGeneration = 0;
     agentRunning = false;
+    shuttingDown = false;
     automaticCheckpoint = undefined;
     const nextSessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!releaseSessionLease && currentSessionId === nextSessionId;
@@ -768,6 +770,7 @@ export default function timelineExtension(
     void hydrateLegacyChanges(currentSessionId);
   });
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
     namingGeneration++;
     namingInFlight = undefined;
     confirmedForks.clear();
@@ -798,18 +801,23 @@ export default function timelineExtension(
     if (event.source !== "extension") paired = false;
   });
   const flushAutomaticCheckpoint = (ctx = lastCtx) => {
-    if (!ctx || !enabled || agentRunning || runningHeartbeatJobs.size || !automaticMutation) return automaticCheckpoint;
+    if (!ctx || !enabled || shuttingDown || agentRunning || runningHeartbeatJobs.size || !automaticMutation) return automaticCheckpoint;
     if (!automaticCheckpoint) {
-      const generation = automaticMutationGeneration;
-      automaticCheckpoint = (async () => {
-        if (await checkpoint(ctx) && generation === automaticMutationGeneration) automaticMutation = false;
-      })().finally(() => {
-        const changedDuringCheckpoint = generation !== automaticMutationGeneration;
-        if (changedDuringCheckpoint) paired = false;
-        automaticCheckpoint = undefined;
-        if (changedDuringCheckpoint && !agentRunning && !runningHeartbeatJobs.size)
-          queueMicrotask(() => { void flushAutomaticCheckpoint(ctx); });
+      const run = (async () => {
+        while (true) {
+          const generation = automaticMutationGeneration;
+          const captured = await checkpoint(ctx);
+          const changedDuringCheckpoint = generation !== automaticMutationGeneration;
+          if (captured && !changedDuringCheckpoint) automaticMutation = false;
+          if (!changedDuringCheckpoint) return;
+          paired = false;
+          if (agentRunning || runningHeartbeatJobs.size) return;
+        }
+      })();
+      const tracked = run.finally(() => {
+        if (automaticCheckpoint === tracked) automaticCheckpoint = undefined;
       });
+      automaticCheckpoint = tracked;
     }
     return automaticCheckpoint;
   };
@@ -820,7 +828,7 @@ export default function timelineExtension(
     if (["running", "cancelling"].includes(event.state)) runningHeartbeatJobs.add(event.id);
     else {
       runningHeartbeatJobs.delete(event.id);
-      flushAutomaticCheckpoint();
+      return flushAutomaticCheckpoint();
     }
   });
   pi.on("agent_start", () => { agentRunning = true; });

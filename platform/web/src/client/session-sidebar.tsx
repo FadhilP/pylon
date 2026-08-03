@@ -413,6 +413,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       <span className="session-copy">
         <strong>{sessionTitle(session)}</strong>
         <small>
+          {session.parentSession && <>Spawned from <span title={session.parentSession.id}>{session.parentSession.title}</span>{" · "}</>}
           {showProject
             ? `${session.cwdLabel} · `
             : <><time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>{displayDate(session.createdAt)}</time>{" · "}</>}

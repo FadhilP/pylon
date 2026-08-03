@@ -150,6 +150,7 @@ interface RuntimeSlot {
   driver: SessionRuntime;
   target: RuntimeTarget;
   innerGeneration: number;
+  eventRevision: number;
   lastActivityAt: number;
   receivedInput: boolean;
   pinned: boolean;
@@ -1376,6 +1377,7 @@ export class RuntimeCoordinator implements PiDriver {
       driver,
       target,
       innerGeneration: handle.sessionGeneration,
+      eventRevision: 0,
       lastActivityAt: Date.now(),
       receivedInput: false,
       pinned: this.registry().isSessionPinned(handle.sessionId),
@@ -2005,7 +2007,14 @@ export class RuntimeCoordinator implements PiDriver {
     const previousId = this.selectedId;
     slot.lastActivityAt = Date.now();
     const cachedWorkspace = Boolean(slot.workspace);
-    const runtime = await this.snapshotFor(slot, cachedWorkspace);
+    let useCachedWorkspace = cachedWorkspace;
+    let runtime: RuntimeSnapshot;
+    let revision: number;
+    do {
+      revision = slot.eventRevision;
+      runtime = await this.snapshotFor(slot, useCachedWorkspace);
+      useCachedWorkspace = true;
+    } while (revision !== slot.eventRevision);
     const issue = describeRuntimeSnapshotIssue(runtime);
     if (issue) throw new Error(issue);
     this.selectedId = slot.id;
@@ -2019,6 +2028,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private onSlotEvent(slot: RuntimeSlot, event: DriverEvent): void {
+    slot.eventRevision++;
     slot.lastActivityAt = Date.now();
     if (event.type === "session.event") {
       const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { agentColorId } from "../shared/format.ts";
 
 const colors = [
   ["#7089a8", "#7089a826"],
@@ -8,9 +9,9 @@ const colors = [
   ["#8f8260", "#8f826026"],
 ] as const;
 
-export function agentColor(id: string): CSSProperties {
+export function agentColor(agent: { id: string; threadId?: string }): CSSProperties {
   let hash = 0;
-  for (const character of id) hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+  for (const character of agentColorId(agent)) hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
   const [color, soft] = colors[hash % colors.length]!;
   return { "--agent-color": color, "--agent-soft": soft } as CSSProperties;
 }

@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
@@ -7,6 +7,7 @@ import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
 
 const REFRESH_MS = 60_000;
+const canonicalPath = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
 
 export { projectIdForCwd } from "./project-registry.ts";
 
@@ -198,10 +199,17 @@ export class SessionIndex {
     }
     const project = this.registry?.projectForSession(session.id, session.cwd);
     const workStartedAt = options.workStartedAtFor?.(session.id);
+    const parent = session.parentSessionPath
+      ? this.sessions.find((candidate) => candidate.id !== session.id
+        && canonicalPath(candidate.cwd) === canonicalPath(session.cwd)
+        && canonicalPath(candidate.path) === canonicalPath(session.parentSessionPath!))
+      : undefined;
+    const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
     return {
       id: session.id.slice(0, 128),
       projectId: this.projectId(session),
       ...(session.name ? { name: session.name.slice(0, 200) } : {}),
+      ...(parent && parentTitle ? { parentSession: { id: parent.id.slice(0, 128), title: parentTitle } } : {}),
       cwdLabel: project?.label ?? (basename(session.cwd) || "Workspace"),
       createdAt: session.created.toISOString(),
       modifiedAt: session.modified.toISOString(),

@@ -114,7 +114,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     let notification = "";
     const ui = new Proxy({ confirm: async () => false, notify: (text: string) => { notification = text; } }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
     const ctx: any = {
-      cwd, hasUI: false, mode: "json", model: undefined, ui,
+      cwd, hasUI: false, mode: "json", model: undefined, scopedModels: [], ui,
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false, getAvailable: () => [] },
       sessionManager: {
         getEntries: () => [], getBranch: () => [], getSessionId: () => "bundle-session",
@@ -134,7 +134,32 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(!active.includes("advisor"));
     assert.ok(!active.includes("helios_browser"));
     assert.ok(!active.includes("helios_capture"));
+    assert.ok(!active.includes("spawn_agent"));
+    assert.ok(!active.includes("spawn_session"));
     assert.ok(events.count() > 0);
+
+    const agentDiscovery = await tools.get("search_tools").execute(
+      "discover-spawn-agent",
+      { query: "delegate to a private agent", limit: 1 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(agentDiscovery.content[0].text, /Selected: spawn_agent/);
+    assert.ok(active.includes("spawn_agent"));
+    assert.ok(!active.includes("spawn_session"));
+
+    const sessionDiscovery = await tools.get("search_tools").execute(
+      "discover-spawn-session",
+      { query: "open an inspectable child session", limit: 1 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(sessionDiscovery.content[0].text, /Selected: spawn_session/);
+    assert.ok(!active.includes("spawn_agent"));
+    assert.ok(active.includes("spawn_session"));
+
     const discoveryResult = await tools.get("search_tools").execute(
       "discover-browser",
       { query: "browser navigation" },
