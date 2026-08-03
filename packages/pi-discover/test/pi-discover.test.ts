@@ -730,6 +730,11 @@ test("host refreshes its SQLite index after each turn", async () => {
   runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
+    assert.deepEqual(policy.managedTools, [
+      "search_tools", "symbol_search", "fd", "rg", "code_search",
+      "relationship_graph", "index_status", "search_sessions", "session_stats",
+    ]);
+    assert.deepEqual(policy.enabledTools, policy.managedTools);
     assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status", "search_sessions", "session_stats"]);
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",

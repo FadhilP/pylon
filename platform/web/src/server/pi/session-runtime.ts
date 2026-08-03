@@ -72,6 +72,7 @@ import type {
   UpdatePackageSettingsInput,
   UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
+  UpdateToolPolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
 import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-factory.ts";
@@ -103,6 +104,8 @@ function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel 
   return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
 }
 
+const cloneToolOverrides = (value: RuntimePolicyReadModel["effective"]["toolOverrides"]) => ({ ...(value ?? {}) });
+
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
     revision: 0,
@@ -112,11 +115,13 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
+      toolOverrides: {},
     },
     project: {
       verify: { mode: "auto" },
+      toolOverrides: {},
     },
-    session: {},
+    session: { toolOverrides: {} },
     effective: {
       verify: { mode: "auto" },
       timelineEnabled: true,
@@ -124,6 +129,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
+      toolOverrides: {},
     },
     availableVerifyChecks: [],
   };
@@ -785,16 +791,17 @@ export class SessionRuntime implements PiDriver {
   applyRuntimePolicy(policy: RuntimePolicyReadModel): void {
     this.runtimePolicy = {
       ...policy,
-      global: { ...policy.global },
-      project: { ...policy.project, verify: cloneVerifyPolicy(policy.project.verify) },
+      global: { ...policy.global, toolOverrides: cloneToolOverrides(policy.global.toolOverrides) },
+      project: { ...policy.project, verify: cloneVerifyPolicy(policy.project.verify), toolOverrides: cloneToolOverrides(policy.project.toolOverrides) },
       session: {
+        toolOverrides: cloneToolOverrides(policy.session.toolOverrides),
         ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
         ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
         ...(policy.session.workspace ? { workspace: policy.session.workspace } : {}),
         ...(policy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: policy.session.guardTimeoutSeconds } : {}),
         ...(policy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: policy.session.clarifyTimeoutSeconds } : {}),
       },
-      effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify) },
+      effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify), toolOverrides: cloneToolOverrides(policy.effective.toolOverrides) },
       availableVerifyChecks: policy.availableVerifyChecks.map((check) => ({ ...check })),
     };
     this.publishRuntimePolicy();
@@ -803,6 +810,10 @@ export class SessionRuntime implements PiDriver {
 
   updateRuntimePolicy(_input: UpdateRuntimePolicyInput): Promise<void> {
     return Promise.reject(new Error("runtime policy updates require the runtime coordinator"));
+  }
+
+  updateToolPolicy(_input: UpdateToolPolicyInput): Promise<void> {
+    return Promise.reject(new Error("tool policy updates require the runtime coordinator"));
   }
 
   addProject(_input: ProjectInput): Promise<ReplacementResult> {
@@ -2193,6 +2204,7 @@ export class SessionRuntime implements PiDriver {
         inputTokens: stats.tokens.input,
         outputTokens: stats.tokens.output,
         cacheReadTokens: stats.tokens.cacheRead,
+        cacheWriteTokens: stats.tokens.cacheWrite,
         contextTokens: context?.tokens ?? 0,
         contextLimit: context?.contextWindow ?? 0,
         contextPercent: context?.percent ?? 0,
@@ -2207,9 +2219,10 @@ export class SessionRuntime implements PiDriver {
       ...(this.commandResult ? { commandResult: { ...this.commandResult } } : {}),
       runtimePolicy: {
         ...this.runtimePolicy,
-        global: { ...this.runtimePolicy.global },
-        project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify) },
+        global: { ...this.runtimePolicy.global, toolOverrides: cloneToolOverrides(this.runtimePolicy.global.toolOverrides) },
+        project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify), toolOverrides: cloneToolOverrides(this.runtimePolicy.project.toolOverrides) },
         session: {
+          toolOverrides: cloneToolOverrides(this.runtimePolicy.session.toolOverrides),
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
           ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
           ...(this.runtimePolicy.session.guardEnabled !== undefined ? { guardEnabled: this.runtimePolicy.session.guardEnabled } : {}),
@@ -2217,7 +2230,7 @@ export class SessionRuntime implements PiDriver {
           ...(this.runtimePolicy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: this.runtimePolicy.session.guardTimeoutSeconds } : {}),
           ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds } : {}),
         },
-        effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify) },
+        effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify), toolOverrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides) },
         availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check })),
       },
     };
@@ -2250,6 +2263,10 @@ export class SessionRuntime implements PiDriver {
         guard: this.runtimePolicy.effective.guardTimeoutSeconds,
         clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,
       },
+    });
+    this.eventBus.emit("pylon:tool-overrides", {
+      version: 1,
+      overrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides),
     });
     this.eventBus.emit("pi-verify:catalog-request", {
       version: 1,

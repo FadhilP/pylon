@@ -22,7 +22,7 @@ export type ToolUnregisterMessage = {
 export type ToolMessage = ToolPolicyMessage | ToolUnregisterMessage;
 
 const validOwner = (value: unknown): value is string =>
-  typeof value === "string" && /^pi-[a-z0-9-]+$/.test(value);
+  typeof value === "string" && (value === "pylon-core" || /^pi-[a-z0-9-]+$/.test(value));
 const stringList = (value: unknown): value is string[] =>
   Array.isArray(value) &&
   value.every((item) => typeof item === "string" && item.length > 0) &&

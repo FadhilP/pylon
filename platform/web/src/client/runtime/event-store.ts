@@ -319,6 +319,24 @@ export class RuntimeEventStore {
     });
   }
 
+  async updateToolPolicy(
+    scope: "global" | "project" | "session",
+    tool: string,
+    mode: "inherit" | "active" | "deferred" | "disabled",
+    expectedRevision: number,
+  ): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updateToolPolicy",
+      scope,
+      tool,
+      mode,
+      expectedRevision,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async fileSuggestions(query: string): Promise<FileSuggestionList> {
     const runtime = this.requireReadyRuntime();
     const result = await this.api.fileSuggestions(query, runtime.sessionGeneration);

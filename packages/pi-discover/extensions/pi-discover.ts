@@ -187,12 +187,13 @@ export default function discoverExtension(pi: ExtensionAPI) {
   const configureDeferredTools = () => {
     let coordinated = false;
     const deferredTools = ["relationship_graph", "index_status", "search_sessions", "session_stats"];
+    const managedTools = ["search_tools", "symbol_search", "fd", "rg", "code_search", ...deferredTools];
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
       owner: "pi-discover",
-      managedTools: deferredTools,
-      enabledTools: deferredTools,
+      managedTools,
+      enabledTools: managedTools,
       deferredTools,
       deferredToolUsage: {
         relationship_graph: "map source symbols or tokens to related files and source locations",

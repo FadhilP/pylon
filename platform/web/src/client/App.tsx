@@ -1092,6 +1092,7 @@ export function App() {
         packages={packages}
         hookSettings={hookSettings}
         runtimePolicy={live.runtime?.runtimePolicy}
+        toolPolicies={live.runtime?.operational.tools.policies ?? []}
         policyDisabled={live.connection !== "connected"
           || live.runtime?.ready !== true
           || Boolean(live.pendingUi)
@@ -1125,6 +1126,7 @@ export function App() {
           settings.clarifyTimeoutSeconds,
           expectedRevision,
         )}
+        onUpdateGlobalToolPolicy={(tool, mode, expectedRevision) => runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)}
       />}
     </div>
   );

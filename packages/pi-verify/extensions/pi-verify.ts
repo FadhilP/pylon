@@ -169,11 +169,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
       ?.data;
     if (latestContext) pi.events.emit("pi-verify:lifecycle", latestContext);
+    pi.events.emit("pylon:tool-policy", {
+      version: 1,
+      kind: "register",
+      owner: "pi-verify",
+      managedTools: ["verify"],
+      enabledTools: ["verify"],
+    });
     void publishCatalog();
   });
   pi.on("session_shutdown", () => {
     disposePolicy?.();
     disposeCatalog?.();
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-verify" });
     currentCwd = "";
     currentSessionId = "";
     nonPassingState = undefined;

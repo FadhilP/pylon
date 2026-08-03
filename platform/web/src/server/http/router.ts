@@ -592,6 +592,12 @@ export class ServerTransport {
           this.projection.refresh(await this.driver.snapshot());
           return accepted(command.expectedGeneration);
         });
+      case "updateToolPolicy":
+        if (!this.driver.updateToolPolicy) return Promise.reject(httpError(409, "tool policy is unavailable"));
+        return this.driver.updateToolPolicy(command).then(async () => {
+          this.projection.refresh(await this.driver.snapshot());
+          return accepted(command.expectedGeneration);
+        });
       case "dismissCommandResult":
         if (!this.driver.dismissCommandResult) return Promise.reject(httpError(409, "command results are unavailable"));
         this.driver.dismissCommandResult(command.resultId, command.expectedGeneration);

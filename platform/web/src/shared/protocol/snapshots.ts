@@ -39,6 +39,8 @@ export type VerifyPolicyReadModel =
 
 export type WorkspacePolicyMode = "checkout" | "worktree" | "local";
 export type DialogTimeoutSeconds = number | null;
+export type ToolExposureMode = "active" | "deferred" | "disabled";
+export type ToolOverrideReadModel = Record<string, ToolExposureMode>;
 
 export interface RuntimePolicyReadModel {
   revision: number;
@@ -48,9 +50,11 @@ export interface RuntimePolicyReadModel {
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
+    toolOverrides?: ToolOverrideReadModel;
   };
   project: {
     verify: VerifyPolicyReadModel;
+    toolOverrides?: ToolOverrideReadModel;
     timelineEnabled?: boolean;
     guardEnabled?: boolean;
     workspace?: WorkspacePolicyMode;
@@ -59,6 +63,7 @@ export interface RuntimePolicyReadModel {
   };
   session: {
     verify?: VerifyPolicyReadModel;
+    toolOverrides?: ToolOverrideReadModel;
     timelineEnabled?: boolean;
     guardEnabled?: boolean;
     workspace?: WorkspacePolicyMode;
@@ -72,6 +77,7 @@ export interface RuntimePolicyReadModel {
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
+    toolOverrides?: ToolOverrideReadModel;
   };
   availableVerifyChecks: VerifyOptionReadModel[];
 }

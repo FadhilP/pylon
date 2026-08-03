@@ -44,8 +44,13 @@ test("protocol validates version, owners, and managed subsets", () => {
     parseToolMessage({ version: PROTOCOL_VERSION, kind: "unregister", owner: "pi-scout" }),
     { message: { version: PROTOCOL_VERSION, kind: "unregister", owner: "pi-scout" } },
   );
+  assert.deepEqual(
+    parseToolMessage({ version: PROTOCOL_VERSION, kind: "unregister", owner: "pylon-core" }),
+    { message: { version: PROTOCOL_VERSION, kind: "unregister", owner: "pylon-core" } },
+  );
   assert.match((parseToolMessage({ version: 2, kind: "unregister", owner: "pi-scout" }) as any).error, /version/);
-  assert.match((parseToolMessage({ version: 1, kind: "register", owner: "bad", managedTools: [], enabledTools: [] }) as any).error, /owner/);
+  assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pylon", managedTools: [], enabledTools: [] }) as any).error, /owner/);
+  assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pylon-core-extra", managedTools: [], enabledTools: [] }) as any).error, /owner/);
   assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pi-test", managedTools: [], enabledTools: ["read"] }) as any).error, /subset/);
   assert.match((parseToolMessage({ version: 1, kind: "register", owner: "pi-test", managedTools: ["read"], enabledTools: [], deferredTools: ["read"] }) as any).error, /deferredTools.*subset/);
   const parsed = parseToolMessage({

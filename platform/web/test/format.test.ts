@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCompactNumber, formatRelativeTime, formatSessionActivity, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
+import { formatCacheHitRate, formatCompactNumber, formatRelativeTime, formatSessionActivity, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
 import { highlightSource, renderMarkdown } from "../src/shared/markdown.ts";
 
 test("work duration uses compact Codex-style units", () => {
@@ -33,6 +33,11 @@ test("usage counters use compact readable units", () => {
   assert.equal(formatCompactNumber(1_250_000), "1.3M");
   assert.equal(formatCompactNumber(3_000_000_000), "3B");
   assert.equal(formatCompactNumber(Number.NaN), "—");
+});
+
+test("cache hit rate includes cache writes and handles empty usage", () => {
+  assert.equal(formatCacheHitRate(120, 240, 60), "57.14%");
+  assert.equal(formatCacheHitRate(0, 0, 0), "—");
 });
 
 test("Markdown code fences preserve and highlight supported languages", () => {

@@ -61,7 +61,7 @@ test("workspace apply tool policy fails closed without coordination and unregist
   assert.deepEqual(runtime.policies[0], {
     version: 1,
     kind: "register",
-    owner: "pi-workspace-apply",
+    owner: "pylon-core",
     managedTools: ["apply_session_changes"],
     enabledTools: ["apply_session_changes"],
     deferredTools: ["apply_session_changes"],
@@ -73,7 +73,7 @@ test("workspace apply tool policy fails closed without coordination and unregist
   assert.deepEqual(runtime.policies[1], {
     version: 1,
     kind: "unregister",
-    owner: "pi-workspace-apply",
+    owner: "pylon-core",
   });
 });
 

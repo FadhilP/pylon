@@ -1,4 +1,4 @@
-import type { DialogTimeoutSeconds, HookSettingsReadModel, PackageSettingsReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
+import type { DialogTimeoutSeconds, HookSettingsReadModel, PackageSettingsReadModel, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
   "prompt",
@@ -43,6 +43,7 @@ export const COMMAND_NAMES = [
   "applySessionChanges",
   "updateProjectWorktreeSettings",
   "updateRuntimePolicy",
+  "updateToolPolicy",
   "dismissCommandResult",
 ] as const;
 
@@ -124,6 +125,13 @@ export type WebCommand =
       workspace: WorkspacePolicyMode | "inherit";
       guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";
+      expectedRevision: number;
+    } & CommandBase)
+  | ({
+      type: "updateToolPolicy";
+      scope: "global" | "project" | "session";
+      tool: string;
+      mode: ToolExposureMode | "inherit";
       expectedRevision: number;
     } & CommandBase)
   | ({ type: "dismissCommandResult"; resultId: string } & CommandBase);

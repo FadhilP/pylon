@@ -38,6 +38,13 @@ test("session_start shuts down the previous manager before replacing it", async 
   try {
     setSessionId(first);
     await handlers.get("session_start")!({}, ctx);
+    assert.deepEqual(events.find((event) => event.name === "pylon:tool-policy")?.value, {
+      version: 1,
+      kind: "register",
+      owner: "pi-heartbeat",
+      managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+      enabledTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+    });
     const started = await tools.get("heartbeat_start").execute(
       "start",
       { command: `node -e "setTimeout(()=>{},10000)"`, otherWork: "replace session" },
@@ -53,6 +60,10 @@ test("session_start shuts down the previous manager before replacing it", async 
     assert.ok(firstJobEvents.every((event) => event.value.sessionId === first), "terminal events retain the creating session");
   } finally {
     await handlers.get("session_shutdown")!();
+    assert.deepEqual(events.at(-1), {
+      name: "pylon:tool-policy",
+      value: { version: 1, kind: "unregister", owner: "pi-heartbeat" },
+    });
     await rm(agentDir, { recursive: true, force: true });
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

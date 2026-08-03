@@ -26,7 +26,7 @@ export class WorkspaceApplyTool {
         pi.events.emit("pylon:tool-policy", {
           version: 1,
           kind: "register",
-          owner: "pi-workspace-apply",
+          owner: "pylon-core",
           managedTools: ["apply_session_changes"],
           enabledTools: ["apply_session_changes"],
           deferredTools: ["apply_session_changes"],
@@ -36,7 +36,7 @@ export class WorkspaceApplyTool {
         if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "apply_session_changes"));
       });
       pi.on("session_shutdown", () => {
-        pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-workspace-apply" });
+        pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pylon-core" });
       });
       pi.on("before_agent_start", () => {
         if (!bridge.result) return;

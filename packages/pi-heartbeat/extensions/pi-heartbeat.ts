@@ -60,11 +60,22 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     await pruneStaleSessionDirs(root, dir);
     manager = new JobManager(dir, refresh);
     await manager.init();
+    pi.events.emit("pylon:tool-policy", {
+      version: 1,
+      kind: "register",
+      owner: "pi-heartbeat",
+      managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+      enabledTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+    });
     refresh();
   });
   pi.on("session_shutdown", async () => {
-    await manager?.shutdown();
-    manager = undefined;
+    try {
+      await manager?.shutdown();
+    } finally {
+      manager = undefined;
+      pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-heartbeat" });
+    }
   });
   pi.on("context", (event) => {
     if (!manager) return;

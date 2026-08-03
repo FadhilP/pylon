@@ -882,7 +882,7 @@ export class RuntimeProjection {
   private compaction(raw: Record<string, unknown>, kind: string): void { this.runtime.conversation.compaction = { active: kind !== "compaction_end" && raw.active !== false, reason: raw.reason === "manual" || raw.reason === "threshold" || raw.reason === "overflow" ? raw.reason : undefined }; this.publish("compaction.update", this.runtime.conversation.compaction); }
   private metrics(raw: Record<string, unknown>): void {
     const current = this.runtime.metrics as unknown as Record<string, unknown>;
-    for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]) {
+    for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]) {
       if (typeof raw[key] === "number" && Number.isFinite(raw[key])) current[key] = raw[key];
     }
     if (Array.isArray(raw.toolUsage)) {

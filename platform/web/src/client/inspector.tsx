@@ -23,10 +23,10 @@ import {
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
-import { formatCompactNumber, formatWorkDuration } from "../shared/format";
+import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
-import type { JobReadModel, VerificationReadModel } from "../shared/protocol/events";
-import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type { JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
+import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
@@ -49,7 +49,7 @@ const viewDescriptions: Record<ViewId, string> = {
   policy: "Project and session behavior. Global defaults live in Settings.",
   timeline: "Recoverable checkpoints across the current run.",
   memory: "Durable facts Continuity keeps for this project.",
-  tools: "Tool usage, package policies, and availability.",
+  tools: "Project and session overrides for registered tools.",
 };
 
 interface InspectorProps {
@@ -85,7 +85,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, over
         {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
         {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
         {current === "memory" && <Memory live={live} />}
-        {current === "tools" && <Tools live={live} pylonPolicies={live.runtime?.operational.tools.availability === "available"} />}
+        {current === "tools" && <Tools live={live} />}
       </div>
     </aside>
   );
@@ -98,14 +98,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const workTone: Tone = work?.mode === "executing" ? "active" : work?.mode === "completed" ? "success" : "neutral";
   return (
     <div className="page-grid">
-      <InspectorSection title="Usage">
-        <div className="usage-strip" aria-label="Session usage">
-        <div><small>Input</small><strong>{runtime ? formatCompactNumber(runtime.metrics.inputTokens) : "—"}</strong><span>tokens</span></div>
-        <div><small>Output</small><strong>{runtime ? formatCompactNumber(runtime.metrics.outputTokens) : "—"}</strong><span>tokens</span></div>
-        <div><small>Cache reads</small><strong>{runtime ? formatCompactNumber(runtime.metrics.cacheReadTokens) : "—"}</strong><span>tokens</span></div>
-        <div><small>Tool calls</small><strong>{runtime ? formatCompactNumber(runtime.metrics.toolCalls) : "—"}</strong><span>session total</span></div>
-        </div>
-      </InspectorSection>
+      <SessionUsage key={runtime?.sessionId ?? "empty"} metrics={runtime?.metrics} />
       <div className="overview-columns">
         {operational?.continuity.availability === "available" && <InspectorSection title="Task List" meta={work ? displayTime(work.updatedAt) : undefined} className="run-panel">
           {work ? <>
@@ -694,77 +687,97 @@ function oneLine(value: string, max = 120): string {
   return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
 }
 
-function Tools({ live, pylonPolicies }: { live: RuntimeStoreSnapshot; pylonPolicies: boolean }) {
-  const [query, setQuery] = useState("");
-  const runtime = live.runtime;
-  const metrics = runtime?.metrics;
-  const policies = runtime?.operational.tools.policies ?? [];
-  const tools = runtime?.availableTools ?? [];
+function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
+  const [expanded, setExpanded] = useState(false);
   const toolUsage = [...(metrics?.toolUsage ?? [])]
     .sort((left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name));
-  const totalTokens = (metrics?.inputTokens ?? 0) + (metrics?.outputTokens ?? 0);
-  const inputPercent = totalTokens > 0 ? (metrics?.inputTokens ?? 0) / totalTokens * 100 : 0;
-  const visibleTools = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    const items = tools.map((name) => ({ name, active: runtime?.activeTools.includes(name) === true }));
-    return normalized ? items.filter((item) => item.name.toLowerCase().includes(normalized)) : items;
-  }, [query, runtime?.activeTools, tools]);
-  return (
-    <div className="tools-page">
-      <InspectorSection title="Session Usage" meta={`${formatCompactNumber(totalTokens)} tokens`} className="session-tool-usage">
-        <div className="session-tool-summary">
-          <div className="session-tool-call-total"><small>Tool calls</small><strong className="mono">{formatCompactNumber(metrics?.toolCalls ?? 0)}</strong><span>{toolUsage.length === 200 ? "200 tools shown" : `${toolUsage.length} tools used`}</span></div>
-          <div className="session-token-composition">
-            <div><small>Total tokens</small><strong className="mono">{formatCompactNumber(totalTokens)}</strong></div>
-            <div className="session-token-stack" aria-label={`${formatCompactNumber(metrics?.inputTokens ?? 0)} input tokens and ${formatCompactNumber(metrics?.outputTokens ?? 0)} output tokens`}>
-              <span className="input" style={{ width: `${inputPercent}%` }} />
-              <span className="output" style={{ width: `${totalTokens > 0 ? 100 - inputPercent : 0}%` }} />
-            </div>
-            <div className="session-token-key"><span><strong>Input</strong> {formatCompactNumber(metrics?.inputTokens ?? 0)}</span><span><strong>Output</strong> {formatCompactNumber(metrics?.outputTokens ?? 0)}</span></div>
-          </div>
-        </div>
-        <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Estimated from serialized tool arguments and text results">Tokens / calls</span></div>
-        {toolUsage.length > 0 ? <div className="session-tool-usage-list">
-          {toolUsage.map((usage) => <div className="session-tool-usage-row" key={usage.name}>
-            <div><strong>{usage.name}</strong><span aria-label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens`}><i className="input" style={{ width: `${usage.tokens > 0 ? usage.inputTokens / usage.tokens * 100 : 0}%` }} /><i className="output" style={{ width: `${usage.tokens > 0 ? usage.outputTokens / usage.tokens * 100 : 0}%` }} /></span></div>
-            <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span>
-            <span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
-          </div>)}
-        </div> : <div className="session-tool-usage-empty">No completed tool calls in this session.</div>}
-      </InspectorSection>
-      <SieveStatus live={live} />
-      <InspectorSection title="Available Tools" meta={`${visibleTools.length}`} className="tool-table-panel" defaultOpen={false}>
-        <div className="table-toolbar">
-          <div><p>Effective state for this session.</p></div>
-          <label className="table-search"><IconSearch size={15} /><span className="sr-only">Filter tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" /></label>
-        </div>
-        <div className="generic-tool-list">
-          {visibleTools.map((tool) => <div className="generic-tool-row" key={tool.name}>
-            <span className="tool-glyph"><IconTool size={15} /></span>
-            <strong>{tool.name}</strong>
-            <Status tone={tool.active ? "success" : "neutral"}>{tool.active ? "active" : "available"}</Status>
-          </div>)}
-          {visibleTools.length === 0 && <div className="empty-state"><IconSearch size={20} /><strong>{tools.length ? "No matching tools" : "No tools available"}</strong><span>{tools.length ? "Try another tool name." : "Enable a package or configure Pi tools for this workspace."}</span></div>}
-        </div>
-      </InspectorSection>
-      {pylonPolicies && <InspectorSection title="Package Policies" meta={`${policies.length}`} className="tool-table-panel" defaultOpen={false}>
-        <div className="table-toolbar"><div><p>Pylon coordination state.</p></div></div>
-        {runtime?.operational.tools.availability === "unavailable" ? <FeatureUnavailable name="Tool policy" /> : <div className="tool-table" role="table" aria-label="Pylon package policies">
-          <div className="tool-table-head" role="row"><span role="columnheader">Package</span><span role="columnheader">Managed tools</span><span role="columnheader">State</span><span role="columnheader">Count</span></div>
-          {policies.map((policy) => {
-            const deferred = policy.deferredTools.length > 0;
-            return <div className="tool-table-row" role="row" key={policy.owner}>
-              <span className="tool-name" role="cell"><span className="tool-glyph"><IconTool size={15} /></span><span><strong>{policy.owner.replace(/^pi-/, "")}</strong><small>{policy.owner}</small></span></span>
-              <span className="tool-purpose" role="cell">{policy.managedTools.join(", ")}</span>
-              <span role="cell"><Status tone={policy.allowOnly ? "warning" : deferred ? "neutral" : "success"}>{policy.allowOnly ? "guarded" : deferred ? "deferred" : "active"}</Status></span>
-              <span className="mono tool-calls" role="cell">{policy.enabledTools.length}</span>
-            </div>;
-          })}
-          {policies.length === 0 && <div className="empty-state"><IconTool size={20} /><strong>No package policies</strong><span>No policy owners registered for this session.</span></div>}
-        </div>}
-      </InspectorSection>}
+  const inputTokens = metrics?.inputTokens ?? 0;
+  const outputTokens = metrics?.outputTokens ?? 0;
+  const cacheReadTokens = metrics?.cacheReadTokens ?? 0;
+  const cacheWriteTokens = metrics?.cacheWriteTokens ?? 0;
+  const inputOutputTokens = inputTokens + outputTokens;
+  const inputPercent = inputOutputTokens > 0 ? inputTokens / inputOutputTokens * 100 : 50;
+  const cacheHitRate = formatCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
+  const visibleUsage = expanded ? toolUsage : toolUsage.slice(0, 5);
+  return <InspectorSection title="Session Usage" className="session-tool-usage">
+    <div className="session-tool-summary">
+      <div className="session-tool-call-total"><small>Tool calls</small><strong className="mono">{formatCompactNumber(metrics?.toolCalls ?? 0)}</strong><span>{toolUsage.length === 200 ? "200 tools shown" : `${toolUsage.length} tools used`}</span></div>
+      <div className="session-token-composition">
+        <div><small>Input + output</small><strong className="mono">{formatCompactNumber(inputOutputTokens)}</strong></div>
+        <div className="session-token-stack" aria-label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`}><span className="input" style={{ width: `${inputPercent}%` }} /><span className="output" style={{ width: `${100 - inputPercent}%` }} /></div>
+        <div className="session-token-key"><span><strong>Input</strong> {formatCompactNumber(inputTokens)}</span><span><strong>Output</strong> {formatCompactNumber(outputTokens)}</span></div>
+        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache read hit: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache read hit</strong> {cacheHitRate}</span></div>
+      </div>
     </div>
-  );
+    <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Estimated from serialized tool arguments and text results">Tokens / calls</span></div>
+    {visibleUsage.length ? <div className="session-tool-usage-list">{visibleUsage.map((usage) => <div className="session-tool-usage-row" key={usage.name}>
+      <div><strong>{usage.name}</strong><span aria-label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens`}><i className="input" style={{ width: `${usage.tokens > 0 ? usage.inputTokens / usage.tokens * 100 : 0}%` }} /><i className="output" style={{ width: `${usage.tokens > 0 ? usage.outputTokens / usage.tokens * 100 : 0}%` }} /></span></div>
+      <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span><span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
+    </div>)}</div> : <div className="session-tool-usage-empty">No completed tool calls in this session.</div>}
+    {toolUsage.length > 5 && <button className="session-usage-expand" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} /></button>}
+  </InspectorSection>;
+}
+
+function Tools({ live }: { live: RuntimeStoreSnapshot }) {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<"project" | "session">("project");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const runtime = live.runtime;
+  const policies = runtime?.operational.tools.policies ?? [];
+  const normalized = query.trim().toLowerCase();
+  const claimed = new Set<string>();
+  const policyGroups = policies.map((policy) => ({
+    owner: policy.owner,
+    policy,
+    tools: policy.managedTools.filter((tool) => {
+      if (claimed.has(tool)) return false;
+      claimed.add(tool);
+      return true;
+    }),
+  }));
+  const groups = [
+    ...policyGroups,
+    { owner: "Pi built-ins", policy: undefined, tools: (runtime?.availableTools ?? []).filter((tool) => !claimed.has(tool)) },
+  ].map((group) => ({ ...group, tools: group.tools.filter((tool) => !normalized || tool.toLowerCase().includes(normalized)) }))
+    .filter((group) => group.tools.length);
+  const directOverrides = scope === "project" ? runtime?.runtimePolicy.project.toolOverrides : runtime?.runtimePolicy.session.toolOverrides;
+  const effectiveOverrides = runtime?.runtimePolicy.effective.toolOverrides ?? {};
+  const disabled = live.connection !== "connected" || !runtime?.ready || Boolean(live.pendingUi) || Boolean(runtime.conversation.workStartedAt);
+  return <div className="tools-page">
+    <InspectorSection title="Tool Overrides" meta={`${runtime?.availableTools.length ?? 0}`} className="tool-overrides-panel">
+      <div className="tool-override-toolbar">
+        <div className="policy-scope" role="tablist" aria-label="Tool override scope"><button type="button" role="tab" aria-selected={scope === "project"} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button><button type="button" role="tab" aria-selected={scope === "session"} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button></div>
+        <label className="table-search"><IconSearch size={15} /><span className="sr-only">Filter tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" /></label>
+      </div>
+      <p className="tool-override-note">Inherited tools follow global Settings. Package capability and safety gates remain authoritative.</p>
+      <div className="tool-override-groups">{groups.map((group) => <section className="tool-override-group" key={group.owner}>
+        <header><strong>{group.owner}</strong><span>{group.tools.length}</span></header>
+        {group.tools.map((tool) => {
+          const capable = group.policy ? group.policy.enabledTools.includes(tool) : true;
+          const packageDefault: ToolExposureMode = group.policy?.deferredTools.includes(tool)
+            ? "deferred"
+            : group.policy ? capable ? "active" : "disabled" : runtime?.activeTools.includes(tool) ? "active" : "disabled";
+          const effective = capable ? effectiveOverrides[tool] ?? packageDefault : "disabled";
+          const locked = tool === "search_tools";
+          const directOverride = directOverrides?.[tool];
+          return <label className="tool-override-row" data-effective={effective} key={tool}>
+            <span className="tool-override-name"><strong>{tool}</strong></span>
+            <span className="tool-override-effective" aria-label={`Current setting: ${effective}`}><i aria-hidden="true" /><strong>{effective}</strong></span>
+            <select aria-label={`${scope === "project" ? "Project" : "Session"} override for ${tool}`} value={directOverride ?? "inherit"} disabled={disabled || locked || busy === tool || (!capable && !directOverride)} onChange={(event) => {
+              if (!runtime) return;
+              const mode = event.target.value as ToolExposureMode | "inherit";
+              setBusy(tool); setError("");
+              void runtimeStore.updateToolPolicy(scope, tool, mode, runtime.runtimePolicy.revision).catch((cause) => setError(cause instanceof Error ? cause.message : "Tool policy could not be saved")).finally(() => setBusy(""));
+            }}><option value="inherit">Inherit</option><option value="active" disabled={!capable}>Active</option><option value="deferred" disabled={!capable}>Deferred</option><option value="disabled" disabled={!capable}>Disabled</option></select>
+          </label>;
+        })}
+      </section>)}</div>
+      {!groups.length && <div className="empty-state"><IconSearch size={20} /><strong>No matching tools</strong><span>Try another tool name.</span></div>}
+      {error && <p className="policy-error" role="alert">{error}</p>}
+    </InspectorSection>
+    <SieveStatus live={live} />
+  </div>;
 }
 
 function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {

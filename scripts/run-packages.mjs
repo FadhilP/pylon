@@ -17,7 +17,7 @@ if (!scripts.every((script) => script === "check" || script === "test" || script
   process.exit(2);
 }
 
-const concurrency = action === "install" ? 3 : Math.min(8, availableParallelism());
+const concurrency = action === "install" ? 3 : Math.min(4, availableParallelism());
 const run = (name, script) =>
   new Promise((resolve) => {
     const npmCli = process.env.npm_execpath;

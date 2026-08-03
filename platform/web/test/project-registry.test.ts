@@ -22,7 +22,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.renameProject(projectIdForCwd(second), "Renamed project");
     await assert.rejects(registry.renameProject(projectIdForCwd(second), " "), /invalid project name/);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 11);
+    assert.equal(stored.version, 12);
     assert.equal(stored.projects.length, 2);
     assert.equal(stored.projects[1].label, "Renamed project");
     assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
@@ -151,13 +151,13 @@ test("version 9 active sessions migrate without becoming pinned", async () => {
     assert.deepEqual(migrated.listActiveSessionOrder(), ["legacy-active"]);
     assert.deepEqual(migrated.listPinnedSessionIds(), []);
     assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "legacy-active").effective.guardEnabled, true);
-    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 11);
+    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 12);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("version 10 registries migrate to version 11", async () => {
+test("version 10 registries migrate to version 12", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-project-v10-migration-"));
   const project = join(root, "project");
   const config = join(root, "agent", "pylon-web", "projects.json");
@@ -173,7 +173,7 @@ test("version 10 registries migrate to version 11", async () => {
     const migrated = new ProjectRegistry(config);
     await migrated.load();
     assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "session").effective.guardEnabled, true);
-    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 11);
+    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 12);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -247,7 +247,7 @@ test("version 7 Automatic policies migrate to Local without moving session works
     assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").session.workspace, "local");
     assert.deepEqual(registry.workspaceForSession("session-one"), workspace);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 11);
+    assert.equal(stored.version, 12);
     assert.deepEqual(stored.pinnedSessionIds, []);
     assert.equal(stored.projects[0].workspacePolicy, undefined);
     assert.equal(stored.sessionPolicies[0].workspace, "local");
@@ -290,6 +290,7 @@ test("runtime policy persists project defaults and session overrides", async () 
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
       verify: { mode: "auto" },
+      toolOverrides: {},
       timelineEnabled: true,
       guardEnabled: true,
       workspace: "local",
@@ -298,6 +299,7 @@ test("runtime policy persists project defaults and session overrides", async () 
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-two").effective, {
       verify: { mode: "selected", checks: ["npm:test"] },
+      toolOverrides: {},
       timelineEnabled: false,
       guardEnabled: false,
       workspace: "worktree",
@@ -310,6 +312,31 @@ test("runtime policy persists project defaults and session overrides", async () 
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").revision, 2);
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.timelineEnabled, true);
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.guardEnabled, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tool policy overrides inherit across global project and session scopes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-tool-policy-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load([project]);
+    const projectId = projectIdForCwd(project);
+    await registry.updateToolPolicy({ scope: "global", projectId, sessionId: "session-one", tool: "spawn_agent", mode: "deferred", expectedRevision: 0 });
+    await registry.updateToolPolicy({ scope: "project", projectId, sessionId: "session-one", tool: "spawn_agent", mode: "active", expectedRevision: 1 });
+    await registry.updateToolPolicy({ scope: "session", projectId, sessionId: "session-one", tool: "spawn_agent", mode: "disabled", expectedRevision: 2 });
+    assert.equal(registry.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "disabled");
+    assert.equal(registry.runtimePolicy(projectId, "session-two").effective.toolOverrides?.spawn_agent, "active");
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load();
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "disabled");
+    await reloaded.updateToolPolicy({ scope: "session", projectId, sessionId: "session-one", tool: "spawn_agent", mode: "inherit", expectedRevision: 3 });
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "active");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -337,6 +364,7 @@ test("global runtime policy is inherited independently by projects and sessions"
     });
     assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
       verify: { mode: "auto" },
+      toolOverrides: {},
       timelineEnabled: false,
       guardEnabled: false,
       workspace: "worktree",

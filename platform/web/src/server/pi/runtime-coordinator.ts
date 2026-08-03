@@ -74,6 +74,7 @@ import type {
   UpdatePackageSettingsInput,
   UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
+  UpdateToolPolicyInput,
   WorkspaceFileInput,
   WorkspaceFilesInput,
 } from "./pi-driver.ts";
@@ -1244,6 +1245,46 @@ export class RuntimeCoordinator implements PiDriver {
       sessionGeneration: this.generation,
       payload: { type: "runtime_policy_changed" },
     });
+  }
+
+  async updateToolPolicy(input: UpdateToolPolicyInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const selected = this.selected();
+    const projectId = this.projectIdForSlot(selected);
+    if (!projectId) throw new Error("tool policy requires a registered project");
+    const affected = input.scope === "global"
+      ? [...this.slots.values()].filter((slot) => Boolean(this.projectIdForSlot(slot)))
+      : input.scope === "project"
+        ? [...this.slots.values()].filter((slot) => this.projectIdForSlot(slot) === projectId)
+        : [selected];
+    if (affected.some((slot) => !this.slotCanSleep(slot))) {
+      throw new Error("tool policy can only change while affected sessions are idle");
+    }
+    const snapshots = await Promise.all(affected.map(async (slot) => ({
+      slot,
+      projectId: this.projectIdForSlot(slot),
+      current: await slot.driver.snapshot(),
+    })));
+    await this.registry().updateToolPolicy({
+      scope: input.scope,
+      projectId,
+      sessionId: selected.id,
+      tool: input.tool,
+      mode: input.mode,
+      expectedRevision: input.expectedRevision,
+    });
+    for (const item of snapshots) {
+      if (!item.projectId) continue;
+      const policy = this.registry().runtimePolicy(item.projectId, item.slot.id);
+      policy.availableVerifyChecks = item.current.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check }));
+      item.slot.driver.applyRuntimePolicy(policy);
+      this.emit({
+        type: "session.event",
+        sessionId: item.slot.id,
+        sessionGeneration: this.generation,
+        payload: { type: "runtime_policy_changed" },
+      });
+    }
   }
 
   async setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult> {

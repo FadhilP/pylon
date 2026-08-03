@@ -23,6 +23,33 @@ test("verify guidance requires one post-result response", () => {
   assert.match(tool.renderCall({ scope: "changed" }, theme).render(80).join("\n"), /Verify worktree changes/);
 });
 
+test("verify publishes package tool ownership for the session lifecycle", () => {
+  const handlers = new Map<string, (event?: any, ctx?: any) => any>();
+  const events: Array<{ channel: string; value: any }> = [];
+  extension({
+    registerTool: () => {},
+    on: (name: string, handler: (event?: any, ctx?: any) => any) => handlers.set(name, handler),
+    events: { emit: (channel: string, value: any) => events.push({ channel, value }) },
+    appendEntry: () => {},
+  } as any);
+  handlers.get("session_start")!({}, {
+    cwd: process.cwd(),
+    sessionManager: { getSessionId: () => "verify-policy", getEntries: () => [] },
+  });
+  assert.deepEqual(events.find((event) => event.channel === "pylon:tool-policy")?.value, {
+    version: 1,
+    kind: "register",
+    owner: "pi-verify",
+    managedTools: ["verify"],
+    enabledTools: ["verify"],
+  });
+  handlers.get("session_shutdown")!();
+  assert.deepEqual(events.at(-1), {
+    channel: "pylon:tool-policy",
+    value: { version: 1, kind: "unregister", owner: "pi-verify" },
+  });
+});
+
 test("verify publishes bounded result metadata and session entry", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-verify-extension-"));
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node ok.js" } }));

@@ -289,6 +289,48 @@ test("tools command manages baseline while restrictive gates remain authoritativ
   assert.match(message, /Effective:/);
 });
 
+test("an override received before package registration preserves the unmanaged baseline", () => {
+  const runtime = harness();
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { edit: "deferred" } });
+  assert.ok(!runtime.active().includes("edit"));
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: {} });
+  assert.ok(runtime.active().includes("edit"));
+});
+
+test("user overrides control active deferred and disabled tools without bypassing capability", () => {
+  const runtime = harness();
+  runtime.events.emit("pylon:tool-policy", {
+    version: 1, kind: "register", owner: "pi-advisor",
+    managedTools: ["advisor"], enabledTools: ["advisor"],
+  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "deferred", edit: "deferred" } });
+  assert.ok(!runtime.active().includes("advisor"));
+  assert.ok(!runtime.active().includes("edit"));
+  const responses: any[] = [];
+  runtime.events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => responses.push(value) });
+  assert.deepEqual(responses[0].eligible(), ["advisor", "edit"]);
+  responses[0].select(["advisor"]);
+  assert.ok(runtime.active().includes("advisor"));
+
+  runtime.events.emit("pylon:tool-policy", {
+    version: 1, kind: "register", owner: "pi-other", managedTools: [], enabledTools: [],
+  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: {} });
+  assert.ok(runtime.active().includes("edit"));
+
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "disabled", edit: "active" } });
+  assert.ok(!runtime.active().includes("advisor"));
+  assert.ok(runtime.active().includes("edit"));
+  assert.deepEqual(responses[0].eligible(), []);
+
+  runtime.events.emit("pylon:tool-policy", {
+    version: 1, kind: "register", owner: "pi-advisor",
+    managedTools: ["advisor"], enabledTools: [],
+  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "active" } });
+  assert.ok(!runtime.active().includes("advisor"));
+});
+
 test("discovery capability replaces deferred selections and respects gates", () => {
   const runtime = harness();
   runtime.events.emit("pylon:tool-policy", {

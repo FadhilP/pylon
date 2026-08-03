@@ -112,6 +112,10 @@ test("command validation allowlists bounded v27 commands and attachments", () =>
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: Array(7).fill("check") }, timeline: "enabled", guard: "enabled", workspace: "worktree", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", guardTimeoutSeconds: 14, clarifyTimeoutSeconds: 60, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 86_401, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "repo_scout", mode: "deferred", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateToolPolicy", scope: "session", tool: "repo_scout", mode: "inherit", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "", mode: "active", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "repo_scout", mode: "sometimes", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "dismissCommandResult", resultId: "result-1", commandId: "dismiss", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "timeline", name: "Investigate fix", commandId: "fork", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: " ", commandId: "fork", expectedGeneration: 1 }).ok, false);
@@ -187,7 +191,7 @@ test("event and snapshot validators reject incompatible versions", () => {
       availableVerifyChecks: [],
     },
     metrics: {
-      model: "model", provider: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+      model: "model", provider: "provider", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
       contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0,
       toolUsage: [{ name: "read", calls: 2, inputTokens: 300, outputTokens: 20, tokens: 320 }],
     },
@@ -202,6 +206,7 @@ test("event and snapshot validators reject incompatible versions", () => {
   };
   assert.equal(isRuntimeSnapshot(snapshot), true);
   assert.equal(runtimeSnapshotValidationIssue(snapshot), undefined);
+  assert.equal(isRuntimeSnapshot({ ...snapshot, metrics: { ...snapshot.metrics, cacheWriteTokens: undefined } }), false);
   assert.equal(isRuntimeSnapshot({
     ...snapshot,
     metrics: { ...snapshot.metrics, toolUsage: [{ name: "read", calls: -1, inputTokens: 300, outputTokens: 20, tokens: 320 }] },

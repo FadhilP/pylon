@@ -149,6 +149,7 @@ export interface ForkInput {
 }
 
 export type UpdateRuntimePolicyInput = Extract<WebCommand, { type: "updateRuntimePolicy" }>;
+export type UpdateToolPolicyInput = Extract<WebCommand, { type: "updateToolPolicy" }>;
 
 export interface EditPromptInput extends PromptInput {
   entryId: string;
@@ -330,6 +331,7 @@ export interface PiDriver {
   rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand>;
   fork(input: ForkInput): Promise<ReplacementResult>;
   updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
+  updateToolPolicy?(input: UpdateToolPolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;

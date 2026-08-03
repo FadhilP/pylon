@@ -50,6 +50,11 @@ export function formatCompactNumber(value: number): string {
   return `${rounded}${unit.suffix}`;
 }
 
+export function formatCacheHitRate(inputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): string {
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  return promptTokens > 0 ? `${(cacheReadTokens / promptTokens * 100).toFixed(2)}%` : "—";
+}
+
 export function modelLabel(reference: string, models: ModelOptionReadModel[]): string {
   const match = models.find((model) =>
     reference === model.name

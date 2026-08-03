@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import type { DialogTimeoutSeconds, RuntimePolicyReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
+import type { DialogTimeoutSeconds, RuntimePolicyReadModel, ToolExposureMode, ToolOverrideReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
 
-const VERSION = 11;
+const VERSION = 12;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const MAX_PINNED_SESSIONS = 10_000;
 const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
+const MAX_TOOL_OVERRIDES = 256;
 
 export interface RegisteredProject {
   id: string;
@@ -23,6 +24,7 @@ export interface RegisteredProject {
   workspacePolicy?: WorkspacePolicyMode;
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
+  toolOverrides?: ToolOverrideReadModel;
 }
 
 interface SessionPolicyRecord {
@@ -34,6 +36,16 @@ interface SessionPolicyRecord {
   workspace?: WorkspacePolicyMode;
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
+  toolOverrides?: ToolOverrideReadModel;
+}
+
+export interface ToolPolicyUpdate {
+  scope: "global" | "project" | "session";
+  projectId: string;
+  sessionId: string;
+  tool: string;
+  mode: ToolExposureMode | "inherit";
+  expectedRevision: number;
 }
 
 export interface RuntimePolicyUpdate {
@@ -138,6 +150,7 @@ export class ProjectRegistry {
     workspace: "local" as WorkspacePolicyMode,
     guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
     clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
+    toolOverrides: {} as ToolOverrideReadModel,
   };
   private policyRevision = 0;
   private loaded = false;
@@ -163,7 +176,7 @@ export class ProjectRegistry {
         await this.save();
         return;
       }
-      if (![2, 3, 4, 5, 6, 7, 8, 9, 10, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
+      if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, VERSION].includes(Number(value.version)) || !Array.isArray(value.projects) || !Array.isArray(value.archivedSessions)) {
         throw new Error("invalid project registry");
       }
       const persistedGlobal = value.globalPolicy && typeof value.globalPolicy === "object" && !Array.isArray(value.globalPolicy)
@@ -174,7 +187,8 @@ export class ProjectRegistry {
           || Number(value.version) >= VERSION && typeof persistedGlobal.guardEnabled !== "boolean"
           || !validWorkspacePolicy(persistedGlobal.workspace)
           || !validDialogTimeout(persistedGlobal.guardTimeoutSeconds)
-          || !validDialogTimeout(persistedGlobal.clarifyTimeoutSeconds)) {
+          || !validDialogTimeout(persistedGlobal.clarifyTimeoutSeconds)
+          || Number(value.version) >= VERSION && !validToolOverrides(persistedGlobal.toolOverrides)) {
           throw new Error("invalid global runtime policy");
         }
         this.globalPolicy = {
@@ -183,12 +197,13 @@ export class ProjectRegistry {
           workspace: persistedGlobal.workspace,
           guardTimeoutSeconds: persistedGlobal.guardTimeoutSeconds,
           clarifyTimeoutSeconds: persistedGlobal.clarifyTimeoutSeconds,
+          toolOverrides: Number(value.version) >= VERSION ? cloneToolOverrides(persistedGlobal.toolOverrides as ToolOverrideReadModel) : {},
         };
       }
       const legacyPolicy = Number(value.version) < 9;
       const projects = value.projects.flatMap((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-        const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; guardEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown };
+        const record = item as { directory?: unknown; label?: unknown; archivedAt?: unknown; setupCommand?: unknown; verifyPolicy?: unknown; timelineEnabled?: unknown; guardEnabled?: unknown; workspacePolicy?: unknown; guardTimeoutSeconds?: unknown; clarifyTimeoutSeconds?: unknown; toolOverrides?: unknown };
         const workspacePolicy = record.workspacePolicy === undefined
           ? undefined
           : migrateWorkspacePolicy(record.workspacePolicy);
@@ -202,6 +217,7 @@ export class ProjectRegistry {
         if (record.workspacePolicy !== undefined && workspacePolicy === undefined) return [];
         if (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds)) return [];
         if (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds)) return [];
+        if (record.toolOverrides !== undefined && !validToolOverrides(record.toolOverrides)) return [];
         return [{
           directory: record.directory,
           ...(typeof record.label === "string" ? { label: record.label.trim() } : {}),
@@ -213,6 +229,7 @@ export class ProjectRegistry {
           ...(workspacePolicy && (!legacyPolicy || workspacePolicy !== "local") ? { workspacePolicy } : {}),
           ...(record.guardTimeoutSeconds !== undefined && (!legacyPolicy || record.guardTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
           ...(record.clarifyTimeoutSeconds !== undefined && (!legacyPolicy || record.clarifyTimeoutSeconds !== DEFAULT_DIALOG_TIMEOUT_SECONDS) ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
+          ...(record.toolOverrides && Object.keys(record.toolOverrides as ToolOverrideReadModel).length ? { toolOverrides: cloneToolOverrides(record.toolOverrides as ToolOverrideReadModel) } : {}),
         }];
       });
       this.projects = await this.resolveProjects(projects);
@@ -521,11 +538,15 @@ export class ProjectRegistry {
     const projectWorkspace = project.workspacePolicy ?? this.globalPolicy.workspace;
     const projectGuardTimeout = project.guardTimeoutSeconds === undefined ? this.globalPolicy.guardTimeoutSeconds : project.guardTimeoutSeconds;
     const projectClarifyTimeout = project.clarifyTimeoutSeconds === undefined ? this.globalPolicy.clarifyTimeoutSeconds : project.clarifyTimeoutSeconds;
+    const globalTools = cloneToolOverrides(this.globalPolicy.toolOverrides);
+    const projectTools = cloneToolOverrides(project.toolOverrides ?? {});
+    const sessionTools = cloneToolOverrides(session?.toolOverrides ?? {});
     return {
       revision: this.policyRevision,
-      global: { ...this.globalPolicy },
+      global: { ...this.globalPolicy, toolOverrides: globalTools },
       project: {
         verify: projectVerify,
+        toolOverrides: projectTools,
         ...(project.timelineEnabled !== undefined ? { timelineEnabled: project.timelineEnabled } : {}),
         ...(project.guardEnabled !== undefined ? { guardEnabled: project.guardEnabled } : {}),
         ...(project.workspacePolicy !== undefined ? { workspace: project.workspacePolicy } : {}),
@@ -533,6 +554,7 @@ export class ProjectRegistry {
         ...(project.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds } : {}),
       },
       session: {
+        toolOverrides: sessionTools,
         ...(session?.verify ? { verify: cloneVerifyPolicy(session.verify) } : {}),
         ...(session?.timelineEnabled !== undefined ? { timelineEnabled: session.timelineEnabled } : {}),
         ...(session?.guardEnabled !== undefined ? { guardEnabled: session.guardEnabled } : {}),
@@ -542,6 +564,7 @@ export class ProjectRegistry {
       },
       effective: {
         verify: cloneVerifyPolicy(session?.verify ?? projectVerify),
+        toolOverrides: { ...globalTools, ...projectTools, ...sessionTools },
         timelineEnabled: session?.timelineEnabled ?? projectTimeline,
         guardEnabled: session?.guardEnabled ?? projectGuard,
         workspace: session?.workspace ?? projectWorkspace,
@@ -571,6 +594,7 @@ export class ProjectRegistry {
         workspace: input.workspace,
         guardTimeoutSeconds: input.guardTimeoutSeconds,
         clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
+        toolOverrides: this.globalPolicy.toolOverrides,
       };
     } else if (input.scope === "project") {
       if (input.verify.mode === "inherit") throw new Error("project Verify policy cannot inherit");
@@ -605,12 +629,68 @@ export class ProjectRegistry {
       if (input.clarifyTimeoutSeconds === "inherit") delete session.clarifyTimeoutSeconds;
       else session.clarifyTimeoutSeconds = input.clarifyTimeoutSeconds;
       if (!session.verify && session.timelineEnabled === undefined && session.guardEnabled === undefined && !session.workspace
-        && session.guardTimeoutSeconds === undefined && session.clarifyTimeoutSeconds === undefined) {
+        && session.guardTimeoutSeconds === undefined && session.clarifyTimeoutSeconds === undefined && !session.toolOverrides) {
         this.sessionPolicies = this.sessionPolicies.filter((item) => item !== session);
       }
     }
     this.policyRevision++;
     await this.save();
+    return this.runtimePolicy(input.projectId, input.sessionId);
+  }
+
+  async updateToolPolicy(input: ToolPolicyUpdate): Promise<RuntimePolicyReadModel> {
+    if (input.expectedRevision !== this.policyRevision) throw new Error("runtime policy changed; refresh and try again");
+    if (!validToolName(input.tool) || !["inherit", "active", "deferred", "disabled"].includes(input.mode)) {
+      throw new Error("invalid tool policy");
+    }
+    const project = this.requireProject(input.projectId);
+    const previousRevision = this.policyRevision;
+    const previousGlobal = cloneToolOverrides(this.globalPolicy.toolOverrides);
+    const previousProject = project.toolOverrides ? cloneToolOverrides(project.toolOverrides) : undefined;
+    const previousSessions = input.scope === "session" ? this.sessionPolicies.map((item) => ({
+      ...item,
+      ...(item.toolOverrides ? { toolOverrides: cloneToolOverrides(item.toolOverrides) } : {}),
+    })) : undefined;
+    let overrides: ToolOverrideReadModel;
+    if (input.scope === "global") {
+      overrides = this.globalPolicy.toolOverrides;
+    } else if (input.scope === "project") {
+      overrides = project.toolOverrides ??= {};
+    } else {
+      let session = this.sessionPolicies.find((item) => item.sessionId === input.sessionId);
+      if (!session) {
+        session = { sessionId: input.sessionId, projectId: input.projectId };
+        this.sessionPolicies.push(session);
+      }
+      if (session.projectId !== input.projectId) throw new Error("session policy project mismatch");
+      overrides = session.toolOverrides ??= {};
+    }
+    if (input.mode !== "inherit" && !(input.tool in overrides) && Object.keys(overrides).length >= MAX_TOOL_OVERRIDES) {
+      throw new Error("too many tool policy overrides");
+    }
+    if (input.mode === "inherit") delete overrides[input.tool];
+    else overrides[input.tool] = input.mode;
+    if (input.scope === "project" && !Object.keys(overrides).length) delete project.toolOverrides;
+    if (input.scope === "session") {
+      const session = this.sessionPolicies.find((item) => item.sessionId === input.sessionId)!;
+      if (!Object.keys(overrides).length) delete session.toolOverrides;
+      if (!session.verify && session.timelineEnabled === undefined && session.guardEnabled === undefined && !session.workspace
+        && session.guardTimeoutSeconds === undefined && session.clarifyTimeoutSeconds === undefined && !session.toolOverrides) {
+        this.sessionPolicies = this.sessionPolicies.filter((item) => item !== session);
+      }
+    }
+    this.policyRevision++;
+    try {
+      await this.save();
+    } catch (error) {
+      this.policyRevision = previousRevision;
+      if (input.scope === "global") this.globalPolicy.toolOverrides = previousGlobal;
+      else if (input.scope === "project") {
+        if (previousProject) project.toolOverrides = previousProject;
+        else delete project.toolOverrides;
+      } else if (previousSessions) this.sessionPolicies = previousSessions;
+      throw error;
+    }
     return this.runtimePolicy(input.projectId, input.sessionId);
   }
 
@@ -709,7 +789,7 @@ export class ProjectRegistry {
     await rm(resolve(dirname(this.configPath), "provision.json"), { force: true });
   }
 
-  private async resolveProjects(records: Array<{ directory: string; label?: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; guardEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds }>): Promise<RegisteredProject[]> {
+  private async resolveProjects(records: Array<{ directory: string; label?: string; archivedAt?: string; setupCommand?: string; verifyPolicy?: VerifyPolicyReadModel; timelineEnabled?: boolean; guardEnabled?: boolean; workspacePolicy?: WorkspacePolicyMode; guardTimeoutSeconds?: DialogTimeoutSeconds; clarifyTimeoutSeconds?: DialogTimeoutSeconds; toolOverrides?: ToolOverrideReadModel }>): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
       try {
@@ -728,6 +808,7 @@ export class ProjectRegistry {
             ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
             ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
             ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
+            ...(record.toolOverrides ? { toolOverrides: cloneToolOverrides(record.toolOverrides) } : {}),
           });
         }
       } catch {
@@ -760,6 +841,7 @@ export class ProjectRegistry {
         ...(project.workspacePolicy ? { workspacePolicy: project.workspacePolicy } : {}),
         ...(project.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: project.guardTimeoutSeconds } : {}),
         ...(project.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds } : {}),
+        ...(project.toolOverrides ? { toolOverrides: project.toolOverrides } : {}),
       })),
       archivedSessions: this.archivedSessions,
       sessionWorkspaces: this.sessionWorkspaces,
@@ -816,7 +898,8 @@ export class ProjectRegistry {
       || (record.guardEnabled !== undefined && typeof record.guardEnabled !== "boolean")
       || (record.workspace !== undefined && workspace === undefined)
       || (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds))
-      || (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds))) return [];
+      || (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds))
+      || (record.toolOverrides !== undefined && !validToolOverrides(record.toolOverrides))) return [];
     return [{
       sessionId: record.sessionId,
       projectId: record.projectId,
@@ -826,6 +909,7 @@ export class ProjectRegistry {
       ...(workspace ? { workspace } : {}),
       ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
       ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
+      ...(record.toolOverrides && Object.keys(record.toolOverrides as ToolOverrideReadModel).length ? { toolOverrides: cloneToolOverrides(record.toolOverrides as ToolOverrideReadModel) } : {}),
     }];
   }
 }
@@ -843,6 +927,22 @@ function validVerifyPolicy(value: unknown): value is VerifyPolicyReadModel {
 
 function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel {
   return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
+}
+
+function validToolName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200
+    && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function validToolOverrides(value: unknown): value is ToolOverrideReadModel {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value as object).length <= MAX_TOOL_OVERRIDES
+    && Object.entries(value as Record<string, unknown>).every(([tool, mode]) => validToolName(tool)
+      && (mode === "active" || mode === "deferred" || mode === "disabled"));
+}
+
+function cloneToolOverrides(value: ToolOverrideReadModel): ToolOverrideReadModel {
+  return { ...value };
 }
 
 function validWorkspacePolicy(value: unknown): value is WorkspacePolicyMode {

@@ -30,6 +30,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const policies = new Map<string, ToolPolicy>();
   const rejected: string[] = [];
   const selectedTools = new Set<string>();
+  const toolOverrides = new Map<string, "active" | "deferred" | "disabled">();
   let initialized = false;
   let lastError: string | undefined;
   let lastAcknowledgeError: string | undefined;
@@ -74,12 +75,27 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const hasGate = () => [...policies.values()].some((policy) => policy.allowOnly);
   const managedTools = () =>
     new Set([...managedByOwner.values()].flatMap((tools) => [...tools]));
-  const discoverableTools = () =>
-    new Set([...policies.values()].flatMap((policy) => policy.deferredTools ?? []));
+  const capableTools = () => {
+    const managed = managedTools();
+    const capable = new Set([...policies.values()].flatMap((policy) => policy.enabledTools));
+    for (const tool of pi.getAllTools?.() ?? []) if (!managed.has(tool.name)) capable.add(tool.name);
+    return capable;
+  };
+  const discoverableTools = () => {
+    const capable = capableTools();
+    const result = new Set([...policies.values()].flatMap((policy) => policy.deferredTools ?? []).filter((tool) => capable.has(tool)));
+    for (const [tool, mode] of toolOverrides) {
+      result.delete(tool);
+      if (mode === "deferred" && capable.has(tool)) result.add(tool);
+    }
+    return result;
+  };
   const discoveryCatalog = () => {
     const entries = new Map<string, Set<string>>();
+    const discoverable = discoverableTools();
     for (const policy of policies.values()) {
       for (const name of policy.deferredTools ?? []) {
+        if (!discoverable.has(name)) continue;
         const usages = entries.get(name) ?? new Set<string>();
         const usage = policy.deferredToolUsage?.[name];
         if (usage) usages.add(usage);
@@ -94,17 +110,32 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const captureBaseline = () => {
     if (initialized && hasGate()) return;
     const managed = managedTools();
+    const previous = new Set(baseline);
     baseline.clear();
     for (const tool of pi.getActiveTools())
-      if (!managed.has(tool)) baseline.add(tool);
+      if (!managed.has(tool) && !toolOverrides.has(tool)) baseline.add(tool);
+    for (const tool of previous)
+      if (!managed.has(tool) && toolOverrides.has(tool)) baseline.add(tool);
     initialized = true;
   };
   const reconcile = () => {
     if (!initialized) captureBaseline();
     try {
       const discoverable = discoverableTools();
+      const capable = capableTools();
       const nextSelected = [...selectedTools].filter((tool) => discoverable.has(tool));
-      pi.setActiveTools(reconcileTools(baseline, policies.values(), nextSelected));
+      const active = new Set(reconcileTools(baseline, policies.values()));
+      for (const [tool, mode] of toolOverrides) {
+        if (mode === "active" && capable.has(tool)) active.add(tool);
+        else active.delete(tool);
+      }
+      for (const tool of nextSelected) active.add(tool);
+      const gates = [...policies.values()].filter((policy) => policy.allowOnly);
+      for (const gate of gates) {
+        const allowed = new Set(gate.allowOnly);
+        for (const tool of active) if (!allowed.has(tool)) active.delete(tool);
+      }
+      pi.setActiveTools([...active]);
       selectedTools.clear();
       for (const tool of nextSelected) selectedTools.add(tool);
       lastError = undefined;
@@ -177,6 +208,15 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     "pylon:tool-policy",
     handlePolicy,
   );
+  const disposeOverrideListener = pi.events.on("pylon:tool-overrides", (value: any) => {
+    if (value?.version !== 1 || !value.overrides || typeof value.overrides !== "object" || Array.isArray(value.overrides)) return;
+    const entries = Object.entries(value.overrides);
+    if (entries.length > 256 || entries.some(([tool, mode]) => !tool || tool.length > 200 || !["active", "deferred", "disabled"].includes(String(mode)))) return;
+    if (!initialized) captureBaseline();
+    toolOverrides.clear();
+    for (const [tool, mode] of entries) if (tool !== "search_tools") toolOverrides.set(tool, mode as "active" | "deferred" | "disabled");
+    reconcile();
+  });
   const disposeGuardListener = pi.events.on("pi-guard:decision", (event: any) => {
     if (event?.version === 1)
       guardDiagnostic = `${event.decision}: ${event.reason} (blocked ${event.blocked}, confirmed ${event.confirmed})`;
@@ -356,6 +396,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", () => {
     disposePolicyListener();
+    disposeOverrideListener();
     disposeGuardListener();
     disposeDiscoveryListener();
     disposeWorktreeObserverRequest();

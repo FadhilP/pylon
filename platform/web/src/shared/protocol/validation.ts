@@ -86,6 +86,12 @@ function validDialogTimeout(value: unknown, allowInherit = false): boolean {
     || Number.isSafeInteger(value) && (value as number) >= 15 && (value as number) <= 86_400;
 }
 
+function validToolOverrides(value: unknown): boolean {
+  return record(value) && Object.keys(value).length <= 256
+    && Object.entries(value).every(([tool, mode]) => boundedString(tool, 200)
+      && (mode === "active" || mode === "deferred" || mode === "disabled"));
+}
+
 export function validHookSettings(value: unknown): value is HookSettingsReadModel {
   if (!record(value) || Object.keys(value).length !== 2
     || !record(value.sessionStart) || !record(value.beforeAgentStart)) return false;
@@ -273,6 +279,17 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     if (!validDialogTimeout(value.guardTimeoutSeconds, value.scope !== "global")
       || !validDialogTimeout(value.clarifyTimeoutSeconds, value.scope !== "global")) {
       return { ok: false, error: "invalid dialog timeout policy" };
+    }
+  }
+  if (value.type === "updateToolPolicy") {
+    if (value.scope !== "global" && value.scope !== "project" && value.scope !== "session") {
+      return { ok: false, error: "invalid tool policy scope" };
+    }
+    if (!boundedString(value.tool, 200) || !["inherit", "active", "deferred", "disabled"].includes(String(value.mode))) {
+      return { ok: false, error: "invalid tool policy" };
+    }
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+      return { ok: false, error: "invalid tool policy revision" };
     }
   }
   if (value.type === "dismissCommandResult" && !identifier(value.resultId)) {
@@ -595,13 +612,16 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !["checkout", "worktree", "local"].includes(String(policy.global.workspace))
     || !validDialogTimeout(policy.global.guardTimeoutSeconds)
     || !validDialogTimeout(policy.global.clarifyTimeoutSeconds)
+    || (policy.global.toolOverrides !== undefined && !validToolOverrides(policy.global.toolOverrides))
     || !record(policy.project) || !validVerifyPolicy(policy.project.verify)
+    || (policy.project.toolOverrides !== undefined && !validToolOverrides(policy.project.toolOverrides))
     || (policy.project.timelineEnabled !== undefined && typeof policy.project.timelineEnabled !== "boolean")
     || (policy.project.guardEnabled !== undefined && typeof policy.project.guardEnabled !== "boolean")
     || (policy.project.workspace !== undefined && !["checkout", "worktree", "local"].includes(String(policy.project.workspace)))
     || (policy.project.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.guardTimeoutSeconds))
     || (policy.project.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.clarifyTimeoutSeconds))
     || !record(policy.session)
+    || (policy.session.toolOverrides !== undefined && !validToolOverrides(policy.session.toolOverrides))
     || (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify))
     || (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean")
     || (policy.session.guardEnabled !== undefined && typeof policy.session.guardEnabled !== "boolean")
@@ -611,6 +631,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !record(policy.effective) || !validVerifyPolicy(policy.effective.verify)
     || typeof policy.effective.timelineEnabled !== "boolean"
     || typeof policy.effective.guardEnabled !== "boolean"
+    || (policy.effective.toolOverrides !== undefined && !validToolOverrides(policy.effective.toolOverrides))
     || !["checkout", "worktree", "local"].includes(String(policy.effective.workspace))
     || !validDialogTimeout(policy.effective.guardTimeoutSeconds)
     || !validDialogTimeout(policy.effective.clarifyTimeoutSeconds)
@@ -737,7 +758,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || !thinkingLevels.has(String(controls.pending.thinkingLevel)))) return false;
   const metrics = value.metrics;
   if (!record(metrics) || typeof metrics.model !== "string" || typeof metrics.provider !== "string"
-    || !["inputTokens", "outputTokens", "cacheReadTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]
+    || !["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]
       .every((key) => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number))
     || (metrics.toolUsage !== undefined && (!Array.isArray(metrics.toolUsage) || metrics.toolUsage.length > 200
       || !metrics.toolUsage.every((item) => record(item) && boundedString(item.name) && item.name.length > 0
@@ -888,7 +909,7 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
       ["session controls", { sessionControls: { models: [], thinkingLevels: [] } }],
       ["metrics", {
         metrics: {
-          model: "", provider: "", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+          model: "", provider: "", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
           contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0,
           userMessages: 0, assistantMessages: 0, toolCalls: 0,
         },

@@ -140,6 +140,7 @@ export interface SessionMetricsReadModel {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheWriteTokens: number;
   contextTokens: number;
   contextLimit: number;
   contextPercent: number;

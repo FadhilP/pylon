@@ -1,7 +1,7 @@
 import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, UiRequestReadModel } from "../shared/protocol/events";
-import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel } from "../shared/protocol/snapshots";
+import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, ToolPolicyReadModel, UiRequestReadModel } from "../shared/protocol/events";
+import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel, ToolExposureMode } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
@@ -20,6 +20,7 @@ interface SettingsDialogProps {
   packages: PackageSummary[];
   hookSettings?: HookSettingsReadModel;
   runtimePolicy?: RuntimePolicyReadModel;
+  toolPolicies: ToolPolicyReadModel[];
   policyDisabled: boolean;
   loading: boolean;
   hookLoading: boolean;
@@ -38,14 +39,16 @@ interface SettingsDialogProps {
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
   onUpdateGlobalPolicy: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
+  onUpdateGlobalToolPolicy: (tool: string, mode: ToolExposureMode | "inherit", expectedRevision: number) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
   const [packageQuery, setPackageQuery] = useState("");
-  const [expandedPackage, setExpandedPackage] = useState<string | null | undefined>();
+  const [selectedPackageId, setSelectedPackageId] = useState<string>();
+  const [toolPolicyBusy, setToolPolicyBusy] = useState("");
   const filteredPackages = packages.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()));
   const providers = providerAuth?.providers ?? [];
   const filteredProviders = providers
@@ -111,7 +114,9 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
     dialogRef.current?.querySelectorAll<HTMLButtonElement>("[role='tab']")[next]?.focus();
   };
 
-  const firstConfigurablePackage = filteredPackages.find((item) => hasPackageFields(item.settings))?.id;
+  const selectedPackage = filteredPackages.find((item) => item.id === selectedPackageId) ?? filteredPackages[0];
+  const selectedToolPolicy = selectedPackage ? toolPolicies.find((policy) => policy.owner === selectedPackage.id) : undefined;
+  const selectedTools = selectedToolPolicy?.managedTools ?? [];
 
   return <div className="settings-backdrop" onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) onClose();
@@ -138,7 +143,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
           </div>
         </nav>
 
-        <div className="settings-content">
+        <div className={`settings-content${activeTab === "packages" ? " is-packages" : ""}`}>
           <section id="settings-panel-providers" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-providers" hidden={activeTab !== "providers"}>
             <div className="settings-pane-header">
               <div><h2>Providers</h2><p>Connect accounts and API keys used by Pi. Credentials stay on this machine.</p></div>
@@ -185,48 +190,59 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
             {providerLogoutDisabled && <p className="settings-note" role="status">Providers can disconnect when every active session is idle.</p>}
           </section>
 
-          <section id="settings-panel-packages" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-packages" hidden={activeTab !== "packages"}>
+          <section id="settings-panel-packages" className="settings-pane packages-workbench-pane" role="tabpanel" aria-labelledby="settings-tab-packages" hidden={activeTab !== "packages"}>
             <div className="settings-pane-header">
-              <div><h2>Packages</h2><p>Enable local Pi packages and tune how each one runs. Expand a package to edit its defaults.</p></div>
+              <div><h2>Packages</h2><p>Configure package defaults and global tool exposure from one workbench.</p></div>
               <input type="search" value={packageQuery} onChange={(event) => setPackageQuery(event.target.value)} placeholder="Filter packages" aria-label="Filter packages" />
             </div>
             {loading && packages.length === 0 && <div className="settings-empty">Detecting packages…</div>}
             {!loading && packages.length === 0 && <div className="settings-empty"><IconStack2 size={22} /><strong>No local Pi packages</strong></div>}
             {!loading && packages.length > 0 && filteredPackages.length === 0 && <div className="settings-empty"><strong>No matching packages</strong><span>Try a different filter.</span></div>}
-            {packages.length > 0 && <div className="settings-package-list">{packages.map((item) => {
-              const itemDisabled = Boolean(busy);
-              const matchesFilter = filteredPackages.some((candidate) => candidate.id === item.id);
-              const state = item.error ? "failed" : item.active ? "active" : item.enabled ? "unavailable" : "disabled";
-              const configurable = hasPackageFields(item.settings);
-              const expanded = configurable && (expandedPackage === item.id || (expandedPackage === undefined && item.id === firstConfigurablePackage));
-              const detailsId = `package-settings-${item.id}`;
-              return <section className={`settings-package${expanded ? " is-expanded" : ""}`} key={item.id} hidden={!matchesFilter}>
+            {selectedPackage && <div className="package-workbench">
+              <aside className="package-workbench-index" aria-label="Packages">
+                {filteredPackages.map((item) => {
+                  const state = item.error ? "failed" : item.active ? "active" : item.enabled ? "unavailable" : "disabled";
+                  return <button type="button" className={item.id === selectedPackage.id ? "is-selected" : ""} onClick={() => setSelectedPackageId(item.id)} key={item.id}>
+                    <span><strong>{item.name}</strong><small>{toolPolicies.find((policy) => policy.owner === item.id)?.managedTools.length ?? 0} tools</small></span>
+                    <b className={`package-state is-${state}`}>{state}</b>
+                  </button>;
+                })}
+              </aside>
+              <article className="package-workbench-detail">
                 <header>
-                  <div className="settings-package-main">
-                    <span className="package-copy">
-                      <strong>{item.name}</strong>
-                      <small>{item.description || `${item.extensionCount} Pi extension${item.extensionCount === 1 ? "" : "s"}`}</small>
-                      {item.error && <span className="package-error">{item.error}</span>}
-                    </span>
-                  </div>
-                  <span className={`package-state is-${state}`}>{state}</span>
-                  {item.required
-                    ? <span className="package-required">Required</span>
-                    : <label className="package-switch">
-                        <span className="sr-only">{item.enabled ? "Disable" : "Enable"} {item.name}</span>
-                        <input type="checkbox" role="switch" checked={item.enabled} disabled={itemDisabled} onChange={(event) => onSetEnabled(item, event.target.checked)} />
-                      </label>}
-                  {configurable && <button className="package-expand" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${item.name} settings`} aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpandedPackage(expanded ? null : item.id)}><IconChevronRight size={15} /></button>}
+                  <div><h3>{selectedPackage.name}</h3><p>{selectedPackage.description || `${selectedPackage.extensionCount} Pi extension${selectedPackage.extensionCount === 1 ? "" : "s"}`}</p></div>
+                  {selectedPackage.required ? <span className="package-required">Required</span> : <label className="package-switch"><span className="sr-only">Toggle {selectedPackage.name}</span><input type="checkbox" role="switch" checked={selectedPackage.enabled} disabled={Boolean(busy)} onChange={(event) => onSetEnabled(selectedPackage, event.target.checked)} /></label>}
                 </header>
-                {configurable && item.settings && <div id={detailsId} hidden={!expanded}><PackageFields
-                  settings={item.settings}
-                  models={models}
-                  sessionThinkingLevels={sessionThinkingLevels}
-                  disabled={itemDisabled}
-                  onUpdate={(settings) => onUpdate(item, settings)}
-                /></div>}
-              </section>;
-            })}</div>}
+                {selectedPackage.error && <p className="package-error">{selectedPackage.error}</p>}
+                {selectedPackage.settings?.kind !== "spawn" && <section className="workbench-section">
+                  <header><div><h4>Package defaults</h4><p>Configuration owned by this package.</p></div><span>Global</span></header>
+                  {hasPackageFields(selectedPackage.settings) && selectedPackage.settings
+                    ? <PackageFields settings={selectedPackage.settings} models={models} sessionThinkingLevels={sessionThinkingLevels} disabled={Boolean(busy)} onUpdate={(settings) => onUpdate(selectedPackage, settings)} />
+                    : <p className="workbench-empty">This package has no configurable defaults.</p>}
+                </section>}
+                <section className="workbench-section">
+                  <header><div><h4>Tool exposure</h4><p>Defaults used when a project or session does not override them.</p></div><span>Global</span></header>
+                  {selectedTools.length ? <div className="workbench-tool-list">{selectedTools.map((tool) => {
+                    const capable = selectedToolPolicy?.enabledTools.includes(tool) === true;
+                    const packageDefault = selectedToolPolicy?.deferredTools.includes(tool) ? "deferred" : capable ? "active" : "disabled";
+                    const override = runtimePolicy?.global.toolOverrides?.[tool];
+                    const effective = capable ? override ?? packageDefault : "disabled";
+                    const locked = tool === "search_tools";
+                    return <label className="workbench-tool-row" data-effective={effective} key={tool}>
+                      <span><strong>{tool}</strong><small className="workbench-tool-status"><i aria-hidden="true" />Current: {effective}</small></span>
+                      <select value={override ?? "inherit"} disabled={locked || policyDisabled || toolPolicyBusy === tool || (!capable && !override)} onChange={(event) => {
+                        if (!runtimePolicy) return;
+                        const mode = event.target.value as ToolExposureMode | "inherit";
+                        setToolPolicyBusy(tool);
+                        void onUpdateGlobalToolPolicy(tool, mode, runtimePolicy.revision).finally(() => setToolPolicyBusy(""));
+                      }}>
+                        <option value="inherit">Default</option><option value="active" disabled={!capable}>Active</option><option value="deferred" disabled={!capable}>Deferred</option><option value="disabled" disabled={!capable}>Disabled</option>
+                      </select>
+                    </label>;
+                  })}</div> : <p className="workbench-empty">This package does not publish tool policy.</p>}
+                </section>
+              </article>
+            </div>}
           </section>
 
           <section id="settings-panel-hooks" className="settings-pane hooks-pane" role="tabpanel" aria-labelledby="settings-tab-hooks" hidden={activeTab !== "hooks"}>
@@ -437,16 +453,6 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
     </div>;
   }
   if (settings.kind === "timeline") return null;
-  if (settings.kind === "spawn") {
-    return <div className="package-fields">
-      <label>spawn_agent for new sessions<select value={settings.agentAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, agentAvailability: event.target.value as typeof settings.agentAvailability })}>
-        <option value="deferred">Deferred (recommended)</option><option value="active">Always active</option>
-      </select></label>
-      <label>spawn_session for new sessions<select value={settings.sessionAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, sessionAvailability: event.target.value as typeof settings.sessionAvailability })}>
-        <option value="deferred">Deferred (recommended)</option><option value="active">Always active</option>
-      </select></label>
-    </div>;
-  }
   if (settings.kind !== "helios") return null;
   return <div className="package-fields">
     <label>Future owned browsers<select value={settings.headed ? "shown" : "headless"} disabled={disabled} onChange={(event) => onUpdate({ ...settings, headed: event.target.value === "shown" })}>
