@@ -574,10 +574,6 @@ export class ProjectRegistry {
       };
     } else if (input.scope === "project") {
       if (input.verify.mode === "inherit") throw new Error("project Verify policy cannot inherit");
-      if (input.guardTimeoutSeconds !== "inherit" && !validDialogTimeout(input.guardTimeoutSeconds)
-        || input.clarifyTimeoutSeconds !== "inherit" && !validDialogTimeout(input.clarifyTimeoutSeconds)) {
-        throw new Error("invalid dialog timeout policy");
-      }
       project.verifyPolicy = cloneVerifyPolicy(input.verify);
       if (input.timeline === "inherit") delete project.timelineEnabled;
       else project.timelineEnabled = input.timeline === "enabled";

@@ -467,7 +467,11 @@ test("projection suppresses duration-only delegated heartbeats", () => {
     args: { task: "Apply edits" },
     partialResult: {
       content: [{ type: "text", text: "Worker activity:\nread a.ts" }],
-      details: { state: "running", model: "provider/grunt", thinking: "medium", activity: [{ kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" }] },
+      details: {
+        state: "running", model: "provider/grunt", thinking: "medium",
+        usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
+        activity: [{ kind: "call", tool: "read", text: "{\"path\":\"a.ts\",\"password\":\"hidden\"}" }],
+      },
     },
   }));
   assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.response, undefined);
@@ -481,6 +485,7 @@ test("projection suppresses duration-only delegated heartbeats", () => {
     },
   }));
   assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.durationMs, 1_000);
+  assert.deepEqual(projection.snapshot().conversation.delegatedRuns[0]?.usage, { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.01 });
   assert.equal(published.filter((event) => event.type === "delegate.update").length, 2);
   projection.apply(session({
     type: "tool_execution_end",

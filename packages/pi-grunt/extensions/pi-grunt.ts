@@ -48,6 +48,14 @@ function usageText(run: WorkerRun): string {
   return `${run.turns} turn${run.turns === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
 }
 
+const addUsage = (left: WorkerRun["usage"], right: WorkerRun["usage"]): WorkerRun["usage"] => ({
+  input: left.input + right.input,
+  output: left.output + right.output,
+  cacheRead: left.cacheRead + right.cacheRead,
+  cacheWrite: left.cacheWrite + right.cacheWrite,
+  cost: left.cost + right.cost,
+});
+
 type SessionStats = { runs: number; integrated: number; requiresAttention: number; turns: number; cost: number };
 const emptyStats = (): SessionStats => ({ runs: 0, integrated: 0, requiresAttention: 0, turns: 0, cost: 0 });
 function workerMetrics(run: WorkerRun, workerStatus: string, integrationStatus: string, changedFileCount?: number) {
@@ -228,12 +236,13 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
       }, HEARTBEAT_MS);
       heartbeat.unref();
+      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      let attemptUsage = { ...usage };
       try {
         const timeoutMs = gruntTimeoutMs();
         const maxCostUsd = gruntMaxCostUsd();
         const maxTurns = gruntMaxTurns();
         const deadline = started + timeoutMs;
-        const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
         let totalTurns = 0;
         let attempts = 0;
         let workerCwd = "";
@@ -241,6 +250,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         let run!: WorkerRun;
         for (;;) {
           attempts++;
+          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
           workerCwd = isolated?.workerCwd ?? ctx.cwd;
           missingDependencies = isolated
             ? unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd)
@@ -260,19 +270,25 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             timeoutMs: Math.max(1, deadline - Date.now()),
             maxTurns: Math.max(1, maxTurns - totalTurns),
             maxCostUsd: Math.max(0, maxCostUsd - usage.cost),
+            onUsage: (snapshot) => {
+              attemptUsage = snapshot;
+              lastUpdateAt = Date.now();
+              onUpdate?.({ content: [{ type: "text", text: "Grunt usage updated" }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity, attempts } });
+            },
             onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
               activity = all; lastUpdateAt = Date.now();
-              onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, activity: all, attempts } });
+              onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity: all, attempts } });
             },
           });
-          if (run.cwd !== workerCwd)
-            throw new Error(`Worker runner did not confirm the ${mode} working directory`);
           usage.input += run.usage.input;
           usage.output += run.usage.output;
           usage.cacheRead += run.usage.cacheRead;
           usage.cacheWrite += run.usage.cacheWrite;
           usage.cost += run.usage.cost;
+          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
           totalTurns += run.turns;
+          if (run.cwd !== workerCwd)
+            throw new Error(`Worker runner did not confirm the ${mode} working directory`);
           const retryIsolation = isolated;
           const canRetry = retryIsolation !== undefined
             && attempts < DELEGATE_MAX_ATTEMPTS
@@ -286,7 +302,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           if ((await parentChangesSinceBaseline(exec, callIsolation ?? retryIsolation!)).length) break;
           onUpdate?.({
             content: [{ type: "text", text: `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }],
-            details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: Date.now() - started, attempts },
+            details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: Date.now() - started, usage: { ...usage }, attempts },
           });
           const cleanupWarnings = await removeIsolatedWorktree(exec, retryIsolation!);
           if (cleanupWarnings.length)
@@ -397,9 +413,10 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         };
       } catch (error) {
         const failureMessage = sanitizeFailureMessage(error, "Grunt execution failed.");
+        const liveUsage = addUsage(usage, attemptUsage);
         return {
           content: [{ type: "text" as const, text: named(mode === "isolated" ? `Grunt failed in isolated worktree; parent unchanged. ${failureMessage}` : `Grunt failed in DIRECT mode; partial edits may remain. ${failureMessage}`) }],
-          details: { ...agent, status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking },
+          details: { ...agent, status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking, usage: liveUsage },
         };
       } finally {
         clearInterval(heartbeat);

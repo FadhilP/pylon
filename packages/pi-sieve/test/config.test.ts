@@ -63,6 +63,12 @@ test("web settings round-trip projection mode", async () => {
     kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "invalid",
     rolloverHighMultiplier: 8, rolloverLowMultiplier: 4,
   }, { agentDir }));
+  for (const [rolloverHighMultiplier, rolloverLowMultiplier] of [[0, 1], [64, 65], [4, 4]]) {
+    await assert.rejects(updateSettings({
+      kind: "sieve", activePruning: true, threshold: 12_000, projectionMode: "standard-v2",
+      rolloverHighMultiplier, rolloverLowMultiplier,
+    }, { agentDir }));
+  }
 });
 
 test("sieve config defaults safely and quarantines invalid settings", async () => {

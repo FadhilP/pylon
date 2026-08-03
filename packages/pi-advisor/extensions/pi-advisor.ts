@@ -68,6 +68,8 @@ const emptyUsage = () => ({
   cacheWrite: 0,
   cost: 0,
 });
+const validUsageNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 const modelName = (model: { provider: string; id: string }) =>
   `${model.provider}/${model.id}`;
 const ADVISOR_TIMEOUT_MS = 15 * 60 * 1000;
@@ -403,12 +405,15 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             );
             const responseUsage = response.usage;
             if (responseUsage) {
-              totalUsage.input += responseUsage.input ?? 0;
-              totalUsage.output += responseUsage.output ?? 0;
-              totalUsage.cacheRead += responseUsage.cacheRead ?? 0;
-              totalUsage.cacheWrite += responseUsage.cacheWrite ?? 0;
-              totalUsage.cost += responseUsage.cost?.total ?? 0;
+              totalUsage.input += validUsageNumber(responseUsage.input);
+              totalUsage.output += validUsageNumber(responseUsage.output);
+              totalUsage.cacheRead += validUsageNumber(responseUsage.cacheRead);
+              totalUsage.cacheWrite += validUsageNumber(responseUsage.cacheWrite);
+              totalUsage.cost += validUsageNumber(responseUsage.cost?.total);
             }
+            try {
+              onUpdate?.({ content: [{ type: "text", text: "Advisor usage updated" }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
+            } catch { /* Progress observers must not control provider execution. */ }
             const raw = response.content
               .filter((part) => part.type === "text")
               .map((part) => (part as any).text)
@@ -417,7 +422,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             if (response.stopReason === "error" || response.stopReason === "aborted" || !raw) {
               const retryable = response.stopReason === "error" && isTransientProviderFailure(response.errorMessage);
               if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && retryable && await retryWait(attempts, controller.signal)) {
-                onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, attempts } });
+                onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
                 continue;
               }
               const code = response.stopReason === "aborted"
@@ -461,7 +466,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
             return { content: [{ type: "text" as const, text: `${named("Advice:")}\n\n${advice.text}` }], details };
           } catch (error) {
             if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && isTransientProviderFailure(error) && await retryWait(attempts, controller.signal)) {
-              onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, attempts } });
+              onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
               continue;
             }
             const code = errorCode(error, controller.signal.aborted && !timedOut, timedOut);

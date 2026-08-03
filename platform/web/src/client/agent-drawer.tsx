@@ -4,12 +4,13 @@ import { formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
 import { MarkdownContent } from "./conversation-panel";
 import { thinkingLabel } from "./format";
-import { agentColor } from "./agent-color";
+import { agentColor, type AgentColorMap } from "./agent-color";
 import { AnimatedDetails } from "./animated-details";
 
-export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
+export function AgentPanel({ runs, models, colors, selectedId, onSelect, onClose }: {
   runs: DelegatedAgentRunReadModel[];
   models: ModelOptionReadModel[];
+  colors: AgentColorMap;
   selectedId?: string;
   onSelect: (id?: string) => void;
   onClose: () => void;
@@ -21,7 +22,7 @@ export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
     : selected ? [selected] : [];
 
   return (
-    <aside id="agents-panel" className={`inspector agents-panel is-open${selected ? " has-selection" : ""}`} aria-labelledby="agents-title" style={selected ? agentColor(selected) : undefined}>
+    <aside id="agents-panel" className={`inspector agents-panel is-open${selected ? " has-selection" : ""}`} aria-labelledby="agents-title" style={selected ? agentColor(selected, colors) : undefined}>
       <header>
         <div>
           {selected && <button className="icon-button" type="button" onClick={() => onSelect(undefined)} aria-label="Back to agents"><IconArrowLeft size={17} /></button>}
@@ -32,19 +33,19 @@ export function AgentPanel({ runs, models, selectedId, onSelect, onClose }: {
       </header>
       {selected
         ? <AgentDetails run={selected} threadRuns={threadRuns} models={models} />
-        : <AgentList runs={ordered} models={models} onSelect={onSelect} />}
+        : <AgentList runs={ordered} models={models} colors={colors} onSelect={onSelect} />}
     </aside>
   );
 }
 
-function AgentList({ runs, models, onSelect }: { runs: DelegatedAgentRunReadModel[]; models: ModelOptionReadModel[]; onSelect: (id: string) => void }) {
+function AgentList({ runs, models, colors, onSelect }: { runs: DelegatedAgentRunReadModel[]; models: ModelOptionReadModel[]; colors: AgentColorMap; onSelect: (id: string) => void }) {
   if (!runs.length) return <div className="agents-empty"><IconBotId size={24} /><strong>No delegated runs</strong><span>Advisor, Grunt, Scout, and spawned child activity will appear here.</span></div>;
   const turns = new Map<number, DelegatedAgentRunReadModel[]>();
   for (const run of runs) turns.set(run.turn, [...(turns.get(run.turn) ?? []), run]);
   return <div className="agents-list">
     {[...turns].map(([turn, items]) => <section key={turn}>
       <h2>{turn > 0 ? `Turn ${turn}` : "Earlier turn"}</h2>
-      {items.map((run) => <button type="button" key={run.id} style={agentColor(run)} onClick={() => onSelect(run.id)}>
+      {items.map((run) => <button type="button" key={run.id} style={agentColor(run, colors)} onClick={() => onSelect(run.id)}>
         <span className="agent-run-copy">
           <strong className="agent-run-heading">
             <AgentIdentity run={run} />

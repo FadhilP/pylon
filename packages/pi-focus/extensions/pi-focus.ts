@@ -187,14 +187,7 @@ export default function focusExtension(pi: ExtensionAPI) {
     if (enabled && completionBell) ringCompletionBell(ctx.mode);
   });
   pi.on("tool_execution_start", (event, ctx) => {
-    if (
-      !enabled ||
-      event.toolName !== "repo_scout" &&
-      event.toolName !== "web_scout" &&
-      event.toolName !== "advisor" &&
-      event.toolName !== "grunt"
-    )
-      return;
+    if (!enabled || !childTools.has(event.toolName)) return;
     activeChild = event.toolName === "repo_scout"
       ? "SCOUT"
       : event.toolName === "web_scout"

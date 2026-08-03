@@ -57,17 +57,16 @@ interface InspectorProps {
   live: RuntimeStoreSnapshot;
   availableViews: Set<ViewId>;
   timelineEnabled: boolean;
-  isOpen: boolean;
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
   onOpenGlobalPolicy: () => void;
 }
 
-export function Inspector({ current, live, availableViews, timelineEnabled, isOpen, overlay, onClose, onNavigate, onOpenGlobalPolicy }: InspectorProps) {
+export function Inspector({ current, live, availableViews, timelineEnabled, overlay, onClose, onNavigate, onOpenGlobalPolicy }: InspectorProps) {
   const items = navigation.filter((item) => availableViews.has(item.id));
   return (
-    <aside id="session-inspector" className={`inspector ${isOpen ? "is-open" : ""}`} aria-label="Session inspector" aria-hidden={!isOpen} inert={!isOpen}>
+    <aside id="session-inspector" className="inspector" aria-label="Session inspector">
       <header className="inspector-header">
         <div><span className="section-kicker">Inspector</span></div>
         <button className="icon-button" type="button" onClick={onClose} aria-label={overlay ? "Close inspector" : "Collapse inspector"}><IconX size={17} /></button>

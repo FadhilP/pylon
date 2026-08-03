@@ -538,6 +538,8 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((sessionList.activeSessions as unknown[]).length, 1);
     const invalidCursor = await fetch(`${origin}/api/v1/sessions?cursor=not-valid`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(invalidCursor.status, 400);
+    const unauthorizedInvalidCursor = await fetch(`${origin}/api/v1/sessions?cursor=not-valid`, { headers: { cookie, "x-pylon-tab-id": "unknown-tab" } });
+    assert.equal(unauthorizedInvalidCursor.status, 403);
     const history = await fetch(`${origin}/api/v1/conversation-history?cursor=${encodeHistoryCursor(100)}&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(history.status, 200);
     assert.equal(((await body(history)).messages as unknown[]).length, 1);

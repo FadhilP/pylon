@@ -116,6 +116,13 @@ export function usageText(run: ScoutRun): string {
   const u = run.usage;
   return `${run.turns.length} turn${run.turns.length === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
 }
+const addUsage = (left: ScoutRun["usage"], right: ScoutRun["usage"]): ScoutRun["usage"] => ({
+  input: left.input + right.input,
+  output: left.output + right.output,
+  cacheRead: left.cacheRead + right.cacheRead,
+  cacheWrite: left.cacheWrite + right.cacheWrite,
+  cost: left.cost + right.cost,
+});
 function activityText(items: readonly ScoutActivity[]): string {
   return items
     .map(
@@ -376,11 +383,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         const maxCostUsd = scoutMaxCostUsd();
         const deadline = started + timeoutMs;
         const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+        let attemptUsage = { ...usage };
         const turns: ScoutRun["turns"] = [];
         let attempts = 0;
         let run!: ScoutRun;
         for (;;) {
           attempts++;
+          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
           const sessionDir = await repoSessionDir();
           sessionDirs.push(sessionDir);
           const args = [
@@ -400,12 +409,20 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             // Failure wrapping happens here; cap once afterward so retrieval notices survive.
             resultMaxBytes: false,
             env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
+            onUsage: (snapshot) => {
+              attemptUsage = snapshot;
+              lastUpdateAt = Date.now();
+              onUpdate?.({
+                content: [{ type: "text", text: "Scout usage updated" }],
+                details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity, attempts },
+              });
+            },
             onActivity: (_item, all) => {
               lastUpdateAt = Date.now();
               activity = all;
               onUpdate?.({
                 content: [{ type: "text", text: `Scout child activity:\n${activityText(all)}` }],
-                details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, activity: all, attempts },
+                details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity: all, attempts },
               });
             },
           });
@@ -414,6 +431,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           usage.cacheRead += run.usage.cacheRead;
           usage.cacheWrite += run.usage.cacheWrite;
           usage.cost += run.usage.cost;
+          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
           turns.push(...run.turns);
           const canRetry = attempts < DELEGATE_MAX_ATTEMPTS
             && Date.now() < deadline
@@ -424,7 +442,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           if (signal?.aborted || Date.now() >= deadline || (maxCostUsd !== undefined && usage.cost >= maxCostUsd)) break;
           onUpdate?.({
             content: [{ type: "text", text: `Scout provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }],
-            details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: Date.now() - started, attempts },
+            details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: Date.now() - started, usage: { ...usage }, attempts },
           });
         }
         // Include any failure wrapper in the same hard report budget as child output.
@@ -570,6 +588,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           maxCostUsd: scoutMaxCostUsd(),
           env: scoutChildEnv({ [WEB_SCOUT_GRANT_ENV]: grant.value }, process.env, model.provider),
           inheritEnv: false,
+          onUsage: (usage) => {
+            lastUpdateAt = Date.now();
+            onUpdate?.({ content: [{ type: "text", text: "Web Scout usage updated" }], details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: lastUpdateAt - started, usage, activity } });
+          },
           onActivity: (_item, all) => {
             lastUpdateAt = Date.now();
             activity = all;

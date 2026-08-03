@@ -277,9 +277,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "Verify: invalid selection");
         return { content: [{ type: "text" as const, text: details.skipped! }], details };
       }
-      const checks = selectedPolicy
-        ? requested.map((id: string) => detection.available.find((check) => check.id === id)!)
-        : requested.length
+      const checks = selectedPolicy || requested.length
         ? requested.map((id: string) => detection.available.find((check) => check.id === id)!)
         : detection.checks;
       const omittedChecks = selectedPolicy || requested.length ? [] : detection.omitted.map((check) => check.id);

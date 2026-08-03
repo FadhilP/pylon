@@ -127,7 +127,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
     },
     sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
   };
-  const run = async (complete: () => any) => {
+  const run = async (complete: () => any, onUpdate?: (value: any) => void) => {
     let tool: any;
     advisor({
       on: () => {},
@@ -137,7 +137,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
       getActiveTools: () => [],
       setActiveTools: () => {},
     } as any, complete as any, async () => true);
-    return tool.execute("failure", { request: "review" }, undefined, undefined, ctx);
+    return tool.execute("failure", { request: "review" }, undefined, onUpdate, ctx);
   };
   try {
     const secret = `sk-${"x".repeat(40)}`;
@@ -176,6 +176,13 @@ test("advisor records bounded redacted failure diagnostics", async () => {
 
     const aborted = await run(async () => ({ content: [], stopReason: "aborted" }));
     assert.equal(aborted.details.failureCode, "aborted");
+
+    const observerSafe = await run(async () => ({
+      content: [{ type: "text", text: "advice" }], stopReason: "stop",
+      usage: { input: Number.NaN, output: -1, cacheRead: Infinity, cacheWrite: 0, cost: { total: -1 } },
+    }), (update) => { if (update.details?.usage) throw new Error("render failed"); });
+    assert.equal(observerSafe.details.failureCode, undefined);
+    assert.deepEqual(observerSafe.details.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
   } finally {
     if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousDir;
@@ -234,11 +241,13 @@ test("Advisor retries transient failures and only successful consultations consu
 
     mode = "exhaust";
     const callsBeforeExhaustion = providerCalls;
-    const exhausted = await tool.execute("exhaust", { request: "review" }, undefined, undefined, ctx);
+    const updates: any[] = [];
+    const exhausted = await tool.execute("exhaust", { request: "review" }, undefined, (update: any) => updates.push(update), ctx);
     assert.equal(providerCalls, callsBeforeExhaustion + 3);
     assert.equal(exhausted.details.failureCode, "provider_unavailable");
     assert.equal(exhausted.details.attempts, 3);
     assert.equal(exhausted.details.usage.input, 3);
+    assert.deepEqual([...new Set(updates.flatMap((update) => update.details?.usage ? [update.details.usage.input] : []))], [1, 2, 3]);
     assert.equal(exhausted.details.callNumber, 2);
 
     mode = "paid";

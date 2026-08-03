@@ -113,6 +113,7 @@ export type RunPiOptions = {
   env?: NodeJS.ProcessEnv;
   inheritEnv?: boolean;
   onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
+  onUsage?: (usage: ChildUsage) => void;
 };
 
 export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
@@ -140,6 +141,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   });
   const messages: any[] = [];
   const turns: ChildTurnUsage[] = [];
+  const usage = emptyUsage();
   const activity: ScoutActivity[] = [];
   let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false;
   let commandError: string | undefined;
@@ -202,16 +204,26 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;
       const message = event.message;
       messages.push(message);
-      const usage = message.usage ?? {};
-      const latestContextTokens = contextTokensFromUsage(usage);
-      const latestCacheReadTokens = cacheReadTokensFromUsage(usage);
+      const rawUsage = message.usage ?? {};
+      const latestContextTokens = contextTokensFromUsage(rawUsage);
+      const latestCacheReadTokens = cacheReadTokensFromUsage(rawUsage);
       if (message.stopReason !== "aborted" && message.stopReason !== "error" && (latestContextTokens > 0 || latestCacheReadTokens > 0)) {
         contextTokens = latestContextTokens;
         cacheReadTokens = latestCacheReadTokens;
       }
-      const cost = validCost(usage.cost?.total);
-      turns.push({ input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost, model: message.model, stopReason: message.stopReason });
-      reportedCost += cost;
+      const turn = {
+        input: validTokens(rawUsage.input), output: validTokens(rawUsage.output),
+        cacheRead: validTokens(rawUsage.cacheRead), cacheWrite: validTokens(rawUsage.cacheWrite),
+        cost: validCost(rawUsage.cost?.total), model: message.model, stopReason: message.stopReason,
+      };
+      turns.push(turn);
+      reportedCost += turn.cost;
+      usage.input += turn.input;
+      usage.output += turn.output;
+      usage.cacheRead += turn.cacheRead;
+      usage.cacheWrite += turn.cacheWrite;
+      usage.cost += turn.cost;
+      try { options.onUsage?.({ ...usage }); } catch { /* Progress observers must not control the child. */ }
 
       if (finalizationAttempted && !finalizationMessage) {
         finalizationMessage = message;
@@ -266,10 +278,6 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout);
 
-  const usage = turns.reduce((sum, turn) => ({
-    input: sum.input + turn.input, output: sum.output + turn.output,
-    cacheRead: sum.cacheRead + turn.cacheRead, cacheWrite: sum.cacheWrite + turn.cacheWrite, cost: sum.cost + turn.cost,
-  }), emptyUsage());
   const final = finalizationMessage ?? messages.at(-1);
   const rawText = final?.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
   const capped = options.resultMaxBytes === false

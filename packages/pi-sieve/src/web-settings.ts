@@ -1,4 +1,4 @@
-import { configPath, configuredActivePruning, configuredProjectionMode, configuredRolloverHighMultiplier, configuredRolloverLowMultiplier, configuredThreshold, loadConfig, MAX_ROLLOVER_MULTIPLIER, MAX_SIEVE_THRESHOLD, MIN_ROLLOVER_MULTIPLIER, MIN_SIEVE_THRESHOLD, saveConfig } from "./config.ts";
+import { configPath, configuredActivePruning, configuredProjectionMode, configuredRolloverHighMultiplier, configuredRolloverLowMultiplier, configuredThreshold, loadConfig, saveConfig, validProjectionMode, validRolloverMultiplier, validSieveThreshold } from "./config.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
@@ -14,14 +14,10 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
 
 export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (value?.kind !== "sieve" || typeof value.activePruning !== "boolean"
-    || (value.projectionMode !== "stable" && value.projectionMode !== "standard-v2" && value.projectionMode !== "legacy")
-    || !Number.isInteger(value.threshold)
-    || value.threshold < MIN_SIEVE_THRESHOLD
-    || value.threshold > MAX_SIEVE_THRESHOLD
-    || !Number.isInteger(value.rolloverHighMultiplier)
-    || !Number.isInteger(value.rolloverLowMultiplier)
-    || value.rolloverLowMultiplier < MIN_ROLLOVER_MULTIPLIER
-    || value.rolloverHighMultiplier > MAX_ROLLOVER_MULTIPLIER
+    || !validProjectionMode(value.projectionMode)
+    || !validSieveThreshold(value.threshold)
+    || !validRolloverMultiplier(value.rolloverHighMultiplier)
+    || !validRolloverMultiplier(value.rolloverLowMultiplier)
     || value.rolloverHighMultiplier <= value.rolloverLowMultiplier) {
     throw new Error("invalid Sieve settings");
   }

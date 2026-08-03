@@ -203,7 +203,6 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               return <section className={`settings-package${expanded ? " is-expanded" : ""}`} key={item.id} hidden={!matchesFilter}>
                 <header>
                   <div className="settings-package-main">
-                    {/* <span className="package-mark" aria-hidden="true">{packageInitials(item.name)}</span> */}
                     <span className="package-copy">
                       <strong>{item.name}</strong>
                       <small>{item.description || `${item.extensionCount} Pi extension${item.extensionCount === 1 ? "" : "s"}`}</small>
@@ -373,11 +372,6 @@ function GlobalPolicySettings({ policy, disabled, onUpdate }: {
 
 function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
   return Boolean(settings && settings.kind !== "timeline");
-}
-
-function packageInitials(name: string): string {
-  const parts = name.replace(/^pi[-_]?/i, "").split(/[-_\s]+/);
-  return (parts.length === 1 ? parts[0]!.slice(0, 2) : parts.map((part) => part[0]).join("").slice(0, 2)).toUpperCase();
 }
 
 function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUpdate }: {

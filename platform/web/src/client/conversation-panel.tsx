@@ -11,7 +11,7 @@ import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, 
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { agentColor } from "./agent-color";
+import { agentColor, type AgentColorMap } from "./agent-color";
 import { matrixSelectionAtPoint, matrixThinkingAxis, moveMatrixSelection } from "../shared/model-matrix";
 import { AnimatedDetails } from "./animated-details";
 import { UiDialog } from "./ui-dialog";
@@ -59,6 +59,7 @@ export function ConversationPanel({
   initialDraft = "",
   onDraftChange,
   onSelectAgent,
+  agentColors,
   onOpenLogin,
 }: {
   live: RuntimeStoreSnapshot;
@@ -66,6 +67,7 @@ export function ConversationPanel({
   initialDraft?: string;
   onDraftChange?: (draft: string) => void;
   onSelectAgent?: (id: string) => void;
+  agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
 }) {
   const [message, setMessage] = useState(initialDraft);
@@ -567,7 +569,7 @@ export function ConversationPanel({
     <section className="conversation-panel" aria-label="Live conversation">
       {live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
       {live.connection === "error" && <div className="conversation-state error">{live.error || "Unable to load runtime."}</div>}
-      <ActiveAgents runs={activeAgents} onSelect={onSelectAgent} />
+      <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />
       {runtime && <div
         ref={streamRef}
         className="message-stream"
@@ -1658,7 +1660,7 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   </span>;
 }
 
-function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; onSelect?: (id: string) => void }) {
+function ActiveAgents({ runs, colors, onSelect }: { runs: DelegatedAgentRunReadModel[]; colors: AgentColorMap; onSelect?: (id: string) => void }) {
   const [now, setNow] = useState(Date.now());
   const [displayed, setDisplayed] = useState(runs);
   const [exiting, setExiting] = useState(false);
@@ -1686,7 +1688,7 @@ function ActiveAgents({ runs, onSelect }: { runs: DelegatedAgentRunReadModel[]; 
     {displayed.slice(0, 3).map((run) => {
       const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
       const elapsed = Number.isNaN(started) ? run.durationMs ?? 0 : Math.max(0, now - started);
-      return <button type="button" key={run.id} style={agentColor(run)} onClick={() => onSelect?.(run.id)}>
+      return <button type="button" key={run.id} style={agentColor(run, colors)} onClick={() => onSelect?.(run.id)}>
         <span className="agent-state is-working" aria-hidden="true" />
         <IconBotId size={14} />
         <span><strong>{run.agentName ? <span className="agent-instance-name">{run.agentName}</span> : agentKindLabel(run.kind)}</strong><small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small></span>

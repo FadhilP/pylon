@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { writeJsonAtomic } from "./storage.ts";
 
 export const thinkingLevels = [
   "off",
@@ -58,16 +59,7 @@ export async function saveConfig(
   path = configPath(),
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-      mode: 0o600,
-    });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => {});
-    throw error;
-  }
+  await writeJsonAtomic(path, config);
 }
 
 export function parseModelRef(

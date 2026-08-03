@@ -17,6 +17,7 @@ import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, S
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
+import { useAgentColors } from "./agent-color";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel } from "./conversation-panel";
 import { BrowserPanel } from "./browser-panel";
@@ -167,6 +168,7 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
+  const agentColors = useAgentColors(live.runtime?.sessionId, live.runtime?.conversation.delegatedRuns ?? []);
   const projects = useMemo<SessionProject[]>(() => sessionPages.map((page) => ({
     id: page.id,
     label: page.label,
@@ -978,6 +980,7 @@ export function App() {
               setSelectedAgentId(id);
               setRightPanel("agents");
             }}
+            agentColors={agentColors}
             onOpenLogin={(provider) => {
               setSettingsTab("providers");
               setSettingsProviderQuery(provider ?? "");
@@ -999,7 +1002,6 @@ export function App() {
               live={live}
               availableViews={availableViews}
               timelineEnabled={timelineEnabled}
-              isOpen
               overlay={inspectorOverlay}
               onClose={() => setRightPanel(null)}
               onNavigate={selectView}
@@ -1019,6 +1021,7 @@ export function App() {
             key={`agents:${live.runtime?.sessionId ?? "loading"}`}
             runs={live.runtime?.conversation.delegatedRuns ?? []}
             models={live.runtime?.sessionControls.models ?? []}
+            colors={agentColors}
             selectedId={selectedAgentId}
             onSelect={setSelectedAgentId}
             onClose={() => setRightPanel(null)}

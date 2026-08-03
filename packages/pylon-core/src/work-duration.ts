@@ -40,10 +40,8 @@ export function appendWorkDuration(
   return true;
 }
 
-export function readPersistedWorkDurations(
-  session: { getBranch(): unknown[]; getEntries(): unknown[] },
-): Map<string, number> {
-  const activeAssistants = new Set(session.getBranch().flatMap((value) => {
+export function activeAssistantEntryIds(branch: unknown[]): Set<string> {
+  return new Set(branch.flatMap((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const entry = value as Record<string, unknown>;
     const message = entry.message as Record<string, unknown> | undefined;
@@ -51,6 +49,12 @@ export function readPersistedWorkDurations(
       ? [entry.id]
       : [];
   }));
+}
+
+export function readPersistedWorkDurations(
+  session: { getBranch(): unknown[]; getEntries(): unknown[] },
+): Map<string, number> {
+  const activeAssistants = activeAssistantEntryIds(session.getBranch());
   const durations = new Map<string, number>();
   for (const value of session.getEntries()) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;

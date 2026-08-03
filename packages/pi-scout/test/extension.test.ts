@@ -123,15 +123,19 @@ test("Repo Scout publishes sanitized bounded child failure details", async () =>
 test("Repo Scout retries transient child failures in fresh sessions", async () => {
   let calls = 0;
   const sessionDirs: string[] = [];
-  const runtime = await harness(async (args): Promise<ScoutRun> => {
+  const runtime = await harness(async (args, options): Promise<ScoutRun> => {
     calls++;
     sessionDirs.push(args[args.indexOf("--session-dir") + 1]);
-    if (calls === 1) return {
+    if (calls === 1) {
+      options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+      return {
       text: "", error: "503 model at capacity", stderr: "", durationMs: 1,
       usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       turns: [], truncated: false, exitCode: 1, activity: [], budgetExceeded: false,
       finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
-    };
+      };
+    }
+    options.onUsage?.({ input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 });
     return {
       text: "## Findings\n\n- Recovered. `src/a.ts:1-2`", stderr: "", durationMs: 1,
       usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 },
@@ -140,13 +144,15 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
     };
   });
   try {
+    const updates: any[] = [];
     const result = await runtime.tools.get("repo_scout").execute(
-      "retry", { task: "inspect" }, undefined, undefined, context({ hasUI: false }),
+      "retry", { task: "inspect" }, undefined, (update: any) => updates.push(update), context({ hasUI: false }),
     );
     assert.equal(calls, 2);
     assert.equal(result.details.attempts, 2);
     assert.equal(result.details.failureCode, undefined);
     assert.equal(result.details.usage.input, 3);
+    assert.deepEqual([...new Set(updates.flatMap((update) => update.details?.usage ? [update.details.usage.input] : []))], [1, 3]);
     assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally { runtime.restore(); }
 });

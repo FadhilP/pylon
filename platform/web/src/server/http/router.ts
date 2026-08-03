@@ -215,10 +215,15 @@ export class ServerTransport {
     }
   }
 
-  private async sessionList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+  private requireTab(request: IncomingMessage): string {
     const session = this.sessions.get(request);
     const tabId = header(request.headers["x-pylon-tab-id"]);
     if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    return tabId;
+  }
+
+  private async sessionList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
     const projectId = url.searchParams.get("projectId") ?? undefined;
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const query = url.searchParams.get("q")?.trim() || undefined;
@@ -234,18 +239,14 @@ export class ServerTransport {
   }
 
   private async packageList(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const result = await this.driver.listPackages();
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing packages");
     this.send(response, 200, result);
   }
 
   private async hookSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     if (!this.driver.listHookSettings) throw httpError(409, "hook settings are unavailable");
     const result = await this.driver.listHookSettings();
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing hook settings");
@@ -253,9 +254,7 @@ export class ServerTransport {
   }
 
   private async stateqlSnapshot(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const historyLimit = Number(url.searchParams.get("historyLimit") ?? 50);
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
@@ -269,9 +268,7 @@ export class ServerTransport {
   }
 
   private async conversationHistory(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? "";
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
@@ -287,9 +284,7 @@ export class ServerTransport {
   }
 
   private async conversationTurnIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const direction = url.searchParams.get("direction") ?? "earlier";
     const generation = Number(url.searchParams.get("generation"));
@@ -309,9 +304,7 @@ export class ServerTransport {
   }
 
   private async fileSuggestions(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const query = url.searchParams.get("q")?.trim() ?? "";
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
@@ -325,9 +318,7 @@ export class ServerTransport {
   }
 
   private async workspaceFiles(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
     if (!this.driver.workspaceFiles) throw httpError(404, "workspace files are unavailable");
@@ -348,9 +339,7 @@ export class ServerTransport {
     url: URL,
     diff: boolean,
   ): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const path = url.searchParams.get("path") ?? "";
     const view = url.searchParams.get("view") === "base" ? "base" : "current";
@@ -372,9 +361,7 @@ export class ServerTransport {
     url: URL,
     diff: boolean,
   ): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const checkpointId = url.searchParams.get("checkpointId") ?? "";
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
@@ -400,9 +387,7 @@ export class ServerTransport {
   }
 
   private async queuedPrompt(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    const tabId = this.requireTab(request);
     const queueId = url.searchParams.get("queueId") ?? "";
     const generation = Number(url.searchParams.get("generation"));
     if (!/^[A-Za-z0-9._:-]{1,128}$/.test(queueId)) throw httpError(400, "invalid queueId");
@@ -416,9 +401,7 @@ export class ServerTransport {
   }
 
   private async archiveList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
-    const session = this.sessions.get(request);
-    const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
+    this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const query = url.searchParams.get("q")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");

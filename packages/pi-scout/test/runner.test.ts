@@ -107,10 +107,20 @@ test("runner exposes and bounds child tool activity", async () => {
 
 test("exact discovery ceiling sends one steer and accepts one final response", async () => {
   const child = await fake("scout-cost-limit-", `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});emit(${assistant("first", "toolUse", "{cost:{total:.5}}")});}else if(command.type==='steer'){emit({id:command.id,type:'response',command:'steer',success:true});emit(${assistant("final findings", "stop", "{cost:{total:.2}}")});settled();setInterval(()=>{},1000);}`);
-  const run = await runPi([], { cwd: child.dir, prompt: "x", maxCostUsd: 0.5, invocation: child.invocation });
+  const usage: any[] = [];
+  const run = await runPi([], { cwd: child.dir, prompt: "x", maxCostUsd: 0.5, invocation: child.invocation, onUsage: item => usage.push(item) });
   assert.equal(run.text, "final findings"); assert.equal(run.usage.cost, 0.7);
+  assert.deepEqual(usage.map((item) => item.cost), [0.5, 0.7]);
+  assert.deepEqual(run.usage, usage.at(-1));
   assert.equal(run.budgetExceeded, true); assert.equal(run.finalizationAttempted, true); assert.equal(run.finalizationSucceeded, true);
   assert.equal(run.failure, undefined); assert.equal(run.error, undefined);
+});
+
+test("usage observer failures do not control Scout", async () => {
+  const child = await fake("scout-usage-observer-", `if(command.type==='prompt'){emit(${assistant("done", "stop", "{input:1}")});settled();setInterval(()=>{},1000);}`);
+  const run = await runPi([], { cwd: child.dir, prompt: "x", invocation: child.invocation, onUsage: () => { throw new Error("render failed"); } });
+  assert.equal(run.text, "done");
+  assert.equal(run.usage.input, 1);
 });
 
 test("a normal final stop above the ceiling succeeds without steering", async () => {

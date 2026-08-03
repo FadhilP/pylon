@@ -66,7 +66,10 @@ async function fixture(runOverride?: (args: string[], options: any) => Promise<S
   };
   const run: any = async (args: string[], options: any) => {
     calls.push({ args, prompt: options.prompt, env: options.env });
-    return runOverride ? runOverride(args, options) : completed(`reply:${options.prompt}`);
+    if (runOverride) return runOverride(args, options);
+    const result = completed(`reply:${options.prompt}`);
+    options.onUsage?.(result.usage);
+    return result;
   };
   spawnExtension(pi, run, agentDir);
   const models = [
@@ -192,6 +195,23 @@ test("explicit models honor scope changes after schema registration", async () =
       assert.equal(rejected.details.failureCode, "model_unavailable");
     }
     assert.equal(f.calls.length, 0);
+  } finally { f.restore(); }
+});
+
+test("running spawn updates expose the selected model", async () => {
+  const f = await fixture();
+  try {
+    for (const name of ["spawn_agent", "spawn_session"]) {
+      const updates: any[] = [];
+      await f.tools.get(name).execute("create", {
+        action: "create", prompt: "report model",
+      }, undefined, (update: any) => updates.push(update), f.ctx);
+      assert.equal(updates[0]?.details.state, "running");
+      assert.equal(updates[0]?.details.model, "fake/model");
+      assert.deepEqual(updates.find((update) => update.details?.usage)?.details.usage, {
+        input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1,
+      });
+    }
   } finally { f.restore(); }
 });
 

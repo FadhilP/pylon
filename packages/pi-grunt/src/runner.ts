@@ -32,6 +32,7 @@ type RunOptions = {
   maxCostUsd?: number;
   invocation?: Invocation;
   onActivity?: (activity: WorkerActivity, all: readonly WorkerActivity[]) => void;
+  onUsage?: (usage: ChildUsage) => void;
 };
 
 const emptyUsage = (): ChildUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
@@ -93,7 +94,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     detached: process.platform !== "win32", env: process.env,
   });
   const messages: any[] = [];
-  const usages: ChildUsage[] = [];
+  const usage = emptyUsage();
   const activity: WorkerActivity[] = [];
   let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false, protocolMalformed = false;
   let budgetExceeded = "", contextExceeded = "";
@@ -113,15 +114,19 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;
       const message = event.message;
       messages.push(message);
-      const usage = message.usage ?? {};
-      usages.push({ input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost: usage.cost?.total ?? 0 });
-      const cost = usages.reduce((sum, item) => sum + item.cost, 0);
-      const contextTokens = contextTokensFromUsage(usage);
+      const turnUsage = message.usage ?? {};
+      usage.input += validTokens(turnUsage.input);
+      usage.output += validTokens(turnUsage.output);
+      usage.cacheRead += validTokens(turnUsage.cacheRead);
+      usage.cacheWrite += validTokens(turnUsage.cacheWrite);
+      usage.cost += validTokens(turnUsage.cost?.total);
+      try { options.onUsage?.({ ...usage }); } catch { /* Progress observers must not control the child. */ }
+      const contextTokens = contextTokensFromUsage(turnUsage);
       if (contextTokens > GRUNT_CONTEXT_LIMIT)
         contextExceeded = `Worker exceeded context limit (${contextTokens} > ${GRUNT_CONTEXT_LIMIT} tokens).`;
       else if (message.stopReason === "toolUse" && options.maxTurns !== undefined && messages.length >= options.maxTurns)
         budgetExceeded = `Worker reached turn limit (${options.maxTurns}).`;
-      else if (message.stopReason === "toolUse" && options.maxCostUsd !== undefined && cost >= options.maxCostUsd)
+      else if (message.stopReason === "toolUse" && options.maxCostUsd !== undefined && usage.cost >= options.maxCostUsd)
         budgetExceeded = `Worker reached cost limit ($${options.maxCostUsd.toFixed(2)}).`;
       if (contextExceeded || budgetExceeded) terminate(child);
     } catch { protocolMalformed = true; }
@@ -144,11 +149,6 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
   });
   clearTimeout(timeout); options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout);
-  const usage = usages.reduce((sum, item) => ({
-    input: sum.input + item.input, output: sum.output + item.output,
-    cacheRead: sum.cacheRead + item.cacheRead, cacheWrite: sum.cacheWrite + item.cacheWrite,
-    cost: sum.cost + item.cost,
-  }), emptyUsage());
   const final = messages.at(-1);
   const rawText = final?.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
   const capped = capText(rawText);

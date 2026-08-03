@@ -58,7 +58,7 @@ async function withLock<T>(path: string, task: () => Promise<T>): Promise<T> {
   }
 }
 
-async function writeUnlocked(path: string, value: any) {
+export async function writeJsonAtomic(path: string, value: any) {
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
     await writeFile(temporary, JSON.stringify(value, null, 2) + "\n", {
@@ -72,7 +72,7 @@ async function writeUnlocked(path: string, value: any) {
 }
 
 export async function writeJson(path: string, value: any) {
-  await withLock(path, () => writeUnlocked(path, value));
+  await withLock(path, () => writeJsonAtomic(path, value));
 }
 
 export async function withStateLock<T>(
@@ -90,7 +90,7 @@ export async function updateJson<T>(
 ): Promise<T> {
   return withLock(path, async () => {
     const next = update(await readJson(path, fallback, valid));
-    await writeUnlocked(path, next);
+    await writeJsonAtomic(path, next);
     return next;
   });
 }

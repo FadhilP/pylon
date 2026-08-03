@@ -10,7 +10,7 @@ import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHist
 import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
-import { liveToolMessage, replaceConversationMessage, replaceToolActivity } from "../../shared/transcript";
+import { liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity } from "../../shared/transcript";
 import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
 
 export interface RuntimeStoreSnapshot {
@@ -1243,7 +1243,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         ...runtime,
         conversation: {
           ...conversation,
-          delegatedRuns: [...conversation.delegatedRuns.filter((item) => item.id !== run.id), next].slice(-100),
+          delegatedRuns: replaceDelegatedRun(conversation.delegatedRuns, next),
         },
       };
     }

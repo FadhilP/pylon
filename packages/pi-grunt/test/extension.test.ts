@@ -48,18 +48,22 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     let workerAttempts = 0;
     let outcome: "completed" | "blocked" = "completed";
     const runningUpdates: any[] = [];
-    const runWorker = async (args: string[], options: { cwd: string; onActivity?: Function }): Promise<WorkerRun> => {
+    const runWorker = async (args: string[], options: { cwd: string; onActivity?: Function; onUsage?: Function }): Promise<WorkerRun> => {
       childArgs = args;
       workerCwd = options.cwd;
       workerCwds.push(options.cwd);
       workerAttempts++;
-      if (workerAttempts === 1) return {
+      if (workerAttempts === 1) {
+        options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+        return {
         text: "", cwd: options.cwd, model: "worker", stopReason: "error", error: "503 model at capacity",
         failure: "child_error", stderr: "", durationMs: 2,
         usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, turns: 1,
         truncated: false, exitCode: 1, activity: [],
-      };
+        };
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
+      options.onUsage?.({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 });
       options.onActivity?.(
         { kind: "call", tool: "read", text: "README.md" },
         [{ kind: "call", tool: "read", text: "README.md" }],
@@ -106,6 +110,8 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     const activityUpdate = runningUpdates.find((update) => update.details?.activity?.length);
     assert.equal(activityUpdate.details.state, "running");
     assert.ok(activityUpdate.details.durationMs > 0);
+    assert.deepEqual([...new Set(runningUpdates.flatMap((update) => update.details?.usage ? [update.details.usage.input] : []))], [1, 2]);
+    assert.equal(result.details.usage.input, 2);
     assert.equal(result.details.status, "completed");
     assert.equal(result.details.applied, true);
     assert.equal(result.details.isolated, true);

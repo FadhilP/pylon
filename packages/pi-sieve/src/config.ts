@@ -20,6 +20,20 @@ export type SieveConfig = {
   rolloverLowMultiplier?: number;
 };
 
+export function validProjectionMode(value: unknown): value is ProjectionMode {
+  return value === "stable" || value === "standard-v2" || value === "legacy";
+}
+
+export function validSieveThreshold(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value)
+    && value >= MIN_SIEVE_THRESHOLD && value <= MAX_SIEVE_THRESHOLD;
+}
+
+export function validRolloverMultiplier(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value)
+    && value >= MIN_ROLLOVER_MULTIPLIER && value <= MAX_ROLLOVER_MULTIPLIER;
+}
+
 export const defaultConfig = (): SieveConfig => ({ version: 1 });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-sieve", "config.json");
 
@@ -60,22 +74,10 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
       Array.isArray(value) ||
       value.version !== 1 ||
       (value.activePruning !== undefined && typeof value.activePruning !== "boolean") ||
-      (value.projectionMode !== undefined
-        && value.projectionMode !== "stable"
-        && value.projectionMode !== "standard-v2"
-        && value.projectionMode !== "legacy") ||
-      (value.threshold !== undefined &&
-        (!Number.isInteger(value.threshold) ||
-          value.threshold < MIN_SIEVE_THRESHOLD ||
-          value.threshold > MAX_SIEVE_THRESHOLD)) ||
-      (value.rolloverHighMultiplier !== undefined &&
-        (!Number.isInteger(value.rolloverHighMultiplier) ||
-          value.rolloverHighMultiplier < MIN_ROLLOVER_MULTIPLIER ||
-          value.rolloverHighMultiplier > MAX_ROLLOVER_MULTIPLIER)) ||
-      (value.rolloverLowMultiplier !== undefined &&
-        (!Number.isInteger(value.rolloverLowMultiplier) ||
-          value.rolloverLowMultiplier < MIN_ROLLOVER_MULTIPLIER ||
-          value.rolloverLowMultiplier > MAX_ROLLOVER_MULTIPLIER)) ||
+      (value.projectionMode !== undefined && !validProjectionMode(value.projectionMode)) ||
+      (value.threshold !== undefined && !validSieveThreshold(value.threshold)) ||
+      (value.rolloverHighMultiplier !== undefined && !validRolloverMultiplier(value.rolloverHighMultiplier)) ||
+      (value.rolloverLowMultiplier !== undefined && !validRolloverMultiplier(value.rolloverLowMultiplier)) ||
       (value.rolloverHighMultiplier ?? DEFAULT_ROLLOVER_HIGH_MULTIPLIER)
         <= (value.rolloverLowMultiplier ?? DEFAULT_ROLLOVER_LOW_MULTIPLIER)
     )

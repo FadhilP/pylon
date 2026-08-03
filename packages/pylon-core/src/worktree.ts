@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { activeAssistantEntryIds } from "./work-duration.ts";
 
 function git(cwd: string, args: string[], env: Record<string, string> = {}, maxBuffer = 64 * 1024 * 1024) {
   return new Promise<string>((resolve, reject) =>
@@ -282,14 +283,7 @@ export function parseWorktreeSummary(value: unknown): PersistedWorktreeSummary |
 export function readPersistedWorktreeSummaries(
   session: { getBranch(): unknown[]; getEntries(): unknown[] },
 ): Map<string, WorktreeFileChange[]> {
-  const activeAssistants = new Set(session.getBranch().flatMap((value) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-    const entry = value as Record<string, unknown>;
-    const message = entry.message as Record<string, unknown> | undefined;
-    return entry.type === "message" && message?.role === "assistant" && typeof entry.id === "string"
-      ? [entry.id]
-      : [];
-  }));
+  const activeAssistants = activeAssistantEntryIds(session.getBranch());
   const summaries = new Map<string, WorktreeFileChange[]>();
   for (const value of session.getEntries()) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;

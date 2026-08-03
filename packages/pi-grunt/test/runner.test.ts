@@ -34,12 +34,23 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
   const dir = await mkdtemp(join(tmpdir(), "grunt-runner-"));
   const script = join(dir, "fake.mjs");
   await writeFile(script, `console.log(JSON.stringify({type:'tool_execution_start',toolName:'edit',args:{path:'a.ts'}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`);
-  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
+  const usage: any[] = [];
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, onUsage: item => usage.push(item) });
   assert.equal(run.text, "turn 2");
   assert.equal(run.cwd, dir);
   assert.equal(run.turns, 2);
-  assert.equal(run.usage.input, 3);
+  assert.deepEqual(usage.map((item) => item.input), [1, 3]);
+  assert.deepEqual(run.usage, usage.at(-1));
   assert.equal(run.activity[0]?.tool, "edit");
+});
+
+test("usage observer failures do not control the worker", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "grunt-usage-observer-"));
+  const script = join(dir, "fake.mjs");
+  await writeFile(script, `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{input:1}}}))`);
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, onUsage: () => { throw new Error("render failed"); } });
+  assert.equal(run.text, "done");
+  assert.equal(run.usage.input, 1);
 });
 
 test("runner fails closed on incomplete model stop reasons", async () => {

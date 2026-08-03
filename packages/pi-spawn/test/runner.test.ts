@@ -17,20 +17,37 @@ async function fake(body: string) {
   return { dir, invocation: { command: process.execPath, args: [script] } };
 }
 
-test("runner sends an RPC prompt, collects bounded activity, usage, and settlement", async () => {
+test("runner sends an RPC prompt and streams cumulative usage", async () => {
   const child = await fake(`if(command.type==='prompt'){
     emit({id:command.id,type:'response',command:'prompt',success:true});
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'working'}],model:'fake',stopReason:'toolUse',usage:{input:1,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}});
     emit({type:'tool_execution_start',toolName:'read',args:{path:'a.ts'}});
     emit({type:'tool_execution_end',toolName:'read',result:{content:[{type:'text',text:'source'}]}});
     emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'reply:'+command.message}],model:'fake',stopReason:'stop',usage:{input:2,output:3,cacheRead:4,cacheWrite:5,cost:{total:.2}}}});
     emit({type:'agent_settled'}); setInterval(()=>{},1000);
   }`);
   const activity: string[] = [];
-  const run = await runSpawn([], { cwd: child.dir, prompt: "hello", invocation: child.invocation, onActivity: item => activity.push(`${item.kind}:${item.tool}`) });
+  const usage: any[] = [];
+  const run = await runSpawn([], {
+    cwd: child.dir, prompt: "hello", invocation: child.invocation,
+    onActivity: item => activity.push(`${item.kind}:${item.tool}`),
+    onUsage: item => usage.push(item),
+  });
   assert.equal(run.text, "reply:hello");
-  assert.deepEqual(run.usage, { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: .2 });
+  assert.deepEqual(usage, [
+    { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: .1 },
+    { input: 3, output: 5, cacheRead: 7, cacheWrite: 9, cost: 0.30000000000000004 },
+  ]);
+  assert.deepEqual(run.usage, usage.at(-1));
   assert.deepEqual(activity, ["call:read", "result:read"]);
   assert.equal(run.error, undefined);
+});
+
+test("usage observer failures do not control the spawned child", async () => {
+  const child = await fake(`if(command.type==='prompt'){emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{input:1}}});emit({type:'agent_settled'});setInterval(()=>{},1000);}`);
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation, onUsage: () => { throw new Error("render failed"); } });
+  assert.equal(run.text, "done");
+  assert.equal(run.usage.input, 1);
 });
 
 test("runner reports rejected commands and aborts oversized protocol output", async () => {

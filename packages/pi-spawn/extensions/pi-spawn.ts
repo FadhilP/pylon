@@ -191,12 +191,13 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
   ) => {
     const started = Date.now();
     const agentName = scientistName(id);
+    const model = policy?.model;
     let activity: readonly SpawnActivity[] = [];
     let authorized = beforeRun === undefined;
     const update = (value: unknown) => { try { onUpdate?.(value); } catch { /* UI updates must not control child lifecycle. */ } };
     update({
       content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} ${agentName} is working…` }],
-      details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", activity },
+      details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), activity },
     });
     try {
       const run = await withThreadLock(path, async () => {
@@ -208,11 +209,15 @@ export default function spawnExtension(pi: ExtensionAPI, runChild: RunChild = ru
           signal,
           timeoutMs: spawnTimeoutMs(),
           env: { PI_SPAWN_CHILD: kind, PI_SPAWN_DEPTH: String(Number(process.env.PI_SPAWN_DEPTH ?? 0) + 1) },
+          onUsage: (usage) => update({
+            content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} usage updated` }],
+            details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), durationMs: Date.now() - started, usage, activity },
+          }),
           onActivity: (_item, all) => {
             activity = all;
             update({
               content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} activity: ${all.at(-1)?.tool ?? "working"}` }],
-              details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", durationMs: Date.now() - started, activity: all },
+              details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), durationMs: Date.now() - started, activity: all },
             });
           },
         });

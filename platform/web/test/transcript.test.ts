@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceToolActivity, turnIdsInViewport } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, turnIdsInViewport } from "../src/shared/transcript.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { MessageReadModel } from "../src/shared/protocol/events.ts";
+import type { DelegatedAgentRunReadModel, MessageReadModel } from "../src/shared/protocol/events.ts";
 
 const message = (id: string, role: MessageReadModel["role"]): MessageReadModel => ({
   id,
@@ -58,6 +58,23 @@ test("live tools keep event position and reconcile without flicker", () => {
     { id: "call", name: "read", status: "running" },
   );
   assert.deepEqual(tools.map((tool) => [tool.id, tool.status]), [["call", "completed"], ["other", "running"]]);
+});
+
+test("delegated run updates preserve position and bound new runs", () => {
+  const run = (id: string): DelegatedAgentRunReadModel => ({
+    id, kind: "grunt", turn: 1, status: "running", activity: [],
+  });
+  const original = Array.from({ length: 100 }, (_, index) => run(`run-${index}`));
+  const completed = { ...original[40]!, status: "completed" as const };
+  const replaced = replaceDelegatedRun(original, completed);
+
+  assert.equal(replaced[40], completed);
+  assert.deepEqual(replaced.map(({ id }) => id), original.map(({ id }) => id));
+
+  const appended = replaceDelegatedRun(replaced, run("new-run"));
+  assert.equal(appended.length, 100);
+  assert.equal(appended[0]?.id, "run-1");
+  assert.equal(appended.at(-1)?.id, "new-run");
 });
 
 test("the latest loaded prompt appears immediately in a stale latest rail page", () => {

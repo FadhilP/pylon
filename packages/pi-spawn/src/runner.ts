@@ -41,6 +41,7 @@ export type RunSpawnOptions = {
   invocation?: Invocation;
   env?: NodeJS.ProcessEnv;
   onActivity?: (item: SpawnActivity, all: readonly SpawnActivity[]) => void;
+  onUsage?: (usage: SpawnUsage) => void;
 };
 
 const emptyUsage = (): SpawnUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
@@ -100,6 +101,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   });
   const messages: any[] = [];
   const activity: SpawnActivity[] = [];
+  const usage = emptyUsage();
   let stdout = "", stderr = "", commandError = "", timedOut = false, aborted = false;
   let protocolOverflow = false, settled = false, commandId = 0;
 
@@ -137,7 +139,17 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       pushActivity({ kind: "result", tool: event.toolName, text: bounded, ...(event.isError ? { isError: true } : {}) });
       return;
     }
-    if (event.type === "message_end" && event.message?.role === "assistant") messages.push(event.message);
+    if (event.type === "message_end" && event.message?.role === "assistant") {
+      const message = event.message;
+      const item = message.usage ?? {};
+      messages.push(message);
+      usage.input += validNumber(item.input);
+      usage.output += validNumber(item.output);
+      usage.cacheRead += validNumber(item.cacheRead);
+      usage.cacheWrite += validNumber(item.cacheWrite);
+      usage.cost += validNumber(item.cost?.total);
+      try { options.onUsage?.({ ...usage }); } catch { /* Progress observers must not control the child. */ }
+    }
   };
 
   child.stdout!.on("data", (chunk) => {
@@ -176,15 +188,6 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout.endsWith("\r") ? stdout.slice(0, -1) : stdout);
 
-  const usage = messages.reduce((sum, message) => {
-    const item = message.usage ?? {};
-    sum.input += validNumber(item.input);
-    sum.output += validNumber(item.output);
-    sum.cacheRead += validNumber(item.cacheRead);
-    sum.cacheWrite += validNumber(item.cacheWrite);
-    sum.cost += validNumber(item.cost?.total);
-    return sum;
-  }, emptyUsage());
   const final = messages.at(-1);
   const rawText = textContent(final);
   const capped = truncateHead(rawText, { maxBytes: 50 * 1024, maxLines: 2000 });

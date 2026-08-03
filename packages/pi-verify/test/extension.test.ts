@@ -365,4 +365,16 @@ test("runtime policy overrides model-supplied Verify checks", async () => {
     hasUI: false,
   });
   assert.deepEqual(commands, [process.platform === "win32" ? "/d /s /c npm run lint" : "run lint"]);
+
+  eventHandlers.get("pylon:runtime-policy")!({
+    version: 1,
+    sessionId: "session",
+    verify: { mode: "selected", checks: [] },
+  });
+  const empty = await tool.execute("policy-empty", { scope: "project", checks: ["npm:test"] }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.equal(empty.details.state, "no_checks");
+  assert.equal(commands.length, 1);
 });

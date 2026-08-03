@@ -1,4 +1,4 @@
-import type { MessageReadModel, ToolActivityReadModel } from "./protocol/events.ts";
+import type { DelegatedAgentRunReadModel, MessageReadModel, ToolActivityReadModel } from "./protocol/events.ts";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "./protocol/snapshots.ts";
 
 export type ConversationBlock = MessageReadModel | { id: string; tools: MessageReadModel[] };
@@ -50,6 +50,14 @@ export function replaceToolActivity(tools: ToolActivityReadModel[], item: ToolAc
   if (index < 0) return [...tools, item].slice(-100);
   if (tools[index]!.status !== "running" && item.status === "running") return tools;
   const next = tools.slice();
+  next[index] = item;
+  return next;
+}
+
+export function replaceDelegatedRun(runs: DelegatedAgentRunReadModel[], item: DelegatedAgentRunReadModel): DelegatedAgentRunReadModel[] {
+  const index = runs.findIndex((run) => run.id === item.id);
+  if (index < 0) return [...runs, item].slice(-100);
+  const next = runs.slice();
   next[index] = item;
   return next;
 }
