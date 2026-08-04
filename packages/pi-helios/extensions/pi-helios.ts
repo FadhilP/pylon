@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { AndroidSdk, diagnoseAndroid } from "../src/android-sdk.ts";
+import { AndroidSessionManager, type AndroidAction, type AndroidOperationResult } from "../src/android-session.ts";
+import { resolveAppium } from "../src/appium.ts";
 import { BrowserSessionManager, validateCdpEndpoint, type BrowserOperationResult } from "../src/browser-session.ts";
 import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
 import { configPath, loadConfig, saveConfig } from "../src/config.ts";
@@ -148,6 +151,57 @@ const browserSchema = Type.Object({
 type BrowserParams = Static<typeof browserActionSchema>;
 type BrowserInput = Static<typeof browserSchema>;
 
+const ANDROID_ACTIONS = ["avds", "start", "attach", "status", "snapshot", "find", "screenshot", "tap", "fill", "back", "swipe", "close", "detach"] as const;
+const androidSchema = Type.Object({
+  action: StringEnum(ANDROID_ACTIONS),
+  avd: Type.Optional(Type.String({ maxLength: 200 })),
+  serial: Type.Optional(Type.String({ pattern: "^emulator-[0-9]{4,5}$", maxLength: 20 })),
+  appPackage: Type.Optional(Type.String({ maxLength: 255 })),
+  appActivity: Type.Optional(Type.String({ maxLength: 500 })),
+  headless: Type.Optional(Type.Boolean()),
+  target: Type.Optional(Type.String({ pattern: "^a[1-9][0-9]{0,5}$", maxLength: 7, description: "Element reference from the latest Android snapshot, such as a1" })),
+  text: Type.Optional(Type.String({ maxLength: 10000 })),
+  direction: Type.Optional(StringEnum(["up", "down", "left", "right"] as const)),
+  distance: Type.Optional(Type.Integer({ minimum: 10, maximum: 90, description: "Swipe distance as percentage of the screen dimension" })),
+}, { additionalProperties: false });
+type AndroidInput = Static<typeof androidSchema>;
+
+function rejectAndroidExtra(params: AndroidInput, allowed: readonly (keyof AndroidInput)[]): void {
+  const accepted = new Set<keyof AndroidInput>(["action", ...allowed]);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && !accepted.has(key as keyof AndroidInput)) throw new Error(`${params.action} does not accept ${key}`);
+  }
+}
+
+function androidAction(params: AndroidInput): AndroidAction {
+  switch (params.action) {
+    case "snapshot": case "screenshot": case "back": rejectAndroidExtra(params, []); return { kind: params.action };
+    case "find":
+      rejectAndroidExtra(params, ["text"]);
+      return { kind: "find", text: requireAndroidField(params, "text") };
+    case "tap": rejectAndroidExtra(params, ["target"]); return { kind: "tap", target: requireAndroidField(params, "target") };
+    case "fill": rejectAndroidExtra(params, ["target", "text"]); return { kind: "fill", target: requireAndroidField(params, "target"), text: requireAndroidField(params, "text") };
+    case "swipe": rejectAndroidExtra(params, ["direction", "distance"]); return { kind: "swipe", direction: requireAndroidField(params, "direction"), distance: params.distance ?? 60 };
+    default: throw new Error(`${params.action} is not an active Android-session operation`);
+  }
+}
+
+function requireAndroidField<K extends keyof AndroidInput>(params: AndroidInput, key: K): NonNullable<AndroidInput[K]> {
+  const value = params[key];
+  if (value === undefined || value === "") throw new Error(`${params.action} requires ${String(key)}`);
+  return value as NonNullable<AndroidInput[K]>;
+}
+
+function describeAndroid(result: AndroidOperationResult): string {
+  const lines = [`Android ${result.action} ${result.outcome} (${result.ownership}).`, `Emulator: ${result.serial} / ${result.avd}.`, `Package: ${result.packageName}.`];
+  if (result.snapshot !== undefined) lines.push(`Snapshot:\n${result.snapshot || "(no matching elements)"}`);
+  if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
+  if (result.snapshotTruncated) lines.push(`Remaining: ${result.snapshotOmittedLines ?? 0} lines / ${result.snapshotOmittedBytes ?? 0} bytes.`);
+  if (result.findMatches !== undefined) lines.push(`Matches: ${result.findMatches}.`);
+  for (const warning of result.cleanupWarnings ?? []) lines.push(`Warning: ${warning}.`);
+  return lines.join("\n");
+}
+
 function sessionId(ctx: any): string {
   const id = ctx.sessionManager?.getSessionId?.();
   if (typeof id !== "string" || !id) throw new Error("Helios requires a stable Pi session identity");
@@ -241,6 +295,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
   const settingsPath = options.configPath ?? configPath();
   const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) => pi.exec(command, args, options);
   const manager = new BrowserSessionManager(exec);
+  const androidManager = new AndroidSessionManager(exec);
   const disposeEmbeddedBrowser = pi.events.on("pylon:helios-browser-request", (value: unknown) => {
     const request = value && typeof value === "object" ? value as Partial<EmbeddedRequest> : undefined;
     if (request?.version !== 1 || typeof request.claim !== "function" || typeof request.respond !== "function" || !request.claim()) return;
@@ -269,21 +324,22 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond((async () => {
       const sessions = manager.summary();
+      const androidSessions = androidManager.summary();
       try {
         const version = await cachedHealthDiagnostic();
         return {
           version: 1,
           owner: "pi-helios",
           label: "Helios",
-          lines: [`CLI: ${version}`, `Browser sessions: ${sessions.total} (${sessions.owned} owned, ${sessions.attached} attached, ${sessions.cleanupRequired} cleanup-required)`, "Web Scout browser broker: ready"],
-          warning: sessions.cleanupRequired > 0,
+          lines: [`CLI: ${version}`, `Browser sessions: ${sessions.total} (${sessions.owned} owned, ${sessions.attached} attached, ${sessions.cleanupRequired} cleanup-required)`, `Android sessions: ${androidSessions.total} (${androidSessions.owned} owned, ${androidSessions.attached} attached, ${androidSessions.cleanupRequired} cleanup-required)`, "Web Scout browser broker: ready"],
+          warning: sessions.cleanupRequired > 0 || androidSessions.cleanupRequired > 0,
         };
       } catch (error) {
         return {
           version: 1,
           owner: "pi-helios",
           label: "Helios",
-          lines: [error instanceof Error ? `CLI: ${error.message}` : "CLI: unavailable", `Browser sessions: ${sessions.total}`],
+          lines: [error instanceof Error ? `CLI: ${error.message}` : "CLI: unavailable", `Browser sessions: ${sessions.total}`, `Android sessions: ${androidSessions.total} (${androidSessions.cleanupRequired} cleanup-required)`],
           warning: true,
         };
       }
@@ -296,12 +352,13 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       version: 1,
       kind: "register",
       owner: "pi-helios",
-      managedTools: ["helios_browser", "helios_capture"],
-      enabledTools: ["helios_browser", "helios_capture"],
-      deferredTools: ["helios_browser", "helios_capture"],
+      managedTools: ["helios_browser", "helios_capture", "helios_android"],
+      enabledTools: ["helios_browser", "helios_capture", "helios_android"],
+      deferredTools: ["helios_browser", "helios_capture", "helios_android"],
       deferredToolUsage: {
         helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
         helios_capture: "capture a consented Windows window for visual debugging",
+        helios_android: "start or attach to an Android emulator and navigate one app through constrained Appium actions",
       },
     });
   });
@@ -310,10 +367,16 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
     disposeWebScoutCapability();
     disposeEmbeddedBrowser();
     disposeHealth();
-    const summary = await manager.shutdown();
-    if (!ctx.hasUI) return;
+    const [summary, androidSummary] = await Promise.all([manager.shutdown(), androidManager.shutdown()]);
+    if (!ctx.hasUI) {
+      if (summary.failures.length || androidSummary.failures.length || summary.cleanupWarnings.length || androidSummary.cleanupWarnings.length) {
+        throw new Error(`Helios shutdown cleanup uncertain: ${summary.failures.length} browser failure(s), ${androidSummary.failures.length} Android failure(s), ${summary.cleanupWarnings.length + androidSummary.cleanupWarnings.length} warning(s)`);
+      }
+      return;
+    }
     if (summary.failures.length) ctx.ui.notify(`Helios could not ${summary.failures.map((item) => item.action).join("/")} ${summary.failures.length} browser session(s). Browser cleanup remains uncertain.`, "error");
-    for (const warning of summary.cleanupWarnings) ctx.ui.notify(`Helios cleanup warning: ${warning}`, "warning");
+    if (androidSummary.failures.length) ctx.ui.notify(`Helios could not clean up ${androidSummary.failures.length} Android session(s). Emulator cleanup remains uncertain.`, "error");
+    for (const warning of [...summary.cleanupWarnings, ...androidSummary.cleanupWarnings]) ctx.ui.notify(`Helios cleanup warning: ${warning}`, "warning");
     ctx.ui.setStatus?.("pi-helios", undefined);
   });
 
@@ -326,6 +389,18 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
         ctx.ui.notify(`Helios CLI ready: ${version}. CLI compatibility is verified.`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "Helios CLI diagnostic failed", "error");
+      }
+    },
+  });
+
+  pi.registerCommand("helios-android-doctor", {
+    description: "Check Android SDK, AVD, Appium, and UiAutomator2 readiness",
+    handler: async (_args, ctx) => {
+      try {
+        const [android, appium] = await Promise.all([diagnoseAndroid(exec), resolveAppium(exec)]);
+        ctx.ui.notify(`Helios Android ready: ${android.adbVersion}; Appium ${appium.version}; ${android.avds.length} AVD(s): ${android.avds.join(", ") || "none"}.`, "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : "Helios Android diagnostic failed", "error");
       }
     },
   });
@@ -345,6 +420,77 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       const active = manager.get(sessionId(ctx));
       const unchanged = active?.ownership === "owned" ? " Active owned session unchanged." : "";
       ctx.ui.notify(`Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.${unchanged}`, "info");
+    },
+  });
+
+  pi.registerTool({
+    name: "helios_android",
+    label: "Helios Android",
+    description: "Start one owned Android AVD or attach to one consented existing Android emulator, then navigate one expected app through constrained Appium actions. Use returned Android element refs; never guess selectors or request raw ADB/Appium commands. Close owned emulators and detach attached emulators when done. Never monitor. Users must supervise permissions, messages, purchases, destructive actions, secret entry, and any unexpected system UI.",
+    promptSnippet: "Start or attach to one Android emulator and navigate one app through constrained Appium actions",
+    promptGuidelines: [
+      "Use only for user-requested Android emulator work. Start or attach first; close owned emulators or detach attached emulators when done. Never monitor.",
+      "Use only refs returned by the latest Android snapshot or find result. Snapshot again after tap, fill, back, or swipe because those actions invalidate refs.",
+      "Stop if the UI leaves the expected app package. User must supervise permissions, messages, purchases, destructive actions, secret entry, and system UI.",
+      "Never request raw ADB, Appium commands, selectors, scripts, capabilities, APK installation, file transfer, physical-device access, or AVD creation/deletion.",
+    ],
+    parameters: androidSchema,
+    executionMode: "sequential",
+    async execute(toolCallId, params: AndroidInput, signal, onUpdate, ctx) {
+      const id = sessionId(ctx);
+      if (params.action === "avds") {
+        rejectAndroidExtra(params, []);
+        const avds = await (await AndroidSdk.create(exec)).listAvds(signal);
+        return { content: [{ type: "text" as const, text: `Android AVDs (${avds.length}): ${avds.join(", ") || "none"}.` }], details: { avds } };
+      }
+      if (params.action === "status") {
+        rejectAndroidExtra(params, []);
+        const record = androidManager.get(id);
+        if (!record) return { content: [{ type: "text" as const, text: "No active Helios Android session." }], details: { active: false } };
+        return { content: [{ type: "text" as const, text: `Android session ${record.state} (${record.ownership}): ${record.serial} / ${record.avd}; package ${record.packageName}.` }], details: { active: true, ...record } };
+      }
+      if (params.action === "start" || params.action === "attach") {
+        if (!ctx.hasUI) throw new Error("Helios Android start and attachment require interactive confirmation");
+        const packageName = requireAndroidField(params, "appPackage");
+        let approved: boolean;
+        if (params.action === "start") {
+          rejectAndroidExtra(params, ["avd", "appPackage", "appActivity", "headless"]);
+          const avd = requireAndroidField(params, "avd");
+          approved = await ctx.ui.confirm("Start Android emulator?", `Helios will launch and control AVD “${avd}” for package ${packageName}, start a private loopback Appium server, and stop this emulator when closed. UI source and screenshots may contain secrets and enter model/session history.`);
+          if (!approved) return { content: [{ type: "text" as const, text: "User declined Android emulator start." }], details: { declined: true } };
+          onUpdate?.({ content: [{ type: "text" as const, text: `Starting Android AVD ${avd}...` }], details: {} });
+          if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", `android: starting ${avd}`);
+          try {
+            const result = await androidManager.start(id, avd, packageName, params.appActivity, params.headless ?? false, signal);
+            return { content: [{ type: "text" as const, text: describeAndroid(result) }], details: result };
+          } finally { if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", undefined); }
+        }
+        rejectAndroidExtra(params, ["serial", "appPackage", "appActivity"]);
+        const serial = requireAndroidField(params, "serial");
+        approved = await ctx.ui.confirm("Attach to Android emulator?", `Helios will control existing emulator ${serial} for package ${packageName} through a private loopback Appium server. Existing app data and UI may become accessible to the selected model and retained in Pi history. Helios will detach without stopping the emulator.`);
+        if (!approved) return { content: [{ type: "text" as const, text: "User declined Android emulator attachment." }], details: { declined: true } };
+        onUpdate?.({ content: [{ type: "text" as const, text: `Attaching to Android emulator ${serial}...` }], details: {} });
+        if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", `android: attaching ${serial}`);
+        try {
+          const result = await androidManager.attach(id, serial, packageName, params.appActivity, signal);
+          return { content: [{ type: "text" as const, text: describeAndroid(result) }], details: result };
+        } finally { if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", undefined); }
+      }
+      if (params.action === "close" || params.action === "detach") {
+        rejectAndroidExtra(params, []);
+        const result = await androidManager.close(id, params.action, signal);
+        return { content: [{ type: "text" as const, text: describeAndroid(result) }], details: result };
+      }
+      if (params.action === "screenshot" && ctx.model && !ctx.model.input.includes("image")) throw new Error("Selected model does not support image input");
+      onUpdate?.({ content: [{ type: "text" as const, text: `Running Android ${params.action}...` }], details: {} });
+      const result = await androidManager.operate(id, androidAction(params), signal);
+      if (!result.artifactPath) return { content: [{ type: "text" as const, text: describeAndroid(result) }], details: result };
+      try {
+        const image = await createReadToolDefinition(ctx.cwd).execute(toolCallId, { path: result.artifactPath }, signal, onUpdate, ctx);
+        return { content: [{ type: "text" as const, text: describeAndroid(result) }, ...image.content], details: { ...result, artifactPath: undefined } };
+      } finally {
+        await rm(result.artifactPath, { force: true }).catch(() => { if (ctx.hasUI) ctx.ui.notify("Helios could not delete temporary Android screenshot.", "warning"); });
+      }
     },
   });
 

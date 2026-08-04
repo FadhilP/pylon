@@ -9,7 +9,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
         <div><span className="section-kicker" id="database-panel-title">Database</span></div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="Close database"><IconX size={17} /></button>
       </header>
-      <p className="inspector-description">Shared StateQL workspace, durable results, and bounded command history.</p>
+      <p className="inspector-description">Shared StateQL workspace, connection context, and bounded database activity.</p>
       <div className="inspector-scroll">
         <StateQLWorkspace live={live} />
       </div>

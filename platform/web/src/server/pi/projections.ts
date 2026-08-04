@@ -454,6 +454,16 @@ export class RuntimeProjection {
     const finalAssistant = [...runtime.conversation.messages].reverse()
       .find((message) => message.role === "assistant" && !message.streaming);
     if (finalAssistant) this.reconcileAssistant(finalAssistant);
+    for (const run of runtime.conversation.delegatedRuns) {
+      const previous = this.delegatedRuns.get(run.id);
+      if (run.status === "running" || (previous && previous.status !== "running")) continue;
+      const next = previous ? {
+        ...structuredClone(previous),
+        ...structuredClone(run),
+        activity: structuredClone(run.activity.length > previous.activity.length ? run.activity : previous.activity),
+      } : structuredClone(run);
+      if (!previous || !isDeepStrictEqual(previous, next)) this.setDelegatedRun(next);
+    }
     this.runtime = {
       ...this.runtime,
       ready: runtime.ready,

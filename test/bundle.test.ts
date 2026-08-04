@@ -108,10 +108,10 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     }
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
+      "advisor", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_android", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
     ]);
 
     let notification = "";
@@ -141,6 +141,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.ok(!active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
     assert.ok(!active.includes("advisor"));
+    assert.ok(!active.includes("helios_android"));
     assert.ok(!active.includes("helios_browser"));
     assert.ok(!active.includes("helios_capture"));
     assert.ok(!active.includes("spawn_agent"));
@@ -179,6 +180,16 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     assert.match(discoveryResult.content[0].text, /Selected: helios_browser/);
     assert.match(discoveryResult.content[0].text, /Callable definitions update next model turn/);
     assert.ok(active.includes("helios_browser"));
+
+    const androidDiscovery = await tools.get("search_tools").execute(
+      "discover-android",
+      { query: "start an Android emulator and navigate an app" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(androidDiscovery.content[0].text, /Selected: helios_android/);
+    assert.ok(active.includes("helios_android"));
     await commands.get("pylon").handler("doctor", ctx);
     assert.match(notification, /Package health:/);
     assert.match(notification, /Helios:/);

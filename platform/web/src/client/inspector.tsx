@@ -32,6 +32,7 @@ import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-pol
 import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
+import { buildStateQLActivity, filterStateQLActivity, stateqlActivityStatus, type StateQLActivityFilter, type StateQLActivityItem } from "../shared/stateql-notebook";
 
 export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
@@ -550,6 +551,8 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [activityFilter, setActivityFilter] = useState<StateQLActivityFilter>("all");
+  const [expandedActivity, setExpandedActivity] = useState<Set<string>>(new Set());
   const toolRevision = useMemo(() => (live.runtime?.conversation.tools ?? [])
     .filter((tool) => tool.name === "stateql" && tool.status !== "running")
     .map((tool) => `${tool.id}:${tool.status}`)
@@ -562,13 +565,24 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
     const controller = new AbortController();
     let active = true;
     void runtimeStore.stateqlSnapshot(50, controller.signal)
-      .then((value) => { if (active) setSnapshot(value); })
+      .then((value) => {
+        if (!active) return;
+        setSnapshot(value);
+        const first = buildStateQLActivity(value)[0];
+        setExpandedActivity(first ? new Set([first.id]) : new Set());
+      })
       .catch((cause) => {
         if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "StateQL status failed to load");
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; controller.abort(); };
   }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, refresh, toolRevision]);
+
+  const activity = useMemo(() => snapshot ? buildStateQLActivity(snapshot) : [], [snapshot]);
+  const visibleActivity = useMemo(() => filterStateQLActivity(activity, activityFilter), [activity, activityFilter]);
+  const visibleHistory = visibleActivity.filter((item) => item.source === "history");
+  const visibleMetadata = visibleActivity.filter((item) => item.source === "metadata");
+  const allVisibleExpanded = visibleActivity.length > 0 && visibleActivity.every((item) => expandedActivity.has(item.id));
 
   if (!snapshot && loading) return <div className="empty-state"><IconLoader2 className="spin" size={20} /><strong>Loading StateQL</strong><span>Reading bounded local status and history.</span></div>;
   if (!snapshot) return <div className="empty-state"><IconDatabase size={20} /><strong>StateQL unavailable</strong><span>{error || "No StateQL snapshot is available for this actor."}</span></div>;
@@ -590,45 +604,81 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
       {error && <p className="ui-request-error" role="alert">{error}</p>}
     </InspectorSection>
 
-    <InspectorSection title="Recent results" meta={`${snapshot.recent_results.length}`} className="tool-table-panel">
-      <div className="tool-table" role="table" aria-label="Recent StateQL results">
-        <div className="tool-table-head" role="row"><span role="columnheader">Handle</span><span role="columnheader">Alias</span><span role="columnheader">Rows</span><span role="columnheader">State</span></div>
-        {snapshot.recent_results.map((result) => <div className="tool-table-row" role="row" key={result.handle}>
-          <span className="tool-name mono" role="cell">{result.handle}</span>
-          <span role="cell">{result.alias ?? "—"}</span>
-          <span className="mono" role="cell">{result.rows}</span>
-          <span role="cell"><Status tone="neutral">materialized</Status></span>
-        </div>)}
-        {snapshot.recent_results.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No result handles</strong><span>StateQL queries will appear here.</span></div>}
+    <section className="stateql-notebook" aria-labelledby="stateql-activity-title">
+      <header className="stateql-notebook-header">
+        <div><h2 id="stateql-activity-title">Session activity</h2><p>Bounded session history and recent metadata · {activity.length} items</p></div>
+        <button className="text-button" type="button" disabled={visibleActivity.length === 0} onClick={() => setExpandedActivity((current) => {
+          if (allVisibleExpanded) return new Set([...current].filter((id) => !visibleActivity.some((item) => item.id === id)));
+          return new Set([...current, ...visibleActivity.map((item) => item.id)]);
+        })}>{allVisibleExpanded ? "Collapse all" : "Expand all"}</button>
+      </header>
+      <div className="stateql-filters" role="group" aria-label="Filter database activity">
+        {(["all", "read", "write", "error"] as const).map((filter) => {
+          const count = filterStateQLActivity(activity, filter).length;
+          return <button type="button" aria-pressed={activityFilter === filter} key={filter} onClick={() => setActivityFilter(filter)}>
+            {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}<span>{count}</span>
+          </button>;
+        })}
       </div>
-    </InspectorSection>
-
-    <InspectorSection title="Recent operations" meta={`${snapshot.recent_operations.length}`} className="tool-table-panel">
-      <div className="tool-table" role="table" aria-label="Recent StateQL operations">
-        <div className="tool-table-head" role="row"><span role="columnheader">Handle</span><span role="columnheader">Type</span><span role="columnheader">Rows</span><span role="columnheader">State</span></div>
-        {snapshot.recent_operations.map((operation) => <div className="tool-table-row" role="row" key={operation.handle}>
-          <span className="tool-name mono" role="cell">{operation.handle}</span>
-          <span className="tool-name" role="cell"><span><strong>{operation.type}</strong><small className="mono">{oneLine(operation.actor_id, 18)}</small></span></span>
-          <span className="mono" role="cell">{operation.affected_rows ?? "—"}</span>
-          <span role="cell"><Status tone={operation.status === "committed" ? "success" : operation.status === "failed" || operation.status === "outcome_unknown" ? "danger" : "active"}>{operation.status}</Status></span>
-        </div>)}
-        {snapshot.recent_operations.length === 0 && <div className="empty-state"><IconDatabase size={20} /><strong>No database writes</strong><span>Confirmed write operations will appear here.</span></div>}
+      <p className="stateql-notebook-note">Snapshot metadata only. SQL text and row previews are not available in this view.</p>
+      <div className="stateql-card-list">
+        {visibleHistory.map((item) => <StateQLActivityCard item={item} expanded={expandedActivity.has(item.id)} key={item.id} onExpandedChange={(open) => setExpandedActivity((current) => {
+          const next = new Set(current);
+          if (open) next.add(item.id); else next.delete(item.id);
+          return next;
+        })} />)}
+        {visibleMetadata.length > 0 && <div className="stateql-metadata-label"><strong>Recent metadata without history</strong><span>No timestamp is available for these retained handles.</span></div>}
+        {visibleMetadata.map((item) => <StateQLActivityCard item={item} expanded={expandedActivity.has(item.id)} key={item.id} onExpandedChange={(open) => setExpandedActivity((current) => {
+          const next = new Set(current);
+          if (open) next.add(item.id); else next.delete(item.id);
+          return next;
+        })} />)}
+        {visibleActivity.length === 0 && <div className="empty-state"><IconClock size={20} /><strong>No matching activity</strong><span>{activity.length === 0 ? "Commands run in this shared workspace will appear here." : `No ${activityFilter} activity is available in the bounded snapshot.`}</span></div>}
       </div>
-    </InspectorSection>
-
-    <InspectorSection title="Command history" meta={`${snapshot.history.length}`} className="tool-table-panel">
-      <div className="tool-table" role="table" aria-label="StateQL command history">
-        <div className="tool-table-head" role="row"><span role="columnheader">Command</span><span role="columnheader">Handle</span><span role="columnheader">Result</span><span role="columnheader">Time</span></div>
-        {snapshot.history.map((entry) => <div className="tool-table-row" role="row" key={entry.command_id}>
-          <span className="tool-name" role="cell"><span><strong>{entry.command}</strong><small className="mono">{oneLine(entry.actor_id, 18)}</small></span></span>
-          <span className="mono" role="cell">{entry.handle ?? "—"}</span>
-          <span role="cell"><Status tone={!entry.success ? "danger" : entry.cached ? "neutral" : "success"}>{entry.success ? entry.cached ? "cached" : entry.executed ? "executed" : "ok" : entry.error_code ?? "failed"}</Status></span>
-          <time role="cell" dateTime={entry.timestamp}>{displayTime(entry.timestamp)}</time>
-        </div>)}
-        {snapshot.history.length === 0 && <div className="empty-state"><IconClock size={20} /><strong>No StateQL history</strong><span>Commands run in this shared workspace will appear here.</span></div>}
-      </div>
-    </InspectorSection>
+    </section>
   </div>;
+}
+
+function StateQLActivityCard({ item, expanded, onExpandedChange }: { item: StateQLActivityItem; expanded: boolean; onExpandedChange: (open: boolean) => void }) {
+  const status = stateqlActivityStatus(item);
+  const kind = item.tags.includes("error") ? "error" : item.tags.includes("write") ? "write" : item.tags.includes("read") ? "read" : "other";
+  const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "·";
+  const title = item.source === "history"
+    ? item.command
+    : item.result && item.operation
+      ? "Result and operation metadata"
+      : item.operation
+        ? `${item.operation.type} operation`
+        : "Materialized result";
+  return <details className={`stateql-card is-${kind}`} open={expanded} onToggle={(event) => {
+    if (event.currentTarget.open !== expanded) onExpandedChange(event.currentTarget.open);
+  }}>
+    <summary>
+      <span className="stateql-card-marker" aria-hidden="true">{marker}</span>
+      <span className="stateql-card-title"><strong>{title}</strong><small className="mono">{item.command}{item.handle ? ` · ${oneLine(item.handle, 24)}` : ""}</small></span>
+      <span className="stateql-card-meta"><Status tone={status.tone}>{status.label}</Status>{item.timestamp && <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time>}</span>
+      <IconChevronDown size={15} aria-hidden="true" />
+    </summary>
+    <div className="stateql-card-content">
+      <dl className="stateql-card-facts">
+        <div><dt>Command</dt><dd className="mono">{item.command}</dd></div>
+        <div><dt>Actor</dt><dd className="mono">{item.actorId ? oneLine(item.actorId, 20) : "—"}</dd></div>
+        <div><dt>Handle</dt><dd className="mono" title={item.handle}>{item.handle ? oneLine(item.handle, 24) : "—"}</dd></div>
+        <div><dt>Execution</dt><dd>{item.source === "metadata" ? "History unavailable" : item.cached ? "cache hit" : item.executed ? "database executed" : item.success ? "completed" : "failed"}</dd></div>
+      </dl>
+      {item.result && <section className="stateql-result-receipt" aria-label="Materialized result">
+        <div><span>Materialized result</span><strong className="mono" title={item.result.handle}>{oneLine(item.result.handle, 26)}</strong></div>
+        <div><span>Alias</span><strong>{item.result.alias ?? "No alias"}</strong></div>
+        <div><span>Rows</span><strong className="mono">{item.result.rows}</strong></div>
+      </section>}
+      {item.operation && <section className="stateql-operation-receipt" aria-label="Database operation">
+        <div><span>Operation</span><strong className="mono" title={item.operation.handle}>{oneLine(item.operation.handle, 26)}</strong></div>
+        <div><span>Affected</span><strong>{item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}</strong></div>
+        <div><span>State</span><strong>{item.operation.status}</strong></div>
+      </section>}
+      {item.result && item.operation && <p className="stateql-card-warning">This handle matches both result and operation metadata.</p>}
+    </div>
+  </details>;
 }
 
 function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapshot; enabled: boolean }) {

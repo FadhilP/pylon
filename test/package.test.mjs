@@ -65,6 +65,7 @@ test("packed package installs and launches its production web app", { timeout: 2
     const packageRoot = join(prefix, "node_modules", "@fadhilp", "pylon");
     const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
     assert.equal(manifest.bin.pylon, "./bin/pylon.mjs");
+    assert.ok(existsSync(join(packageRoot, "bin", "storage.mjs")));
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
 
@@ -88,7 +89,12 @@ test("packed package installs and launches its production web app", { timeout: 2
 
     launch = spawn(process.execPath, [join(packageRoot, "bin", "pylon.mjs")], {
       cwd: project,
-      env: { ...process.env, PYLON_NO_UPDATE_CHECK: "1", PYLON_PORT: "0" },
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: join(temp, "agent"),
+        PYLON_NO_UPDATE_CHECK: "1",
+        PYLON_PORT: "0",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const origin = await readyUrl(launch);

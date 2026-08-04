@@ -17,6 +17,12 @@ test("Database is a package-gated peer panel, not an Inspector tab", async () =>
   assert.match(database, /<StateQLWorkspace live=\{live\} \/>/);
   assert.match(inspector, /if \(live\.connection !== "connected" \|\| !live\.runtime\?\.ready\) return/);
   assert.match(inspector, /\[live\.connection, live\.runtime\?\.ready, live\.runtime\?\.sessionId, live\.runtime\?\.sessionGeneration, refresh, toolRevision\]/);
+  assert.match(inspector, /aria-label="Filter database activity"/);
+  assert.match(inspector, /aria-pressed=\{activityFilter === filter\}/);
+  assert.match(inspector, /allVisibleExpanded \? "Collapse all" : "Expand all"/);
+  assert.match(inspector, /<StateQLActivityCard/);
+  assert.doesNotMatch(inspector, /title="Recent results"/);
+  assert.doesNotMatch(inspector, /title="Command history"/);
   assert.doesNotMatch(inspector, /id: "stateql"/);
   assert.doesNotMatch(inspector, /current === "stateql"/);
 });

@@ -748,6 +748,41 @@ test("authoritative refresh repairs a terminal assistant omitted from live event
   assert.deepEqual(published.filter((type) => type.startsWith("message.")), ["message.start", "message.end"]);
 });
 
+test("authoritative refresh settles delegated runs missed during session switching", () => {
+  const initial = runtime();
+  initial.conversation.delegatedRuns = [{
+    id: "spawn-1", kind: "spawn_agent", turn: 1, request: "Inspect auth", status: "running",
+    agentName: "Ada", startedAt: "2026-07-27T01:02:03.000Z", modelName: "provider/child",
+    activity: [
+      { kind: "call", tool: "read", text: "auth.ts" },
+      { kind: "result", tool: "read", text: "source" },
+    ],
+  }];
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(initial, (type, payload) => published.push({ type, payload }));
+  const completed = runtime();
+  completed.conversation.delegatedRuns = [{
+    id: "spawn-1", kind: "spawn_agent", turn: 1, request: "Inspect auth", response: "Done",
+    status: "completed", durationMs: 1_250, activity: [{ kind: "call", tool: "read", text: "auth.ts" }],
+  }];
+
+  projection.refresh(completed);
+
+  const run = projection.snapshot().conversation.delegatedRuns[0];
+  assert.equal(run?.status, "completed");
+  assert.equal(run?.response, "Done");
+  assert.equal(run?.agentName, "Ada");
+  assert.equal(run?.modelName, "provider/child");
+  assert.equal(run?.activity.length, 2);
+  assert.deepEqual(published.filter((event) => event.type === "delegate.update").map((event) => ({ id: event.payload.id, status: event.payload.status })), [
+    { id: "spawn-1", status: "completed" },
+  ]);
+
+  projection.refresh(initial);
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.status, "completed");
+  assert.equal(published.filter((event) => event.type === "delegate.update").length, 1);
+});
+
 test("agent completion does not duplicate live or snapshotted assistants", () => {
   const canonical = {
     id: "history-2",

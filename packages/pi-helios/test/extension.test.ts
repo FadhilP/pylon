@@ -59,9 +59,17 @@ function context(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("registers native capture and constrained browser tools", () => {
+test("registers native capture and constrained browser and Android tools", () => {
   const { tools } = runtime();
-  assert.deepEqual([...tools.keys()].sort(), ["helios_browser", "helios_capture"]);
+  assert.deepEqual([...tools.keys()].sort(), ["helios_android", "helios_browser", "helios_capture"]);
+  const android = tools.get("helios_android");
+  assert.match(android.description, /Start one owned Android AVD/);
+  assert.match(android.description, /consented existing Android emulator/);
+  assert.match(android.description, /returned Android element refs/);
+  assert.match(android.description, /never guess selectors/i);
+  assert.match(android.promptGuidelines.join("\n"), /Never request raw ADB, Appium commands/i);
+  assert.equal(android.parameters.properties.serial.pattern, "^emulator-[0-9]{4,5}$");
+  assert.equal(android.parameters.properties.target.pattern, "^a[1-9][0-9]{0,5}$");
   const captureDescription = tools.get("helios_capture").description;
   assert.match(captureDescription, /Windows window/);
   assert.match(captureDescription, /user asks/);
@@ -98,7 +106,44 @@ test("advertises compact deferred browser usages to Pylon", async () => {
   assert.deepEqual(policy.deferredToolUsage, {
     helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
     helios_capture: "capture a consented Windows window for visual debugging",
+    helios_android: "start or attach to an Android emulator and navigate one app through constrained Appium actions",
   });
+});
+
+test("Android start and attachment require visible consent before SDK or Appium access", async () => {
+  let executions = 0;
+  const { tools } = runtime({ exec: async () => { executions++; return { code: 0, stdout: "", stderr: "", killed: false }; } });
+  const declined = await tools.get("helios_android").execute("android-start", {
+    action: "start", avd: "Pixel_Test", appPackage: "com.example.app",
+  }, undefined, undefined, context({ ui: { async confirm() { return false; }, notify() {} } }));
+  assert.equal(declined.details.declined, true);
+  assert.equal(executions, 0);
+  await assert.rejects(tools.get("helios_android").execute("android-attach", {
+    action: "attach", serial: "emulator-5554", appPackage: "com.example.app",
+  }, undefined, undefined, context({ hasUI: false })), /require interactive confirmation/);
+  assert.equal(executions, 0);
+});
+
+test("Android tool rejects cross-action fields and unsupported screenshots before backend access", async () => {
+  let confirmations = 0;
+  const { tools } = runtime();
+  const ctx = context({ ui: { async confirm() { confirmations++; return true; }, notify() {} } });
+  await assert.rejects(tools.get("helios_android").execute("invalid-start", {
+    action: "start", avd: "Pixel_Test", serial: "emulator-5554", appPackage: "com.example.app",
+  }, undefined, undefined, ctx), /does not accept serial/);
+  await assert.rejects(tools.get("helios_android").execute("invalid-attach", {
+    action: "attach", serial: "emulator-5554", appPackage: "com.example.app", headless: true,
+  }, undefined, undefined, ctx), /does not accept headless/);
+  await assert.rejects(tools.get("helios_android").execute("missing-package", {
+    action: "start", avd: "Pixel_Test",
+  }, undefined, undefined, ctx), /requires appPackage/);
+  await assert.rejects(tools.get("helios_android").execute("invalid-find", {
+    action: "find", text: "Next", avd: "Pixel_Test",
+  }, undefined, undefined, ctx), /does not accept avd/);
+  await assert.rejects(tools.get("helios_android").execute("text-screenshot", {
+    action: "screenshot",
+  }, undefined, undefined, context({ model: { input: ["text"] } })), /does not support image/);
+  assert.equal(confirmations, 0);
 });
 
 test("owned launches default to headless when visibility is not configured", async () => {
@@ -237,11 +282,12 @@ test("health diagnostics share cached work while doctor stays fresh", async () =
     return { code: 0, stdout: "playwright-cli 0.1.17\n", stderr: "", killed: false };
   } });
   const health = eventHandlers.get("pylon:health-request")![0];
-  const responses: Promise<unknown>[] = [];
+  const responses: Promise<any>[] = [];
   const request = { version: 1, respond(value: Promise<unknown>) { responses.push(value); } };
   health(request);
   health(request);
-  await Promise.all(responses);
+  const values = await Promise.all(responses);
+  assert.ok(values.every((value) => value.lines.some((line: string) => line.startsWith("Android sessions:"))));
   assert.equal(calls, 1);
   await commands.get("helios-doctor").handler("", context());
   assert.equal(calls, 2);

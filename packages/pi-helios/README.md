@@ -1,6 +1,6 @@
 # pi-helios
 
-Consent-gated browser use and named Windows-window screenshots for [Pi](https://pi.dev). Helios never captures a desktop, controls native input, exposes raw Playwright commands, or monitors in background.
+Consent-gated browser and Android-emulator automation plus named Windows-window screenshots for [Pi](https://pi.dev). Helios never captures a desktop, exposes raw Playwright/Appium/ADB commands, controls physical Android devices, or monitors in background.
 
 ## Installation
 
@@ -8,7 +8,7 @@ Consent-gated browser use and named Windows-window screenshots for [Pi](https://
 pi install git:github.com/FadhilP/pylon
 ```
 
-Run `/reload` after installation. `@playwright/cli@0.1.17` is pinned as runtime dependency. In the Pylon bundle, browser and capture schemas stay deferred until `search_tools` activates them; standalone Helios keeps both tools active.
+Run `/reload` after installation. `@playwright/cli@0.1.17` is pinned as runtime dependency. In the Pylon bundle, browser, Android, and capture schemas stay deferred until `search_tools` activates them; standalone Helios keeps all three tools active.
 
 ## Browser Setup
 
@@ -34,6 +34,54 @@ Example CDP launch:
 ```sh
 chrome --remote-debugging-port=9222 --user-data-dir=C:\temp\pi-helios-cdp
 ```
+
+## Android Emulator Setup
+
+Helios can launch one existing Android Virtual Device (owned mode) or attach to one running Android emulator. Android support requires user-installed prerequisites; Helios never installs SDK components, Appium drivers, apps, system images, or AVDs.
+
+1. Install an Android SDK with `platform-tools`, `emulator`, and at least one configured AVD.
+2. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Platform-default SDK directories are also detected (`%LOCALAPPDATA%\\Android\\Sdk`, `~/Library/Android/sdk`, or `~/Android/Sdk`).
+3. Install Appium and UiAutomator2 explicitly:
+
+```sh
+npm install -g appium
+appium driver install uiautomator2
+```
+
+Run `/helios-android-doctor` to check SDK tools, installed AVDs, Appium, and UiAutomator2. If Appium is not installed globally, `APPIUM_PATH` may name its absolute, non-symlink CLI JavaScript entrypoint. Helios starts a private Appium server bound to a reserved random loopback port; it never enables relaxed security.
+
+### Android Usage
+
+`helios_android` exposes constrained actions:
+
+- `avds`, `status`
+- `start`, `attach`, `close`, `detach`
+- `snapshot`, `find`, `screenshot`
+- `tap`, `fill`, `back`, `swipe`
+
+Start an owned existing AVD:
+
+```text
+{ action: "start", avd: "Pixel_8_API_35", appPackage: "com.example.app", appActivity: ".MainActivity" }
+```
+
+Owned starts are visible by default. Set `headless: true` only when a native emulator window is unnecessary. `close` deletes the Appium session, stops Helios's Appium server, revalidates emulator identity, and stops only the emulator process Helios launched.
+
+Attach to an already-running emulator by its even-port ADB serial:
+
+```text
+{ action: "attach", serial: "emulator-5554", appPackage: "com.example.app" }
+```
+
+Attachment verifies that the target is an emulator and resolves its AVD name. `detach` deletes the Appium session and stops Helios's Appium server but never stops the existing emulator. Both start and attach require visible confirmation and are unavailable without interactive UI.
+
+Snapshots expose bounded refs such as `a1`; `tap` and `fill` accept only refs from the latest snapshot or find result. Tap, fill, back, and swipe invalidate refs. Helios refetches source, verifies the expected package and element identity, and refuses stale, disabled, off-screen, malformed, or package-escaped targets.
+
+Android source is limited to 1 MB, 5,000 nodes, and bounded model output. Every editable-field value, password-like value, and common credential pattern is redacted from text snapshots. Screenshots cannot be redacted. Mixed-package actionable trees, permission controllers, launchers, settings, keyboards presented as separate UI trees, installers, and other system UI are outside the expected package and are refused.
+
+Helios uses only fixed internal SDK operations for device listing, AVD identity, boot readiness, and owned-emulator shutdown. Starts reserve session identity and ports before asynchronous work; close and shutdown wait for in-flight startup cleanup. Cleanup remains retryable until the tracked process exits and the Appium endpoint or emulator serial disappears. Helios does not expose raw ADB/Appium commands, shell access, selectors, scripts, arbitrary capabilities, APK installation, file transfer, physical-device control, AVD creation/deletion, or unknown-process cleanup.
+
+An opt-in local contract test is available with `PI_HELIOS_ANDROID_LIVE=1`, `PI_HELIOS_ANDROID_AVD`, `PI_HELIOS_ANDROID_PACKAGE`, and optional `PI_HELIOS_ANDROID_ACTIVITY`. Set `PI_HELIOS_ANDROID_ATTACH_SERIAL` as well to exercise attach/snapshot/screenshot/detach against an already-running emulator. Live tests are skipped by default.
 
 ## Browser Usage
 

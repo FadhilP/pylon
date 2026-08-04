@@ -44,10 +44,11 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "verify": "npm run test:bundle && npm run test:update && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
-    "verify:fast": "npm run test:bundle && npm run test:update && node scripts/run-packages.mjs check && npm run build --workspace @pylon/web",
+    "verify": "npm run test:bundle && npm run test:update && npm run test:storage && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
+    "verify:fast": "npm run test:bundle && npm run test:update && npm run test:storage && node scripts/run-packages.mjs check && npm run build --workspace @pylon/web",
     "test:bundle": "node --experimental-transform-types --test-isolation=none --test-force-exit --test test/bundle.test.ts",
     "test:update": "node --test test/update.test.mjs",
+    "test:storage": "node --test test/storage.test.mjs",
     "test:package": "node --test test/package.test.mjs",
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test",
