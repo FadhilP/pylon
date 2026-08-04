@@ -359,9 +359,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
     configureDeferredTools();
     scheduleIndexRefresh(ctx);
   });
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", () => {
     clearTurnState();
-    scheduleIndexRefresh(ctx);
   });
   pi.on("before_agent_start", (event: any) => {
     if (!event.systemPromptOptions?.selectedTools?.includes("search_tools")) return;

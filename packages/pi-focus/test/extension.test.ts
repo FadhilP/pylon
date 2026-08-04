@@ -112,22 +112,47 @@ test("Grunt and Web Scout show and clear child-model activity widget", () => {
 
   let widget: any;
   const ctx: any = { ui: { setWidget: (_name: string, value: any) => { widget = value; } } };
-  handlers.get("tool_execution_start")![0]({ toolName: "grunt" }, ctx);
+  handlers.get("tool_execution_start")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
   const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
   assert.equal(
     widget({}, theme).render(120).map((line: string) => line.trimEnd()).join("\n"),
     "GRUNT · child model active · expand tool row for activity",
   );
 
-  handlers.get("tool_execution_end")![0]({ toolName: "grunt" }, ctx);
+  handlers.get("tool_execution_end")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
   assert.equal(widget, undefined);
 
-  handlers.get("tool_execution_start")![0]({ toolName: "web_scout" }, ctx);
+  handlers.get("tool_execution_start")![0]({ toolName: "web_scout", toolCallId: "web-1" }, ctx);
   assert.equal(
     widget!({}, theme).render(120).map((line: string) => line.trimEnd()).join("\n"),
     "WEB · child model active · expand tool row for activity",
   );
-  handlers.get("tool_execution_end")![0]({ toolName: "web_scout" }, ctx);
+  handlers.get("tool_execution_end")![0]({ toolName: "web_scout", toolCallId: "web-1" }, ctx);
+  assert.equal(widget, undefined);
+});
+
+test("overlapping Scouts keep child activity visible until the final call ends", () => {
+  const handlers = new Map<string, Function[]>();
+  const pi: any = {
+    getSessionName: () => undefined,
+    getThinkingLevel: () => "low",
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+  };
+  extension(pi);
+
+  let widget: any;
+  const ctx: any = { ui: { setWidget: (_name: string, value: any) => { widget = value; } } };
+  const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+  const rendered = () => widget({}, theme).render(120).map((line: string) => line.trimEnd()).join("\n");
+
+  handlers.get("tool_execution_start")![0]({ toolName: "repo_scout", toolCallId: "scout-1" }, ctx);
+  handlers.get("tool_execution_start")![0]({ toolName: "repo_scout", toolCallId: "scout-2" }, ctx);
+  assert.equal(rendered(), "SCOUT ×2 · child model active · expand tool row for activity");
+
+  handlers.get("tool_execution_end")![0]({ toolName: "repo_scout", toolCallId: "scout-2" }, ctx);
+  assert.equal(rendered(), "SCOUT · child model active · expand tool row for activity");
+  handlers.get("tool_execution_end")![0]({ toolName: "repo_scout", toolCallId: "scout-1" }, ctx);
   assert.equal(widget, undefined);
 });
 

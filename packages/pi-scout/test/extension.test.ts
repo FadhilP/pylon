@@ -163,11 +163,13 @@ test("steering preserves the current repo Scout call sequence", () => {
   assert.equal(startsNewRepoSequence({ source: "interactive", streamingBehavior: "followUp" }), true);
 });
 
-test("parallel Repo Scout calls are serialized into fresh child sessions; only follow-ups get parent context", async () => {
+test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups get parent context", async () => {
   let calls = 0;
   let firstStarted!: () => void;
+  let secondStarted!: () => void;
   let releaseFirst!: () => void;
-  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const firstStart = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const secondStart = new Promise<void>((resolve) => { secondStarted = resolve; });
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
   const childArgs: string[][] = [];
   const childPrompts: string[] = [];
@@ -176,13 +178,13 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     childArgs.push(args);
     childPrompts.push(options.prompt);
     childOptions.push(options);
-    calls++;
-    if (calls === 1) {
+    const call = ++calls;
+    if (call === 1) {
       firstStarted();
       await firstGate;
-    }
+    } else secondStarted();
     return {
-      text: `result ${calls}`, stderr: "", durationMs: 1,
+      text: `result ${call}`, stderr: "", durationMs: 1,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       turns: [], truncated: false, exitCode: 0, activity: [],
       budgetExceeded: false, finalizationAttempted: false, finalizationSucceeded: false,
@@ -191,18 +193,23 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     };
   };
   const runtime = await harness(run);
+  const statuses: Array<string | undefined> = [];
   const ctx = context({
-    hasUI: false,
     sessionManager: {
       buildContextEntries: () => [{ type: "message", message: { role: "user", content: "Find auth flow" } }],
     },
+    ui: { setStatus: (_name: string, value: string | undefined) => statuses.push(value) },
   });
   try {
     const first = runtime.tools.get("repo_scout").execute("one", { task: "first" }, undefined, undefined, ctx);
-    await started;
+    await firstStart;
     const second = runtime.tools.get("repo_scout").execute("two", { task: "second", retryReason: "Need prior request context" }, undefined, undefined, ctx);
+    await secondStart;
+    const secondResult = await second;
+    assert.deepEqual(statuses, ["scout: searching repository…", "scout: searching repository…"]);
     releaseFirst();
-    const results = await Promise.all([first, second]);
+    const firstResult = await first;
+    const results = [firstResult, secondResult];
     const sessionDir = (args: string[]) => args[args.indexOf("--session-dir") + 1];
     assert.equal(calls, 2);
     assert.equal(results[0].details.callNumber, 1);
@@ -214,11 +221,13 @@ test("parallel Repo Scout calls are serialized into fresh child sessions; only f
     assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,grep,find,ls")));
     assert.ok(childOptions.every((options) => options.resultMaxBytes === false));
     assert.ok(childOptions.every((options) => options.env.PI_SCOUT_CHILD === "1"));
+    assert.ok(childOptions.every((options) => options.concurrent === true));
     assert.notEqual(sessionDir(childArgs[0]), sessionDir(childArgs[1]));
     assert.ok(childArgs.every((args) => args.includes("rpc") && !args.some((arg) => arg.includes("Find auth flow"))));
     assert.doesNotMatch(childPrompts[0], /Find auth flow/);
     assert.match(childPrompts[1], /Find auth flow/);
     assert.match(childPrompts[1], /Prior scout gap requiring follow-up: Need prior request context/);
+    assert.equal(statuses.at(-1), undefined);
   } finally { runtime.restore(); }
 });
 

@@ -39,6 +39,18 @@ const outside = (parent: string, child: string) => {
 };
 const splitNul = (value: string) => value.split("\0").filter(Boolean);
 
+function changedWorktreePaths(status: string): string[] {
+  const records = splitNul(status);
+  const paths = new Set<string>();
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index]!;
+    if (record.length < 4) continue;
+    paths.add(record.slice(3));
+    if (/[RC]/.test(record.slice(0, 2)) && records[index + 1]) paths.add(records[++index]!);
+  }
+  return [...paths];
+}
+
 async function temporaryIndex<T>(run: (env: Record<string, string>) => Promise<T>): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "pylon-worktree-"));
   try {
@@ -48,10 +60,14 @@ async function temporaryIndex<T>(run: (env: Record<string, string>) => Promise<T
   }
 }
 
-async function currentTree(root: string, head?: string): Promise<string> {
+async function currentTree(root: string, head?: string, changedPaths?: string[]): Promise<string> {
   return temporaryIndex(async (env) => {
     await git(root, head ? ["read-tree", head] : ["read-tree", "--empty"], env);
-    await git(root, ["add", "-A", "--", "."], env);
+    const boundedPaths = changedPaths?.length && changedPaths.length <= 500
+      && changedPaths.reduce((size, path) => size + path.length + 1, 0) <= 24_000
+      ? changedPaths.map((path) => `:(literal)${path}`)
+      : ["."];
+    await git(root, ["add", "-A", "--", ...boundedPaths], env);
     return git(root, ["write-tree"], env);
   });
 }
@@ -301,7 +317,7 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
     const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
     const [revision, status] = await Promise.all([
       git(root, ["rev-parse", "HEAD", "HEAD^{tree}"]),
-      git(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
+      git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
     ]);
     const [head, headTree] = revision.split(/\r?\n/, 2);
     if (!head || !headTree) throw Error("Git returned an invalid HEAD revision.");
@@ -309,17 +325,13 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
       return { root, tree: headTree, fingerprint: `${root}\n${head}\nclean` };
     }
 
-    const indexTree = await git(root, ["write-tree"]);
-    const dir = await mkdtemp(join(tmpdir(), "pylon-worktree-"));
-    const env = { GIT_INDEX_FILE: join(dir, "index") };
-    try {
-      await git(root, ["read-tree", "HEAD"], env);
-      await git(root, ["add", "-A", "--", "."], env);
-      const tree = await git(root, ["write-tree"], env);
-      return { root, tree, fingerprint: `${root}\n${head}\n${indexTree}\n${tree}` };
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const [indexTree, candidateTree] = await Promise.all([
+      git(root, ["write-tree"]),
+      currentTree(root, "HEAD", changedWorktreePaths(status)),
+    ]);
+    const latestStatus = await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const tree = latestStatus === status ? candidateTree : await currentTree(root, "HEAD");
+    return { root, tree, fingerprint: `${root}\n${head}\n${indexTree}\n${tree}` };
   } catch {
     return undefined;
   }

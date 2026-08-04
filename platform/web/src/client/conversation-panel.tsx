@@ -175,6 +175,17 @@ export function ConversationPanel({
     () => groupConversationMessages(visibleMessages),
     [transcriptMessages, runtime?.conversation.tools],
   );
+  const toolBlocksBeforeLaterPrompt = useMemo(() => {
+    const ids = new Set<string>();
+    let laterPrompt = false;
+    for (let index = conversationBlocks.length - 1; index >= 0; index--) {
+      const block = conversationBlocks[index]!;
+      if ("tools" in block) {
+        if (laterPrompt) ids.add(block.id);
+      } else if (block.role === "user") laterPrompt = true;
+    }
+    return ids;
+  }, [conversationBlocks]);
   const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
   const userTurns = useMemo(
     () => visibleMessages.filter((item) => item.role === "user" && item.entryId),
@@ -598,10 +609,9 @@ export function ConversationPanel({
           </div>
         </div>}
         {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
-        {conversationBlocks.map((block, index) => {
+        {conversationBlocks.map((block) => {
           if ("tools" in block) {
-            const laterPrompt = conversationBlocks.slice(index + 1).some((item) => !("tools" in item) && item.role === "user");
-            return <ToolTurnGroup key={block.id} tools={block.tools} onExpand={laterPrompt ? undefined : forceTranscriptBottom} />;
+            return <ToolTurnGroup key={block.id} tools={block.tools} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
           }
           if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;

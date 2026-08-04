@@ -122,15 +122,32 @@ export function applyOperationalEvent(
   expectedSessionId?: string,
   redact: (value: string) => string = (value) => value,
 ): OperationalReadModel {
-  let next = cloneOperational(current);
-  if (channel === "pi-verify:lifecycle" || channel === "pi-verify:result") next.verification = verification(value, redact);
-  else if (channel === "pi-heartbeat:job") next.jobs = jobs(current.jobs, value);
-  else if (channel === "pi-guard:decision") next.guard = guard(current.guard, value);
-  else if (channel === "pi-continuity:state-change") next.continuity = continuity(current.continuity, value, expectedSessionId);
-  else if (channel === "pi-timeline:state-change") next.timeline = timeline(current.timeline, value, expectedSessionId);
-  else if (channel === "pylon:tool-policy") next.tools = toolPolicy(current.tools, value);
-  else if (channel === "pi-sieve:state-change") next.sieve = sieve(current.sieve, value);
-  else return current;
+  let next: OperationalReadModel;
+  if (channel === "pi-verify:lifecycle" || channel === "pi-verify:result") {
+    const verificationState = verification(value, redact);
+    next = { ...current, verification: verificationState };
+  } else if (channel === "pi-heartbeat:job") {
+    const jobState = jobs(current.jobs, value);
+    next = { ...current, jobs: jobState };
+  } else if (channel === "pi-guard:decision") {
+    const guardState = guard(current.guard, value);
+    next = { ...current, guard: guardState };
+  } else if (channel === "pi-continuity:state-change") {
+    const continuityState = continuity(current.continuity, value, expectedSessionId);
+    if (continuityState === current.continuity) return current;
+    next = { ...current, continuity: continuityState };
+  } else if (channel === "pi-timeline:state-change") {
+    const timelineState = timeline(current.timeline, value, expectedSessionId);
+    if (timelineState === current.timeline) return current;
+    next = { ...current, timeline: timelineState };
+  } else if (channel === "pylon:tool-policy") {
+    const toolsState = toolPolicy(current.tools, value);
+    next = { ...current, tools: toolsState };
+  } else if (channel === "pi-sieve:state-change") {
+    const sieveState = sieve(current.sieve, value);
+    if (sieveState === current.sieve) return current;
+    next = { ...current, sieve: sieveState };
+  } else return current;
   return withHealth(next, diagnostics);
 }
 

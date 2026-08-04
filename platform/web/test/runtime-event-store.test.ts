@@ -19,6 +19,20 @@ test("switching sessions drops history cached for a potentially different branch
   assert.match(source, /async switchSession\(sessionId: string\)[\s\S]*?this\.historyCache\.delete\(sessionId\)[\s\S]*?type: "switchSession"/);
 });
 
+test("terminal agent event restores a dropped final assistant atomically", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /case "agent\.end":[\s\S]*?finalAssistant\(info\.assistantMessage\)[\s\S]*?reconcileFinalAssistant\(conversation\.messages, assistant\)/);
+});
+
+test("history windows remain bounded while rotating through many session generations", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /if \(!segments\?\.length\)[\s\S]*?this\.setHistorySegments\(key, segments\)/);
+  assert.match(source, /private setHistorySegments[\s\S]*?while \(this\.historyWindows\.size > MAX_CACHED_SESSIONS\)/);
+  assert.match(source, /jumpToHistory[\s\S]*?this\.setHistorySegments\(historyKey/);
+});
+
 test("retryable agent events preserve active work while terminal errors settle it", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
   assert.match(source, /"agent\.start", "agent\.end", "agent\.error"/);

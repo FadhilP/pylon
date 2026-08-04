@@ -76,12 +76,23 @@ test("context and cache-read sizes remain independent", () => {
   assert.equal(contextTokensFromUsage({ input: -1, output: 2, cacheRead: 3, cacheWrite: 4 }), 0);
 });
 
-test("runner serializes parallel Scout child processes", async () => {
+test("runner serializes parallel Scout child processes by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-serial-")); const script = join(dir, "fake.mjs");
   await writeFile(script, rpc(`if(command.type==='prompt'){const {mkdir,rm}=await import('node:fs/promises'); const lock=process.argv[2]; let held=false,text='ok'; try{await mkdir(lock);held=true;await new Promise(r=>setTimeout(r,100));}catch{text='overlap';}finally{if(held)await rm(lock,{recursive:true});} emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],model:'fake',stopReason:'stop',usage:{}}}); settled(); setInterval(()=>{},1000);}`));
   const invocation = { command: process.execPath, args: [script, join(dir, "active")] };
   const runs = await Promise.all([runPi([], { cwd: dir, prompt: "one", invocation }), runPi([], { cwd: dir, prompt: "two", invocation })]);
   assert.deepEqual(runs.map((run) => run.text), ["ok", "ok"]);
+});
+
+test("runner permits explicit concurrent Scout child processes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scout-concurrent-")); const script = join(dir, "fake.mjs");
+  await writeFile(script, rpc(`if(command.type==='prompt'){const {mkdir,rm}=await import('node:fs/promises'); const lock=process.argv[2]; let held=false,text='ok'; try{await mkdir(lock);held=true;await new Promise(r=>setTimeout(r,100));}catch{text='overlap';}finally{if(held)await rm(lock,{recursive:true});} emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],model:'fake',stopReason:'stop',usage:{}}}); settled(); setInterval(()=>{},1000);}`));
+  const invocation = { command: process.execPath, args: [script, join(dir, "active")] };
+  const runs = await Promise.all([
+    runPi([], { cwd: dir, prompt: "one", invocation, concurrent: true }),
+    runPi([], { cwd: dir, prompt: "two", invocation, concurrent: true }),
+  ]);
+  assert.deepEqual(runs.map((run) => run.text).sort(), ["ok", "overlap"]);
 });
 
 test("runner passes extension-controlled child environment", async () => {

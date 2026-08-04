@@ -11,6 +11,7 @@ const MAX_MESSAGES = 100;
 const MAX_TOOLS = 100;
 const MAX_DELEGATED_RUNS = 100;
 const MAX_PAYLOAD_TEXT = 8 * 1024;
+const STREAM_FLUSH_MS = 50;
 const MAX_AGENT_ACTIVITY_TEXT = 2_000;
 const delegatedAgentKinds = new Set<DelegatedAgentKind>(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
@@ -450,6 +451,9 @@ export class RuntimeProjection {
   }
 
   refresh(runtime: RuntimeSnapshot): void {
+    const finalAssistant = [...runtime.conversation.messages].reverse()
+      .find((message) => message.role === "assistant" && !message.streaming);
+    if (finalAssistant) this.reconcileAssistant(finalAssistant);
     this.runtime = {
       ...this.runtime,
       ready: runtime.ready,
@@ -586,8 +590,9 @@ export class RuntimeProjection {
       return;
     }
     if (event.type === "package.event") {
-      this.runtime.operational = cloneOperational(event.operational);
-      this.publish(`operational.${event.channel}`, cloneOperational(this.runtime.operational));
+      const operational = cloneOperational(event.operational);
+      this.runtime.operational = operational;
+      this.publish(`operational.${event.channel}`, operational);
       return;
     }
     if (event.type === "session.replaced" || event.type === "session.unavailable") {
@@ -730,6 +735,7 @@ export class RuntimeProjection {
         durationMs,
         turnId,
         messageId: assistant?.id,
+        assistantMessage: !willRetry && kind === "agent_end" && assistant ? { ...assistant, streaming: false } : null,
         modelName: assistant?.modelName,
         thinkingLevel: assistant?.thinkingLevel,
         gitBranch: this.runtime.gitBranch,
@@ -743,7 +749,10 @@ export class RuntimeProjection {
     if (raw.assistantMessage === null) return undefined;
     const value = object(raw.assistantMessage);
     if (value.role !== "assistant" || typeof value.id !== "string" || typeof value.text !== "string") return undefined;
-    const canonical = value as unknown as MessageReadModel;
+    return this.reconcileAssistant(value as unknown as MessageReadModel);
+  }
+
+  private reconcileAssistant(canonical: MessageReadModel): MessageReadModel {
     let current = this.messages.get(canonical.id);
     if (!current && canonical.entryId) {
       current = [...this.messages.values()].find((message) => message.entryId === canonical.entryId);
@@ -819,7 +828,7 @@ export class RuntimeProjection {
     this.pendingUpdate = { id: messageId, text: current.text };
     this.updateBytes += Buffer.byteLength(incoming || full);
     if (this.updateBytes >= MAX_PAYLOAD_TEXT) this.flush();
-    else if (!this.updateTimer) { this.updateTimer = setTimeout(() => this.flush(), 16); this.updateTimer.unref?.(); }
+    else if (!this.updateTimer) { this.updateTimer = setTimeout(() => this.flush(), STREAM_FLUSH_MS); this.updateTimer.unref?.(); }
   }
   private messageEnd(raw: Record<string, unknown>): void {
     if (promptFileCount(object(raw.message))) return;

@@ -2352,7 +2352,7 @@ export class SessionRuntime implements PiDriver {
         if (replacing && raw?.available === false) return;
         const sessionId = active ? this.runtime?.session.sessionId : undefined;
         if (channel === "pi-timeline:state-change") this.captureTimelineUndo(raw);
-        this.operational = applyOperationalEvent(
+        const operational = applyOperationalEvent(
           this.operational,
           channel,
           payload,
@@ -2360,6 +2360,8 @@ export class SessionRuntime implements PiDriver {
           sessionId,
           (value) => this.sanitizeOperationalText(value),
         );
+        if (operational === this.operational) return;
+        this.operational = operational;
         if (active && sessionId) this.emit({
           type: "package.event",
           sessionId,

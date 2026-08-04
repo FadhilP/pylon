@@ -20,6 +20,24 @@ test("Verify running lifecycle exposes timer metadata before checks finish", () 
   assert.deepEqual(state.verification.checks, []);
 });
 
+test("operational projections structurally share unchanged branches and ignore stale snapshots", () => {
+  const initial = initialOperational(["heartbeat_start", "continuity_update"], []);
+  const withJob = applyOperationalEvent(initial, "pi-heartbeat:job", {
+    version: 1, id: "job-1", label: "Index", state: "running", startedAt: new Date(0).toISOString(),
+  });
+  assert.notStrictEqual(withJob.jobs, initial.jobs);
+  assert.strictEqual(withJob.continuity, initial.continuity);
+  assert.strictEqual(withJob.timeline, initial.timeline);
+  assert.strictEqual(applyOperationalEvent(withJob, "unknown", {}), withJob);
+
+  const continuity = applyOperationalEvent(withJob, "pi-continuity:state-change", {
+    version: 3, revision: 1, sessionId: "session", available: true, memory: [], globalMemory: [],
+  }, [], "session");
+  assert.strictEqual(applyOperationalEvent(continuity, "pi-continuity:state-change", {
+    version: 3, revision: 1, sessionId: "session", available: false, memory: [], globalMemory: [],
+  }, [], "session"), continuity);
+});
+
 test("operational projections bound package payloads and isolate malformed versions", () => {
   let state = initialOperational(["verify", "heartbeat_start", "continuity_update"], ["pi-guard.ts", "pi-timeline.ts", "pylon-core.ts"]);
   state = applyOperationalEvent(state, "pi-verify:result", {

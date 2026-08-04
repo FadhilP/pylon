@@ -30,8 +30,8 @@ function markerOwner(value: any): SpawnOwner | undefined {
   return { id: value.ownerSessionId, file: value.ownerSessionFile };
 }
 
-function readSpawnOwner(manager: SessionManager): SpawnOwner | undefined {
-  const owners = manager.getEntries().flatMap((entry) =>
+function readSpawnOwner(entries: ReturnType<SessionManager["getEntries"]>): SpawnOwner | undefined {
+  const owners = entries.flatMap((entry) =>
     entry.type === "custom" && entry.customType === SPAWN_SESSION_MARKER ? [markerOwner(entry.data)] : []);
   const owner = owners[0];
   return owner && owners.every((candidate) => candidate?.id === owner.id
@@ -67,8 +67,7 @@ export interface SessionIndexOptions {
 
 export class SessionIndex {
   private sessions: SessionInfo[] = [];
-  private userCounts = new Map<string, number>();
-  private spawnOwners = new Map<string, { mtimeMs: number; owner?: SpawnOwner }>();
+  private metadata = new Map<string, { path: string; mtimeMs: number; ctimeMs: number; size: number; userMessageCount: number; owner?: SpawnOwner }>();
   private scannedAt = 0;
   private scan?: Promise<void>;
 
@@ -90,8 +89,7 @@ export class SessionIndex {
 
   remove(sessionId: string): void {
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
-    this.userCounts.delete(sessionId);
-    this.spawnOwners.delete(sessionId);
+    this.metadata.delete(sessionId);
   }
 
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
@@ -123,6 +121,7 @@ export class SessionIndex {
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
     const limit = Math.min(100, Math.max(1, input.limit ?? 10));
     const projects: SessionProjectPage[] = [];
+    const sessionLookup = this.sessionLookup();
     const projectEntries = registered
       ? registered
           .filter((project) => !input.projectId || project.id === input.projectId)
@@ -138,7 +137,7 @@ export class SessionIndex {
         label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
         cwd,
         totalCount: sessions.length,
-        sessions: page.map((session) => this.summary(session, options)),
+        sessions: page.map((session) => this.summary(session, options, sessionLookup)),
         ...(offset + page.length < sessions.length && page.length
           ? { nextCursor: encodeCursor(page.at(-1)!.id) }
           : {}),
@@ -158,7 +157,7 @@ export class SessionIndex {
         return right.modified.getTime() - left.modified.getTime();
       })
       .slice(0, 100)
-      .map((session) => this.summary(session, options));
+      .map((session) => this.summary(session, options, sessionLookup));
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, activeSessions, projects };
   }
 
@@ -189,8 +188,9 @@ export class SessionIndex {
     const offset = cursorId ? source.findIndex((session) => session.id === cursorId) + 1 : 0;
     const limit = Math.min(100, Math.max(1, input.limit ?? 20));
     const page = cursorId && offset === 0 ? [] : source.slice(offset, offset + limit);
+    const sessionLookup = this.sessionLookup();
     const sessions: ArchivedSessionSummary[] = page.map((session) => ({
-      ...this.summary(session, options),
+      ...this.summary(session, options, sessionLookup),
       active: false,
       runtimeState: "sleeping",
       archivedAt: archiveRecords.get(session.id)!,
@@ -217,26 +217,20 @@ export class SessionIndex {
     return this.scan;
   }
 
-  private summary(session: SessionInfo, options: SessionIndexOptions): SessionSummary {
+  private summary(
+    session: SessionInfo,
+    options: SessionIndexOptions,
+    sessionLookup: Map<string, SessionInfo>,
+  ): SessionSummary {
     let manager: SessionManager | undefined;
     const open = () => manager ??= SessionManager.open(session.path);
-    let userMessageCount = options.userCountFor?.(session.id) ?? this.userCounts.get(session.id);
-    if (userMessageCount === undefined) {
-      try {
-        userMessageCount = open().getEntries()
-          .filter((entry) => entry.type === "message" && entry.message.role === "user").length;
-      } catch {
-        userMessageCount = 0;
-      }
-      this.userCounts.set(session.id, userMessageCount);
-    }
-    const owner = this.spawnOwnerFor(session, open);
+    const metadata = this.metadataFor(session, open);
+    const userMessageCount = options.userCountFor?.(session.id) ?? metadata.userMessageCount;
+    const owner = metadata.owner;
     const project = this.registry?.projectForSession(session.id, session.cwd);
     const workStartedAt = options.workStartedAtFor?.(session.id);
     const parent = owner
-      ? this.sessions.find((candidate) => candidate.id === owner.id
-        && canonicalPath(candidate.cwd) === canonicalPath(session.cwd)
-        && canonicalPath(candidate.path) === canonicalPath(owner.file))
+      ? sessionLookup.get(this.sessionKey(owner.id, session.cwd, owner.file))
       : undefined;
     const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
     return {
@@ -256,17 +250,34 @@ export class SessionIndex {
     };
   }
 
-  private spawnOwnerFor(session: SessionInfo, open: () => SessionManager): SpawnOwner | undefined {
+  private metadataFor(session: SessionInfo, open: () => SessionManager) {
     try {
-      const mtimeMs = statSync(session.path).mtimeMs;
-      const cached = this.spawnOwners.get(session.id);
-      if (cached?.mtimeMs === mtimeMs) return cached.owner;
-      const owner = readSpawnOwner(open());
-      this.spawnOwners.set(session.id, { mtimeMs, ...(owner ? { owner } : {}) });
-      return owner;
+      const file = statSync(session.path);
+      const cached = this.metadata.get(session.id);
+      if (cached?.path === session.path && cached.mtimeMs === file.mtimeMs && cached.ctimeMs === file.ctimeMs && cached.size === file.size) return cached;
+      const entries = open().getEntries();
+      const owner = readSpawnOwner(entries);
+      const metadata = {
+        path: session.path,
+        mtimeMs: file.mtimeMs,
+        ctimeMs: file.ctimeMs,
+        size: file.size,
+        userMessageCount: entries.filter((entry) => entry.type === "message" && entry.message.role === "user").length,
+        ...(owner ? { owner } : {}),
+      };
+      this.metadata.set(session.id, metadata);
+      return metadata;
     } catch {
-      return undefined;
+      return { path: session.path, mtimeMs: 0, ctimeMs: 0, size: 0, userMessageCount: 0 };
     }
+  }
+
+  private sessionKey(id: string, cwd: string, path: string): string {
+    return `${id}\0${canonicalPath(cwd)}\0${canonicalPath(path)}`;
+  }
+
+  private sessionLookup(): Map<string, SessionInfo> {
+    return new Map(this.sessions.map((session) => [this.sessionKey(session.id, session.cwd, session.path), session]));
   }
 
   private projectLabels(sessions: SessionInfo[]): Map<string, string> {

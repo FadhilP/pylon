@@ -172,26 +172,23 @@ export function repoScoutOrientationGuidance(selectedTools?: readonly string[]):
 
 export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retryWait = waitForDelegateRetry) {
   let repoRuns = 0;
-  let repoCallQueue = Promise.resolve();
+  let activeRepoCalls = 0;
+  const repoCallNumbers = new Map<string, number>();
   const seenRepoSearches = new Set<string>();
   const repoSessionDirs = new Set<string>();
 
+  const repoCallNumber = (id: string) => {
+    const current = repoCallNumbers.get(id);
+    if (current) return current;
+    const next = ++repoRuns;
+    repoCallNumbers.set(id, next);
+    return next;
+  };
   const repoSessionDir = () =>
     mkdtemp(join(tmpdir(), "pi-scout-agent-")).then((dir) => {
       repoSessionDirs.add(dir);
       return dir;
     });
-  const serializeRepoCall = async <T>(run: () => Promise<T>): Promise<T> => {
-    const previousRun = repoCallQueue;
-    let releaseRun = () => {};
-    repoCallQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
-    await previousRun;
-    try {
-      return await run();
-    } finally {
-      releaseRun();
-    }
-  };
 
   const resolveModel = async (ctx: any) => {
     const config = await loadConfig();
@@ -305,7 +302,6 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       { additionalProperties: false },
     ),
     async execute(id, params, signal, onUpdate, ctx) {
-      return serializeRepoCall(async () => {
       if (!isScoutEnabled(await loadConfig()))
         return {
           content: [{ type: "text" as const, text: "Repo Scout inactive. Configure it with /scout or use /scout reset." }],
@@ -344,29 +340,31 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           details: { failureCode: "unavailable", model: modelName(model) },
         };
       const thinking = await resolveThinking();
-      repoRuns++;
+      const callNumber = repoCallNumber(id);
+      activeRepoCalls++;
       const started = Date.now();
       const agent = { agentName: delegatedName(pi, "repo_scout", id), startedAt: new Date(started).toISOString() };
-      if (ctx.hasUI)
-        ctx.ui.setStatus("pi-scout", "scout: searching repository…");
-      onUpdate?.({
-        content: [{ type: "text", text: "Scout searching repository…" }],
-        details: { ...agent, model: modelName(model), thinking, state: "running" },
-      });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       const sessionDirs: string[] = [];
-      const heartbeat = setInterval(() => {
-        const now = Date.now();
-        if (now - lastUpdateAt < HEARTBEAT_MS) return;
-        lastUpdateAt = now;
-        onUpdate?.({
-          content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }],
-          details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started, activity },
-        });
-      }, HEARTBEAT_MS);
-      heartbeat.unref();
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       try {
+        if (ctx.hasUI)
+          ctx.ui.setStatus("pi-scout", "scout: searching repository…");
+        onUpdate?.({
+          content: [{ type: "text", text: "Scout searching repository…" }],
+          details: { ...agent, model: modelName(model), thinking, state: "running" },
+        });
+        heartbeat = setInterval(() => {
+          const now = Date.now();
+          if (now - lastUpdateAt < HEARTBEAT_MS) return;
+          lastUpdateAt = now;
+          onUpdate?.({
+            content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }],
+            details: { ...agent, model: modelName(model), thinking, state: "running", durationMs: now - started, activity },
+          });
+        }, HEARTBEAT_MS);
+        heartbeat.unref();
         const retryReason = params.retryReason?.trim();
         // Initial tasks are self-contained. Only a stated follow-up gap warrants parent history.
         const parentContext = retryReason
@@ -409,6 +407,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             // Failure wrapping happens here; cap once afterward so retrieval notices survive.
             resultMaxBytes: false,
             env: scoutChildEnv({ PI_SCOUT_CHILD: "1" }, process.env, model.provider),
+            concurrent: true,
             onUsage: (snapshot) => {
               attemptUsage = snapshot;
               lastUpdateAt = Date.now();
@@ -459,7 +458,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             ...agent,
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
-            callNumber: repoRuns,
+            callNumber,
             contextTokens: run.contextTokens,
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
@@ -487,17 +486,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           },
         };
       } finally {
-        clearInterval(heartbeat);
-        for (const sessionDir of sessionDirs) {
-          repoSessionDirs.delete(sessionDir);
-          await rm(sessionDir, { recursive: true, force: true });
+        if (heartbeat) clearInterval(heartbeat);
+        for (const sessionDir of sessionDirs) repoSessionDirs.delete(sessionDir);
+        await Promise.allSettled(sessionDirs.map((sessionDir) => rm(sessionDir, { recursive: true, force: true })));
+        repoCallNumbers.delete(id);
+        activeRepoCalls = Math.max(0, activeRepoCalls - 1);
+        if (ctx.hasUI && activeRepoCalls === 0) {
+          try { ctx.ui.setStatus("pi-scout", undefined); }
+          catch { /* UI cleanup must not replace the Scout result. */ }
         }
-        if (ctx.hasUI) ctx.ui.setStatus("pi-scout", undefined);
       }
-      });
     },
     renderCall(args, theme, context) {
-      const callNumber = (context.state.callNumber as number | undefined) ?? repoRuns + 1;
+      const callNumber = (context.state.callNumber as number | undefined) ?? repoCallNumber(context.toolCallId);
       context.state.callNumber = callNumber;
       const prompt = args.task.trim().replace(/\s+/g, " ");
       const truncatedPrompt = prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt;

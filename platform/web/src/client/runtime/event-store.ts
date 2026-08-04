@@ -11,6 +11,7 @@ import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type 
 import { ApiClient } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
 import { liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity } from "../../shared/transcript";
+import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
 import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
 
 export interface RuntimeStoreSnapshot {
@@ -560,7 +561,7 @@ export class RuntimeEventStore {
       || page.sessionGeneration !== runtime.sessionGeneration) {
       throw new Error("Conversation history is stale or invalid");
     }
-    this.historyWindows.set(historyKey(runtime.sessionId, runtime.sessionGeneration), [{
+    this.setHistorySegments(historyKey(runtime.sessionId, runtime.sessionGeneration), [{
       messages: page.messages,
       earlierCursor: page.earlierCursor,
       laterCursor: page.laterCursor,
@@ -907,7 +908,7 @@ export class RuntimeEventStore {
         messages: runtime.conversation.messages,
         earlierCursor: runtime.conversation.historyCursor,
       }];
-      this.historyWindows.set(key, segments);
+      this.setHistorySegments(key, segments);
     } else {
       const latest = segments.at(-1)!;
       if (!latest.laterCursor) {
@@ -930,6 +931,10 @@ export class RuntimeEventStore {
     const segments = this.historyWindows.get(key) ?? [];
     if (direction === "before") segments.unshift(segment);
     else segments.push(segment);
+    this.setHistorySegments(key, segments);
+  }
+
+  private setHistorySegments(key: string, segments: HistorySegment[]): void {
     this.historyWindows.delete(key);
     this.historyWindows.set(key, segments);
     while (this.historyWindows.size > MAX_CACHED_SESSIONS) {
@@ -1322,9 +1327,11 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
       const willRetry = info.willRetry === true;
       const durationMs = Number.isSafeInteger(info.durationMs) ? info.durationMs as number : undefined;
       const messageId = typeof info.messageId === "string" ? info.messageId : undefined;
+      const assistant = willRetry ? undefined : finalAssistant(info.assistantMessage);
+      const settledMessages = reconcileFinalAssistant(conversation.messages, assistant);
       const messages = willRetry || durationMs === undefined || !messageId
-        ? conversation.messages
-        : conversation.messages.map((message) => message.id === messageId ? {
+        ? settledMessages
+        : settledMessages.map((message) => message.id === messageId || Boolean(assistant?.entryId && message.entryId === assistant.entryId) ? {
             ...message,
             workDurationMs: durationMs,
             modelName: typeof info.modelName === "string" ? info.modelName : undefined,

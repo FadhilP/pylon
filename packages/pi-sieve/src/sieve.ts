@@ -1447,6 +1447,33 @@ function projectionHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonicalProjectionValue(value))).digest("hex");
 }
 
+function projectionSourceHashes<T extends ContextMessage>(
+  messages: readonly T[],
+  cwd = process.cwd(),
+): Map<number, string> {
+  const calls = new Map<string, unknown[]>();
+  const hashes = new Map<number, string>();
+  const resolvedCwd = resolve(cwd);
+  for (let index = 0; index < messages.length; index++) {
+    const fields = messages[index] as Record<string, unknown>;
+    if (fields.role === "assistant" && Array.isArray(fields.content)) {
+      for (const block of fields.content) {
+        const call = jsonObject(block);
+        if (call?.type !== "toolCall" || typeof call.id !== "string") continue;
+        const matching = calls.get(call.id) ?? [];
+        matching.push(call);
+        calls.set(call.id, matching);
+      }
+      continue;
+    }
+    const toolCallId = typeof fields.toolCallId === "string" ? fields.toolCallId : "";
+    if (fields.role === "toolResult") {
+      hashes.set(index, projectionHash({ cwd: resolvedCwd, calls: calls.get(toolCallId) ?? [], result: fields }));
+    }
+  }
+  return hashes;
+}
+
 export function projectionSourceHash<T extends ContextMessage>(
   messages: readonly T[],
   resultIndex: number,
@@ -1497,12 +1524,18 @@ type NewProjection<T extends ContextMessage> = {
   projectionKind?: ProjectionKind;
 };
 
+type PreparedProjection<T extends ContextMessage> = {
+  resultCount: number;
+  duplicate?: DuplicateReplacement<T>;
+};
+
 /** Projects one newly observed raw result using only history at or before it. */
-export function projectNewResult<T extends ContextMessage>(
+function projectNewResultPrepared<T extends ContextMessage>(
   messages: readonly T[],
   resultIndex: number,
-  threshold = SIEVE_THRESHOLD,
-  options: SieveOptions = {},
+  threshold: number,
+  options: SieveOptions,
+  prepared?: PreparedProjection<T>,
 ): NewProjection<T> {
   const message = messages[resultIndex];
   const unchanged = (budgetEligible = false, retainedSourceChars = 0): NewProjection<T> => ({
@@ -1514,13 +1547,15 @@ export function projectNewResult<T extends ContextMessage>(
   const prefix = messages.slice(0, resultIndex + 1);
   const toolCallId = fields.toolCallId;
   if (typeof toolCallId !== "string" || !toolCallId) return unchanged();
-  const resultCount = prefix.reduce((count, candidate) => {
+  const resultCount = prepared?.resultCount ?? prefix.reduce((count, candidate) => {
     const value = candidate as Record<string, unknown>;
     return count + (value.role === "toolResult" && value.toolCallId === toolCallId ? 1 : 0);
   }, 0);
   if (resultCount !== 1) return unchanged();
-  const duplicate = exactDuplicateReplacements(prefix, cwd, new Map(), options.pruneActive === true)
-    .find((replacement) => replacement.messageIndex === resultIndex);
+  const duplicate = prepared
+    ? prepared.duplicate
+    : exactDuplicateReplacements(prefix, cwd, new Map(), options.pruneActive === true)
+        .find((replacement) => replacement.messageIndex === resultIndex);
   if (duplicate) {
     return {
       message: duplicate.message,
@@ -1593,6 +1628,15 @@ export function projectNewResult<T extends ContextMessage>(
     : unchanged();
 }
 
+export function projectNewResult<T extends ContextMessage>(
+  messages: readonly T[],
+  resultIndex: number,
+  threshold = SIEVE_THRESHOLD,
+  options: SieveOptions = {},
+): NewProjection<T> {
+  return projectNewResultPrepared(messages, resultIndex, threshold, options);
+}
+
 function contentCharacters(content: unknown): number {
   return textOnlyContentLength(content)
     ?? mixedContentBlocks(content)?.sourceChars
@@ -1604,13 +1648,14 @@ function projectionEntry<T extends ContextMessage>(
   index: number,
   decision: NewProjection<T>,
   cwd?: string,
+  knownSourceHash?: string,
 ): ProjectionEntry {
   const fields = messages[index] as Record<string, unknown>;
   const projectedMessage = cloneProjectionValue(decision.message);
   const projectedFields = projectedMessage as Record<string, unknown>;
   return {
     toolCallId: fields.toolCallId as string,
-    sourceHash: projectionSourceHash(messages, index, cwd),
+    sourceHash: knownSourceHash ?? projectionSourceHash(messages, index, cwd),
     toolName: typeof fields.toolName === "string" ? fields.toolName : "unknown",
     isError: fields.isError === true,
     projectedContent: cloneProjectionValue((projectedFields.content as ContentBlock[]) ?? []),
@@ -1682,6 +1727,7 @@ export function stableSieveMessages<T extends ContextMessage>(
     requiresReflow: false,
   };
   const rawMessageHashes = messages.map((message) => projectionHash(message));
+  const sourceHashes = projectionSourceHashes(messages, options.cwd);
 
   for (let index = 0; index < messages.length; index++) {
     const fields = messages[index] as Record<string, unknown>;
@@ -1699,7 +1745,7 @@ export function stableSieveMessages<T extends ContextMessage>(
       return { messages: output, stats, recoverableActiveResults, diagnostics };
     }
     if (counts.get(toolCallId) === 1 && existing
-      && existing.sourceHash !== projectionSourceHash(messages, index, options.cwd)) {
+      && existing.sourceHash !== sourceHashes.get(index)) {
       diagnostics.sourceMismatches++;
       diagnostics.requiresReflow = true;
       diagnostics.earliestChangedMessageIndex = index;
@@ -1731,6 +1777,7 @@ export function stableSieveMessages<T extends ContextMessage>(
   }
 
   const usedIds = new Set<string>();
+  let duplicateReplacements: Map<number, DuplicateReplacement<T>> | undefined;
   for (let index = 0; index < messages.length; index++) {
     const raw = messages[index];
     const fields = raw as Record<string, unknown>;
@@ -1740,7 +1787,7 @@ export function stableSieveMessages<T extends ContextMessage>(
       diagnostics.ambiguousIds++;
       continue;
     }
-    const sourceHash = projectionSourceHash(messages, index, options.cwd);
+    const sourceHash = sourceHashes.get(index)!;
     const existing = epoch.entries.get(toolCallId);
     if (counts.get(toolCallId) !== 1) {
       epoch.taintedIds.add(toolCallId);
@@ -1772,11 +1819,14 @@ export function stableSieveMessages<T extends ContextMessage>(
       continue;
     }
 
-    const decision = projectNewResult(messages, index, threshold, {
+    duplicateReplacements ??= new Map(exactDuplicateReplacements(
+      messages, options.cwd ?? process.cwd(), new Map(), epoch.config.activePruning,
+    ).map((replacement) => [replacement.messageIndex, replacement]));
+    const decision = projectNewResultPrepared(messages, index, threshold, {
       pruneActive: epoch.config.activePruning,
       cwd: options.cwd,
-    });
-    const entry = projectionEntry(messages, index, decision, options.cwd);
+    }, { resultCount: counts.get(toolCallId)!, duplicate: duplicateReplacements.get(index) });
+    const entry = projectionEntry(messages, index, decision, options.cwd, sourceHash);
     epoch.entries.set(toolCallId, entry);
     output[index] = cloneProjectionValue(entry.projectedMessage) as T;
     diagnostics.newProjections++;
@@ -1804,18 +1854,22 @@ export function rolloverStableSieveMessages<T extends ContextMessage>(
       counts.set(fields.toolCallId, (counts.get(fields.toolCallId) ?? 0) + 1);
   }
 
+  const duplicateReplacements = new Map(exactDuplicateReplacements(
+    messages, options.cwd ?? process.cwd(), new Map(), epoch.config.activePruning,
+  ).map((replacement) => [replacement.messageIndex, replacement]));
+  const sourceHashes = projectionSourceHashes(messages, options.cwd);
   let remaining = Math.max(0, retainedSourceTarget);
   let seeded = 0;
   for (let index = messages.length - 1; index >= 0; index--) {
     const fields = messages[index] as Record<string, unknown>;
     const toolCallId = fields.toolCallId;
     if (fields.role !== "toolResult" || typeof toolCallId !== "string" || !toolCallId || counts.get(toolCallId) !== 1) continue;
-    const decision = projectNewResult(messages, index, epoch.config.threshold, {
+    const decision = projectNewResultPrepared(messages, index, epoch.config.threshold, {
       pruneActive: epoch.config.activePruning,
       cwd: options.cwd,
       retainedSourceCap: remaining,
-    });
-    const entry = projectionEntry(messages, index, decision, options.cwd);
+    }, { resultCount: counts.get(toolCallId)!, duplicate: duplicateReplacements.get(index) });
+    const entry = projectionEntry(messages, index, decision, options.cwd, sourceHashes.get(index));
     epoch.entries.set(toolCallId, entry);
     if (entry.budgetEligible) remaining = Math.max(0, remaining - entry.retainedSourceChars);
     seeded++;

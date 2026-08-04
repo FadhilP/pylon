@@ -92,10 +92,35 @@ export default function focusExtension(pi: ExtensionAPI) {
   let density: Density = "compact";
   let completionBell = false;
   let state = "READY";
-  let activeChild: "SCOUT" | "WEB" | "ADVISOR" | "GRUNT" | undefined;
-  const clearChild = (ctx: any) => {
-    activeChild = undefined;
-    ctx.ui.setWidget("focus-child", undefined);
+  type ChildLabel = "SCOUT" | "WEB" | "ADVISOR" | "GRUNT";
+  const activeChildren = new Map<string, ChildLabel>();
+  const activeChildLabel = () => {
+    if (!activeChildren.size) return undefined;
+    const labels = [...new Set(activeChildren.values())];
+    return labels.length === 1
+      ? `${labels[0]}${activeChildren.size > 1 ? ` ×${activeChildren.size}` : ""}`
+      : `${activeChildren.size} CHILDREN`;
+  };
+  const showChildren = (ctx: any) => {
+    const label = activeChildLabel();
+    if (!label) {
+      ctx.ui.setWidget("focus-child", undefined);
+      return;
+    }
+    ctx.ui.setWidget(
+      "focus-child",
+      (_tui: any, theme: Theme) =>
+        new Text(
+          theme.fg("customMessageLabel", theme.bold(label)) +
+            theme.fg("muted", " · child model active · expand tool row for activity"),
+          0,
+          0,
+        ),
+    );
+  };
+  const clearChildren = (ctx: any) => {
+    activeChildren.clear();
+    showChildren(ctx);
   };
 
   const apply = (ctx: any) => {
@@ -135,7 +160,7 @@ export default function focusExtension(pi: ExtensionAPI) {
           const statuses = [...footerData.getExtensionStatuses().values()]
             .filter(Boolean)
             .map(plainText);
-          const currentState = activeChild ?? composeStatuses(statuses, state);
+          const currentState = activeChildLabel() ?? composeStatuses(statuses, state);
           return footerRows(
             width,
             density,
@@ -182,34 +207,24 @@ export default function focusExtension(pi: ExtensionAPI) {
   });
   pi.on("agent_settled", (_event, ctx) => {
     state = "READY";
-    clearChild(ctx);
+    clearChildren(ctx);
     if (enabled) ctx.ui.setStatus("focus-state", undefined);
     if (enabled && completionBell) ringCompletionBell(ctx.mode);
   });
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled || !childTools.has(event.toolName)) return;
-    activeChild = event.toolName === "repo_scout"
+    const label: ChildLabel = event.toolName === "repo_scout"
       ? "SCOUT"
       : event.toolName === "web_scout"
         ? "WEB"
         : event.toolName === "advisor" ? "ADVISOR" : "GRUNT";
-    ctx.ui.setWidget(
-      "focus-child",
-      (_tui, theme) =>
-        new Text(
-          theme.fg("customMessageLabel", theme.bold(activeChild!)) +
-            theme.fg(
-              "muted",
-              " · child model active · expand tool row for activity",
-            ),
-          0,
-          0,
-        ),
-    );
+    activeChildren.set(event.toolCallId, label);
+    showChildren(ctx);
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (childTools.has(event.toolName))
-      clearChild(ctx);
+    if (!childTools.has(event.toolName)) return;
+    activeChildren.delete(event.toolCallId);
+    showChildren(ctx);
   });
 
   pi.registerCommand("ui", {

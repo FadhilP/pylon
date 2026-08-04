@@ -477,7 +477,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
     </label>
 
     <section className="memory-ledger-scope" aria-labelledby="global-memory-title">
-      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>{globalMemory.length} · memory</span></header>
+      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>{globalMemory.length} · read-only</span></header>
       <div className="memory-ledger-list">
         {visibleGlobalMemory.map((fact) => <details className="memory-ledger-row" key={fact.key}>
           <summary>
@@ -499,7 +499,7 @@ function Memory({ live }: { live: RuntimeStoreSnapshot }) {
     </section>
 
     <section className="memory-ledger-scope" aria-labelledby="project-memory-title">
-      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>{memory.length} · memory</span></header>
+      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>{memory.length} · editable</span></header>
       <div className="memory-ledger-list">
         {visibleMemory.map((fact) => <details className="memory-ledger-row" key={fact.key} open={editing === fact.key || undefined}>
           <summary>

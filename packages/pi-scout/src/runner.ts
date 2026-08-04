@@ -112,11 +112,14 @@ export type RunPiOptions = {
   invocation?: Invocation;
   env?: NodeJS.ProcessEnv;
   inheritEnv?: boolean;
+  /** Bypass the shared child-process queue for callers with isolated per-run state. */
+  concurrent?: boolean;
   onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
   onUsage?: (usage: ChildUsage) => void;
 };
 
 export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
+  if (options.concurrent) return runPiUnlocked(args, options);
   const previousRun = scoutRunQueue;
   let releaseRun = () => {};
   scoutRunQueue = new Promise<void>((resolve) => { releaseRun = resolve; });

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -49,6 +49,36 @@ test("worktree diff reports only changes made after a dirty baseline", async () 
     assert.deepEqual(files, [
       { path: "src/added.txt", additions: 1, deletions: 0 },
       { path: "src/tracked.txt", additions: 1, deletions: 0 },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("worktree snapshots treat unusual changed paths literally", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-literal-paths-"));
+  const names = ["literal[ab].txt", "old[ab].txt", "delete[ab].txt", "space 界.txt"];
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    for (const name of names) await writeFile(join(root, name), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const before = await worktreeSnapshot(root);
+
+    await writeFile(join(root, names[0]!), "changed\n");
+    await rename(join(root, names[1]!), join(root, "new[ab].txt"));
+    await unlink(join(root, names[2]!));
+    await writeFile(join(root, names[3]!), "changed\n");
+    const after = await worktreeSnapshot(root);
+    assert.ok(before && after);
+    assert.deepEqual(await worktreeDiff(before, after), [
+      { path: "delete[ab].txt", additions: 0, deletions: 1 },
+      { path: "literal[ab].txt", additions: 1, deletions: 1 },
+      { path: "new[ab].txt", additions: 1, deletions: 0 },
+      { path: "old[ab].txt", additions: 0, deletions: 1 },
+      { path: "space 界.txt", additions: 1, deletions: 1 },
     ]);
   } finally {
     await rm(root, { recursive: true, force: true });

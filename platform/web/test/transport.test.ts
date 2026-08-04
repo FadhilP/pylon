@@ -12,6 +12,7 @@ test("journal uses opaque generation cursors and rejects stale, future, and malf
   const second = journal.append("message.end", {});
   journal.append("message.start", {});
   assert.equal(eventCursor(first), "1:1");
+  assert.equal(journal.serialized(first), JSON.stringify(first));
   assert.deepEqual(journal.replay("1:1").events.map((event) => event.sequence), [2, 3]);
   assert.equal(journal.replay("1:0").ok, false, "cursor before evicted event is stale");
   assert.equal(journal.replay("1:4").ok, false, "future cursor is invalid");

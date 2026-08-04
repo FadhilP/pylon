@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { checkForUpdate, isNewerVersion } from "../bin/update.mjs";
@@ -89,6 +92,26 @@ test("invalid registry responses are non-fatal", async () => {
     warn: (message) => warnings.push(message),
   }), "continue");
   assert.equal(warnings.length, 2);
+});
+
+test("successful update checks are cached for one day", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-update-cache-"));
+  const cacheFile = join(root, "nested", "update.json");
+  let fetched = 0;
+  const fetch = async () => { fetched++; return (await response("1.0.0")()); };
+  try {
+    assert.equal(await checkForUpdate("1.0.0", { fetch, cacheFile, now: () => 1_000, log: () => {} }), "continue");
+    assert.equal(await checkForUpdate("1.0.0", { fetch, cacheFile, now: () => 2_000, log: () => {} }), "continue");
+    assert.equal(fetched, 1);
+    assert.equal(await checkForUpdate("1.0.0", { fetch, cacheFile, now: () => 86_401_001, log: () => {} }), "continue");
+    assert.equal(fetched, 2);
+
+    await writeFile(cacheFile, "not json");
+    assert.equal(await checkForUpdate("1.0.0", { fetch, cacheFile, now: () => 86_402_000, log: () => {} }), "continue");
+    assert.equal(fetched, 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("invalid installed versions skip the registry", async () => {

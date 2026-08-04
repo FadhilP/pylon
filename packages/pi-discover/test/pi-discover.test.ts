@@ -697,11 +697,12 @@ test("SQLite index projects one physical repository through two gitlink prefixes
   }
 });
 
-test("host refreshes its SQLite index after each turn", async () => {
+test("search refreshes the SQLite index on demand after each turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-discover-turn-"));
   const sourcePath = join(root, "app.ts");
   const previousPath = process.env.PI_DISCOVER_INDEX_PATH;
   let status = "";
+  let statusCalls = 0;
   await writeFile(sourcePath, "export function beforeTurn() {}\n");
   process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
   const runtime = setup(async (_command, args) => {
@@ -710,7 +711,7 @@ test("host refreshes its SQLite index after each turn", async () => {
     if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
     if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files") return { code: 0, stdout: "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: status, stderr: "" };
+    if (gitArgs[0] === "status") { statusCalls++; return { code: 0, stdout: status, stderr: "" }; }
     return { code: 1, stdout: "", stderr: "unexpected git call" };
   });
   const notifications: Array<{ text: string; level: string }> = [];
@@ -771,8 +772,12 @@ test("host refreshes its SQLite index after each turn", async () => {
 
     await writeFile(sourcePath, "export function afterTurn() {}\n");
     status = " M app.ts\0";
+    const statusCallsBeforeTurn = statusCalls;
     await runtime.lifecycle.emitAsync("turn_end", {}, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(statusCalls, statusCallsBeforeTurn);
     result = await runtime.tools.get("symbol_search").execute("two", { query: "afterTurn" }, undefined, undefined, ctx);
+    assert.ok(statusCalls > statusCallsBeforeTurn);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "afterTurn");
 
     await runtime.commands.get("discover-index").handler("status", ctx);

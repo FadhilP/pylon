@@ -728,7 +728,24 @@ test("agent completion restores an assistant lost during session selection", () 
     "message.start",
     "message.end",
   ]);
-  assert.equal((published.at(-1)?.payload as { messageId?: string }).messageId, "history-3");
+  const completion = published.at(-1)?.payload as { messageId?: string; assistantMessage?: { entryId?: string; text?: string } };
+  assert.equal(completion.messageId, "history-3");
+  assert.equal(completion.assistantMessage?.entryId, "final-assistant");
+  assert.equal(completion.assistantMessage?.text, "Completed while switching sessions");
+});
+
+test("authoritative refresh repairs a terminal assistant omitted from live events", () => {
+  const published: string[] = [];
+  const projection = new RuntimeProjection(runtime(), (type) => published.push(type));
+  const fresh = runtime();
+  fresh.conversation.messages = [
+    { id: "history-2", entryId: "final-assistant", role: "assistant", text: "Recovered from snapshot", streaming: false },
+  ];
+
+  projection.refresh(fresh);
+
+  assert.equal(projection.snapshot().conversation.messages[0]?.text, "Recovered from snapshot");
+  assert.deepEqual(published.filter((type) => type.startsWith("message.")), ["message.start", "message.end"]);
 });
 
 test("agent completion does not duplicate live or snapshotted assistants", () => {
@@ -933,6 +950,20 @@ test("projection synchronizes slash-command results and dismissal", () => {
   projection.apply({ type: "command.result", sessionId: "session", sessionGeneration: 1 });
   assert.equal(projection.snapshot().commandResult, undefined);
   assert.equal(published.length, 2);
+});
+
+test("projection coalesces cumulative stream updates on a readable cadence", async () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: [] } }));
+  projection.apply(session({ type: "message_update", delta: "one" }));
+  projection.apply(session({ type: "message_update", delta: " two" }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(published.map((item) => item.type), ["message.start"]);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(published.map((item) => item.type), ["message.start", "message.update"]);
+  assert.deepEqual(published.at(-1)?.payload, { id: "message-1", text: "one two" });
+  projection.dispose();
 });
 
 test("projection disposal cancels delayed stream publication", async () => {

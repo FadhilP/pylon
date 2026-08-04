@@ -12,6 +12,7 @@ import {
   giantErrorMarker,
   omissionMarker,
   partialOmissionMarker,
+  projectionSourceHash,
   recalledGiantErrorMarker,
   recalledOmissionMarker,
   createProjectionEpoch,
@@ -1054,6 +1055,24 @@ test("stable projection applies only append-safe caps and duplicates", () => {
   assert.deepEqual(result.messages[14], source[14], "explicit recall stays complete for the epoch");
   assert.match((result.messages[16] as any).content[0].text, /duplicate read/);
   assert.deepEqual(messages, source, "raw messages remain untouched");
+});
+
+test("stable source-hash indexing matches the exported per-result hash", () => {
+  const call = (id: string, command: string) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command } }],
+  });
+  const messages: any[] = [
+    user("start"),
+    call("one", "echo one"), textResult("bash", "x".repeat(2_000), { toolCallId: "one", isError: false }),
+    call("two", "echo two"), textResult("bash", "y".repeat(2_000), { toolCallId: "two", isError: false }),
+  ];
+  const cwd = resolve("stable-source-hashes");
+  const epoch = createProjectionEpoch("session-start", { threshold: 1_000, activePruning: true }, "prompt");
+  stableSieveMessages(messages, epoch, { cwd });
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "toolResult") continue;
+    assert.equal(epoch.entries.get(message.toolCallId)?.sourceHash, projectionSourceHash(messages, index, cwd));
+  }
 });
 
 test("stable epochs diagnose source changes and taint later duplicate IDs without rewriting the original", () => {

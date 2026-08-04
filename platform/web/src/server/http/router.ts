@@ -632,10 +632,11 @@ export class ServerTransport {
 
   private publish(type: string, payload: unknown): void {
     const event = this.journal.append(type, payload);
-    for (const client of this.clients) this.writeEvent(client.response, event, client.tabId);
+    const serialized = this.journal.serialized(event);
+    for (const client of this.clients) this.writeEvent(client.response, event, client.tabId, serialized);
   }
 
-  private writeEvent(response: ServerResponse, event: WebEvent, tabId: string): void {
+  private writeEvent(response: ServerResponse, event: WebEvent, tabId: string, serialized?: string): void {
     const personalized = event.type === "ui.request" || event.type === "ui.ownership";
     const eventPayload = personalized ? event.payload as Record<string, unknown> : undefined;
     const matchesCurrent = eventPayload?.requestId === this.dialogOwner?.requestId;
@@ -644,7 +645,8 @@ export class ServerTransport {
       owned: matchesCurrent && this.dialogOwner?.tabId === tabId,
       ownershipAvailable: matchesCurrent && this.dialogOwner?.tabId === undefined,
     } : event.payload;
-    response.write(`id: ${eventCursor(event)}\nevent: ${event.type}\ndata: ${JSON.stringify({ ...event, payload })}\n\n`);
+    const data = personalized ? JSON.stringify({ ...event, payload }) : serialized ?? JSON.stringify(event);
+    response.write(`id: ${eventCursor(event)}\nevent: ${event.type}\ndata: ${data}\n\n`);
   }
 
   private session(request: IncomingMessage, response: ServerResponse): BrowserSession {

@@ -13,6 +13,8 @@ export interface ReplayResult {
 /** A small, non-durable replay buffer for exactly one session generation. */
 export class EventJournal {
   private entries: WebEvent[] = [];
+  private readonly sizes = new WeakMap<WebEvent, number>();
+  private readonly serializedEvents = new WeakMap<WebEvent, string>();
   private bytes = 0;
   private lastSequence = 0;
 
@@ -43,19 +45,27 @@ export class EventJournal {
       type,
       payload,
     };
-    let size = Buffer.byteLength(JSON.stringify(event));
+    let serialized = JSON.stringify(event);
+    let size = Buffer.byteLength(serialized);
     if (size > MAX_EVENT_BYTES) {
       event.type = "stream.reset-required";
       event.payload = { reason: `${type} exceeded transport limit` };
-      size = Buffer.byteLength(JSON.stringify(event));
+      serialized = JSON.stringify(event);
+      size = Buffer.byteLength(serialized);
     }
     this.entries.push(event);
+    this.sizes.set(event, size);
+    this.serializedEvents.set(event, serialized);
     this.bytes += size;
     while (this.entries.length > this.maxEvents || (this.bytes > this.maxBytes && this.entries.length > 1)) {
       const removed = this.entries.shift();
-      if (removed) this.bytes -= Buffer.byteLength(JSON.stringify(removed));
+      if (removed) this.bytes -= this.sizes.get(removed) ?? 0;
     }
     return event;
+  }
+
+  serialized(event: WebEvent): string {
+    return this.serializedEvents.get(event) ?? JSON.stringify(event);
   }
 
   replay(lastEventId: string | undefined): ReplayResult {
