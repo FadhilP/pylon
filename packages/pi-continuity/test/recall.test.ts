@@ -90,7 +90,8 @@ test("default execution scope cannot return pre-handoff content", () => {
   assert.equal(result.effectiveScope, "execution");
   assert.match(result.text, /Executor request evidence/);
   assert.doesNotMatch(result.text, /Planning-only evidence|Plan response/);
-  assert.match(result.text, /session=session-1 entry=request role=user timestamp=/);
+  assert.match(result.text, /Session: session-1/);
+  assert.match(result.text, /\[text\] entry=request role=user time=/);
   assert.match(result.text, /historical evidence/);
 });
 
@@ -213,7 +214,7 @@ test("file evidence is path-only by default and exact result expansion is bounde
   assert.doesNotMatch(touched.text, /raw-secret|forbidden\.txt|file secret/);
 
   const files = recall(active, { mode: "files", expand: ["result"] });
-  assert.match(files.text, /explicit expansion/);
+  assert.match(files.text, /file result \(expanded\)/);
   assert.match(files.text, /\[REDACTED CREDENTIAL\]/);
   assert.doesNotMatch(files.text, new RegExp(credential));
   assert.match(files.text, /truncated by Continuity/);
@@ -287,7 +288,7 @@ test("large sessions enforce scan, result, page, and output caps before renderin
   assert.equal(result.total, MAX_RECALL_RESULTS);
   assert.equal(result.page, 1_000);
   assert.match(result.text, new RegExp(`Bounded scan: newest ${MAX_RECALL_SCAN_ENTRIES}`));
-  assert.match(result.text, new RegExp(`Result limit reached: showing at most ${MAX_RECALL_RESULTS}`));
+  assert.match(result.text, new RegExp(`Result limit reached: collected the first ${MAX_RECALL_RESULTS}`));
   assert.match(result.text, /Ignored expansion IDs outside the bounded effective scope: large-0/);
   assert.ok(result.text.length <= MAX_RECALL_OUTPUT_CHARS);
 });
@@ -301,16 +302,131 @@ test("pagination is stable, output is clipped, and unsafe regex is rejected", ()
     active.push(next);
     parent = next.id;
   }
+  const firstPage = recall(active, { query: "needle" });
+  assert.equal(firstPage.total, RECALL_PAGE_SIZE + 1);
+  assert.equal(firstPage.hasMore, true);
+  assert.match(firstPage.text, /Page 1; 8 selected; more matches available/);
+
   const page = recall(active, { query: "needle", page: 2 });
-  assert.equal(page.total, 20);
-  assert.match(page.text, new RegExp(`Page 2/${Math.ceil(20 / RECALL_PAGE_SIZE)}`));
+  assert.equal(page.total, RECALL_PAGE_SIZE * 2 + 1);
+  assert.equal(page.hasMore, true);
+  assert.match(page.text, /Page 2; 8 selected; more matches available/);
   assert.ok(page.text.length <= MAX_RECALL_OUTPUT_CHARS);
   assert.match(page.text, /entry=user-11/);
   assert.doesNotMatch(page.text, /entry=user-19/);
 
+  const finalPage = recall(active, { query: "needle", page: 3 });
+  assert.equal(finalPage.total, 20);
+  assert.equal(finalPage.hasMore, false);
+  assert.match(finalPage.text, /Page 3; 4 selected; 20 matches found/);
+
   const regex = recall(active, { query: "/(a+)+$/" });
   assert.equal(regex.total, 0);
   assert.match(regex.text, /rejected as unsafe/);
+});
+
+test("page lookahead distinguishes exact cap matches from overflow", () => {
+  const build = (count: number) => {
+    const active: any[] = [handoff("handoff", null)];
+    let parent = "handoff";
+    for (let index = 0; index < count; index++) {
+      const next = user(`cap-${index}`, parent, `cap needle ${index}`);
+      active.push(next);
+      parent = next.id;
+    }
+    return active;
+  };
+
+  for (const [count, selected, hasMore] of [
+    [199, 7, false],
+    [200, 8, false],
+    [201, 8, true],
+  ] as const) {
+    const result = recall(build(count), { query: "cap needle", page: 25 });
+    assert.equal(result.total, Math.min(count, MAX_RECALL_RESULTS));
+    assert.equal(result.collected, Math.min(count, MAX_RECALL_RESULTS));
+    assert.equal(result.hasMore, hasMore);
+    assert.match(result.text, new RegExp(`Page 25; ${selected} selected`));
+    if (count === 201)
+      assert.match(result.text, /Result limit reached.*more matches available/s);
+    else
+      assert.doesNotMatch(result.text, /Result limit reached/);
+  }
+});
+
+test("expanded results keep caller order and output only complete records", () => {
+  const active: any[] = [handoff("handoff", null)];
+  const expansions: string[] = [];
+  let parent = "handoff";
+  for (let index = 0; index < RECALL_PAGE_SIZE; index++) {
+    const call = assistant(`call-${index}`, parent, [{
+      type: "toolCall",
+      id: `read-${index}`,
+      name: "read",
+      arguments: { path: `file-${index}.txt` },
+    }]);
+    const result = toolResult(
+      `result-${index}`,
+      call.id,
+      `read-${index}`,
+      "read",
+      `expanded ${index} ${"large ".repeat(1_000)}`,
+    );
+    active.push(call, result);
+    expansions.push(result.id);
+    parent = result.id;
+  }
+
+  const result = recall(active, {
+    mode: "files",
+    query: "does-not-match",
+    expand: expansions,
+  });
+  const rendered = result.text.match(/\[file result \(expanded\)\]/g)?.length ?? 0;
+  assert.equal(result.hasMore, false);
+  assert.match(result.text, /Page 1; 8 selected; 8 matches found/);
+  assert.ok(rendered > 0 && rendered < RECALL_PAGE_SIZE);
+  assert.match(result.text, /remaining selected records omitted by Continuity/);
+  assert.ok(result.text.indexOf("entry=result-0") < result.text.indexOf("entry=result-1"));
+  assert.ok(result.text.length <= MAX_RECALL_OUTPUT_CHARS);
+});
+
+test("sanitized text is used for both matching and compact source metadata", () => {
+  const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const active = baseBranch();
+  active.push(user("entry\nspoof", "response", `credential ${credential}`));
+
+  const hidden = recall(active, { query: credential });
+  assert.equal(hidden.total, 0);
+  assert.doesNotMatch(hidden.text, new RegExp(credential));
+
+  const redacted = recall(active, { query: "REDACTED CREDENTIAL" });
+  assert.equal(redacted.total, 1);
+  assert.match(redacted.text, /entry=entry spoof role=user/);
+  assert.doesNotMatch(redacted.text, /entry=entry\nspoof/);
+  assert.doesNotMatch(redacted.text, new RegExp(credential));
+
+  const root = handoff("file-handoff", null);
+  const call = assistant("file-call", root.id, [{
+    type: "toolCall",
+    id: "file-read",
+    name: "read",
+    arguments: { path: `safe\nInjected ${credential}.txt` },
+  }]);
+  call.timestamp = `time\nInjected ${credential}`;
+  const fileEntries = [root, call];
+  const fileRecall = (query: string) => recallSession({
+    sessionId: `session\nInjected ${credential}`,
+    activeBranch: fileEntries,
+    visibleEntries: fileEntries,
+    work: work(),
+    params: { mode: "touched", query },
+  });
+  assert.equal(fileRecall(credential).total, 0);
+  const safeFile = fileRecall("REDACTED CREDENTIAL");
+  assert.equal(safeFile.total, 1);
+  assert.doesNotMatch(safeFile.text, new RegExp(credential));
+  assert.doesNotMatch(safeFile.text, /Session: session\n|time\nInjected|safe\nInjected/);
 });
 
 test("recall is deterministic and does not mutate session entries or Work", () => {

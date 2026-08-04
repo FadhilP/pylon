@@ -51,6 +51,18 @@ test("Markdown code fences preserve and highlight supported languages", () => {
   assert.match(unknown, /&lt;script&gt;/);
 });
 
+test("Markdown turns inline file citations into file links", () => {
+  const rendered = renderMarkdown("See `platform/web/src/client/App.tsx:337-350` and `src/main.ts:42:7`.");
+  assert.match(rendered, /<a href="platform\/web\/src\/client\/App\.tsx:337"><code>platform\/web\/src\/client\/App\.tsx:337-350<\/code><\/a>/);
+  assert.match(rendered, /<a href="src\/main\.ts:42:7"><code>src\/main\.ts:42:7<\/code><\/a>/);
+
+  const existingLink = renderMarkdown("[`src/main.ts:42`](src/main.ts:42)");
+  assert.equal(existingLink.match(/<a /g)?.length, 1);
+
+  const invalid = renderMarkdown("`word:123` `../outside.ts:2-4` `src/main.ts:9-3`");
+  assert.doesNotMatch(invalid, /<a /);
+});
+
 test("file source highlighting uses extensions and explicit diff grammar", () => {
   assert.match(highlightSource("const value: number = 1;", "src/app.ts"), /hljs-keyword/);
   assert.match(highlightSource('{"ok": true}', "config.json"), /hljs-literal/);

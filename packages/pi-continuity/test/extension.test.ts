@@ -100,6 +100,10 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(guidance, /sole tool call at a safe checkpoint/i);
   assert.match(guidance, /Never re-ask an answered question without new evidence/i);
   assert.match(guidance, /recommended option first/i);
+  assert.match(guidance, /planSummary.*compact executor handoff/i);
+  assert.match(guidance, /concrete paths\/symbols/i);
+  assert.match(guidance, /assumptions or gaps/i);
+  assert.match(guidance, /acceptance criteria/i);
   assert.match(guidance, /Continuity owns plan presentation/i);
   assert.match(guidance, /internal task list/i);
   assert.match(guidance, /Keep verification out of new todo lists/i);
@@ -189,6 +193,14 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     const messagesBefore = app.customMessages.length;
     const downgraded = await recall.execute("recall", { scope: "all" }, undefined, undefined, ctx);
     assert.match(downgraded.content[0].text, /effective scope: visible/);
+    assert.deepEqual(downgraded.details, {
+      recall: true,
+      requestedScope: "all",
+      effectiveScope: "visible",
+      page: 1,
+      collected: 1,
+      hasMore: false,
+    });
     assert.equal(getEntriesCalls, callsBefore, "all entries must not be read before boundary proof");
     assert.equal(app.appended.length, appendedBefore);
     assert.equal(app.customMessages.length, messagesBefore);
@@ -1269,6 +1281,37 @@ test("explicit plan resets model context without replacing the visible session",
     assert.equal(filtered.messages.some((message: any) => message.content === "old prompt"), false);
     assert.equal(filtered.messages.some((message: any) => message.content === "executor prompt"), true);
     assert.equal(filtered.messages[0].customType, "pi-continuity-handoff");
+
+    for (const details of [
+      undefined,
+      { ...boundary.message.details, version: 2 },
+      { ...boundary.message.details, runId: "other-run" },
+      { ...boundary.message.details, timelineId: "other-timeline" },
+    ]) {
+      const unfiltered = await context({
+        messages: [
+          { role: "user", content: "keep old prompt" },
+          { role: "custom", customType: "pi-continuity-handoff", details },
+          { role: "user", content: "keep executor prompt" },
+        ],
+      });
+      assert.equal(
+        unfiltered.messages.some((message: any) => message.content === "keep old prompt"),
+        true,
+      );
+    }
+
+    await app.commands.get("plan").handler("cancel", ctx);
+    const cancelledMessages = [
+      { role: "user", content: "keep cancelled prompt" },
+      { role: "custom", ...boundary.message },
+    ];
+    const cancelled = await context({ messages: cancelledMessages });
+    assert.equal(
+      (cancelled?.messages ?? cancelledMessages)
+        .some((message: any) => message.content === "keep cancelled prompt"),
+      true,
+    );
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -1481,9 +1524,14 @@ test("TUI approval waits for the scheduled planner response before showing choic
     assert.equal(approvalTitle, "Plan ready — review structured plan above");
     assert.match(structuredPlan, /^Plan\n\nGoal\nShip change/);
     assert.deepEqual(app.sent, [
-      "Plan this task without modifying project files: Ship change",
+      "Plan this task without modifying project files. Use continuity_update set_plan; make planSummary a compact executor handoff with the approach, concrete paths/symbols, assumptions or unresolved gaps, and acceptance criteria. Keep todos outcome-level: Ship change",
       "Execute approved stored plan in current session. Track and verify todos.",
     ]);
+    const executorRun = [...app.appended].reverse().find((entry) =>
+      entry.customType === "pylon-run" && entry.data.role === "executor"
+    )?.data;
+    assert.ok(executorRun?.runId);
+    assert.ok(executorRun?.timelineId);
     assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
     assert.equal(app.customMessages.length, 0);
     const context = await app.handlers.get("context")?.[0]({
@@ -1491,6 +1539,148 @@ test("TUI approval waits for the scheduled planner response before showing choic
     }, ctx);
     assert.equal(context.messages[0].content, "Keep this context");
     assert.match(context.messages.at(-1).content, /Work: executing/);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("dismissed TUI approval is offered again on the next settlement", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-dismissed-approval-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  let selections = 0;
+  const ctx: any = {
+    cwd,
+    hasUI: true,
+    mode: "tui",
+    model,
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+      getAvailable: () => [model],
+    },
+    sessionManager: {
+      getSessionId: () => "dismissed-approval-session",
+      getEntries: () => [],
+    },
+    isIdle: () => true,
+    ui: {
+      notify: () => {},
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async () => ++selections === 1
+        ? undefined
+        : "Approve — continue current session",
+      editor: async () => "",
+    },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute(
+      "plan",
+      {
+        action: "set_plan",
+        goal: "Ship change",
+        planSummary: "Implement then verify",
+        todos: ["Implement"],
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => selections === 1);
+    for (let attempt = 0; attempt < 20 && selections < 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    }
+    assert.equal(selections, 2);
+    await waitFor(() =>
+      app.sent.at(-1) === "Execute approved stored plan in current session. Track and verify todos."
+    );
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("unavailable executor leaves TUI approval pending", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-unavailable-executor-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  let executorAvailable = false;
+  let selections = 0;
+  const notifications: string[] = [];
+  const ctx: any = {
+    cwd,
+    hasUI: true,
+    mode: "tui",
+    model,
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        executorAvailable && provider === model.provider && id === model.id
+          ? model
+          : undefined,
+      hasConfiguredAuth: () => true,
+      getAvailable: () => [model],
+    },
+    sessionManager: {
+      getSessionId: () => "unavailable-executor-session",
+      getEntries: () => [],
+    },
+    isIdle: () => true,
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      setStatus: () => {},
+      setWidget: () => {},
+      select: async () => {
+        selections++;
+        return "Approve — continue current session";
+      },
+      editor: async () => "",
+    },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute(
+      "plan",
+      {
+        action: "set_plan",
+        goal: "Ship change",
+        planSummary: "Implement then verify",
+        todos: ["Implement"],
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => notifications.includes("Executor model unavailable."));
+    assert.equal(selections, 1);
+    assert.ok(!app.active().includes("edit"));
+
+    executorAvailable = true;
+    for (let attempt = 0; attempt < 20 && selections < 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    }
+    assert.equal(selections, 2);
+    await waitFor(() => app.active().includes("edit"));
+    assert.equal(app.sent.at(-1), "Execute approved stored plan in current session. Track and verify todos.");
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

@@ -14,6 +14,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { marked, Renderer } from "marked";
+import { parseFileReference, type FileReference } from "./file-reference.ts";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -30,18 +31,50 @@ hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("xml", xml);
 hljs.registerLanguage("yaml", yaml);
 
-const renderer = new Renderer();
+function fileReferenceHref(reference: FileReference): string {
+  return `${reference.path}:${reference.line}${reference.column === undefined ? "" : `:${reference.column}`}`;
+}
 
-renderer.code = ({ text, lang }) => {
-  const language = lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-  const code = language && hljs.getLanguage(language)
-    ? hljs.highlight(text, { language, ignoreIllegals: true }).value
-    : escapeHtml(text);
-  const attributes = language
-    ? ` class="language-${escapeHtml(language)}" data-language="${escapeHtml(language)}"`
-    : "";
-  return `<pre><code${attributes}>${code}</code></pre>\n`;
-};
+function fileCitationHref(text: string): string | undefined {
+  const direct = parseFileReference(text);
+  if (direct?.line !== undefined) return fileReferenceHref(direct);
+
+  const range = /^(.*):(\d+)-(\d+)$/.exec(text);
+  if (!range) return;
+  const start = parseFileReference(`${range[1]}:${range[2]}`);
+  const end = parseFileReference(`${range[1]}:${range[3]}`);
+  if (start?.line === undefined || end?.line === undefined || start.path !== end.path || end.line < start.line) return;
+  return fileReferenceHref(start);
+}
+
+class MarkdownRenderer extends Renderer {
+  private linkDepth = 0;
+
+  override link(token: Parameters<Renderer["link"]>[0]): string {
+    this.linkDepth++;
+    try { return super.link(token); }
+    finally { this.linkDepth--; }
+  }
+
+  override codespan(token: Parameters<Renderer["codespan"]>[0]): string {
+    const code = super.codespan(token);
+    const href = this.linkDepth ? undefined : fileCitationHref(token.text);
+    return href ? `<a href="${escapeHtml(href)}">${code}</a>` : code;
+  }
+
+  override code({ text, lang }: Parameters<Renderer["code"]>[0]): string {
+    const language = lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
+    const code = language && hljs.getLanguage(language)
+      ? hljs.highlight(text, { language, ignoreIllegals: true }).value
+      : escapeHtml(text);
+    const attributes = language
+      ? ` class="language-${escapeHtml(language)}" data-language="${escapeHtml(language)}"`
+      : "";
+    return `<pre><code${attributes}>${code}</code></pre>\n`;
+  }
+}
+
+const renderer = new MarkdownRenderer();
 
 export function renderMarkdown(text: string): string {
   return marked.parse(text, {

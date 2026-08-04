@@ -42,7 +42,10 @@ export type RecallResult = {
   requestedScope: RecallScope;
   effectiveScope: RecallScope | "visible";
   page: number;
+  /** Backward-compatible alias for the bounded number of matches collected. */
   total: number;
+  collected: number;
+  hasMore: boolean;
 };
 
 type RecallRecord = {
@@ -53,6 +56,7 @@ type RecallRecord = {
   content: string;
   searchText?: string;
 };
+type TextCandidate = Omit<RecallRecord, "content"> & { searchText: string };
 type FileOperation = {
   callEntry: SessionEntry;
   resultEntry?: SessionEntry;
@@ -212,10 +216,15 @@ function queryMatcher(query: string | undefined) {
     }
   }
   const terms = value.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
-  return { test: (text: string) => terms.every((term) => text.toLowerCase().includes(term)) };
+  return {
+    test: (text: string) => {
+      const normalized = text.toLowerCase();
+      return terms.every((term) => normalized.includes(term));
+    },
+  };
 }
 
-function textRecord(entry: SessionEntry, expanded: boolean): RecallRecord | undefined {
+function textCandidate(entry: SessionEntry): TextCandidate | undefined {
   let role = "";
   let content = "";
   if (entry.type === "message") {
@@ -232,9 +241,18 @@ function textRecord(entry: SessionEntry, expanded: boolean): RecallRecord | unde
     key: `text:${entry.id}`,
     entry,
     role,
-    label: "historical evidence",
-    content: sanitizeAndClip(content, expanded ? MAX_EXPANSION_CHARS : MAX_EXCERPT_CHARS),
+    label: "text",
     searchText: sanitizeAndClip(content, 8_000),
+  };
+}
+
+function textRecord(candidate: TextCandidate, expanded: boolean): RecallRecord {
+  const max = expanded ? MAX_EXPANSION_CHARS : MAX_EXCERPT_CHARS;
+  return {
+    ...candidate,
+    content: candidate.searchText.length <= max
+      ? candidate.searchText
+      : `${candidate.searchText.slice(0, max)}\n[truncated by Continuity]`,
   };
 }
 
@@ -257,7 +275,7 @@ function fileOperations(entries: SessionEntry[]) {
           callEntry: entry,
           toolCallId: part.id,
           toolName: part.name,
-          path: sanitizeAndClip(part.arguments.path, 500),
+          path: inline(part.arguments.path, 500),
         };
         operations.push(operation);
         if (byCallId.has(part.id)) {
@@ -278,8 +296,8 @@ function operationRecord(operation: FileOperation): RecallRecord {
     key: `file:${operation.callEntry.id}:${operation.toolCallId}`,
     entry: operation.callEntry,
     role: `tool:${operation.toolName}`,
-    label: "historical file-operation evidence",
-    content: `${operation.toolName} ${operation.path}${operation.resultEntry ? `\nStored result entry: ${sanitizeAndClip(operation.resultEntry.id, 200)}` : ""}`,
+    label: "file operation",
+    content: `${operation.toolName} ${operation.path}${operation.resultEntry ? `\nStored result entry: ${inline(operation.resultEntry.id, 200)}` : ""}`,
   };
 }
 
@@ -292,15 +310,17 @@ function resultExpansion(operation: FileOperation): RecallRecord | undefined {
     key: `file-result:${entry.id}`,
     entry,
     role: `toolResult:${operation.toolName}`,
-    label: "historical file-result evidence (explicit expansion)",
+    label: "file result (expanded)",
     content: sanitizeAndClip(content, MAX_EXPANSION_CHARS),
   };
 }
 
-function formatRecord(record: RecallRecord, sessionId: string) {
+const inline = (value: string, max: number) =>
+  sanitizeAndClip(value, max).replace(/\s+/g, " ").trim();
+
+function formatRecord(record: RecallRecord) {
   return [
-    `[${record.label}]`,
-    `session=${sanitizeAndClip(sessionId, 200)} entry=${sanitizeAndClip(record.entry.id, 200)} role=${record.role} timestamp=${sanitizeAndClip(record.entry.timestamp || "unknown", 100)}`,
+    `[${record.label}] entry=${inline(record.entry.id, 200)} role=${inline(record.role, 100)} time=${inline(record.entry.timestamp || "unknown", 100)}`,
     record.content,
   ].join("\n");
 }
@@ -313,10 +333,15 @@ export function recallSession(input: RecallInput): RecallResult {
   const scopedIds = new Set(scanEntries.map((entry) => entry.id));
   const requestedExpansions = [...new Set((input.params.expand ?? []).filter((id) => typeof id === "string" && id))].slice(0, 10);
   const matcher = queryMatcher(input.params.query);
+  const page = Math.min(MAX_RECALL_PAGE, Math.max(1, Math.floor(input.params.page ?? 1)));
+  const pageStart = (page - 1) * RECALL_PAGE_SIZE;
+  const pageEnd = page * RECALL_PAGE_SIZE;
+  // One extra match is a sentinel proving another page exists, including at the 200-result cap.
+  const collectionLimit = Math.min(MAX_RECALL_RESULTS + 1, pageEnd + 1);
   const records: RecallRecord[] = [];
   const seen = new Set<string>();
   const push = (record: RecallRecord | undefined) => {
-    if (!record || seen.has(record.key) || records.length >= MAX_RECALL_RESULTS) return;
+    if (!record || seen.has(record.key) || records.length >= collectionLimit) return;
     seen.add(record.key);
     records.push(record);
   };
@@ -324,11 +349,13 @@ export function recallSession(input: RecallInput): RecallResult {
   if (!matcher.error && mode === "text") {
     for (const id of requestedExpansions) {
       if (!scopedIds.has(id)) continue;
-      push(textRecord(scanEntries.find((entry) => entry.id === id)!, true));
+      const entry = scanEntries.find((item) => item.id === id);
+      const candidate = entry && textCandidate(entry);
+      if (candidate) push(textRecord(candidate, true));
     }
-    for (let index = scanEntries.length - 1; index >= 0 && records.length < MAX_RECALL_RESULTS; index--) {
-      const record = textRecord(scanEntries[index], false);
-      if (record && matcher.test(record.searchText ?? record.content)) push(record);
+    for (let index = scanEntries.length - 1; index >= 0 && records.length < collectionLimit; index--) {
+      const candidate = textCandidate(scanEntries[index]);
+      if (candidate && matcher.test(candidate.searchText)) push(textRecord(candidate, false));
     }
   } else if (!matcher.error) {
     const operations = fileOperations(scanEntries);
@@ -339,40 +366,57 @@ export function recallSession(input: RecallInput): RecallResult {
         ? resultExpansion(operation)
         : operationRecord(operation));
     }
-    for (let index = operations.length - 1; index >= 0 && records.length < MAX_RECALL_RESULTS; index--) {
+    for (let index = operations.length - 1; index >= 0 && records.length < collectionLimit; index--) {
       const record = operationRecord(operations[index]);
       if (matcher.test(record.content)) push(record);
     }
   }
 
-  const page = Math.min(MAX_RECALL_PAGE, Math.max(1, Math.floor(input.params.page ?? 1)));
-  const totalPages = Math.max(1, Math.ceil(records.length / RECALL_PAGE_SIZE));
-  const pageRecords = records.slice((page - 1) * RECALL_PAGE_SIZE, page * RECALL_PAGE_SIZE);
+  const hasMore = records.length > pageEnd;
+  const resultLimitReached = records.length > MAX_RECALL_RESULTS;
+  const collected = Math.min(records.length, MAX_RECALL_RESULTS);
+  const pageRecords = records.slice(pageStart, Math.min(pageEnd, MAX_RECALL_RESULTS));
   const outside = requestedExpansions.filter((id) => !scopedIds.has(id));
   const header = [
     "Session recall — historical evidence only; repository state and direct user instructions remain authoritative.",
-    `Session: ${sanitizeAndClip(input.sessionId, 200)}`,
+    `Session: ${inline(input.sessionId, 200)}`,
     `Requested scope: ${requestedScope}; effective scope: ${selected.effective}; mode: ${mode}.`,
     ...(selected.notice ? [selected.notice] : []),
     ...(selected.entries.length > scanEntries.length
       ? [`Bounded scan: newest ${scanEntries.length} of ${selected.entries.length} in-scope entries.`]
       : []),
-    ...(records.length === MAX_RECALL_RESULTS
-      ? [`Result limit reached: showing at most ${MAX_RECALL_RESULTS} matches.`]
+    ...(resultLimitReached
+      ? [`Result limit reached: collected the first ${MAX_RECALL_RESULTS} matches.`]
       : []),
     ...(matcher.error ? [matcher.error] : []),
-    ...(outside.length ? [`Ignored expansion IDs outside the bounded effective scope: ${outside.map((id) => sanitizeAndClip(id, 100)).join(", ")}`] : []),
-    `Page ${page}/${totalPages}; ${records.length} result${records.length === 1 ? "" : "s"}.`,
+    ...(outside.length ? [`Ignored expansion IDs outside the bounded effective scope: ${outside.map((id) => inline(id, 100)).join(", ")}`] : []),
+    `Page ${page}; ${pageRecords.length} selected; ${hasMore
+      ? "more matches available"
+      : resultLimitReached
+        ? `at least ${records.length} matches found`
+        : `${records.length} match${records.length === 1 ? "" : "es"} found`}.`,
   ].join("\n");
-  let text = [header, ...pageRecords.map((record) => formatRecord(record, input.sessionId))].join("\n\n");
-  if (!pageRecords.length && !matcher.error) text += "\n\nNo historical evidence matched.";
-  if (text.length > MAX_RECALL_OUTPUT_CHARS)
-    text = `${text.slice(0, MAX_RECALL_OUTPUT_CHARS - 34)}\n[truncated by Continuity]`;
+  let text = header;
+  let emitted = 0;
+  const omission = "\n\n[remaining selected records omitted by Continuity]";
+  for (const record of pageRecords) {
+    const block = `\n\n${formatRecord(record)}`;
+    if (text.length + block.length + omission.length > MAX_RECALL_OUTPUT_CHARS) break;
+    text += block;
+    emitted++;
+  }
+  if (emitted < pageRecords.length) text += omission;
+  else if (!pageRecords.length && !matcher.error)
+    text += records.length
+      ? "\n\nNo historical evidence on this page."
+      : "\n\nNo historical evidence matched.";
   return {
     text,
     requestedScope,
     effectiveScope: selected.effective,
     page,
-    total: records.length,
+    total: collected,
+    collected,
+    hasMore,
   };
 }

@@ -96,6 +96,19 @@ const formatPlan = (work: Work) => [
   ...work.todos.map((todo, index) => `${index + 1}. ${todo.text}`),
 ].join("\n");
 
+const isCurrentHandoffBoundary = (message: any, active: Work | undefined) => {
+  const details = message?.details;
+  return Boolean(
+    active?.runId &&
+    (active.mode === "executing" || active.mode === "completed") &&
+    message?.role === "custom" &&
+    message.customType === HANDOFF_ENTRY_TYPE &&
+    details?.version === 1 &&
+    details.runId === active.runId &&
+    details.timelineId === (active.timelineId ?? active.runId)
+  );
+};
+
 const Kind = StringEnum([
     "workflow",
     "structure",
@@ -874,7 +887,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     let boundary = -1;
     for (let index = event.messages.length - 1; index >= 0; index--) {
       const message = event.messages[index] as any;
-      if (message.role === "custom" && message.customType === HANDOFF_ENTRY_TYPE) {
+      if (isCurrentHandoffBoundary(message, work)) {
         boundary = index;
         break;
       }
@@ -942,7 +955,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work: active,
         params: p,
       });
-      return { content: [{ type: "text", text: result.text }], details: { recall: true } };
+      return {
+        content: [{ type: "text", text: result.text }],
+        details: {
+          recall: true,
+          requestedScope: result.requestedScope,
+          effectiveScope: result.effectiveScope,
+          page: result.page,
+          collected: result.collected,
+          hasMore: result.hasMore,
+        },
+      };
     },
   });
   pi.registerTool({
@@ -1067,10 +1090,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     promptSnippet: "Planning, todo/state tracking, and clarification capability.",
     executionMode: "sequential",
     promptGuidelines: [
-      "Use set_plan for explicit /plan, handoffs, or blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. Continuity owns plan presentation in explicit planning; otherwise use an internal task list.",
-      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint; never re-ask an answered question without new evidence. Use exact todo IDs and atomic transitions.",
-      "Keep verification out of new todo lists. Finish work before Verify; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
-      "Never call a completion tool. Write exactly one text-only final response when ready; Continuity completes automatically. For clean/no_checks, first acknowledge allowUnverified tool-only and disclose the limitation.",
+      "Use set_plan for explicit /plan, handoffs, or blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. Explicit planSummary is the compact executor handoff: approach, concrete paths/symbols, assumptions or gaps, acceptance criteria. Continuity owns plan presentation; internal task list otherwise.",
+      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint; never re-ask an answered question without new evidence. Use exact IDs atomically.",
+      "Keep verification out of new todo lists; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
+      "Never call a completion tool. Write exactly one text-only final response. For clean/no_checks, acknowledge allowUnverified tool-only; disclose the limitation.",
       "After failed, stale, cancelled, or error Verify results, write one caveated text-only final response and stop without another tool call.",
     ],
     renderShell: "self",
@@ -1399,6 +1422,77 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return { content: [{ type: "text", text: "Continuity state updated." }] };
     },
   });
+  const approvePlan = async (ctx: any, resetContext: boolean) => {
+    if (!work?.planSummary) {
+      ctx.ui.notify("No stored plan.", "error");
+      return false;
+    }
+    const config = await loadConfig();
+    const executor = await configuredModel(ctx, config.executor, work.baseModel);
+    if (!executor || !(await pi.setModel(executor))) {
+      ctx.ui.notify("Executor model unavailable.", "error");
+      return false;
+    }
+    const previousWork = work;
+    const previousPendingApproval = pendingApproval;
+    const now = new Date().toISOString();
+    const runId = work.runId ?? randomUUID();
+    const timelineId = work.timelineId ?? runId;
+    const thinking = config.executor?.thinking ?? work.baseThinking;
+    if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
+    work = {
+      ...work,
+      mode: "executing",
+      approved: true,
+      runId,
+      timelineId,
+      updatedAt: now,
+    };
+    let gateReleased = false;
+    try {
+      await saveWork();
+      pi.appendEntry(RUN_ENTRY_TYPE, {
+        version: 1,
+        runId,
+        timelineId,
+        role: "executor",
+        parentSessionId: ctx.sessionManager.getSessionId(),
+        createdAt: now,
+      } satisfies RunEntry);
+      if (resetContext)
+        pi.sendMessage({
+          customType: HANDOFF_ENTRY_TYPE,
+          content: [
+            "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
+            buildContext({ ...work, mode: "planning" }, [], "", 600),
+          ].filter(Boolean).join("\n"),
+          display: false,
+          details: {
+            version: 1,
+            runId,
+            timelineId,
+            model: { provider: executor.provider, id: executor.id },
+            ...(thinking ? { thinking } : {}),
+          },
+        }, { triggerTurn: false });
+      gate(false);
+      gateReleased = true;
+      tasksVisible = true;
+      refresh(ctx);
+      pi.sendUserMessage(resetContext
+        ? "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification."
+        : "Execute approved stored plan in current session. Track and verify todos.");
+      pendingApproval = undefined;
+      return true;
+    } catch (error) {
+      work = previousWork;
+      pendingApproval = previousPendingApproval;
+      if (gateReleased) gate(true);
+      await saveWork().catch(() => {});
+      refresh(ctx);
+      throw error;
+    }
+  };
   const planCommand = {
     description: "Start, approve, cancel, or inspect plan",
     handler: async (args: string, ctx: any) => {
@@ -1420,100 +1514,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
         return;
       }
       if (value === "approve-current") {
-        if (!work?.planSummary)
-          return void ctx.ui.notify("No stored plan.", "error");
-        const config = await loadConfig();
-        const executor = await configuredModel(
-          ctx,
-          config.executor,
-          work.baseModel,
-        );
-        if (!executor || !(await pi.setModel(executor)))
-          return void ctx.ui.notify("Executor model unavailable.", "error");
-        const thinking = config.executor?.thinking ?? work.baseThinking;
-        if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
-        work.mode = "executing";
-        work.approved = true;
-        pendingApproval = undefined;
-        work.updatedAt = new Date().toISOString();
-        await saveWork();
-        if (work.runId)
-          pi.appendEntry(RUN_ENTRY_TYPE, {
-            version: 1,
-            runId: work.runId,
-            timelineId: work.timelineId ?? work.runId,
-            role: "executor",
-            parentSessionId: ctx.sessionManager.getSessionId(),
-            createdAt: new Date().toISOString(),
-          } satisfies RunEntry);
-        gate(false);
-        tasksVisible = true;
-        refresh(ctx);
-        pi.sendUserMessage(
-          "Execute approved stored plan in current session. Track and verify todos.",
-        );
+        await approvePlan(ctx, false);
         return;
       }
       if (value === "approve") {
-        if (!work?.planSummary)
-          return void ctx.ui.notify("No stored plan.", "error");
-        const config = await loadConfig();
-        const executor = await configuredModel(
-          ctx,
-          config.executor,
-          work.baseModel,
-        );
-        if (!executor)
-          return void ctx.ui.notify("Executor model unavailable.", "error");
-        if (!(await pi.setModel(executor)))
-          return void ctx.ui.notify("Executor model unavailable.", "error");
-        const now = new Date().toISOString();
-        pendingApproval = undefined;
-        const executorWork: Work = {
-          ...work,
-          mode: "executing",
-          approved: true,
-          updatedAt: now,
-        };
-        const runId = executorWork.runId ?? randomUUID();
-        const run: RunEntry = {
-          version: 1,
-          runId,
-          timelineId: executorWork.timelineId ?? executorWork.runId ?? runId,
-          role: "executor",
-          parentSessionId: ctx.sessionManager.getSessionId(),
-          createdAt: now,
-        };
-        executorWork.runId = run.runId;
-        executorWork.timelineId = run.timelineId;
-        const thinking = config.executor?.thinking ?? work.baseThinking;
-        if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
-        work = executorWork;
-        await saveWork();
-        pi.appendEntry(RUN_ENTRY_TYPE, run);
-        pi.sendMessage({
-          customType: HANDOFF_ENTRY_TYPE,
-          content: [
-            "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
-            buildContext({ ...executorWork, mode: "planning" }, [], "", 600),
-          ].filter(Boolean).join("\n"),
-          display: false,
-          details: {
-            version: 1,
-            runId,
-            timelineId: run.timelineId,
-            model: { provider: executor.provider, id: executor.id },
-            ...(thinking ? { thinking } : {}),
-          },
-        }, {
-          triggerTurn: false,
-        });
-        gate(false);
-        tasksVisible = true;
-        refresh(ctx);
-        pi.sendUserMessage(
-          "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
-        );
+        await approvePlan(ctx, true);
         return;
       }
       if (value === "cancel") {
@@ -1575,7 +1580,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       refresh(ctx);
       if (value)
         pi.sendUserMessage(
-          `Plan this task without modifying project files: ${value}`,
+          `Plan this task without modifying project files. Use continuity_update set_plan; make planSummary a compact executor handoff with the approach, concrete paths/symbols, assumptions or unresolved gaps, and acceptance criteria. Keep todos outcome-level: ${value}`,
         );
     },
   };
@@ -1598,6 +1603,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
     approvalSelectionOpen = true;
     queueMicrotask(async () => {
       const previousOfferedRevision = work?.offeredPlanRevision;
+      const requeue = async () => {
+        if (
+          sessionGeneration !== generation ||
+          work?.mode !== "planning" ||
+          work.runId !== token.runId ||
+          work.planRevision !== token.revision
+        ) return;
+        work.offeredPlanRevision = previousOfferedRevision;
+        pendingApproval = token;
+        await saveWork();
+      };
       try {
         if (
           sessionGeneration !== generation ||
@@ -1613,25 +1629,25 @@ export default function continuityExtension(pi: ExtensionAPI) {
           "Request changes",
         ]);
         if (sessionGeneration !== generation) return;
-        if (choice === "Approve — reset context")
-          await planCommand.handler("approve", actionCtx);
-        else if (choice === "Approve — continue current session")
-          await planCommand.handler("approve-current", actionCtx);
-        else if (choice === "Request changes") {
+        if (!choice) {
+          await requeue();
+          return;
+        }
+        if (choice === "Approve — reset context") {
+          if (await approvePlan(actionCtx, true) === false) await requeue();
+        } else if (choice === "Approve — continue current session") {
+          if (await approvePlan(actionCtx, false) === false) await requeue();
+        } else if (choice === "Request changes") {
           const feedback = await settledCtx.ui.editor("Plan feedback", "");
-          if (feedback?.trim() && sessionGeneration === generation)
+          if (!feedback?.trim()) {
+            await requeue();
+            return;
+          }
+          if (sessionGeneration === generation)
             pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
         }
       } catch (error: any) {
-        if (
-          sessionGeneration === generation &&
-          work?.mode === "planning" &&
-          work.runId === token.runId &&
-          work.planRevision === token.revision
-        ) {
-          work.offeredPlanRevision = previousOfferedRevision;
-          pendingApproval = token;
-        }
+        await requeue().catch(() => {});
         settledCtx.ui.notify(error?.message ?? String(error), "error");
       } finally {
         approvalSelectionOpen = false;
