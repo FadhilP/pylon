@@ -2076,7 +2076,11 @@ export class RuntimeCoordinator implements PiDriver {
         ? event.payload as Record<string, unknown>
         : {};
       const kind = String(payload.type ?? "").replace(/-/g, "_");
-      if (kind === "session_info_changed" || kind === "agent_end") this.sessionIndex.invalidate();
+      if (kind === "session_info_changed" || kind === "agent_start" || kind === "agent_end") {
+        const details = slot.driver.runtimeDetails();
+        if (details.sessionPath)
+          this.sessionIndex.invalidateSession(details.sessionId, details.sessionPath, details.cwd);
+      }
     }
     if (event.type === "session.replaced" || event.type === "session.unavailable") {
       const oldId = slot.id;

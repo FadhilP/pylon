@@ -870,6 +870,59 @@ test("deduplicates only later exact successful results", () => {
   assert.equal(failureResult.messages[4], failed);
 });
 
+test("generic duplicate indexing preserves first-match and unsupported-value behavior", () => {
+  const call = (id: string, argumentsValue: Record<string, unknown>) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name: "rg", arguments: argumentsValue }],
+  });
+  const source = "indexed match\n".repeat(100);
+  const result = (id: string, details: unknown) => textResult("rg", source, {
+    toolCallId: id,
+    isError: false,
+    details,
+  });
+  const indexed = sieveMessages([
+    user("search"),
+    call("rg-1", { pattern: "x", path: "." }), result("rg-1", { truncated: false }),
+    call("rg-2", { path: ".", pattern: "x" }), result("rg-2", { truncated: false }),
+    call("rg-3", { pattern: "x", path: "." }), result("rg-3", { truncated: false }),
+  ], 1_000, { pruneActive: true });
+  assert.match((indexed.messages[4] as any).content[0].text, /same as "rg-1"/);
+  assert.match((indexed.messages[6] as any).content[0].text, /same as "rg-1"/);
+  assert.equal(indexed.stats.transformedBy.duplicate, 2);
+
+  const date = new Date(0);
+  const unsupported = sieveMessages([
+    user("search"),
+    call("date-1", { pattern: "x" }), result("date-1", { date }),
+    call("date-2", { pattern: "x" }), result("date-2", { date: new Date(0) }),
+    call("plain-1", { pattern: "y" }), result("plain-1", { truncated: false }),
+    call("plain-2", { pattern: "y" }), result("plain-2", { truncated: false }),
+  ], 1_000, { pruneActive: true });
+  assert.match((unsupported.messages[4] as any).content[0].text, /same as "date-1"/);
+  assert.match((unsupported.messages[8] as any).content[0].text, /same as "plain-1"/);
+  assert.equal(unsupported.stats.transformedBy.duplicate, 2);
+
+  const sparseA = Array(2);
+  const sparseB = Array(2);
+  const sharedA: Record<string, unknown> = { value: 1 };
+  const sharedB: Record<string, unknown> = { value: 1 };
+  const nullA = Object.assign(Object.create(null), { pattern: "z" });
+  const nullB = Object.assign(Object.create(null), { pattern: "z" });
+  for (const [left, right] of [
+    [{ values: sparseA }, { values: sparseB }],
+    [{ number: Number.NaN, zero: -0 }, { number: Number.NaN, zero: -0 }],
+    [{ left: sharedA, right: sharedA }, { left: sharedB, right: sharedB }],
+    [nullA, nullB],
+  ] as Array<[Record<string, unknown>, Record<string, unknown>]>) {
+    const edge = sieveMessages([
+      user("search"),
+      call("edge-1", left), result("edge-1", { truncated: false }),
+      call("edge-2", right), result("edge-2", { truncated: false }),
+    ], 1_000, { pruneActive: true });
+    assert.equal(edge.stats.transformedBy.duplicate, 1);
+  }
+});
+
 test("prunes eligible text inside mixed content without changing image blocks", () => {
   const image = { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } };
   const mixed = {

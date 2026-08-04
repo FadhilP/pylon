@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
@@ -68,6 +68,7 @@ export interface SessionIndexOptions {
 export class SessionIndex {
   private sessions: SessionInfo[] = [];
   private metadata = new Map<string, { path: string; mtimeMs: number; ctimeMs: number; size: number; userMessageCount: number; owner?: SpawnOwner }>();
+  private dirtyDirectories = new Map<string, { cwd: string; directory: string; sessionIds: Set<string> }>();
   private scannedAt = 0;
   private scan?: Promise<void>;
 
@@ -85,6 +86,21 @@ export class SessionIndex {
 
   invalidate(): void {
     this.scannedAt = 0;
+  }
+
+  invalidateSession(sessionId: string, path?: string, cwd?: string): void {
+    const current = this.sessions.find((session) => session.id === sessionId);
+    const sessionPath = path || current?.path;
+    const sessionCwd = cwd || current?.cwd;
+    if (!sessionPath || !sessionCwd) {
+      this.invalidate();
+      return;
+    }
+    const directory = dirname(sessionPath);
+    const key = `${canonicalPath(directory)}\0${canonicalPath(sessionCwd)}`;
+    const target = this.dirtyDirectories.get(key) ?? { cwd: sessionCwd, directory, sessionIds: new Set<string>() };
+    target.sessionIds.add(sessionId);
+    this.dirtyDirectories.set(key, target);
   }
 
   remove(sessionId: string): void {
@@ -206,15 +222,35 @@ export class SessionIndex {
   }
 
   private async refresh(): Promise<void> {
-    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS) return;
     if (this.scan) return this.scan;
-    this.scan = SessionManager.listAll().then((sessions) => {
-      this.sessions = sessions;
-      this.scannedAt = Date.now();
-    }).finally(() => {
+    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtyDirectories.size) return;
+    this.scan = this.refreshPending().finally(() => {
       this.scan = undefined;
     });
     return this.scan;
+  }
+
+  private async refreshPending(): Promise<void> {
+    while (true) {
+      if (!this.scannedAt || Date.now() - this.scannedAt >= REFRESH_MS) {
+        this.sessions = await SessionManager.listAll();
+        this.scannedAt = Date.now();
+        continue;
+      }
+      if (!this.dirtyDirectories.size) return;
+      const pending = [...this.dirtyDirectories.entries()];
+      this.dirtyDirectories.clear();
+      for (const [key, target] of pending) {
+        const sessions = await SessionManager.list(target.cwd, target.directory);
+        const replaced = (session: SessionInfo) =>
+          target.sessionIds.has(session.id)
+          || `${canonicalPath(dirname(session.path))}\0${canonicalPath(session.cwd)}` === key;
+        const previousIds = this.sessions.filter(replaced).map((session) => session.id);
+        this.sessions = [...this.sessions.filter((session) => !replaced(session)), ...sessions];
+        const currentIds = new Set(sessions.map((session) => session.id));
+        for (const id of previousIds) if (!currentIds.has(id)) this.metadata.delete(id);
+      }
+    }
   }
 
   private summary(

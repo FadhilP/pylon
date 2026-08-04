@@ -1,9 +1,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
@@ -122,6 +122,90 @@ test("session index pages projects, counts user messages, and searches unloaded 
     assert.equal(withPrompt.activeSessions.some((session) => session.id === draft.id), true);
   } finally {
     await Promise.all([first.getSessionFile(), second.getSessionFile()].map((path) => path ? rm(path, { force: true }) : undefined));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session index refreshes one session directory after lifecycle changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-targeted-index-"));
+  const cwd = join(root, "workspace");
+  await mkdir(cwd);
+  const session = SessionManager.create(cwd);
+  persistSession(session, "Initial searchable text");
+  const originalList = SessionManager.list;
+  const originalListAll = SessionManager.listAll;
+  let directoryScans = 0;
+  let globalScans = 0;
+  (SessionManager as any).list = async (...args: unknown[]) => {
+    directoryScans++;
+    return (originalList as any).apply(SessionManager, args);
+  };
+  (SessionManager as any).listAll = async (...args: unknown[]) => {
+    globalScans++;
+    return (originalListAll as any).apply(SessionManager, args);
+  };
+
+  try {
+    const index = new SessionIndex();
+    const options = { activeId: session.getSessionId(), generation: 1, stateFor: () => "idle" as const };
+    await index.list({}, options);
+    persistSession(session, "New lifecycle text");
+    index.invalidateSession(session.getSessionId(), session.getSessionFile(), cwd);
+    const result = await index.list({ query: "New lifecycle text" }, options);
+
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+    assert.equal(globalScans, 1);
+    assert.equal(directoryScans, 1);
+  } finally {
+    (SessionManager as any).list = originalList;
+    (SessionManager as any).listAll = originalListAll;
+    if (session.getSessionFile()) await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("targeted session refresh isolates cwd values and follows path changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-custom-index-"));
+  const custom = join(root, "sessions");
+  const moved = join(root, "moved");
+  const cwdA = join(root, "workspace-a");
+  const cwdB = join(root, "workspace-b");
+  await Promise.all([custom, moved, cwdA, cwdB].map((path) => mkdir(path, { recursive: true })));
+  const first = SessionManager.create(cwdA, custom);
+  const second = SessionManager.create(cwdB, custom);
+  persistSession(first, "Custom A");
+  persistSession(second, "Custom B");
+  const firstPath = first.getSessionFile()!;
+  const movedPath = join(moved, basename(firstPath));
+
+  try {
+    const index = new SessionIndex();
+    const options = { activeId: first.getSessionId(), generation: 1, stateFor: () => "idle" as const };
+    index.invalidateSession(first.getSessionId(), firstPath, cwdA);
+    index.invalidateSession(second.getSessionId(), second.getSessionFile(), cwdB);
+    let result = await index.list({}, options);
+    let sessions = result.projects.flatMap((project) => project.sessions);
+    assert.deepEqual(new Set(sessions.map((session) => session.id)), new Set([first.getSessionId(), second.getSessionId()]));
+
+    persistSession(first, "Custom A refreshed");
+    index.invalidateSession(first.getSessionId(), firstPath, cwdA);
+    result = await index.list({ query: "Custom A refreshed" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, first.getSessionId());
+
+    await rename(firstPath, movedPath);
+    index.invalidateSession(first.getSessionId(), movedPath, cwdA);
+    result = await index.list({}, options);
+    sessions = result.projects.flatMap((project) => project.sessions);
+    assert.equal(sessions.filter((session) => session.id === first.getSessionId()).length, 1);
+    assert.equal(sessions.find((session) => session.id === second.getSessionId())?.projectId, projectIdForCwd(cwdB));
+
+    await rm(movedPath, { force: true });
+    index.invalidateSession(first.getSessionId(), movedPath, cwdA);
+    result = await index.list({}, options);
+    sessions = result.projects.flatMap((project) => project.sessions);
+    assert.equal(sessions.some((session) => session.id === first.getSessionId()), false);
+    assert.equal(sessions.some((session) => session.id === second.getSessionId()), true);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

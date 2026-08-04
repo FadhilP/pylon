@@ -1792,7 +1792,8 @@ export class SessionRuntime implements PiDriver {
         this.stopping = false;
         this.stoppedRun = undefined;
         this.agentError = undefined;
-        this.sessionIndex.invalidate();
+        if (session.sessionFile)
+          this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
         this.refreshSnapshot();
         forwarded = {
           ...raw,
@@ -1812,7 +1813,8 @@ export class SessionRuntime implements PiDriver {
         const userEntryId = this.workUserEntryId;
         this.agentError = willRetry ? undefined : terminalAgentError(raw.messages);
         if (willRetry) {
-          this.sessionIndex.invalidate();
+          if (session.sessionFile)
+            this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
           this.refreshSnapshot();
           forwarded = {
             ...raw,
@@ -1886,7 +1888,8 @@ export class SessionRuntime implements PiDriver {
         this.workUserEntryId = undefined;
         this.workAssistantEntryIdAtStart = undefined;
         this.stopping = false;
-        this.sessionIndex.invalidate();
+        if (session.sessionFile)
+          this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
         invalidateFileSuggestions(session.sessionManager.getCwd());
         this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
         this.refreshSnapshot();
@@ -1907,7 +1910,8 @@ export class SessionRuntime implements PiDriver {
           errorMessage: this.agentError,
         };
       } else if (kind === "session_info_changed") {
-        this.sessionIndex.invalidate();
+        if (session.sessionFile)
+          this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
         this.refreshSnapshot();
       }
       this.emit({

@@ -804,6 +804,30 @@ function serializedContentLength(content: unknown): number {
   }
 }
 
+function supportsDuplicateFingerprint(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (value === null || value === undefined || ["string", "boolean", "number"].includes(typeof value)) return true;
+  if (typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key === "symbol" || key !== "length" && !/^\d+$/.test(key))) return false;
+    return keys.every((key) => key === "length" || supportsDuplicateFingerprint(value[Number(key)], seen));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key === "symbol") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !supportsDuplicateFingerprint(descriptor.value, seen)) return false;
+  }
+  return true;
+}
+
+function genericDuplicateFingerprint(call: TrackedToolCall, result: TrackedToolResult): string | undefined {
+  const value = [call.arguments, result.fields.details, result.fields.content];
+  return supportsDuplicateFingerprint(value) ? projectionHash(value) : undefined;
+}
+
 function exactDuplicateReplacements<T extends ContextMessage>(
   messages: readonly T[],
   cwd: string,
@@ -882,11 +906,17 @@ function exactDuplicateReplacements<T extends ContextMessage>(
     replaced.add(candidate.result.messageIndex);
   }
 
-  // ponytail: duplicate result scans are quadratic; session result counts are small, index fingerprints if measured otherwise.
   const earlierGeneric: typeof candidates = [];
+  const fingerprintBuckets = new Map<string, typeof candidates>();
+  let hasUnsupportedFingerprint = false;
   for (const candidate of candidates) {
     if (candidate.call.name === READ_TOOL_NAME || duplicateExcludedTools.has(candidate.call.name) || replaced.has(candidate.result.messageIndex)) continue;
-    const original = earlierGeneric.find(({ call, result }) =>
+    const fingerprint = genericDuplicateFingerprint(candidate.call, candidate.result);
+    const bucketKey = fingerprint ? `${candidate.call.name}\0${fingerprint}` : undefined;
+    const pool = bucketKey && !hasUnsupportedFingerprint
+      ? fingerprintBuckets.get(bucketKey) ?? []
+      : earlierGeneric;
+    const original = pool.find(({ call, result }) =>
       call.name === candidate.call.name
       && isDeepStrictEqual(call.arguments, candidate.call.arguments)
       && isDeepStrictEqual(result.fields.details, candidate.result.fields.details)
@@ -894,6 +924,13 @@ function exactDuplicateReplacements<T extends ContextMessage>(
     );
     if (!original) {
       earlierGeneric.push(candidate);
+      if (bucketKey) {
+        const bucket = fingerprintBuckets.get(bucketKey) ?? [];
+        bucket.push(candidate);
+        fingerprintBuckets.set(bucketKey, bucket);
+      } else {
+        hasUnsupportedFingerprint = true;
+      }
       continue;
     }
     const sourceChars = textOnlyContentLength(candidate.result.fields.content)

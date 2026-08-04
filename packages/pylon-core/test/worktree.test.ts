@@ -55,6 +55,30 @@ test("worktree diff reports only changes made after a dirty baseline", async () 
   }
 });
 
+test("worktree snapshots from nested directories include repository-wide changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-nested-snapshot-"));
+  const nested = join(root, "src", "nested");
+  await mkdir(nested, { recursive: true });
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "outside.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+
+    const before = await worktreeSnapshot(nested);
+    await writeFile(join(root, "outside.txt"), "changed\n");
+    const after = await worktreeSnapshot(nested);
+    assert.ok(before && after);
+    assert.deepEqual(await worktreeDiff(before, after), [
+      { path: "outside.txt", additions: 1, deletions: 1 },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("worktree snapshots treat unusual changed paths literally", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-literal-paths-"));
   const names = ["literal[ab].txt", "old[ab].txt", "delete[ab].txt", "space 界.txt"];

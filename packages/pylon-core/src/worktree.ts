@@ -33,22 +33,51 @@ const ownedBranch = /^refs\/heads\/(?:pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylo
 const canonical = (path: string) => process.platform === "win32"
   ? resolve(path).toLowerCase()
   : resolve(path);
+const rootCache = new Map<string, string>();
+const revisionCache = new Map<string, { head: string; tree: string }>();
+async function repositoryRoot(cwd: string): Promise<string> {
+  const key = canonical(cwd);
+  const cached = rootCache.get(key);
+  if (cached && await stat(join(cached, ".git")).then(() => true).catch(() => false)) return cached;
+  rootCache.delete(key);
+  const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (canonical(root) === key) rootCache.set(key, root);
+  return root;
+}
 const outside = (parent: string, child: string) => {
   const path = relative(parent, child);
   return path === ".." || path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(path);
 };
 const splitNul = (value: string) => value.split("\0").filter(Boolean);
 
-function changedWorktreePaths(status: string): string[] {
+function fieldTail(record: string, fieldCount: number): string | undefined {
+  let offset = 0;
+  for (let field = 0; field < fieldCount; field++) {
+    offset = record.indexOf(" ", offset);
+    if (offset < 0) return undefined;
+    offset++;
+  }
+  return record.slice(offset) || undefined;
+}
+
+function parseWorktreeStatus(status: string): { head: string; dirty: boolean; paths: string[] } {
   const records = splitNul(status);
+  const head = records.find((record) => record.startsWith("# branch.oid "))?.slice(13) ?? "";
   const paths = new Set<string>();
+  let dirty = false;
   for (let index = 0; index < records.length; index++) {
     const record = records[index]!;
-    if (record.length < 4) continue;
-    paths.add(record.slice(3));
-    if (/[RC]/.test(record.slice(0, 2)) && records[index + 1]) paths.add(records[++index]!);
+    if (record.startsWith("# ")) continue;
+    dirty = true;
+    const path = record.startsWith("1 ") ? fieldTail(record, 8)
+      : record.startsWith("2 ") ? fieldTail(record, 9)
+        : record.startsWith("u ") ? fieldTail(record, 10)
+          : record.startsWith("? ") ? record.slice(2)
+            : undefined;
+    if (path) paths.add(path);
+    if (record.startsWith("2 ") && records[index + 1]) paths.add(records[++index]!);
   }
-  return [...paths];
+  return { head, dirty, paths: [...paths] };
 }
 
 async function temporaryIndex<T>(run: (env: Record<string, string>) => Promise<T>): Promise<T> {
@@ -313,28 +342,53 @@ export function readPersistedWorktreeSummaries(
 }
 
 export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | undefined> {
-  try {
-    const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
-    const [revision, status] = await Promise.all([
-      git(root, ["rev-parse", "HEAD", "HEAD^{tree}"]),
-      git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
-    ]);
-    const [head, headTree] = revision.split(/\r?\n/, 2);
-    if (!head || !headTree) throw Error("Git returned an invalid HEAD revision.");
-    if (!status) {
-      return { root, tree: headTree, fingerprint: `${root}\n${head}\nclean` };
-    }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let raced = false;
+    try {
+      const root = await repositoryRoot(cwd);
+      const key = canonical(root);
+      let revision = revisionCache.get(key);
+      let rawStatus: string;
+      if (revision) {
+        rawStatus = await git(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
+      } else {
+        const [value, status] = await Promise.all([
+          git(root, ["rev-parse", "HEAD", "HEAD^{tree}"]),
+          git(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
+        ]);
+        const [head, tree] = value.split(/\r?\n/, 2);
+        if (!head || !tree) throw Error("Git returned an invalid HEAD revision.");
+        revision = { head, tree };
+        rawStatus = status;
+      }
+      const status = parseWorktreeStatus(rawStatus);
+      if (status.head !== revision.head) {
+        const [head, tree] = (await git(root, ["rev-parse", "HEAD", "HEAD^{tree}"])).split(/\r?\n/, 2);
+        if (!head || !tree || head !== status.head) {
+          raced = true;
+          throw Error("Git HEAD changed during observation.");
+        }
+        revision = { head, tree };
+      }
+      revisionCache.set(key, revision);
+      if (!status.dirty)
+        return { root, tree: revision.tree, fingerprint: `${root}\n${revision.head}\nclean` };
 
-    const [indexTree, candidateTree] = await Promise.all([
-      git(root, ["write-tree"]),
-      currentTree(root, "HEAD", changedWorktreePaths(status)),
-    ]);
-    const latestStatus = await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-    const tree = latestStatus === status ? candidateTree : await currentTree(root, "HEAD");
-    return { root, tree, fingerprint: `${root}\n${head}\n${indexTree}\n${tree}` };
-  } catch {
-    return undefined;
+      const [indexTree, candidateTree] = await Promise.all([
+        git(root, ["write-tree"]),
+        currentTree(root, revision.head, status.paths),
+      ]);
+      const latestStatus = await git(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
+      if (latestStatus !== rawStatus) {
+        raced = true;
+        throw Error("Git worktree changed during observation.");
+      }
+      return { root, tree: candidateTree, fingerprint: `${root}\n${revision.head}\n${indexTree}\n${candidateTree}` };
+    } catch {
+      if (!raced || attempt === 1) return undefined;
+    }
   }
+  return undefined;
 }
 
 export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
