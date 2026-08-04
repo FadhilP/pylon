@@ -215,12 +215,12 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                   {selectedPackage.required ? <span className="package-required">Required</span> : <label className="package-switch"><span className="sr-only">Toggle {selectedPackage.name}</span><input type="checkbox" role="switch" checked={selectedPackage.enabled} disabled={Boolean(busy)} onChange={(event) => onSetEnabled(selectedPackage, event.target.checked)} /></label>}
                 </header>
                 {selectedPackage.error && <p className="package-error">{selectedPackage.error}</p>}
-                {selectedPackage.settings?.kind !== "spawn" && <section className="workbench-section">
+                <section className="workbench-section">
                   <header><div><h4>Package defaults</h4><p>Configuration owned by this package.</p></div><span>Global</span></header>
                   {hasPackageFields(selectedPackage.settings) && selectedPackage.settings
                     ? <PackageFields settings={selectedPackage.settings} models={models} sessionThinkingLevels={sessionThinkingLevels} disabled={Boolean(busy)} onUpdate={(settings) => onUpdate(selectedPackage, settings)} />
                     : <p className="workbench-empty">This package has no configurable defaults.</p>}
-                </section>}
+                </section>
                 <section className="workbench-section">
                   <header><div><h4>Tool exposure</h4><p>Defaults used when a project or session does not override them.</p></div><span>Global</span></header>
                   {selectedTools.length ? <div className="workbench-tool-list">{selectedTools.map((tool) => {
@@ -458,12 +458,6 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   }
   if (settings.kind === "spawn") {
     return <div className="package-fields">
-      <label>Private agents<select value={settings.agentAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, agentAvailability: event.target.value as typeof settings.agentAvailability })}>
-        <option value="deferred">Deferred</option><option value="active">Active</option>
-      </select></label>
-      <label>Spawned sessions<select value={settings.sessionAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, sessionAvailability: event.target.value as typeof settings.sessionAvailability })}>
-        <option value="deferred">Deferred</option><option value="active">Active</option>
-      </select></label>
       <ModelChoices value={settings.models} models={models} disabled={disabled} onChange={(eligible) => onUpdate({ ...settings, models: eligible })} />
       <ThinkingChoices label="Private-agent thinking" value={settings.agentThinkingLevels} disabled={disabled} onChange={(agentThinkingLevels) => onUpdate({ ...settings, agentThinkingLevels })} />
     </div>;
