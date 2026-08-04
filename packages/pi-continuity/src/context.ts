@@ -1,12 +1,15 @@
 import type { Work } from "./active-work.ts";
 import type { Fact, FactStatus } from "./memory.ts";
-export type MemoryNotice = { key: string; status: Extract<FactStatus, "suspect" | "unverifiable">; reason: string };
 const aliases: Record<string, string> = {
   check: "test", validate: "test", validation: "test", verify: "test", verification: "test",
   deploy: "release", publish: "release", ship: "release",
   bundle: "build", compile: "build",
   configuration: "config", setting: "config",
 };
+const ignoredWords = new Set([
+  "about", "and", "could", "from", "have", "into", "just", "now", "please", "right",
+  "should", "than", "that", "then", "these", "this", "those", "would", "with",
+]);
 const normalizeWord = (word: string) => {
   let value = word;
   if (value.length > 4 && value.endsWith("ies")) value = `${value.slice(0, -3)}y`;
@@ -17,24 +20,59 @@ const normalizeWord = (word: string) => {
   else if (value.length > 3 && value.endsWith("s") && !/(?:ss|us|is)$/.test(value)) value = value.slice(0, -1);
   return aliases[value] ?? value;
 };
-const words = (s: string) =>
-  new Set((s.toLowerCase().match(/[a-z0-9_-]{3,}/g) || []).map(normalizeWord));
-const identifiers = (s: string) =>
-  new Set(
-    s.toLowerCase().match(
-      /[a-z0-9_-]+(?:[./][a-z0-9_.-]+)+|[a-z][a-z0-9]*_[a-z0-9_]+/g,
-    ) || [],
-  );
-export function shortlistFacts(facts: Fact[], latest = "", work?: Work, limit = 3) {
-  const queryText = `${latest} ${work?.goal || ""} ${work?.todos.find((t) => t.id === work.currentTodoId)?.text || ""}`,
-    query = words(queryText), queryIdentifiers = identifiers(queryText),
-    score = (fact: Fact) => [...words(`${fact.key} ${fact.text}`)].filter((word) => query.has(word)).length,
-    strongMatch = (fact: Fact) => [...identifiers(`${fact.key} ${fact.text}`)].some((value) => queryIdentifiers.has(value)),
-    rank = (a: Fact, b: Fact) => Number(strongMatch(b)) - Number(strongMatch(a)) ||
-      score(b) - score(a) || b.updatedAt.localeCompare(a.updatedAt),
-    reservedPreference = facts.filter((fact) => fact.kind === "preference").sort(rank)[0],
-    relevant = facts.filter((fact) => fact !== reservedPreference && (score(fact) >= 2 || strongMatch(fact))).sort(rank);
-  return [...(reservedPreference ? [reservedPreference] : []), ...relevant].slice(0, limit);
+const words = (s: string) => new Set(
+  (s.toLowerCase().match(/[a-z0-9_-]{3,}/g) || [])
+    .map(normalizeWord)
+    .filter((word) => !ignoredWords.has(word)),
+);
+const identifiers = (s: string) => new Set(
+  s.toLowerCase().match(
+    /[a-z0-9_-]+(?:[./\\][a-z0-9_.-]+)+|[a-z][a-z0-9]*_[a-z0-9_]+/g,
+  ) || [],
+);
+const continuation = /^(?:continue|go on|keep going|proceed|resume|carry on|do it|run that|fix it|try again)[.!?]*$/i;
+
+/** Uses active work only when the user supplied an explicit content-free continuation. */
+export function promptQuery(latest = "", work?: Work) {
+  const prompt = latest.trim();
+  if (!prompt) return "";
+  if (!continuation.test(prompt)) return words(prompt).size ? prompt : "";
+  if (!work) return "";
+  const current = work.todos.find((todo) => todo.id === work.currentTodoId)?.text;
+  return `${work.goal} ${current || ""}`.trim();
+}
+
+type InjectableStatus = Extract<FactStatus, "active" | "unchecked">;
+type ScoredFact = { fact: Fact; strength: number; matches: number };
+export function shortlistFacts(
+  facts: Fact[], latest = "", work?: Work, limit = 2,
+  statusFor: (fact: Fact) => InjectableStatus = () => "active",
+) {
+  return shortlistResolvedFacts(facts, promptQuery(latest, work), limit, statusFor);
+}
+
+/** Ranks against a query already resolved by promptQuery, without reinterpreting continuation text. */
+export function shortlistResolvedFacts(
+  facts: Fact[], queryText: string, limit = 2,
+  statusFor: (fact: Fact) => InjectableStatus = () => "active",
+) {
+  const query = words(queryText), queryIdentifiers = identifiers(queryText);
+  if (!query.size && !queryIdentifiers.size) return [];
+  const scored = facts.map((fact): ScoredFact | undefined => {
+    const keyText = `${fact.key} ${(fact.evidencePaths ?? []).map((item) => item.path).join(" ")}`,
+      keyWords = words(keyText), textWords = words(fact.text),
+      keyMatches = [...keyWords].filter((word) => query.has(word)),
+      textMatches = [...textWords].filter((word) => query.has(word)),
+      distinct = new Set([...keyMatches, ...textMatches]),
+      exactIdentifier = [...identifiers(`${keyText} ${fact.text}`)].some((value) => queryIdentifiers.has(value)),
+      keyAndText = keyMatches.some((keyWord) => textMatches.some((textWord) => textWord !== keyWord)),
+      requiredTextMatches = statusFor(fact) === "unchecked" ? 3 : 2;
+    const strength = exactIdentifier ? 3 : keyAndText ? 2 : textMatches.length >= requiredTextMatches ? 1 : 0;
+    return strength ? { fact, strength, matches: distinct.size } : undefined;
+  }).filter((item): item is ScoredFact => item !== undefined)
+    .sort((a, b) => b.strength - a.strength || b.matches - a.matches ||
+      b.fact.updatedAt.localeCompare(a.fact.updatedAt) || a.fact.key.localeCompare(b.fact.key));
+  return scored.slice(0, limit).map((item) => item.fact);
 }
 function factIdentity(fact: Fact): string {
   return JSON.stringify([
@@ -77,11 +115,12 @@ export function buildContext(
   latest = "",
   budget = 450,
   parent: Fact[] = [],
-  notices: MemoryNotice[] = [],
+  options: { resolvedQuery?: boolean } = {},
 ) {
-  const selected = shortlistFacts(dedupeFacts(facts), latest, work, 3);
+  const query = options.resolvedQuery ? latest : promptQuery(latest, work);
+  const selected = shortlistResolvedFacts(dedupeFacts(facts), query, 2);
   const selectedIdentities = new Set(selected.map(factIdentity));
-  const selectedParent = shortlistFacts(dedupeFacts(parent), latest, work, 2)
+  const selectedParent = shortlistResolvedFacts(dedupeFacts(parent), query, 2 - selected.length)
     .filter((fact) => !selectedIdentities.has(factIdentity(fact)));
   const lines = [
     "Continuity state. Memory may be stale; direct instructions and repository evidence win.",
@@ -114,17 +153,26 @@ export function buildContext(
       );
     }
   }
-  lines.push(
-    ...selected.slice(0, 3).map((f) => `Memory ${f.key}: ${f.text}`),
-    ...selectedParent.map((f) => `Parent memory ${f.key}: ${f.text}`),
-  );
-  const uniqueNotices = notices.filter((notice, index) => notices.findIndex((candidate) =>
-    candidate.key === notice.key && candidate.status === notice.status && candidate.reason === notice.reason) === index);
-  const content = lines.filter(Boolean), noticeLines = uniqueNotices.slice(0, 2)
-    .map((notice) => `Memory ${notice.key.slice(0, 80)} [${notice.status}]: ${notice.reason.slice(0, 120)}. Inspect evidence; ancestry or age alone never justifies deletion.`);
-  if (content.length === 1 && !noticeLines.length) return "";
-  const max = budget * 4, noticeText = noticeLines.join("\n"),
-    noticeBudget = Math.min(Math.floor(max * 0.45), 420), clippedNotice = noticeText.slice(0, noticeBudget),
-    bodyBudget = Math.max(0, max - clippedNotice.length - (clippedNotice ? 1 : 0));
-  return [content.join("\n").slice(0, bodyBudget), clippedNotice].filter(Boolean).join("\n");
+  const memoryLines = [
+    ...selected.map((fact) => `Memory ${fact.key}: ${fact.text}`),
+    ...selectedParent.map((fact) => `Parent memory ${fact.key}: ${fact.text}`),
+  ];
+  const content = lines.filter(Boolean), max = budget * 4;
+  if (work) {
+    const base = content.join("\n").slice(0, max), remaining = Math.max(0, max - base.length - 1);
+    const memory = fitWholeLines(memoryLines, Math.min(400, remaining));
+    return [base, memory].filter(Boolean).join("\n");
+  }
+  const header = content[0], memory = fitWholeLines(memoryLines, Math.min(400, max - header.length - 1));
+  return memory ? `${header}\n${memory}` : "";
+}
+
+function fitWholeLines(lines: string[], max: number) {
+  const accepted: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const size = line.length + (accepted.length ? 1 : 0);
+    if (size <= max - used) { accepted.push(line); used += size; }
+  }
+  return accepted.join("\n");
 }

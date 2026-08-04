@@ -14,7 +14,7 @@ cd /path/to/your/project
 pylon
 ```
 
-Open [http://127.0.0.1:3141](http://127.0.0.1:3141), then use **Settings** to configure your provider and select models for the main agent, Advisor, Scout, and Grunt.
+Open [http://127.0.0.1:3141](http://127.0.0.1:3141), then use **Settings** to configure providers, package models, Continuity memory, Grunt thinking levels, and Spawn model/thinking eligibility.
 
 Recommended configuration for OpenAI subscriptions:
 
@@ -79,13 +79,13 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 - **[pi-continuity](./packages/pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
 - **[pi-focus](./packages/pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
 - **[pi-guard](./packages/pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
-- **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with main-selected thinking.
+- **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with configurable main-selected thinking.
 - **[pi-heartbeat](./packages/pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
 - **[pi-helios](./packages/pi-helios)** — Provides owned Playwright browsers with isolated profiles, consent-gated browser attachment, and named Windows-window screenshots.
 - **[pi-stateql](./packages/pi-stateql)** — Provides safe stateful database queries, durable result handles, confirmed writes, and bounded web status/history.
 - **[pi-discover](./packages/pi-discover)** — Indexes supported source files, provides read-only repository and historical Pi-session search, and coordinates inactive-tool discovery.
 - **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance and fresh-browser isolated public-web research.
-- **[pi-spawn](./packages/pi-spawn)** — Creates private resumable subagent threads and first-class child sessions that remain promptable from their parent.
+- **[pi-spawn](./packages/pi-spawn)** — Creates private resumable subagent threads and first-class child sessions with configurable eligible models and private-agent thinking.
 - **[pi-sieve](./packages/pi-sieve)** — Limits old bulky successful tool output in outbound context without modifying stored session messages.
 - **[pi-timeline](./packages/pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
 - **[pi-verify](./packages/pi-verify)** — Detects and runs existing project checks with bounded time and output.

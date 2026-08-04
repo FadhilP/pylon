@@ -228,6 +228,35 @@ test("spawn model choices include only authenticated models in session scope", a
   } finally { f.restore(); }
 });
 
+test("configured model and thinking allowlists constrain new children and defaults", async () => {
+  const f = await fixture(undefined, {
+    agentAvailability: "deferred",
+    sessionAvailability: "deferred",
+    models: ["custom/model"],
+    agentThinkingLevels: ["low"],
+  });
+  try {
+    for (const handler of f.handlers.get("session_start") ?? []) await handler({}, f.ctx);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.model.enum, ["custom/model"]);
+    assert.deepEqual(f.tools.get("spawn_session").parameters.properties.model.enum, ["custom/model"]);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.thinking.enum, ["low"]);
+
+    await f.tools.get("spawn_agent").execute("create", { action: "create", prompt: "eligible agent" }, undefined, undefined, f.ctx);
+    assert.equal(f.calls[0].args[f.calls[0].args.indexOf("--model") + 1], "custom/model");
+    assert.equal(f.calls[0].args[f.calls[0].args.indexOf("--thinking") + 1], "low");
+
+    const modelRejected = await f.tools.get("spawn_session").execute("create", {
+      action: "create", prompt: "blocked model", model: "fake/model",
+    }, undefined, undefined, f.ctx);
+    assert.equal(modelRejected.details.failureCode, "model_unavailable");
+    const thinkingRejected = await f.tools.get("spawn_agent").execute("create", {
+      action: "create", prompt: "blocked thinking", thinking: "high",
+    }, undefined, undefined, f.ctx);
+    assert.equal(thinkingRejected.details.failureCode, "invalid");
+    assert.equal(f.calls.length, 1);
+  } finally { f.restore(); }
+});
+
 test("explicit models are revalidated before a child is created", async () => {
   const f = await fixture();
   try {

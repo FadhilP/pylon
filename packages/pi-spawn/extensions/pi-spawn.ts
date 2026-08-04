@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { configPath, loadConfig } from "../src/config.ts";
+import { configPath, loadConfig, thinkingLevels } from "../src/config.ts";
 import { runSpawn, spawnTimeoutMs, type SpawnActivity, type SpawnRun } from "../src/runner.ts";
 import {
   agentPolicy,
@@ -30,7 +30,6 @@ import {
 
 const agentActions = ["create", "continue", "list"] as const;
 const sessionActions = ["create", "adopt", "continue", "list"] as const;
-const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const SPECIALIST_TOOLS = ["advisor", "grunt", "repo_scout", "web_scout"];
 const SPAWN_TOOLS = ["spawn_agent", "spawn_session"];
 const MAX_DEPTH = 4;
@@ -54,12 +53,12 @@ const threadParameters = {
   prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000, description: "Prompt for create, adopt, or continue" })),
 };
 
-const createAgentParameters = () => Type.Object({
+const createAgentParameters = (allowedThinking: readonly string[] = thinkingLevels) => Type.Object({
   action: StringEnum(agentActions, { description: "Create a thread, continue one, or list threads available from the current parent branch" }),
   ...threadParameters,
   name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Concise purpose-based display name fixed when the private thread is created" })),
   model: Type.Optional(Type.String({ minLength: 3, maxLength: 300, description: "Optional provider/model fixed when the private thread is created" })),
-  thinking: Type.Optional(StringEnum(thinkingLevels, { description: "Thinking level fixed when the private thread is created" })),
+  thinking: Type.Optional(StringEnum(allowedThinking, { description: "Thinking level fixed when the private thread is created" })),
   systemPrompt: Type.Optional(Type.String({ minLength: 1, maxLength: 32_000, description: "Replacement system prompt fixed when the private thread is created" })),
   tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 32, uniqueItems: true, description: "Tool allowlist fixed when the private thread is created; an empty list disables all tools" })),
   disableSpecialists: Type.Optional(Type.Boolean({ description: "Disable Advisor, Grunt, and Scout in this private thread; default true" })),
@@ -87,16 +86,22 @@ const defaultName = (prompt: string) => preview(prompt, 100);
 const scientistName = (id: string) => SCIENTIST_NAMES[createHash("sha256").update(id).digest().readUInt32BE(0) % SCIENTIST_NAMES.length];
 const currentModel = (ctx: any): string | undefined =>
   ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-const availableModels = (ctx: any): string[] => {
+const availableModels = (ctx: any, allowed?: readonly string[]): string[] => {
   const models = ctx.scopedModels.length
     ? ctx.scopedModels.map(({ model }: any) => model)
     : ctx.modelRegistry.getAvailable();
-  return [...new Set<string>(models
+  const available = [...new Set<string>(models
     .filter((model: any) => ctx.modelRegistry.hasConfiguredAuth(model))
     .map((model: any) => `${model.provider}/${model.id}`))];
+  return allowed ? allowed.filter((model) => available.includes(model)) : available;
 };
-const modelError = (requested: string, ctx: any): string | undefined => {
-  const available = availableModels(ctx);
+const defaultModel = (ctx: any, allowed?: readonly string[]): string | undefined => {
+  const available = availableModels(ctx, allowed);
+  const current = currentModel(ctx);
+  return current && available.includes(current) ? current : available[0];
+};
+const modelError = (requested: string, ctx: any, allowed?: readonly string[]): string | undefined => {
+  const available = availableModels(ctx, allowed);
   if (available.includes(requested)) return;
   const shown = available.slice(0, 20);
   return `Unavailable model: ${requested}.${shown.length
@@ -192,8 +197,11 @@ function requestSpawnHooks(pi: ExtensionAPI): SpawnHooks | undefined {
 }
 
 export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChild = runSpawn, agentDir = getAgentDir()) {
-  const { agentAvailability, sessionAvailability } = await loadConfig(configPath(agentDir));
-  const AgentParameters = createAgentParameters();
+  const config = await loadConfig(configPath(agentDir));
+  const { agentAvailability, sessionAvailability } = config;
+  const allowedModels = config.models;
+  const allowedThinking: readonly string[] = config.agentThinkingLevels ?? thinkingLevels;
+  const AgentParameters = createAgentParameters(allowedThinking);
   const SessionParameters = createSessionParameters();
 
   pi.on("session_start", (_event, ctx) => {
@@ -308,8 +316,13 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("agent", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
-      const unavailable = params.action === "create" && params.model ? modelError(params.model, ctx) : undefined;
+      const selectedModel = params.action === "create" ? params.model ?? defaultModel(ctx, allowedModels) : undefined;
+      const unavailable = params.action === "create" && (params.model
+        ? modelError(params.model, ctx, allowedModels)
+        : selectedModel ? undefined : "No configured spawn models are currently available.");
       if (unavailable) return { content: [{ type: "text" as const, text: unavailable }], details: { failureCode: "model_unavailable" } };
+      if (params.action === "create" && params.thinking && !allowedThinking.includes(params.thinking))
+        return { content: [{ type: "text" as const, text: `Spawn thinking level is not enabled: ${params.thinking}.` }], details: { failureCode: "invalid" } };
       const parent = requireParent(ctx.sessionManager);
       const allowed = branchSpawnIds(ctx.sessionManager, "agent");
       if (params.action === "list") {
@@ -320,9 +333,12 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       if (params.action === "create") {
         if (Number(process.env.PI_SPAWN_DEPTH ?? 0) >= MAX_DEPTH)
           return { content: [{ type: "text" as const, text: `pi-spawn depth limit (${MAX_DEPTH}) reached.` }], details: { failureCode: "depth_limit" } };
+        const thinking = params.thinking ?? (ctx.thinkingLevel && allowedThinking.includes(ctx.thinkingLevel)
+          ? ctx.thinkingLevel
+          : config.agentThinkingLevels ? allowedThinking[0] : undefined);
         const policy = {
-          ...(params.model ?? currentModel(ctx) ? { model: params.model ?? currentModel(ctx) } : {}),
-          ...(params.thinking ?? ctx.thinkingLevel ? { thinking: params.thinking ?? ctx.thinkingLevel } : {}),
+          model: selectedModel,
+          ...(thinking ? { thinking } : {}),
           ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
           ...(params.tools !== undefined ? { tools: params.tools } : {}),
           disableSpecialists: params.disableSpecialists ?? true,
@@ -349,7 +365,10 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("session", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
-      const unavailable = params.action === "create" && params.model ? modelError(params.model, ctx) : undefined;
+      const selectedModel = params.action === "create" ? params.model ?? defaultModel(ctx, allowedModels) : undefined;
+      const unavailable = params.action === "create" && (params.model
+        ? modelError(params.model, ctx, allowedModels)
+        : selectedModel ? undefined : "No configured spawn models are currently available.");
       if (unavailable) return { content: [{ type: "text" as const, text: unavailable }], details: { failureCode: "model_unavailable" } };
       const parent = requireParent(ctx.sessionManager);
       const allowed = branchSpawnIds(ctx.sessionManager, "session");
@@ -368,7 +387,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
           return { content: [{ type: "text" as const, text: message }], details: { failureCode: "invalid_project" } };
         }
         const created = createSpawnedSession(cwd, parent, params.name?.trim() || defaultName(params.prompt!), {
-          model: params.model ?? currentModel(ctx),
+          model: selectedModel,
           hooks: requestSpawnHooks(pi),
         });
         return executeTurn("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, signal, onUpdate);
@@ -396,7 +415,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
   pi.registerTool(sessionTool);
 
   pi.on("session_start", (_event, ctx) => {
-    const models = availableModels(ctx);
+    const models = availableModels(ctx, allowedModels);
     setModelChoices(AgentParameters, models, "Available provider/model fixed when the private thread is created");
     setModelChoices(SessionParameters, models, "Available provider/model fixed when the standard session is created");
     pi.registerTool(agentTool);

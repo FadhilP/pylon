@@ -510,10 +510,12 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.ok(first.operational.tools.policies.length > 0);
     const initialPackages = await driver.listPackages();
     assert.ok(initialPackages.packages.some((item) => item.id === "pi-timeline" && item.active));
+    const allThinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
     assert.deepEqual(initialPackages.packages.find((item) => item.id === "pi-spawn")?.settings, {
       kind: "spawn",
       agentAvailability: "deferred",
       sessionAvailability: "deferred",
+      agentThinkingLevels: allThinking,
     });
 
     const initialActiveTools = first.activeTools;
@@ -544,11 +546,11 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     const spawnConfigured = await driver.updatePackageSettings({
       packageId: "pi-spawn",
-      settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred" },
+      settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", agentThinkingLevels: ["low", "high"] },
     });
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-spawn")?.settings,
-      { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred" },
+      { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", agentThinkingLevels: ["low", "high"] },
     );
 
     const generation = configured.sessionGeneration;
@@ -556,7 +558,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     for (const [packageId, settings] of [
       ["pi-advisor", { kind: "advisor", mode: "session" }],
       ["pi-scout", { kind: "scout", mode: "session" }],
-      ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic" }],
+      ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic", thinkingLevels: ["medium", "high"] as any }],
     ] as const) {
       const updated = await driver.updatePackageSettings({ packageId, settings });
       assert.equal(updated.sessionGeneration, generation);
@@ -572,7 +574,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     });
     const gruntDisabled = await driver.updatePackageSettings({
       packageId: "pi-grunt",
-      settings: { kind: "grunt", mode: "disabled", executionMode: "dynamic" },
+      settings: { kind: "grunt", mode: "disabled", executionMode: "dynamic", thinkingLevels: ["medium", "high"] },
     });
     assert.equal(scoutDisabled.sessionGeneration, generation);
     assert.equal(gruntDisabled.sessionGeneration, generation);
@@ -580,11 +582,11 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     await driver.updatePackageSettings({
       packageId: "pi-grunt",
-      settings: { kind: "grunt", mode: "session", executionMode: "direct" },
+      settings: { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"] },
     });
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-grunt")?.settings,
-      { kind: "grunt", mode: "session", executionMode: "direct" },
+      { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"] },
     );
 
     await assert.rejects(driver.updatePackageSettings({
@@ -604,6 +606,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         kind: "spawn",
         agentAvailability: "active",
         sessionAvailability: "deferred",
+        agentThinkingLevels: ["low", "high"],
       });
       assert.deepEqual((next as any).hookInjection.settings, futureHooks);
     } finally {

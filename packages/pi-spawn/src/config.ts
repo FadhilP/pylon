@@ -5,10 +5,14 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const toolAvailabilities = ["deferred", "active"] as const;
 export type ToolAvailability = (typeof toolAvailabilities)[number];
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type SpawnConfig = {
   version: 1;
   agentAvailability: ToolAvailability;
   sessionAvailability: ToolAvailability;
+  models?: string[];
+  agentThinkingLevels?: ThinkingLevel[];
 };
 
 export const defaultConfig = (): SpawnConfig => ({
@@ -19,6 +23,12 @@ export const defaultConfig = (): SpawnConfig => ({
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-spawn", "config.json");
 const validAvailability = (value: unknown): value is ToolAvailability =>
   toolAvailabilities.includes(value as ToolAvailability);
+const validModels = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0
+  && new Set(value).size === value.length
+  && value.every((model) => typeof model === "string" && Boolean(model.trim()));
+const validThinkingLevels = (value: unknown): value is ThinkingLevel[] => Array.isArray(value) && value.length > 0
+  && new Set(value).size === value.length
+  && value.every((level) => thinkingLevels.includes(level as ThinkingLevel));
 
 export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
   try {
@@ -33,13 +43,17 @@ export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
         sessionAvailability: value.toolAvailability,
       };
     }
-    if (!validAvailability(value.agentAvailability) || !validAvailability(value.sessionAvailability)) {
+    if (!validAvailability(value.agentAvailability) || !validAvailability(value.sessionAvailability)
+      || value.models !== undefined && !validModels(value.models)
+      || value.agentThinkingLevels !== undefined && !validThinkingLevels(value.agentThinkingLevels)) {
       throw new Error("invalid config");
     }
     return {
       version: 1,
       agentAvailability: value.agentAvailability,
       sessionAvailability: value.sessionAvailability,
+      ...(value.models ? { models: value.models } : {}),
+      ...(value.agentThinkingLevels ? { agentThinkingLevels: value.agentThinkingLevels } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return defaultConfig();

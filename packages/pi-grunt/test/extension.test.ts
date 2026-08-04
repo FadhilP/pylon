@@ -311,7 +311,7 @@ test("Grunt guidance favors high-displacement work and retains Main ownership", 
   assert.match(guidance, /ordinary semantic changes around 50–300 LOC in the main model/i);
   assert.match(guidance, /mechanical multi-file work/i);
   assert.match(guidance, /typically 300–500\+ LOC/i);
-  assert.match(guidance, /Use medium thinking unless high clearly saves work/i);
+  assert.match(guidance, /Use the lowest configured thinking level that fits/i);
   assert.match(guidance, /dependent slices sequentially, inspecting and checking each result first/i);
   assert.match(guidance, /main model owns integration and recovery/i);
   assert.match(guidance, /Fix small remaining defects directly/i);
@@ -359,6 +359,33 @@ test("Grunt guidance favors high-displacement work and retains Main ownership", 
     fg: (color: string, text: string) => { errorColor = color; return text; },
   }, { isError: true });
   assert.equal(errorColor, "error");
+});
+
+test("configured thinking levels update the tool schema and are revalidated at execution", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "grunt-thinking-"));
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    await saveConfig({ version: 1, disabled: false, mode: "direct", thinkingLevels: ["low", "xhigh"] });
+    const handlers = new Map<string, Function[]>();
+    const tools = new Map<string, any>();
+    let active: string[] = [];
+    const pi: any = {
+      events: new Bus(),
+      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {},
+      getActiveTools: () => active, setActiveTools: (next: string[]) => { active = next; }, exec() {},
+    };
+    grunt(pi);
+    for (const handler of handlers.get("session_start") ?? []) await handler({}, {});
+    assert.deepEqual(tools.get("grunt").parameters.properties.thinking.enum, ["low", "xhigh"]);
+    const rejected = await tools.get("grunt").execute("id", { task: "No run", thinking: "high" }, undefined, undefined, {});
+    assert.equal(rejected.details.status, "invalid");
+    assert.match(rejected.content[0].text, /not enabled/i);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });
 
 test("isolated mode throws outside Git while direct mode runs there", async () => {

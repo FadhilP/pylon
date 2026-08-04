@@ -11,6 +11,7 @@ const deferred = {
   agentAvailability: "deferred" as const,
   sessionAvailability: "deferred" as const,
 };
+const allThinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 test("spawn tool availability defaults to deferred and persists independently", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-spawn-config-"));
@@ -20,25 +21,32 @@ test("spawn tool availability defaults to deferred and persists independently", 
       kind: "spawn",
       agentAvailability: "deferred",
       sessionAvailability: "deferred",
+      agentThinkingLevels: allThinking,
     });
 
     await updateSettings({
       kind: "spawn",
       agentAvailability: "active",
       sessionAvailability: "deferred",
+      models: ["custom/model"],
+      agentThinkingLevels: ["low", "high"],
     }, { agentDir });
     assert.deepEqual(await readSettings({ agentDir }), {
       kind: "spawn",
       agentAvailability: "active",
       sessionAvailability: "deferred",
+      models: ["custom/model"],
+      agentThinkingLevels: ["low", "high"],
     });
     assert.deepEqual(JSON.parse(await readFile(configPath(agentDir), "utf8")), {
       version: 1,
       agentAvailability: "active",
       sessionAvailability: "deferred",
+      models: ["custom/model"],
+      agentThinkingLevels: ["low", "high"],
     });
     await assert.rejects(
-      updateSettings({ kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active" }, { agentDir }),
+      updateSettings({ kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: ["high"] }, { agentDir }),
       /invalid Spawn settings/,
     );
   } finally {

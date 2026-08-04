@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { blocked } from "../src/plan-gate.ts";
-import { buildContext, shortlistFacts } from "../src/context.ts";
+import { buildContext, promptQuery, shortlistFacts, shortlistResolvedFacts } from "../src/context.ts";
 import { fresh, setPlan, updateTodo, hasRemainingTodos } from "../src/active-work.ts";
 import type { Fact } from "../src/memory.ts";
 
@@ -26,35 +26,66 @@ test("context bounded active first", () => {
   const w = fresh("goal");
   assert.ok(buildContext(w, [], "", 20).length <= 80);
 });
-test("context includes preferences but rejects weak one-word memory matches", () => {
+test("context requires relevance from preferences and rejects weak one-word matches", () => {
   const facts: Fact[] = [
     { key: "preference.style", kind: "preference", text: "Keep output terse", source: "user", confidence: 1, updatedAt: "2026-01-01" },
     { key: "workflow.release", kind: "workflow", text: "Run release check", source: "README", confidence: 1, updatedAt: "2026-01-01" },
   ];
-  const text = buildContext(undefined, facts, "discuss release migrations");
-  assert.match(text, /Memory preference\.style: Keep output terse/);
-  assert.doesNotMatch(text, /workflow\.release/);
+  assert.equal(buildContext(undefined, facts, "discuss release migrations"), "");
+  assert.match(buildContext(undefined, facts, "keep output terse"), /Memory preference\.style: Keep output terse/);
 });
-test("one preference is reserved without crowding out relevant facts", () => {
-  const preferences: Fact[] = Array.from({ length: 10 }, (_, index) => ({
-    key: `preference.style${index}`, kind: "preference", text: `Style choice ${index}`,
-    source: "user", confidence: 1, updatedAt: `2026-01-${String(index + 1).padStart(2, "0")}`,
-  }));
+test("relevant facts win without a reserved preference", () => {
   const facts: Fact[] = [
-    ...preferences,
+    { key: "preference.style", kind: "preference", text: "Keep output terse", source: "user", confidence: 1, updatedAt: "2026-01-10" },
     { key: "workflow.release", kind: "workflow", text: "Run release check", source: "README", confidence: 1, updatedAt: "2026-01-01" },
     { key: "warning.deploy", kind: "warning", text: "Check deploy warning", source: "README", confidence: 1, updatedAt: "2026-01-01" },
   ];
   const selected = shortlistFacts(facts, "release check deploy warning");
-  assert.deepEqual(selected.map((fact) => fact.key), ["preference.style9", "warning.deploy", "workflow.release"]);
+  assert.deepEqual(selected.map((fact) => fact.key), ["warning.deploy", "workflow.release"]);
 });
-test("context accepts two-term and exact-identifier memory matches", () => {
-  const facts: Fact[] = [
-    { key: "workflow.release", kind: "workflow", text: "Run release check", source: "README", confidence: 1, updatedAt: "2026-01-01" },
-    { key: "architecture.web_scout", kind: "architecture", text: "Use web_scout for public research", source: "source", confidence: 1, updatedAt: "2026-01-01" },
-  ];
-  assert.match(buildContext(undefined, facts, "release check"), /workflow\.release/);
-  assert.match(buildContext(undefined, facts, "call web_scout"), /architecture\.web_scout/);
+test("unchecked facts use a stricter relevance gate", () => {
+  const fact: Fact = {
+    key: "workflow.delivery", kind: "workflow", text: "Run release check before publishing",
+    source: "README", confidence: 1, updatedAt: "2026-01-01",
+  };
+  assert.deepEqual(shortlistFacts([fact], "release check").map((item) => item.key), [fact.key]);
+  assert.deepEqual(shortlistFacts([fact], "release check", undefined, 2, () => "unchecked"), []);
+  assert.deepEqual(shortlistFacts([fact], "workflow.delivery", undefined, 2, () => "unchecked").map((item) => item.key), [fact.key]);
+  assert.deepEqual(shortlistFacts([fact], "run release check", undefined, 2, () => "unchecked").map((item) => item.key), [fact.key]);
+});
+test("active work is used only for explicit content-free continuations", () => {
+  const work = fresh("Repair the worktree revision cache");
+  setPlan(work, ["Inspect porcelain branch OIDs"]);
+  assert.equal(promptQuery("Improve memory prompt injection", work), "Improve memory prompt injection");
+  assert.match(promptQuery("continue", work), /worktree revision cache/i);
+  assert.equal(promptQuery("continue"), "");
+});
+test("context accepts two-term, exact-identifier, and Windows path matches", () => {
+  const release: Fact = {
+    key: "workflow.release", kind: "workflow", text: "Run release check",
+    source: "README", confidence: 1, updatedAt: "2026-01-01",
+  };
+  const scout: Fact = {
+    key: "architecture.web_scout", kind: "architecture", text: "Use web_scout for public research",
+    source: "source", confidence: 1, updatedAt: "2026-01-01",
+  };
+  const windowsPath: Fact = {
+    key: "structure.context", kind: "structure", text: "Context retrieval implementation",
+    source: "source", confidence: 1, updatedAt: "2026-01-01",
+    evidencePaths: [{ path: "packages\\pi-continuity\\src\\context.ts", sha256: "hash" }],
+  };
+  assert.match(buildContext(undefined, [release], "release check"), /workflow\.release/);
+  assert.match(buildContext(undefined, [scout], "call web_scout"), /architecture\.web_scout/);
+  assert.match(buildContext(undefined, [windowsPath], "packages\\pi-continuity\\src\\context.ts"), /structure\.context/);
+});
+test("resolved query ranking is stable and is not reinterpreted", () => {
+  const facts: Fact[] = ["workflow.zeta", "workflow.alpha"].map((key) => ({
+    key, kind: "workflow" as const, text: "Run release check", source: "README",
+    confidence: 1, updatedAt: "2026-01-01",
+  }));
+  assert.deepEqual(shortlistResolvedFacts(facts, "release check").map((fact) => fact.key), [
+    "workflow.alpha", "workflow.zeta",
+  ]);
 });
 test("context normalizes inflections and conservative workflow synonyms", () => {
   const release: Fact = {
@@ -90,18 +121,19 @@ test("context keeps facts from different revisions distinct", () => {
   assert.match(text, /Parent memory workflow\.release/);
 });
 
-test("context reserves room for active memory and suspect metadata without stale text", () => {
+test("context uses a small complete-line memory budget", () => {
   const active: Fact = {
     key: "workflow.release", kind: "workflow", text: "Run release check", source: "README",
     confidence: 1, updatedAt: "2026-01-01",
   };
-  const text = buildContext(undefined, [active], "release check", 100, [], [{
-    key: "workflow.old", status: "suspect", reason: "capture is not an ancestor of HEAD",
-  }]);
+  const oversized: Fact = {
+    key: "workflow.oversized", kind: "workflow", text: `Release check ${"x".repeat(400)}`,
+    source: "README", confidence: 1, updatedAt: "2026-01-02",
+  };
+  const text = buildContext(undefined, [oversized, active], "release check", 100);
+  assert.ok(text.length <= 400);
   assert.match(text, /Memory workflow\.release: Run release check/);
-  assert.match(text, /Memory workflow\.old \[suspect\]/);
-  assert.match(text, /ancestry or age alone never justifies deletion/);
-  assert.doesNotMatch(text, /obsolete command text/);
+  assert.doesNotMatch(text, /workflow\.oversized/);
 });
 test("context deduplicates constraints before planning limits", () => {
   const work = fresh("goal");

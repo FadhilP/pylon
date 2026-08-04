@@ -1320,6 +1320,10 @@ export class SessionRuntime implements PiDriver {
     }
     if (settings.kind === "grunt" && settings.mode === "model") {
       assertProfile(settings.model, undefined);
+      return;
+    }
+    if (settings.kind === "spawn" && settings.models) {
+      for (const model of settings.models) assertProfile(model, undefined);
     }
   }
 

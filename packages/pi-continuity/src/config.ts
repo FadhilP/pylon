@@ -17,11 +17,12 @@ export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type ModelProfile = { model: string; thinking?: ThinkingLevel };
 export type ContinuityConfig = {
   version: 1;
+  memoryEnabled?: boolean;
   planner?: ModelProfile;
   executor?: ModelProfile;
 };
 
-export const defaultConfig = (): ContinuityConfig => ({ version: 1 });
+export const defaultConfig = (): ContinuityConfig => ({ version: 1, memoryEnabled: true });
 export const configPath = (agentDir = getAgentDir()) =>
   join(agentDir, "pi-continuity", "config.json");
 
@@ -38,12 +39,14 @@ export async function loadConfig(path = configPath()): Promise<ContinuityConfig>
     const value = JSON.parse(await readFile(path, "utf8"));
     if (
       value?.version !== 1 ||
+      (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") ||
       (value.planner !== undefined && !isProfile(value.planner)) ||
       (value.executor !== undefined && !isProfile(value.executor))
     )
       throw new Error("invalid config");
     return {
       version: 1,
+      memoryEnabled: value.memoryEnabled ?? true,
       ...(value.planner ? { planner: value.planner } : {}),
       ...(value.executor ? { executor: value.executor } : {}),
     };

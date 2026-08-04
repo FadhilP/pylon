@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import extension from "../extensions/pi-continuity.ts";
+import { saveConfig } from "../src/config.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -23,8 +24,8 @@ async function waitFor(predicate: () => boolean) {
   assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
 }
 
-function runtime() {
-  let active = ["read", "edit", "continuity_update"];
+function runtime(initialActive = ["read", "edit", "continuity_update"]) {
+  let active = [...initialActive];
   let thinking = "medium";
   let selectedModel: any;
   let modelSelections = 0;
@@ -86,6 +87,40 @@ function runtime() {
   };
 }
 
+test("package settings disable durable memory while keeping planning and recall", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-disabled-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    await saveConfig({ version: 1, memoryEnabled: false });
+    const app = runtime(["read", "memory", "continuity_recall", "continuity_update"]);
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json",
+      sessionManager: {
+        getSessionId: () => "memory-disabled",
+        getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    assert.equal(app.active().includes("memory"), false);
+    assert.equal(app.active().includes("continuity_recall"), true);
+    assert.equal(app.active().includes("continuity_update"), true);
+    const result = await app.tools.get("memory").execute("stale", { action: "list" }, undefined, undefined, ctx);
+    assert.equal(result.details.memoryError, true);
+    assert.match(result.content[0].text, /disabled in package settings/i);
+    const beforeAgentStart = app.handlers.get("before_agent_start")![0];
+    assert.equal(await beforeAgentStart({}, ctx), undefined);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("continuity and memory guidance stay dedicated", () => {
   const app = runtime();
   const continuity = app.tools.get("continuity_update");
@@ -133,7 +168,8 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(memoryGuidance, /explicit user rules and non-obvious verified workflows, boundaries, or warnings/i);
   assert.match(memoryGuidance, /Use memory list to avoid duplicates, then add or replace valid candidates/i);
   assert.match(memoryGuidance, /continue without a memory call when none qualify/i);
-  assert.match(memoryGuidance, /List memory when the current key is uncertain/i);
+  assert.match(memoryGuidance, /List memory with a focused query when the current key is uncertain/i);
+  assert.equal(memory.parameters.properties.query.maxLength, 500);
   assert.match(memoryGuidance, /one fact per stable named key/i);
   assert.match(memoryGuidance, /Never save .*secrets/i);
   assert.match(memoryGuidance, /user scope for cross-project preferences and project scope otherwise/i);
@@ -591,6 +627,11 @@ test("memory list is owner-safe, settles candidates, and status uses durable fac
     assert.match(listed.content[0].text, /project\/workflow\.pending \[add\]: Pending command/);
     assert.doesNotMatch(listed.content[0].text, /workflow\.second/);
     assert.equal(listed.details.memoryList, true);
+    const queried = await tool.execute("query", { action: "list", query: "first command" }, undefined, undefined, first);
+    assert.match(queried.content[0].text, /Matching stored facts:/);
+    assert.match(queried.content[0].text, /workflow\.first/);
+    assert.doesNotMatch(queried.content[0].text, /preference\.reply/);
+    assert.match(queried.content[0].text, /workflow\.pending/);
     await settled({}, first);
     listed = await tool.execute("list-after-settle", { action: "list" }, undefined, undefined, first);
     assert.doesNotMatch(listed.content[0].text, /Pending candidates:/);
@@ -606,6 +647,8 @@ test("memory list is owner-safe, settles candidates, and status uses durable fac
     await app.handlers.get("before_agent_start")![0]({}, first);
     listed = await tool.execute("list-suspect", { action: "list" }, undefined, undefined, first);
     assert.match(listed.content[0].text, /project\/workflow\.evidence \[suspect: captured evidence changed or is unavailable\]: Guide is current/);
+    const queriedSuspect = await tool.execute("query-suspect", { action: "list", query: "guide current" }, undefined, undefined, first);
+    assert.match(queriedSuspect.content[0].text, /workflow\.evidence \[suspect:/);
     await app.commands.get("memory").handler("status", first);
     assert.match(notifications.at(-1)!, /4 current-owner stored facts, 3 visible/);
     assert.match(notifications.at(-1)!, /0 current-owner pending candidates .*normally compacted at settlement/);
@@ -1873,6 +1916,9 @@ test("memory candidates survive manual and turn-end compact into model context",
     for (const handler of second.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
     for (const handler of second.handlers.get("input") ?? [])
+      await handler({ source: "user", text: "Improve memory prompt injection relevance and token use" }, ctx);
+    assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
+    for (const handler of second.handlers.get("input") ?? [])
       await handler({ source: "user", text: "verify lint release check" }, ctx);
     assert.equal(
       await second.handlers.get("context")?.[0]({ messages: [] }, ctx),
@@ -1891,7 +1937,8 @@ test("memory candidates survive manual and turn-end compact into model context",
     assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
     await second.commands.get("memory").handler("on", ctx);
     const afterEnable = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.match(afterEnable.message.content, /workflow\.toggle/);
+    assert.equal(afterEnable.message.content.match(/^Memory /gm)?.length, 2);
+    assert.doesNotMatch(afterEnable.message.content, /workflow\.toggle/);
 
     await writeFile(join(cwd, "guide.txt"), "current\n");
     await second.tools.get("memory").execute(
@@ -1904,8 +1951,7 @@ test("memory candidates survive manual and turn-end compact into model context",
     await second.commands.get("memory").handler("compact", ctx);
     await writeFile(join(cwd, "guide.txt"), "changed\n");
     const suspectContext = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.match(suspectContext.message.content, /Memory workflow\.evidence \[suspect\]/);
-    assert.doesNotMatch(suspectContext.message.content, /obsolete command text/);
+    assert.doesNotMatch(suspectContext?.message.content ?? "", /workflow\.evidence|obsolete command text/);
     await second.commands.get("memory").handler("show", ctx);
     assert.match(notifications.at(-1)!, /workflow\.evidence \[suspect:/);
     await second.commands.get("memory").handler("forget suspect", ctx);
@@ -1925,11 +1971,11 @@ test("memory candidates survive manual and turn-end compact into model context",
     );
     await second.commands.get("memory").handler("compact", ctx);
     const afterModelCleanup = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(afterModelCleanup.message.content, /workflow\.lint/);
+    assert.doesNotMatch(afterModelCleanup?.message.content ?? "", /workflow\.lint/);
 
     await second.commands.get("memory").handler("forget workflow.verify", ctx);
     const afterForget = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(afterForget.message.content, /workflow\.verify/);
+    assert.doesNotMatch(afterForget?.message.content ?? "", /workflow\.verify/);
     const gitDir = join(cwd, ".git"), unavailableGit = join(cwd, ".git-unavailable");
     await rename(gitDir, unavailableGit);
     try {
@@ -1938,7 +1984,7 @@ test("memory candidates survive manual and turn-end compact into model context",
       for (const handler of third.handlers.get("input") ?? [])
         await handler({ source: "user", text: "verify lint release check" }, ctx);
       const unavailable = await third.handlers.get("before_agent_start")?.[0]({}, ctx);
-      assert.match(unavailable.message.content, /workflow\.toggle \[unverifiable\]/);
+      assert.equal(unavailable, undefined);
     } finally { await rename(unavailableGit, gitDir); }
     await second.commands.get("memory").handler("owners", ctx);
     const owner = notifications.at(-1)!.split(/\s/)[0]!;

@@ -121,13 +121,17 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   if (value.kind === "advisor" || value.kind === "scout") {
     return modelMode && model && thinking && (value.mode !== "model" || boundedString(value.model, 400));
   }
+  const validThinkingList = (levels: unknown) => Array.isArray(levels) && levels.length > 0
+    && new Set(levels).size === levels.length
+    && levels.every((level) => thinkingLevels.has(String(level)));
   if (value.kind === "grunt") {
     return modelMode && model
       && (value.mode !== "model" || boundedString(value.model, 400))
-      && ["isolated", "direct", "dynamic"].includes(String(value.executionMode));
+      && ["isolated", "direct", "dynamic"].includes(String(value.executionMode))
+      && validThinkingList(value.thinkingLevels);
   }
   if (value.kind === "continuity") {
-    return ["planner", "executor"].every((key) => {
+    return typeof value.memoryEnabled === "boolean" && ["planner", "executor"].every((key) => {
       const profile = value[key];
       return profile === undefined || record(profile)
         && boundedString(profile.model, 400)
@@ -150,7 +154,11 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   if (value.kind === "timeline") return typeof value.editRollbackDefault === "boolean";
   return value.kind === "spawn"
     && (value.agentAvailability === "deferred" || value.agentAvailability === "active")
-    && (value.sessionAvailability === "deferred" || value.sessionAvailability === "active");
+    && (value.sessionAvailability === "deferred" || value.sessionAvailability === "active")
+    && (value.models === undefined || Array.isArray(value.models) && value.models.length > 0
+      && new Set(value.models).size === value.models.length
+      && value.models.every((model) => boundedString(model, 400)))
+    && validThinkingList(value.agentThinkingLevels);
 }
 
 export function validateCommand(value: unknown): ValidationResult<WebCommand> {

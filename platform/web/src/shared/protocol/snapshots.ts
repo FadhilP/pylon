@@ -373,9 +373,11 @@ export type PackageSettingsReadModel =
       mode: PackageModelMode;
       model?: string;
       executionMode: "isolated" | "direct" | "dynamic";
+      thinkingLevels: import("./events.ts").ThinkingLevelReadModel[];
     }
   | {
       kind: "continuity";
+      memoryEnabled: boolean;
       planner?: PackageModelProfileReadModel;
       executor?: PackageModelProfileReadModel;
     }
@@ -399,6 +401,8 @@ export type PackageSettingsReadModel =
       kind: "spawn";
       agentAvailability: "deferred" | "active";
       sessionAvailability: "deferred" | "active";
+      models?: string[];
+      agentThinkingLevels: import("./events.ts").ThinkingLevelReadModel[];
     };
 
 export interface PackageModelProfileReadModel {

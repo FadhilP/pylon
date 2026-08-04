@@ -3,11 +3,14 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const thinkingLevels = ["medium", "high"] as const;
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
+export const defaultThinkingLevels: ThinkingLevel[] = ["medium", "high"];
 export const gruntModes = ["isolated", "direct", "dynamic"] as const;
 export type GruntMode = (typeof gruntModes)[number];
-export type GruntConfig = { version: 1; model?: string; disabled?: boolean; mode?: GruntMode };
+export type GruntConfig = { version: 1; model?: string; disabled?: boolean; mode?: GruntMode; thinkingLevels?: ThinkingLevel[] };
+export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
+  config.thinkingLevels ?? defaultThinkingLevels;
 export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
 export const isGruntEnabled = (config: GruntConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
@@ -56,13 +59,17 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
       value?.version !== 1 ||
       (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
       (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
-      (value.mode !== undefined && !gruntModes.includes(value.mode))
+      (value.mode !== undefined && !gruntModes.includes(value.mode)) ||
+      (value.thinkingLevels !== undefined && (!Array.isArray(value.thinkingLevels)
+        || !value.thinkingLevels.length || new Set(value.thinkingLevels).size !== value.thinkingLevels.length
+        || !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel))))
     ) throw new Error("invalid config");
     return {
       version: 1,
       ...(value.model ? { model: value.model } : {}),
       ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
       ...(value.mode !== undefined ? { mode: value.mode } : {}),
+      ...(value.thinkingLevels !== undefined ? { thinkingLevels: value.thinkingLevels } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return { version: 1 };

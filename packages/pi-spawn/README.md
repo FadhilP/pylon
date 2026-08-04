@@ -31,10 +31,12 @@ Use `spawn_session` when the child conversation should be inspectable or openabl
 
 ## Settings
 
-Pylon exposes separate settings for `spawn_agent` and `spawn_session`:
+Pylon exposes separate availability settings for `spawn_agent` and `spawn_session`:
 
 - **Deferred (recommended)** — keeps that schema out of the initial tool set and relies on its description when discovered.
 - **Always active** — includes that tool from session start and adds its usage guidelines to the system prompt.
+
+Package settings also limit which authenticated, session-scoped models may be used for new children. With no allowlist, every available model remains eligible. If the parent model is excluded, an omitted model deterministically uses the first eligible model; creation fails when none are available. Private-agent thinking has a separate non-empty allowlist and defaults to all levels. These restrictions apply only when creating children, so existing threads remain continuable. `spawn_session` has no thinking override.
 
 Settings apply to new session runtimes. Both tools default to deferred for prompt-cache efficiency.
 

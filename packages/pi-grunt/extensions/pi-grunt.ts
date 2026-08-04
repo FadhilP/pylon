@@ -6,8 +6,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildWorkerContext, sanitizeFailureMessage } from "../src/context.ts";
 import {
-  configPath, gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntTimeoutMs,
-  isGruntEnabled, loadConfig, parseModelRef, saveConfig, thinkingLevels,
+  configPath, gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntThinkingLevels,
+  gruntTimeoutMs, isGruntEnabled, loadConfig, parseModelRef, saveConfig, defaultThinkingLevels,
 } from "../src/config.ts";
 import {
   applyWorkerPatch, cleanupSessionPatchArtifacts, collectWorkerPatch,
@@ -107,6 +107,18 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
   let calls = 0;
   let stats = emptyStats();
   const sessionPatchArtifacts = new Set<string>();
+  const GruntParameters = Type.Object({
+    task: Type.String({ minLength: 1, maxLength: 8000, description: "Self-contained implementation handoff including decisions and acceptance criteria" }),
+    thinking: StringEnum(defaultThinkingLevels, { description: "Worker thinking effort selected by the main model" }),
+    suggestedPaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 40, uniqueItems: true, description: "Scope guidance, not an allowlist" })),
+    targetedContext: Type.Optional(Type.String({ minLength: 1, maxLength: 4000, description: "Directly applicable code snippets or project instructions; never broad transcript context" })),
+    checkCommands: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8, uniqueItems: true, description: "Focused existing checks useful for this task" })),
+  }, { additionalProperties: false });
+  const refreshSchema = (config: Awaited<ReturnType<typeof loadConfig>>) => {
+    GruntParameters.properties.thinking = StringEnum(gruntThinkingLevels(config), {
+      description: "Worker thinking effort selected by the main model",
+    });
+  };
   const recordRun = (run: WorkerRun, integrationStatus: string) => {
     stats.runs++;
     stats.turns += run.turns;
@@ -132,7 +144,9 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     })());
   });
   const refreshTool = async (agentDir?: string) => {
-    const enabled = isGruntEnabled(await loadConfig(agentDir ? configPath(agentDir) : undefined));
+    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
+    refreshSchema(config);
+    const enabled = isGruntEnabled(config);
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1, kind: "register", owner: "pi-grunt",
@@ -172,21 +186,16 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     description: "Run one synchronous delegated implementation worker. Isolated mode retries transient provider failures in fresh worktrees and applies completed work after stale-parent checks; direct mode edits without rollback or automatic retry. Main model reviews and verifies.",
     promptSnippet: "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
     promptGuidelines: [
-      "Delegate based on expected main-model effort avoided, not changed LOC alone. Keep diagnosis, architecture, cross-cutting changes, and ordinary semantic changes around 50–300 LOC in the main model. Use grunt mainly for mechanical multi-file work or designed slices, typically 300–500+ LOC. Use medium thinking unless high clearly saves work. Run dependent slices sequentially, inspecting and checking each result first.",
+      "Delegate based on expected main-model effort avoided, not changed LOC alone. Keep diagnosis, architecture, cross-cutting changes, and ordinary semantic changes around 50–300 LOC in the main model. Use grunt mainly for mechanical multi-file work or designed slices, typically 300–500+ LOC. Use the lowest configured thinking level that fits. Run dependent slices sequentially, inspecting and checking each result first.",
       "The main model owns integration and recovery. Fix small remaining defects directly; re-delegate only self-contained medium or large work that is cheaper to validate. Never call grunt only to verify or repair its previous result.",
       "Direct execution edits the current workspace without rollback, stale-parent checks, changed-path detection, or protection from partial failure.",
     ],
-    parameters: Type.Object({
-      task: Type.String({ minLength: 1, maxLength: 8000, description: "Self-contained implementation handoff including decisions and acceptance criteria" }),
-      thinking: StringEnum(thinkingLevels, { description: "Worker thinking effort selected by the main model" }),
-      suggestedPaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 40, uniqueItems: true, description: "Scope guidance, not an allowlist" })),
-      targetedContext: Type.Optional(Type.String({ minLength: 1, maxLength: 4000, description: "Directly applicable code snippets or project instructions; never broad transcript context" })),
-      checkCommands: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8, uniqueItems: true, description: "Focused existing checks useful for this task" })),
-    }, { additionalProperties: false }),
+    parameters: GruntParameters,
     executionMode: "sequential",
     async execute(id, params, signal, onUpdate, ctx) {
       const config = await loadConfig();
       if (!isGruntEnabled(config)) return { content: [{ type: "text" as const, text: "Grunt inactive. Configure it with /grunt or use /grunt reset." }], details: { status: "disabled" } };
+      if (!gruntThinkingLevels(config).includes(params.thinking)) return { content: [{ type: "text" as const, text: `Grunt thinking level is not enabled: ${params.thinking}.` }], details: { status: "invalid" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Grunt task must not be empty." }], details: { status: "invalid" } };
       const model = await resolveModel(ctx);

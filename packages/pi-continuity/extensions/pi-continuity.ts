@@ -45,7 +45,7 @@ import {
 } from "../src/memory.ts";
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
-import { buildContext, shortlistFacts, type MemoryNotice } from "../src/context.ts";
+import { buildContext, promptQuery, shortlistFacts, shortlistResolvedFacts } from "../src/context.ts";
 import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidence, classifyProjectFacts, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
@@ -153,6 +153,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     project: ProjectContext | undefined,
     savedTools: string[] | undefined,
     lastPrompt = "",
+    memoryEnabled = true,
     memoryInjectionEnabled = true,
     tasksVisible = true,
     currentCwd = "",
@@ -302,22 +303,24 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     return resolved;
   };
-  const visibleFacts = async (query: string, active?: Work) => {
+  const visibleFacts = async (latest: string, active?: Work) => {
     project = await resolveProject(currentCwd);
-    // Classify the complete bounded relevant pool before final three-slot selection.
-    const owned = factsForOwners(memoryFacts, project.owner), projectFacts = shortlistFacts(
-      owned.filter((fact) => fact.scope === "project"), query, active, 30,
+    const query = promptQuery(latest, active);
+    if (!query) return { query, facts: [] as Fact[] };
+    // Prefilter permissively, classify only relevant project facts, then apply the stricter unchecked gate.
+    const owned = factsForOwners(memoryFacts, project.owner), projectFacts = shortlistResolvedFacts(
+      owned.filter((fact) => fact.scope === "project"), query, Number.MAX_SAFE_INTEGER,
     );
     const classified = await classifyProjectFacts(currentCwd, projectFacts);
-    const notices: MemoryNotice[] = classified
-      .filter((item) => item.status === "suspect" || item.status === "unverifiable")
-      .slice(0, 2)
-      .map((item) => ({ key: item.fact.key, status: item.status as "suspect" | "unverifiable", reason: item.reason }));
+    const statuses = new Map(classified.map((item) => [factIdentity(item.fact), item.status]));
+    const applicable = [
+      ...owned.filter((fact) => fact.scope === "user"),
+      ...classified.filter((item) => item.status === "active" || item.status === "unchecked").map((item) => item.fact),
+    ];
     return {
-      facts: [...owned.filter((fact) => fact.scope === "user"), ...classified
-        .filter((item) => item.status === "active" || item.status === "unchecked")
-        .map((item) => item.fact)],
-      notices,
+      query,
+      facts: shortlistResolvedFacts(applicable, query, 2, (fact) =>
+        fact.scope === "project" && statuses.get(factIdentity(fact)) === "active" ? "active" : "unchecked"),
     };
   };
   const reassociateProjectMemory = async () => {
@@ -426,6 +429,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const disposeMemoryMutation = pi.events.on("pi-continuity:memory-mutation", (request: any) => {
     if (request?.version !== 1 || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
     const operation = (async () => {
+      if (!memoryEnabled) throw new Error("Continuity memory is disabled in package settings");
       if (request.action !== "update" && request.action !== "delete") throw new Error("invalid memory action");
       if (typeof request.key !== "string" || !request.key.trim() || request.key.length > 200
         || typeof request.expectedUpdatedAt !== "string") throw new Error("invalid memory target");
@@ -525,8 +529,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const hideTasks = (ctx: any) => {
     if (ctx.mode === "tui") ctx.ui.setWidget("pi-continuity", undefined);
   };
-  const compactMemory = async () =>
-    withStateLock(memoryDirectory(), async () => {
+  const compactMemory = async () => {
+    if (!memoryEnabled) return;
+    return withStateLock(memoryDirectory(), async () => {
       const latestFacts = (await readMemory()).facts,
         latestCandidates = (await readCandidateQueue()).candidates;
       memoryFacts = latestFacts;
@@ -558,6 +563,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
         candidates,
       });
     });
+  };
+  const enabledContinuityTools = () => memoryEnabled ? continuityTools : continuityTools.filter((tool) => tool !== "memory");
   const gate = (on: boolean) => {
     if (on) savedTools ??= pi.getActiveTools();
     let coordinated = false;
@@ -566,11 +573,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       kind: "register",
       owner: "pi-continuity",
       managedTools: continuityTools,
-      enabledTools: continuityTools,
+      enabledTools: enabledContinuityTools(),
       ...(on ? { allowOnly: planningTools() } : {}),
       ...(!on && savedTools ? { restoreTools: [...new Set([
-        ...savedTools,
-        ...continuityTools,
+        ...savedTools.filter((tool) => memoryEnabled || tool !== "memory"),
+        ...enabledContinuityTools(),
       ])] } : {}),
       acknowledge: () => { coordinated = true; },
     });
@@ -581,16 +588,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (on) {
       const allowed = new Set(planningTools());
       pi.setActiveTools([...new Set([
-        ...pi.getActiveTools().filter((tool) => allowed.has(tool)),
-        ...continuityTools,
+        ...pi.getActiveTools().filter((tool) => allowed.has(tool) && (memoryEnabled || tool !== "memory")),
+        ...enabledContinuityTools(),
       ])]);
     } else if (savedTools) {
       pi.setActiveTools([...new Set([
-        ...pi.getActiveTools(),
-        ...savedTools,
-        ...continuityTools,
+        ...pi.getActiveTools().filter((tool) => memoryEnabled || tool !== "memory"),
+        ...savedTools.filter((tool) => memoryEnabled || tool !== "memory"),
+        ...enabledContinuityTools(),
       ])]);
       savedTools = undefined;
+    } else if (!memoryEnabled) {
+      pi.setActiveTools(pi.getActiveTools().filter((tool) => tool !== "memory"));
     }
   };
   const completeWork = async (ctx: any) => {
@@ -671,7 +680,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       releaseSessionLease = undefined;
     }
     currentCwd = ctx.cwd;
-    memoryInjectionEnabled = true;
+    memoryEnabled = (await loadConfig()).memoryEnabled !== false;
+    memoryInjectionEnabled = memoryEnabled;
     recentCalls.clear();
     pendingMutations.clear();
     deniedToolCalls.clear();
@@ -743,10 +753,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (changed) await saveWork();
     }
     project = await resolveProject(ctx.cwd);
-    memoryFacts = (await readMemory()).facts;
+    memoryFacts = memoryEnabled ? (await readMemory()).facts : [];
     facts = memoryFacts;
-    candidates = (await readCandidateQueue()).candidates;
-    await reassociateProjectMemory();
+    candidates = memoryEnabled ? (await readCandidateQueue()).candidates : [];
+    if (memoryEnabled) await reassociateProjectMemory();
     gate(work?.mode === "planning");
     tasksVisible = true;
     refresh(ctx);
@@ -860,12 +870,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return compaction ? { compaction } : { cancel: true };
   });
   pi.on("before_agent_start", async () => {
-    if (!memoryInjectionEnabled) return;
-    const active = activeWork();
-    const query = `${lastPrompt} ${active?.goal || ""} ${active?.todos.find((todo) => todo.id === active.currentTodoId)?.text || ""}`;
-    const visible = await visibleFacts(query, active);
+    if (!memoryEnabled || !memoryInjectionEnabled) return;
+    const visible = await visibleFacts(lastPrompt, activeWork());
     facts = visible.facts;
-    const text = buildContext(undefined, facts, query, 250, [], visible.notices);
+    const text = buildContext(undefined, facts, visible.query, 100, [], { resolvedQuery: true });
     if (text)
       return {
         message: {
@@ -971,12 +979,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "memory",
     label: "Memory",
-    description: "List durable memory or queue an add, replace, or remove candidate.",
-    promptSnippet: "Inspect or propose durable memory candidates.",
+    description: "List or query durable memory, or queue an add, replace, or remove candidate.",
+    promptSnippet: "Inspect, query, or propose durable memory candidates.",
     executionMode: "sequential",
     promptGuidelines: [
       "Before Verify—or before the final response when Verify is unnecessary—review completed work for up to three stable facts that would change a future decision. Strong candidates are explicit user rules and non-obvious verified workflows, boundaries, or warnings. Use memory list to avoid duplicates, then add or replace valid candidates; continue without a memory call when none qualify. Never save task progress, guesses, temporary state, generic facts, duplicates, or secrets.",
-      "Use one fact per stable named key. List memory when the current key is uncertain; replace or remove facts only with direct user or repository evidence. Include the source and repository evidencePaths when applicable. Use user scope for cross-project preferences and project scope otherwise.",
+      "Use one fact per stable named key. List memory with a focused query when the current key is uncertain; replace or remove facts only with direct user or repository evidence. Include the source and repository evidencePaths when applicable. Use user scope for cross-project preferences and project scope otherwise.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),
@@ -1000,6 +1008,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     },
     parameters: Type.Object({
       action: MemAction,
+      query: Type.Optional(Type.String({ maxLength: 500 })),
       key: Type.Optional(Type.String({ maxLength: 200 })),
       kind: Type.Optional(Kind),
       text: Type.Optional(Type.String({ maxLength: 1000 })),
@@ -1009,6 +1018,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       evidencePaths: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 5 })),
     }, { additionalProperties: false }),
     async execute(_i, p, _s, _u, ctx): Promise<any> {
+      if (!memoryEnabled) return {
+        content: [{ type: "text", text: "Continuity memory is disabled in package settings." }],
+        details: { memoryError: true },
+      };
       if (p.action === "list") {
         project = await resolveProject(ctx.cwd);
         // Read without a lock: this action never mutates state and storage writes are atomic.
@@ -1020,17 +1033,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
           owned.filter((fact) => fact.scope === "project"),
         );
         const applicability = new Map(classified.map((item) => [factIdentity(item.fact), item]));
+        const stateFor = (fact: Fact) => fact.scope === "user"
+          ? { status: "unchecked" as const, reason: "user memory" }
+          : applicability.get(factIdentity(fact))!;
+        const shownFacts = p.query?.trim() ? shortlistFacts(owned, p.query, undefined, 30) : owned;
         const pending = candidatesForOwners(candidates, project.owner), shownPending = pending.slice(0, 30);
         const concise = (text: string) => text.length > 200 ? `${text.slice(0, 197)}...` : text;
-        const text = !owned.length && !pending.length
-          ? "No current-owner memory facts or pending candidates."
+        const text = !shownFacts.length && !pending.length
+          ? p.query?.trim() ? "No matching current-owner memory facts or pending candidates." : "No current-owner memory facts or pending candidates."
           : [
-            ...(owned.length ? [
-              "Stored facts:",
-              ...owned.map((fact) => {
-                const state = fact.scope === "user"
-                  ? { status: "unchecked", reason: "user memory" }
-                  : applicability.get(factIdentity(fact))!;
+            ...(shownFacts.length ? [
+              p.query?.trim() ? "Matching stored facts:" : "Stored facts:",
+              ...shownFacts.map((fact) => {
+                const state = stateFor(fact);
                 return `- ${fact.scope}/${fact.key} [${state.status}: ${concise(state.reason)}]: ${concise(fact.text)}`;
               }),
             ] : []),
@@ -1742,6 +1757,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerCommand("memory", {
     description: "Inspect, compact, or forget project memory",
     handler: async (args, ctx) => {
+      if (!memoryEnabled) return void ctx.ui.notify("Continuity memory is disabled in package settings.", "info");
       const sub = args.trim();
       if (sub === "off") {
         memoryInjectionEnabled = false;

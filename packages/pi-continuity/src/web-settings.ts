@@ -13,17 +13,19 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
     kind: "continuity",
+    memoryEnabled: config.memoryEnabled !== false,
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
   };
 }
 
 export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
-  if (value?.kind !== "continuity") throw new Error("invalid Continuity settings");
+  if (value?.kind !== "continuity" || typeof value.memoryEnabled !== "boolean") throw new Error("invalid Continuity settings");
   const planner = profile(value.planner);
   const executor = profile(value.executor);
   await saveConfig({
     version: 1,
+    memoryEnabled: value.memoryEnabled,
     ...(planner ? { planner } : {}),
     ...(executor ? { executor } : {}),
   }, configPath(agentDir));

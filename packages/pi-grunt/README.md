@@ -24,7 +24,7 @@ This installs the complete Pylon bundle, including pi-grunt. Run `/reload` after
 
 ### Modes
 
-Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model and restores isolated mode. `/grunt direct` opts into direct execution; `/grunt isolated` switches back. `/grunt dynamic` chooses isolated mode when the current directory belongs to a Git worktree with a `HEAD` commit, otherwise direct mode. The selected mode persists in Grunt's global config and is shown by `/grunt status`. The main model must select either `medium` or `high` thinking on every `grunt` call. Unsupported levels are clamped by Pi to model capabilities.
+Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model and restores isolated mode. `/grunt direct` opts into direct execution; `/grunt isolated` switches back. `/grunt dynamic` chooses isolated mode when the current directory belongs to a Git worktree with a `HEAD` commit, otherwise direct mode. The selected mode persists in Grunt's global config and is shown by `/grunt status`. Pylon package settings choose the thinking levels the main model may request on each `grunt` call; the backward-compatible default is `medium` and `high`. Provider model capabilities still apply.
 
 ### Limits
 
@@ -63,7 +63,7 @@ Use Grunt mainly for:
 
 Every handoff should name exact files and symbols, chosen design, constraints, non-goals, acceptance criteria, and focused checks. Provide `suggestedPaths` whenever reliable anchors are known. Use `targetedContext` only for directly applicable snippets or project instructions such as relevant `AGENTS.md` rules. Never copy broad conversation history. Omit uncertain paths or context rather than adding noise. Suggested paths guide scope but are not an allowlist.
 
-The main model selects `medium` for mechanical or bounded semantic work and `high` only when delegation still clearly saves work.
+The main model uses the lowest configured thinking level that fits the delegated work.
 
 Grunt calls are unlimited per original user prompt. Dependent slices remain sequential: invoke Grunt for one slice, inspect its applied changes, run focused verification, then invoke Grunt for the next slice. Do not issue dependent calls in one assistant response because later handoffs cannot incorporate earlier results.
 

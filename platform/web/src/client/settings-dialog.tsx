@@ -11,6 +11,7 @@ import { UiDialog } from "./ui-dialog";
 export type SettingsTab = "providers" | "packages" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
 const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "hooks", "policy", "notifications", "appearance"];
+const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
@@ -417,10 +418,12 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <label>Execution mode<select value={settings.executionMode} disabled={disabled} onChange={(event) => onUpdate({ ...settings, executionMode: event.target.value as typeof settings.executionMode })}>
         <option value="isolated">Isolated</option><option value="direct">Direct</option><option value="dynamic">Dynamic</option>
       </select></label>
+      <ThinkingChoices label="Eligible thinking levels" value={settings.thinkingLevels} disabled={disabled} onChange={(thinkingLevels) => onUpdate({ ...settings, thinkingLevels })} />
     </div>;
   }
   if (settings.kind === "continuity") {
     return <div className="package-fields continuity-fields">
+      <label className="checkbox-field"><input type="checkbox" checked={settings.memoryEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, memoryEnabled: event.target.checked })} />Durable memory</label>
       <ProfileFields label="Planner" profile={settings.planner} models={models} disabled={disabled} onChange={(planner) => onUpdate({ ...settings, planner })} />
       <ProfileFields label="Executor" profile={settings.executor} models={models} disabled={disabled} onChange={(executor) => onUpdate({ ...settings, executor })} />
     </div>;
@@ -453,6 +456,18 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       </>}
     </div>;
   }
+  if (settings.kind === "spawn") {
+    return <div className="package-fields">
+      <label>Private agents<select value={settings.agentAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, agentAvailability: event.target.value as typeof settings.agentAvailability })}>
+        <option value="deferred">Deferred</option><option value="active">Active</option>
+      </select></label>
+      <label>Spawned sessions<select value={settings.sessionAvailability} disabled={disabled} onChange={(event) => onUpdate({ ...settings, sessionAvailability: event.target.value as typeof settings.sessionAvailability })}>
+        <option value="deferred">Deferred</option><option value="active">Active</option>
+      </select></label>
+      <ModelChoices value={settings.models} models={models} disabled={disabled} onChange={(eligible) => onUpdate({ ...settings, models: eligible })} />
+      <ThinkingChoices label="Private-agent thinking" value={settings.agentThinkingLevels} disabled={disabled} onChange={(agentThinkingLevels) => onUpdate({ ...settings, agentThinkingLevels })} />
+    </div>;
+  }
   if (settings.kind === "timeline") return null;
   if (settings.kind !== "helios") return null;
   return <div className="package-fields">
@@ -460,6 +475,31 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <option value="shown">Shown</option><option value="headless">Headless</option>
     </select></label>
   </div>;
+}
+
+function ThinkingChoices({ label, value, disabled, onChange }: {
+  label: string;
+  value: ThinkingLevelReadModel[];
+  disabled: boolean;
+  onChange: (value: ThinkingLevelReadModel[]) => void;
+}) {
+  return <fieldset><legend>{label}</legend>{PACKAGE_THINKING_LEVELS.map((level) => <label className="checkbox-field" key={level}>
+    <input type="checkbox" checked={value.includes(level)} disabled={disabled || value.length === 1 && value[0] === level} onChange={(event) => onChange(event.target.checked ? [...value, level] : value.filter((item) => item !== level))} />{thinkingLabel(level)}
+  </label>)}</fieldset>;
+}
+
+function ModelChoices({ value, models, disabled, onChange }: {
+  value?: string[];
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value?: string[]) => void;
+}) {
+  const available = models.map((model) => ({ ref: `${model.provider}/${model.id}`, name: model.name }));
+  const choices = [...available, ...(value ?? []).filter((ref) => !available.some((model) => model.ref === ref)).map((ref) => ({ ref, name: ref }))];
+  return <fieldset><legend>Eligible models</legend>
+    <label className="checkbox-field"><input type="checkbox" checked={value === undefined} disabled={disabled || !available.length} onChange={(event) => onChange(event.target.checked ? undefined : available.map((model) => model.ref))} />All available models</label>
+    {choices.map((model) => <label className="checkbox-field" key={model.ref}><input type="checkbox" checked={value?.includes(model.ref) ?? false} disabled={disabled || value === undefined || value.length === 1 && value[0] === model.ref} onChange={(event) => onChange(event.target.checked ? [...(value ?? []), model.ref] : value?.filter((item) => item !== model.ref))} />{model.name}</label>)}
+  </fieldset>;
 }
 
 function ModelModeField({ value, models, disabled, onChange }: { value: string; models: ModelOptionReadModel[]; disabled: boolean; onChange: (value: string) => void }) {
