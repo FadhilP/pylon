@@ -8,6 +8,18 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.5.0",
+    date: "Aug 4, 2026",
+    title: "Smarter continuity and faster sessions",
+    summary: "Pylon adds boundary-aware context compaction and historical recall, stronger durable memory controls, configurable delegated reasoning, and broad runtime performance improvements.",
+    notes: [
+      "Added deterministic Continuity compaction, bounded session recall across execution handoffs and validated lineage, owner reassociation, and clearer durable-memory inspection and management.",
+      "Added package settings for globally enabling durable memory, selecting eligible Grunt thinking levels, and restricting Spawn child models and private-agent thinking.",
+      "Improved responsiveness with concurrent Scout requests, faster Sieve projection and duplicate handling, cheaper worktree snapshots, incremental session indexing, and cached file suggestions and update checks.",
+      "Made file citations such as path:line:column clickable in conversations and restored missing final assistant messages after terminal runs.",
+    ],
+  },
+  {
     version: "1.4.0",
     date: "Aug 3, 2026",
     title: "Persistent agents and configurable tools",
