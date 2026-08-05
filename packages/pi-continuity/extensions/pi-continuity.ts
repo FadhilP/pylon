@@ -87,6 +87,40 @@ const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
+const setIssue = (
+  active: Work,
+  kind: NonNullable<Work["issue"]>["kind"],
+  failure: string,
+  nextAction: string,
+  id?: string,
+) => {
+  active.latestFailure = failure;
+  active.nextAction = nextAction;
+  active.issue = { kind, ...(id ? { id } : {}) };
+};
+const clearIssue = (active: Work) => {
+  delete active.latestFailure;
+  delete active.nextAction;
+  delete active.issue;
+};
+const applyManualIssueUpdate = (
+  active: Work,
+  failure: string | undefined,
+  nextAction: string | undefined,
+) => {
+  if (failure !== undefined) {
+    if (failure) active.latestFailure = failure;
+    else delete active.latestFailure;
+  }
+  if (nextAction !== undefined) {
+    if (nextAction) active.nextAction = nextAction;
+    else delete active.nextAction;
+  }
+  if (failure !== undefined || nextAction !== undefined) {
+    if (active.latestFailure || active.nextAction) active.issue = { kind: "manual" };
+    else delete active.issue;
+  }
+};
 
 const formatPlan = (work: Work) => [
   "Plan",
@@ -586,6 +620,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
     if (event?.version !== 1 || event.cwd !== currentCwd || event.sessionId !== leasedSessionId) return;
     latestVerification = event;
+    let changed = false;
+    if (["passed", "clean", "no_checks"].includes(event.state) && work?.issue?.kind === "verification") {
+      clearIssue(work);
+      changed = true;
+    }
     if (event.state === "passed") {
       needsVerification = false;
       const remaining = work?.mode === "executing"
@@ -593,13 +632,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
         : [];
       if (work && remaining.length === 1 && isVerificationOnlyTodo(remaining[0].text)) {
         updateTodo(work, remaining[0].id, "done");
-        work.updatedAt = new Date().toISOString();
-        void saveWork();
+        changed = true;
       }
     }
     if (work && event.state === "failed") {
-      work.latestFailure = `Verification failed (${event.results?.find((item: any) => item.code !== 0)?.command ?? "unknown check"}).`;
-      work.nextAction = "Inspect bounded verification failure; use Scout then Advisor if root cause or approach remains unclear.";
+      setIssue(
+        work,
+        "verification",
+        `Verification failed (${event.results?.find((item: any) => item.code !== 0)?.command ?? "unknown check"}).`,
+        "Inspect bounded verification failure; use Scout then Advisor if root cause or approach remains unclear.",
+      );
+      changed = true;
+    }
+    if (work && changed) {
       work.updatedAt = new Date().toISOString();
       void saveWork();
     }
@@ -611,11 +656,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const todo = work.todos.find((item) => item.id === event.todoId);
     if (!todo) return;
     if (event.state === "running") updateTodo(work, todo.id, "in_progress");
-    else if (event.state === "completed") updateTodo(work, todo.id, "done");
-    else if (["failed", "cancelled", "timed_out"].includes(event.state)) {
+    else if (event.state === "completed") {
+      updateTodo(work, todo.id, "done");
+      if (work.issue?.kind === "background" && work.issue.id === event.id) clearIssue(work);
+    } else if (["failed", "cancelled", "timed_out"].includes(event.state)) {
       updateTodo(work, todo.id, "blocked");
-      work.latestFailure = `Background job ${event.id} ${event.state}.`;
-      work.nextAction = "Inspect heartbeat status and retry or revise task.";
+      setIssue(
+        work,
+        "background",
+        `Background job ${event.id} ${event.state}.`,
+        "Inspect heartbeat status and retry or revise task.",
+        event.id,
+      );
     }
     work.updatedAt = new Date().toISOString();
     void saveWork();
@@ -683,6 +735,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         await pi.setModel(model);
       if (thinkingLevels.includes(handoff.data.thinking))
         pi.setThinkingLevel(handoff.data.thinking);
+      await saveWork();
+    }
+    if (work && !work.issue && (work.latestFailure || work.nextAction)) {
+      work.issue = { kind: "manual" };
       await saveWork();
     }
     if (work?.mode === "executing" && !work.currentTodoId) {
@@ -844,10 +900,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (!active.runId) active.runId = randomUUID();
     if (!active.timelineId) active.timelineId = active.runId;
     if (missingIdentity) await saveWork();
+    const identity = latestVerification ? await worktreeFingerprint(currentCwd) : undefined;
+    const verification = identity && latestVerification?.worktreeId === identity
+      ? latestVerification
+      : undefined;
     const compaction = buildContinuityCompaction({
       branchEntries: event.branchEntries,
       preparation: event.preparation,
       work: active,
+      verification,
     });
     return compaction ? { compaction } : { cancel: true };
   });
@@ -1314,12 +1375,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
           updateTodo(work, todo.id, p.status, now);
           if (next) updateTodo(work, next.id, "in_progress", now);
         }
-        if (p.latestFailure !== undefined) work.latestFailure = p.latestFailure;
-        if (p.nextAction !== undefined) work.nextAction = p.nextAction;
+        applyManualIssueUpdate(work, p.latestFailure, p.nextAction);
       } else if (p.action === "state") {
         work.currentTodoId = p.currentTodoId ?? work.currentTodoId;
-        if (p.latestFailure !== undefined) work.latestFailure = p.latestFailure;
-        if (p.nextAction !== undefined) work.nextAction = p.nextAction;
+        applyManualIssueUpdate(work, p.latestFailure, p.nextAction);
         if (p.completion) {
           if (work.mode === "completed")
             return {

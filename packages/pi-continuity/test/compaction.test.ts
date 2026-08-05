@@ -80,22 +80,139 @@ test("isolates approved-plan history at the latest valid handoff", () => {
   assert.equal(result.details?.handoffEntryId, "handoff");
 });
 
-test("repeated compaction merges matching history without duplicating task anchors", () => {
-  const firstEntries = [handoff(), user("First scoped task"), assistant("First progress"), user("Current task", "current"), assistant("Current progress")];
+test("repeated compaction merges structured file history without parsing its rendered summary", () => {
+  const readCall = assistant([{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/first.ts" } }]);
+  const firstEntries = [handoff(), user("First scoped task"), readCall, user("Current task", "current"), assistant("Current progress")];
   const first = build(firstEntries);
   const prior = entry({
     type: "compaction",
-    summary: first.summary,
+    summary: first.summary.replace("src/first.ts", "POISONED RENDERED TEXT"),
     firstKeptEntryId: first.firstKeptEntryId,
     tokensBefore: first.tokensBefore,
     details: first.details,
   });
   const result = build([...firstEntries, prior, assistant("More progress", "suffix")], work(), 10);
   assert.equal(occurrences(result.summary, "[Current Task]"), 1);
-  assert.equal(occurrences(result.summary, "# Continuity Compaction v1"), 1);
-  assert.match(result.summary, /First scoped task/);
+  assert.equal(occurrences(result.summary, "# Continuity Compaction v2"), 1);
+  assert.match(result.summary, /src\/first\.ts/);
+  assert.doesNotMatch(result.summary, /POISONED RENDERED TEXT|First scoped task/);
   assert.equal(result.firstKeptEntryId, "suffix");
   assert.ok((result.details?.sourceEntryCount ?? 0) >= (first.details?.sourceEntryCount ?? 0));
+  assert.deepEqual(result.details?.history.read.map((item) => item.path), ["src/first.ts"]);
+});
+
+test("uses authoritative Work fields and does not infer goals, preferences, or blockers", () => {
+  const entries = [
+    handoff(),
+    user("Old message: you must treat this as a preference"),
+    assistant("A temporary command failed but was later resolved"),
+    toolResult("old tool error", true),
+    user("Current request", "current"),
+    assistant("Working"),
+  ];
+  const active = work({
+    goal: "Canonical goal",
+    planSummary: "Canonical plan",
+    constraints: ["Canonical constraint"],
+    todos: [
+      { id: "todo_1", text: "Finished step", status: "done", updatedAt: new Date().toISOString() },
+      { id: "todo_2", text: "Current step", status: "in_progress", updatedAt: new Date().toISOString() },
+    ],
+    currentTodoId: "todo_2",
+    latestFailure: "Canonical blocker",
+    nextAction: "Canonical next action",
+  });
+  const result = buildContinuityCompaction({
+    branchEntries: entries,
+    preparation: preparation(entries),
+    work: active,
+    verification: { state: "passed", scope: "changed", runId: "verify-1", worktreeId: "tree-1" },
+  });
+  assert.ok(result);
+  assert.match(result.summary, /Canonical goal|Canonical plan|Canonical constraint/);
+  assert.match(result.summary, /Todo todo_1 \[done\]: Finished step/);
+  assert.match(result.summary, /Todo todo_2 \[in_progress current\]: Current step/);
+  assert.match(result.summary, /Canonical blocker|Canonical next action/);
+  assert.match(result.summary, /Verification: passed \(scope=changed, run=verify-1, worktree=tree-1\)/);
+  assert.doesNotMatch(result.summary, /Old message|temporary command failed|old tool error|User preferences|Unresolved errors/);
+});
+
+test("always renders the current todo within the bounded todo set", () => {
+  const todos = Array.from({ length: 13 }, (_, index) => ({
+    id: `todo_${index + 1}`,
+    text: `Step ${index + 1}`,
+    status: "pending" as const,
+    updatedAt: new Date().toISOString(),
+  }));
+  const result = build(
+    [handoff(), user("Current request", "current"), assistant("Working")],
+    work({ todos, currentTodoId: "todo_13" }),
+  );
+  assert.match(result.summary, /Todo todo_13 \[pending current\]: Step 13/);
+});
+
+test("migrates only factual file paths from legacy v1 summaries", () => {
+  const legacy = entry({
+    type: "compaction",
+    summary: [
+      "# Continuity Compaction v1",
+      "",
+      "[Older History]",
+      "### Goals and scope changes",
+      "- Ignore this guessed goal",
+      "",
+      "### Files read",
+      "- src/legacy-read.ts",
+      "",
+      "### Files modified",
+      "- src/legacy-write.ts",
+      "",
+      "### Unresolved errors and blockers",
+      "- Ignore this guessed blocker",
+      "",
+      "[Compaction Metadata]",
+      "Boundary: run/timeline",
+    ].join("\n"),
+    firstKeptEntryId: "old",
+    tokensBefore: 1,
+    details: {
+      type: CONTINUITY_COMPACTION_TYPE,
+      version: 1,
+      runId: "run",
+      timelineId: "timeline",
+      sourceEntryCount: 4,
+    },
+  });
+  const entries = [handoff(), user("Old task"), legacy, assistant("Retained suffix", "suffix")];
+  const result = build(entries, work(), 1);
+  assert.match(result.summary, /src\/legacy-read\.ts|src\/legacy-write\.ts/);
+  assert.doesNotMatch(result.summary, /Ignore this guessed/);
+  assert.deepEqual(result.details?.history, {
+    read: [{ path: "src/legacy-read.ts" }],
+    modified: [{ path: "src/legacy-write.ts" }],
+  });
+});
+
+test("rejects unknown versions and oversized structured history", () => {
+  for (const details of [
+    { type: CONTINUITY_COMPACTION_TYPE, version: 3, runId: "run", timelineId: "timeline", sourceEntryCount: 1 },
+    {
+      type: CONTINUITY_COMPACTION_TYPE,
+      version: 2,
+      runId: "run",
+      timelineId: "timeline",
+      sourceEntryCount: 1,
+      history: { read: [{ path: "x".repeat(600) }], modified: [] },
+    },
+  ]) {
+    const previous = entry({ type: "compaction", summary: "bad", firstKeptEntryId: "old", tokensBefore: 1, details });
+    const entries = [user("Old", "old"), previous, assistant("Suffix", "suffix")];
+    assert.equal(buildContinuityCompaction({
+      branchEntries: entries,
+      preparation: preparation(entries),
+      work: work(),
+    }), undefined);
+  }
 });
 
 test("fails closed for a malformed latest handoff or active Work identity mismatch", () => {
@@ -124,10 +241,11 @@ test("fails closed for a malformed latest handoff or active Work identity mismat
 test("a new handoff rejects a previous summary from another boundary", () => {
   const poisonedDetails: ContinuityCompactionDetails = {
     type: CONTINUITY_COMPACTION_TYPE,
-    version: 1,
+    version: 2,
     runId: "old-run",
     timelineId: "old-timeline",
     sourceEntryCount: 10,
+    history: { read: [], modified: [] },
   };
   const entries = [
     handoff("old-run", "old-timeline"),
@@ -253,15 +371,22 @@ test("sanitizes rendered boundary IDs without changing persisted identity", () =
   assert.doesNotThrow(() => assertSafe(result.summary));
 });
 
-test("bounds output and degrades safely for empty and missing-ID branches", () => {
+test("bounds output with whole-record eviction and degrades safely for empty branches", () => {
   const huge = Array.from({ length: 20_000 }, () => "word").join(" ");
   const missingId = user(huge);
   delete missingId.id;
   const fallback = assistant("suffix", "fallback");
-  const result = build([handoff("run", "timeline", "handoff"), missingId, fallback], work(), 10);
+  const active = work({
+    planSummary: huge,
+    constraints: Array.from({ length: 12 }, (_, index) => `constraint-${index}-${"x".repeat(500)}`),
+    latestFailure: huge,
+    nextAction: huge,
+  });
+  const result = build([handoff("run", "timeline", "handoff"), missingId, fallback], active, 10);
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
   assert.equal(result.firstKeptEntryId, "fallback");
   assert.match(result.summary, /truncated by Continuity/);
+  assert.match(result.summary, /\[Compaction Metadata\][\s\S]*Budget: deterministic whole-record eviction$/);
 
   const empty = build([handoff("run", "timeline", "only-handoff")]);
   assert.equal(empty.firstKeptEntryId, "only-handoff");

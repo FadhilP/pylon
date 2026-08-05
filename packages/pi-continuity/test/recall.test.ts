@@ -141,11 +141,12 @@ test("matching compaction identity permits explicit lineage but not an unproven 
     tokensBefore: 1,
     details: {
       type: CONTINUITY_COMPACTION_TYPE,
-      version: 1,
+      version: 2,
       runId: "run",
       timelineId: "timeline",
       handoffEntryId: "missing-handoff",
       sourceEntryCount: 1,
+      history: { read: [], modified: [] },
     },
   });
   const visible = [user("visible", null, "Visible fallback evidence")];

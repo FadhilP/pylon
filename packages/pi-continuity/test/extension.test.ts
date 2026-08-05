@@ -415,6 +415,71 @@ test("automatic completion waits for required verification", async () => {
   }
 });
 
+test("verification clears only its own blocker state", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-issue-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const ctx: any = {
+    cwd, hasUI: false, mode: "json",
+    sessionManager: { getSessionId: () => "verify-issue-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    const context = async () => (await app.handlers.get("context")?.[0]({ messages: [] }, ctx))
+      .messages.at(-1).content;
+
+    app.emit("pi-verify:result", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "failed", runId: "failed", results: [{ command: "npm test", code: 1 }],
+    });
+    assert.match(await context(), /Verification failed/);
+
+    await tool.execute("manual", {
+      action: "state", latestFailure: "Manual blocker", nextAction: "Wait for user",
+    }, undefined, undefined, ctx);
+    app.emit("pi-verify:result", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "passed", runId: "passed", results: [],
+    });
+    assert.match(await context(), /Blocked: Manual blocker/);
+    assert.match(await context(), /Next: Wait for user/);
+
+    await tool.execute("clear", {
+      action: "state", latestFailure: "", nextAction: "",
+    }, undefined, undefined, ctx);
+    app.emit("pi-verify:result", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "failed", runId: "failed-again", results: [],
+    });
+    assert.match(await context(), /Verification failed/);
+    app.emit("pi-verify:result", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "clean", runId: "clean", results: [],
+    });
+    assert.doesNotMatch(await context(), /Verification failed/);
+
+    app.emit("pi-heartbeat:job", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "failed", id: "job-1", todoId: "todo_1",
+    });
+    assert.match(await context(), /Background job job-1 failed/);
+    app.emit("pi-heartbeat:job", {
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd,
+      state: "completed", id: "job-1", todoId: "todo_1",
+    });
+    assert.doesNotMatch(await context(), /Background job job-1 failed/);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
 test("clean Verify requires a tool-only acknowledgement before automatic completion", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-acknowledgement-"));

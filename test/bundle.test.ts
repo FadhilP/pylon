@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
 import pylon from "../packages/pylon-core/extensions/pylon-core.ts";
 import continuity from "../packages/pi-continuity/extensions/pi-continuity.ts";
+import papercut from "../packages/pi-papercut/extensions/pi-papercut.ts";
 import focus from "../packages/pi-focus/extensions/pi-focus.ts";
 import guard from "../packages/pi-guard/extensions/pi-guard.ts";
 import grunt from "../packages/pi-grunt/extensions/pi-grunt.ts";
@@ -56,6 +57,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     "./packages/pi-advisor/extensions/pi-advisor.ts",
     "./packages/pylon-core/extensions/pylon-core.ts",
     "./packages/pi-continuity/extensions/pi-continuity.ts",
+    "./packages/pi-papercut/extensions/pi-papercut.ts",
     "./packages/pi-focus/extensions/pi-focus.ts",
     "./packages/pi-guard/extensions/pi-guard.ts",
     "./packages/pi-grunt/extensions/pi-grunt.ts",
@@ -103,15 +105,15 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    for (const extension of [advisor, pylon, continuity, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]) {
+    for (const extension of [advisor, pylon, continuity, papercut, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]) {
       await extension(pi);
     }
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "compact", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
+      "advisor", "compact", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "papercut", "papercuts", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_android", "helios_browser", "helios_capture", "index_status", "memory", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
+      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_android", "helios_browser", "helios_capture", "index_status", "memory", "papercut", "papercuts", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
     ]);
 
     let notification = "";
@@ -129,6 +131,10 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       message?.kind === "register" && message.owner === "pi-continuity");
     assert.deepEqual(continuityPolicy?.managedTools, ["continuity_recall", "continuity_update", "memory"]);
     assert.deepEqual(continuityPolicy?.enabledTools, ["continuity_recall", "continuity_update", "memory"]);
+    const papercutPolicy = [...toolPolicies].reverse().find((message) =>
+      message?.kind === "register" && message.owner === "pi-papercut");
+    assert.deepEqual(papercutPolicy?.managedTools, ["papercut", "papercuts"]);
+    assert.deepEqual(papercutPolicy?.enabledTools, ["papercut", "papercuts"]);
     disposeToolPolicyCapture();
     assert.ok(active.includes("search_tools"));
     assert.ok(active.includes("continuity_recall"));

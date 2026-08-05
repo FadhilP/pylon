@@ -2,6 +2,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Work } from "./active-work.ts";
 import {
   CONTINUITY_COMPACTION_TYPE,
+  isContinuityCompactionDetails,
   resolveContinuityBoundary,
   type ContinuityBoundaryResolution,
 } from "./compaction.ts";
@@ -139,7 +140,7 @@ function safeVisibleEntries(entries: SessionEntry[], work: Work) {
     const entry = entries[index];
     const details = entry.type === "compaction" ? entry.details as any : undefined;
     if (
-      details?.type === CONTINUITY_COMPACTION_TYPE && details.version === 1 &&
+      details?.type === CONTINUITY_COMPACTION_TYPE && isContinuityCompactionDetails(details) &&
       details.runId === work.runId && details.timelineId === work.timelineId
     ) return entries.slice(index);
   }

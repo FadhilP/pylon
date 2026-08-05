@@ -5,6 +5,10 @@ export type Todo = {
   status: TodoStatus;
   updatedAt: string;
 };
+export type WorkIssue = {
+  kind: "verification" | "background" | "manual";
+  id?: string;
+};
 export type Work = {
   schemaVersion: 1;
   mode: "planning" | "executing" | "handed_off" | "completed" | "cancelled";
@@ -16,6 +20,7 @@ export type Work = {
   currentTodoId?: string;
   latestFailure?: string;
   nextAction?: string;
+  issue?: WorkIssue;
   runId?: string;
   timelineId?: string;
   planRevision?: number;
@@ -59,6 +64,9 @@ export function isWork(value: any): value is Work {
       (value.latestFailure === undefined ||
         typeof value.latestFailure === "string") &&
       (value.nextAction === undefined || typeof value.nextAction === "string") &&
+      (value.issue === undefined ||
+        (["verification", "background", "manual"].includes(value.issue?.kind) &&
+          (value.issue.id === undefined || typeof value.issue.id === "string"))) &&
       (value.runId === undefined ||
         (typeof value.runId === "string" && value.runId.length > 0)) &&
       (value.timelineId === undefined ||
