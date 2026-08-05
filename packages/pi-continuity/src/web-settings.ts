@@ -1,4 +1,4 @@
-import { configPath, loadConfig, saveConfig, thinkingLevels, type ModelProfile } from "./config.ts";
+import { configPath, loadConfig, updateConfig, thinkingLevels, type ModelProfile } from "./config.ts";
 
 function profile(value: any): ModelProfile | undefined {
   if (value === undefined) return undefined;
@@ -16,6 +16,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     memoryEnabled: config.memoryEnabled !== false,
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
+    ...(config.memoryReviewer ? { memoryReviewer: config.memoryReviewer } : {}),
   };
 }
 
@@ -23,10 +24,9 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
   if (value?.kind !== "continuity" || typeof value.memoryEnabled !== "boolean") throw new Error("invalid Continuity settings");
   const planner = profile(value.planner);
   const executor = profile(value.executor);
-  await saveConfig({
-    version: 1,
-    memoryEnabled: value.memoryEnabled,
-    ...(planner ? { planner } : {}),
-    ...(executor ? { executor } : {}),
-  }, configPath(agentDir));
+  const memoryReviewer = profile(value.memoryReviewer);
+  await updateConfig(() => ({
+    version: 2, memoryEnabled: value.memoryEnabled,
+    ...(planner ? { planner } : {}), ...(executor ? { executor } : {}), ...(memoryReviewer ? { memoryReviewer } : {}),
+  }), configPath(agentDir));
 }

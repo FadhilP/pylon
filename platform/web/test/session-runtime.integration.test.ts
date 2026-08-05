@@ -99,6 +99,38 @@ test("terminal agent errors come only from the latest assistant response", () =>
   ])?.length, 1_000);
 });
 
+test("memory runtime bridge forwards scoped CAS mutations and maps stale errors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-memory-bridge-")), cwd = join(root, "workspace"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]); const mutations: any[] = [];
+  const memoryBridge: InlineExtension = { name: "memory-bridge-probe", factory(pi) {
+    pi.events.on("pi-continuity:memory-mutation", (request: any) => {
+      mutations.push({ ...request, respond: undefined });
+      request.respond(request.action === "delete" && request.expectedRevision === 9 ? Promise.reject(new Error("memory note revision changed")) : Promise.resolve());
+    });
+  } };
+  const driver = new SessionRuntime({ extensionFactories: [memoryBridge] });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const userId = "00000000-0000-4000-8000-000000000001", projectId = "00000000-0000-4000-8000-000000000002";
+    await driver.updateContinuityMemory({ expectedGeneration: handle.sessionGeneration, scope: "user", id: userId, trigger: "replying", guidance: "Keep replies concise.", expectedRevision: 2 });
+    await driver.deleteContinuityMemory({ expectedGeneration: handle.sessionGeneration, scope: "project", id: projectId, expectedRevision: 3 });
+    await driver.migrateContinuityMemory({ expectedGeneration: handle.sessionGeneration });
+    assert.deepEqual(mutations.slice(0, 2).map(({ sessionId, expectedGeneration, action, scope, id, expectedRevision, trigger, guidance }) => ({ sessionId, expectedGeneration, action, scope, id, expectedRevision, trigger, guidance })), [
+      { sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration, action: "update", scope: "user", id: userId, expectedRevision: 2, trigger: "replying", guidance: "Keep replies concise." },
+      { sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration, action: "delete", scope: "project", id: projectId, expectedRevision: 3, trigger: undefined, guidance: undefined },
+    ]);
+    assert.deepEqual(mutations[2], {
+      version: 2,
+      sessionId: handle.sessionId,
+      expectedGeneration: handle.sessionGeneration,
+      action: "migrate",
+      respond: undefined,
+    });
+    await assert.rejects(driver.deleteContinuityMemory({ expectedGeneration: handle.sessionGeneration, scope: "user", id: userId, expectedRevision: 9 }), { name: "StaleMemoryError" });
+    assert.throws(() => driver.migrateContinuityMemory({ expectedGeneration: handle.sessionGeneration + 1 }), { name: "StaleGenerationError" });
+  } finally { await driver.dispose(); await rm(root, { recursive: true, force: true }); }
+});
+
 function persistSession(session: SessionManager, name: string): string {
   session.appendSessionInfo(name);
   return session.appendMessage({
@@ -135,6 +167,50 @@ test("completed work duration survives runtime restart", { timeout: 45_000 }, as
     await driver.start({ cwd, agentDir, repositoryRoot, sessionPath: session.getSessionFile()! });
     const message = (await driver.snapshot()).conversation.messages.find((item) => item.entryId === assistantEntryId);
     assert.equal(message?.workDurationMs, 12_345);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime snapshots retain live delegated agents while the session is not selected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-live-delegates-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    const toolCallId = "spawn-live";
+    session._emit({
+      type: "tool_execution_start", toolCallId, toolName: "spawn_agent",
+      args: { action: "create", prompt: "Inspect auth" },
+    });
+    session._emit({
+      type: "tool_execution_update", toolCallId, toolName: "spawn_agent",
+      args: { action: "create", prompt: "Inspect auth" },
+      partialResult: {
+        content: [{ type: "text", text: "Private agent is working" }],
+        details: {
+          piSpawn: { version: 1, kind: "agent", id: "child-session" },
+          agentName: "Ada", startedAt: "2026-07-30T10:00:00.000Z", state: "running",
+          model: "provider/child", durationMs: 1_000,
+          usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.01 },
+          activity: [{ kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" }],
+        },
+      },
+    });
+
+    const [run] = (await driver.snapshot()).conversation.delegatedRuns;
+    assert.equal(run?.id, toolCallId);
+    assert.equal(run?.status, "running");
+    assert.equal(run?.agentName, "Ada");
+    assert.equal(run?.threadId, "child-session");
+    assert.equal(run?.modelName, "provider/child");
+    assert.equal(run?.activity.length, 1);
+    assert.equal(run?.usage?.output, 3);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
@@ -301,6 +377,7 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
   };
   let cancelNextReplacement = true;
   let cancelRecoverySwitch = false;
+  let finishCompact: (() => void) | undefined;
   let factoryCalls = 0;
   let failOnFactoryCall = 0;
   const recoveryCanceller: InlineExtension = {
@@ -343,6 +420,16 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
       pi.registerCommand("phase0-notify", {
         handler: async (_args, ctx) => { ctx.ui.notify("Command result", "info"); },
       });
+      pi.registerCommand("compact", {
+        handler: async (args, ctx) => {
+          if (args.trim() === "fail") {
+            ctx.ui.notify("Compaction failure detail", "error");
+            return;
+          }
+          await new Promise<void>((resolve) => { finishCompact = resolve; });
+        },
+      });
+      pi.registerCommand("phase0-empty", { handler: async () => {} });
       pi.registerCommand("phase0-wait", {
         handler: async (_args, ctx) => { await ctx.ui.input("Wait for cancellation"); },
       });
@@ -409,6 +496,27 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     assert.equal(observations.notifications, 0);
     driver.dismissCommandResult("notify-command", 1);
     assert.equal((await driver.snapshot()).commandResult, undefined);
+
+    const commandNames = (await driver.snapshot()).sessionControls.commands?.map((command) => command.name) ?? [];
+    assert.ok(commandNames.includes("compact:2"), JSON.stringify(commandNames));
+    const compacting = driver.prompt({ commandId: "compact-command", expectedGeneration: 1, message: "/compact:2" });
+    assert.equal((await driver.snapshot()).commandResult, undefined);
+    assert.ok(finishCompact);
+    finishCompact();
+    await compacting;
+    assert.equal((await driver.snapshot()).commandResult, undefined);
+    await driver.prompt({ commandId: "empty-command", expectedGeneration: 1, message: "/phase0-empty" });
+    assert.equal((await driver.snapshot()).commandResult?.command, "phase0-empty");
+    driver.dismissCommandResult("empty-command", 1);
+    await driver.prompt({ commandId: "compact-failure", expectedGeneration: 1, message: "/compact:2 fail" });
+    assert.deepEqual((await driver.snapshot()).commandResult, {
+      id: "compact-failure",
+      command: "compact:2",
+      output: "Compaction failure detail",
+      severity: "error",
+      occurredAt: (await driver.snapshot()).commandResult?.occurredAt,
+    });
+    driver.dismissCommandResult("compact-failure", 1);
 
     let resolvePending!: () => void;
     const pendingUi = new Promise<void>((resolve) => { resolvePending = resolve; });

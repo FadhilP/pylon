@@ -271,6 +271,15 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const disposeVerifyTelemetry = pi.events.on("pi-verify:result", (value: unknown) => {
     recordVerificationOutcome(tokenMeter, value);
   });
+  const memoryTelemetry = (kind: "review" | "migration", value: any) => {
+    if (value?.version !== 1 || !Number.isSafeInteger(value.durationMs) || value.durationMs < 0 || !Number.isSafeInteger(value.proposalCount) || value.proposalCount < 0 || value.proposalCount > 2
+      || !Array.isArray(value.verdicts) || value.verdicts.length > 2 || !value.verdicts.every((item: unknown) => typeof item === "string" && item.length <= 32)
+      || !value.usage || !["input", "output", "cacheRead", "cacheWrite", "cost"].every((key) => typeof value.usage[key] === "number" && Number.isFinite(value.usage[key]) && value.usage[key] >= 0)) return;
+    try { pi.appendEntry?.("pi-continuity-memory-telemetry", { version: 1, kind, model: typeof value.model === "string" ? value.model.slice(0, 200) : undefined, thinking: typeof value.thinking === "string" ? value.thinking.slice(0, 20) : undefined, durationMs: value.durationMs, proposalCount: value.proposalCount, verdicts: value.verdicts, usage: value.usage }); }
+    catch { /* Memory telemetry must never disrupt the task. */ }
+  };
+  const disposeMemoryReviewTelemetry = pi.events.on("pi-continuity:memory-review-telemetry", (value: any) => memoryTelemetry("review", value));
+  const disposeMemoryMigrationTelemetry = pi.events.on("pi-continuity:memory-migration-telemetry", (value: any) => memoryTelemetry("migration", value));
 
   const collectHealth = async (): Promise<{ lines: string[]; warning: boolean }> => {
     const pending: Promise<unknown>[] = [];
@@ -402,6 +411,8 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     disposeWorktreeObserverRequest();
     disposeTelemetryListener();
     disposeVerifyTelemetry();
+    disposeMemoryReviewTelemetry();
+    disposeMemoryMigrationTelemetry();
     disposeDelegateNames();
     shellBaseline = undefined;
     shellCwd = "";
@@ -453,7 +464,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       await access(agentDir, constants.W_OK);
       stateStatus = "writable";
       const continuityDir = join(agentDir, "pi-continuity");
-      const entries = await readdir(continuityDir).catch(() => []);
+      const entries = await readdir(continuityDir, { recursive: true }).catch(() => [] as string[]);
       const now = Date.now();
       oldLocks = (await Promise.all(entries.filter((name) => name.endsWith(".lock")).map(async (name) => {
         const info = await stat(join(continuityDir, name)).catch(() => undefined);
@@ -469,19 +480,20 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     for (const name of ["pi-advisor", "pi-grunt", "pi-scout", "pi-continuity"]) {
       const entries = await readdir(join(agentDir, name), { recursive: true }).catch(() => [] as string[]);
       for (const entry of entries)
-        if (entry.includes(".corrupt-") && quarantined.length < 8)
+        if ((entry.includes(".corrupt-") || entry.includes(".reset-unsupported-")) && quarantined.length < 8)
           quarantined.push(join(name, entry));
     }
     const configured: Array<[string, string]> = [];
-    let configWarning = false;
+    let configWarning = false, continuityConfig: any;
     for (const [name, file, select] of [
       ["Advisor", join(agentDir, "pi-advisor", "config.json"), (value: any) => [["Advisor", value.advisorModel]]],
       ["Grunt", join(agentDir, "pi-grunt", "config.json"), (value: any) => [["Grunt", value.model]]],
       ["Scout", join(agentDir, "pi-scout", "config.json"), (value: any) => [["Scout", value.model]]],
-      ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model]]],
+      ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model], ["Memory Reviewer", value.memoryReviewer?.model]]],
     ] as const) {
       try {
         const value = JSON.parse(await readFile(file, "utf8"));
+        if (name === "Continuity") continuityConfig = value;
         for (const [label, model] of select(value))
           if (typeof model === "string" && model.trim()) configured.push([label, model]);
       } catch (error: any) {
@@ -491,9 +503,20 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         }
       }
     }
+    if (continuityConfig?.memoryEnabled !== false && !continuityConfig?.memoryReviewer?.model) {
+      configured.push(["Memory Reviewer", "<not configured>"]);
+      configWarning = true;
+    }
+    let migrationLine = "Memory migration: not started";
+    try {
+      const migration = JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v5", "migration.json"), "utf8"));
+      migrationLine = `Memory migration: ${String(migration.status ?? "unknown")}${migration.failureReason ? ` (${String(migration.failureReason).slice(0, 200)})` : ""}`;
+      if (["failed", "preparing", "prepared"].includes(migration.status)) configWarning = true;
+    } catch (error: any) { if (error?.code !== "ENOENT") { migrationLine = "Memory migration: invalid journal"; configWarning = true; } }
     const thinking = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     const modelLines = configured.length ? configured.map(([label, reference]) => {
       if (reference === "<invalid config>") return `${label}: invalid config JSON`;
+      if (reference === "<not configured>") return `${label}: not configured (memory proposals unavailable)`;
       const slash = reference.indexOf("/");
       const colon = reference.lastIndexOf(":");
       const suffix = reference.slice(colon + 1);
@@ -519,6 +542,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         `Quarantined state: ${quarantined.join(", ") || "none"}`,
         "Configured child models:",
         ...modelLines,
+        migrationLine,
         "Tool surfaces:",
         ...surfaceLines,
         "Package health:",
@@ -576,6 +600,39 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       deferred.length ? "warning" : "info",
     );
   };
+
+  pi.registerCommand("compact", {
+    description: "Compact conversation context, optionally guided by instructions",
+    handler: async (args, ctx) => {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const complete = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          const detail = (error instanceof Error ? error.message : error == null ? "" : String(error)).trim().slice(0, 1_000);
+          ctx.ui.notify(
+            `Compaction failed. Reason: ${detail || "no explanation was returned"}. Retry; if it keeps failing, try a different model.`,
+            "error",
+          );
+          resolve();
+        };
+        try {
+          ctx.compact({
+            customInstructions: args.trim() || undefined,
+            onComplete: complete,
+            onError: fail,
+          });
+        } catch (error) {
+          fail(error);
+        }
+      });
+    },
+  });
 
   pi.registerCommand("tokens", {
     description: "Show estimated payload tokens used by each tool in the current session branch",

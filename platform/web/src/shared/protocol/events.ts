@@ -321,23 +321,25 @@ export interface ContinuityWorkReadModel {
   todos: ContinuityTodoReadModel[];
 }
 
-export interface ContinuityMemoryFactReadModel {
-  key: string;
-  kind: "workflow" | "structure" | "architecture" | "warning" | "preference";
-  text: string;
-  source: string;
-  confidence: number;
+export interface ContinuityMemoryNoteReadModel {
+  id: string;
+  scope: "user" | "project";
+  trigger: string;
+  guidance: string;
+  authority: "user_instruction" | "project_contract" | "imported";
+  origin: "user" | "agent" | "migration";
+  relatedPaths?: string[];
+  revision: number;
   updatedAt: string;
-  captureCommit?: string;
-  branchAtCapture?: string;
-  evidencePaths?: Array<{ path: string; sha256: string }>;
+  sourceSummary: string;
 }
 
 export interface ContinuityReadModel {
   availability: FeatureState;
   revision: number;
-  memory: ContinuityMemoryFactReadModel[];
-  globalMemory: ContinuityMemoryFactReadModel[];
+  memory: ContinuityMemoryNoteReadModel[];
+  globalMemory: ContinuityMemoryNoteReadModel[];
+  v4MigrationAvailable: boolean;
   work?: ContinuityWorkReadModel;
 }
 

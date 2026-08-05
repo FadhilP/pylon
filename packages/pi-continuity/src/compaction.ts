@@ -265,7 +265,7 @@ export function resolveContinuityBoundary(
 function isSafeCutEntry(entry: SessionEntry | undefined) {
   if (!entry) return false;
   if (entry.type === "message") return entry.message.role !== "toolResult";
-  return ["custom_message", "branch_summary"].includes(entry.type);
+  return ["custom", "custom_message", "branch_summary"].includes(entry.type);
 }
 
 export function buildContinuityCompaction({

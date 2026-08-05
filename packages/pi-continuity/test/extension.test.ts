@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import extension from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
+import { emptyMemoryState, isMemoryState, isNotebookNote, isReviewRecord, serverNoteId, serverReviewId, type ReviewRecord } from "../src/memory.ts";
+import { writeJsonAtomic } from "../src/storage.ts";
+import { projectContext, worktreeFingerprint } from "../src/worktree.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -94,7 +97,7 @@ test("package settings disable durable memory while keeping planning and recall"
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
-    await saveConfig({ version: 1, memoryEnabled: false });
+    await saveConfig({ version: 2, memoryEnabled: false });
     const app = runtime(["read", "memory", "continuity_recall", "continuity_update"]);
     const ctx: any = {
       cwd, hasUI: false, mode: "json",
@@ -161,19 +164,16 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.equal(continuity.parameters.properties.todoIds.maxItems, 12);
   assert.equal(memory.label, "Memory");
   assert.equal(memory.executionMode, "sequential");
-  assert.match(JSON.stringify(memory.parameters), /list.*add.*replace.*remove/);
-  assert.match(memory.promptSnippet, /durable memory/i);
-  assert.match(memoryGuidance, /Before Verify—or before the final response when Verify is unnecessary/i);
-  assert.match(memoryGuidance, /up to three stable facts that would change a future decision/i);
-  assert.match(memoryGuidance, /explicit user rules and non-obvious verified workflows, boundaries, or warnings/i);
-  assert.match(memoryGuidance, /Use memory list to avoid duplicates, then add or replace valid candidates/i);
-  assert.match(memoryGuidance, /continue without a memory call when none qualify/i);
-  assert.match(memoryGuidance, /List memory with a focused query when the current key is uncertain/i);
+  assert.match(JSON.stringify(memory.parameters), /list.*propose/);
+  assert.doesNotMatch(JSON.stringify(memory.parameters), /confidence|kind/);
+  assert.match(memory.promptSnippet, /reviewer-gated/i);
+  assert.match(memoryGuidance, /Most tasks should propose no memory/i);
+  assert.match(memoryGuidance, /explicit user instructions or intentional project contracts/i);
+  assert.match(memoryGuidance, /at most two proposals/i);
+  assert.match(memoryGuidance, /exact quote/i);
+  assert.match(memoryGuidance, /120 lines/i);
   assert.equal(memory.parameters.properties.query.maxLength, 500);
-  assert.match(memoryGuidance, /one fact per stable named key/i);
-  assert.match(memoryGuidance, /Never save .*secrets/i);
-  assert.match(memoryGuidance, /user scope for cross-project preferences and project scope otherwise/i);
-  assert.ok(memoryGuidance.length < 900);
+  assert.ok(memoryGuidance.length < 1_200);
 });
 
 test("session recall tool is sequential, read-only, and handles ephemeral state without side effects", async () => {
@@ -392,7 +392,7 @@ test("automatic completion waits for required verification", async () => {
     assert.match(blocked.content[0].text, /Cannot complete until/);
 
     app.emit("pi-verify:result", {
-      version: 1, cwd, state: "failed", runId: "failed",
+      version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "failed", runId: "failed",
       results: [{ command: "npm test", code: 1 }],
     });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
@@ -404,7 +404,7 @@ test("automatic completion waits for required verification", async () => {
     assert.match(blocked.content[0].text, /Cannot complete until/);
     assert.equal(blocked.terminate, undefined);
 
-    app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "run", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "passed", runId: "run", results: [] });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
     blocked = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /already completed/i);
@@ -439,13 +439,13 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
     const finalMessage = { message: {
       role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }],
     } };
-    app.emit("pi-verify:result", { version: 1, cwd, state: "failed", runId: "failed", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "failed", runId: "failed", results: [] });
     let rejected = await tool.execute(
       "failed-ack", { action: "state", allowUnverified: true }, undefined, undefined, ctx,
     );
     assert.match(rejected.content[0].text, /requires a current clean or no_checks/);
 
-    app.emit("pi-verify:result", { version: 1, cwd, state: "clean", runId: "clean", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "clean", runId: "clean", results: [] });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
     let context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
@@ -470,7 +470,7 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
 
-    app.emit("pi-verify:result", { version: 1, cwd, state: "no_checks", runId: "no-checks", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "no_checks", runId: "no-checks", results: [] });
     await tool.execute("ack-again", { action: "state", allowUnverified: true }, undefined, undefined, ctx);
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
@@ -505,7 +505,7 @@ test("passing Verify completes a sole remaining verification todo", async () => 
     for (const handler of app.handlers.get("tool_call") ?? [])
       await handler({ toolName: "edit", input: {} }, ctx);
 
-    app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "passed", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "passed", runId: "passed", results: [] });
     const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.doesNotMatch(context.messages.at(-1).content, /Todo todo_2/);
 
@@ -537,7 +537,7 @@ test("settlement waits for the single post-Verify final response", async () => {
     await tool.execute("plan", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? []) await handler({ toolName: "edit", input: {} }, ctx);
     await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
-    app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "passed", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "passed", runId: "passed", results: [] });
     await app.handlers.get("agent_settled")?.[0]?.({}, ctx);
     const completed = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /^Work completed/);
@@ -574,7 +574,7 @@ test("TUI keeps routine updates hidden but shows memory and terminal outcomes", 
     renderMemory("Memory candidate add queued: project/workflow.test.", {
       memoryCandidate: { action: "add", scope: "project", key: "workflow.test" },
     }),
-    /Memory candidate add: project\/workflow\.test/,
+    /Memory candidate add queued: project\/workflow\.test/,
   );
   assert.match(
     renderMemory("memory remove requires nonempty source/reason evidence", { memoryError: true }),
@@ -584,92 +584,6 @@ test("TUI keeps routine updates hidden but shows memory and terminal outcomes", 
     renderMemory("Stored facts:\n- project/workflow.test: Run tests", { memoryList: true }),
     /project\/workflow\.test: Run tests/,
   );
-});
-
-test("memory list is owner-safe, settles candidates, and status uses durable facts", async () => {
-  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-extension-memory-list-"));
-  const firstCwd = join(root, "first"), secondCwd = join(root, "second");
-  await mkdir(firstCwd); await mkdir(secondCwd);
-  await exec("git", ["init", "-q", firstCwd]);
-  await exec("git", ["init", "-q", secondCwd]);
-  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
-  const notifications: string[] = [];
-  const context = (cwd: string, sessionId: string): any => ({
-    cwd, hasUI: false, mode: "json",
-    sessionManager: { getSessionId: () => sessionId, getEntries: () => [] },
-    ui: { notify: (message: string) => notifications.push(message), setStatus: () => {}, setWidget: () => {} },
-  });
-  const first = context(firstCwd, "first"), second = context(secondCwd, "second");
-  try {
-    const app = runtime(), start = app.handlers.get("session_start")![0], settled = app.handlers.get("agent_settled")![0];
-    await start({}, first);
-    const tool = app.tools.get("memory");
-    for (const params of [
-      { action: "add", scope: "user", key: "preference.reply", text: "Use concise replies" },
-      { action: "add", key: "workflow.first", text: "Run the first command" },
-    ]) await tool.execute("candidate", params, undefined, undefined, first);
-    await settled({}, first);
-
-    await start({}, second);
-    await tool.execute("foreign", {
-      action: "add", key: "workflow.second", text: "Do not expose this project",
-    }, undefined, undefined, second);
-    await settled({}, second);
-
-    await start({}, first);
-    await tool.execute("pending", {
-      action: "add", key: "workflow.pending", text: "Pending command",
-    }, undefined, undefined, first);
-    let listed = await tool.execute("list", { action: "list" }, undefined, undefined, first);
-    assert.match(listed.content[0].text, /user\/preference\.reply \[unchecked: user memory\]: Use concise replies/);
-    assert.match(listed.content[0].text, /project\/workflow\.first \[unchecked: no project provenance\]: Run the first command/);
-    assert.match(listed.content[0].text, /project\/workflow\.pending \[add\]: Pending command/);
-    assert.doesNotMatch(listed.content[0].text, /workflow\.second/);
-    assert.equal(listed.details.memoryList, true);
-    const queried = await tool.execute("query", { action: "list", query: "first command" }, undefined, undefined, first);
-    assert.match(queried.content[0].text, /Matching stored facts:/);
-    assert.match(queried.content[0].text, /workflow\.first/);
-    assert.doesNotMatch(queried.content[0].text, /preference\.reply/);
-    assert.match(queried.content[0].text, /workflow\.pending/);
-    await settled({}, first);
-    listed = await tool.execute("list-after-settle", { action: "list" }, undefined, undefined, first);
-    assert.doesNotMatch(listed.content[0].text, /Pending candidates:/);
-
-    await writeFile(join(firstCwd, "guide.txt"), "before\n");
-    await tool.execute("evidence", {
-      action: "add", key: "workflow.evidence", text: "Guide is current",
-      source: "guide.txt", evidencePaths: ["guide.txt"],
-    }, undefined, undefined, first);
-    await settled({}, first);
-    await writeFile(join(firstCwd, "guide.txt"), "after\n");
-    await app.handlers.get("input")![0]({ source: "user", text: "guide is current" }, first);
-    await app.handlers.get("before_agent_start")![0]({}, first);
-    listed = await tool.execute("list-suspect", { action: "list" }, undefined, undefined, first);
-    assert.match(listed.content[0].text, /project\/workflow\.evidence \[suspect: captured evidence changed or is unavailable\]: Guide is current/);
-    const queriedSuspect = await tool.execute("query-suspect", { action: "list", query: "guide current" }, undefined, undefined, first);
-    assert.match(queriedSuspect.content[0].text, /workflow\.evidence \[suspect:/);
-    await app.commands.get("memory").handler("status", first);
-    assert.match(notifications.at(-1)!, /4 current-owner stored facts, 3 visible/);
-    assert.match(notifications.at(-1)!, /0 current-owner pending candidates .*normally compacted at settlement/);
-
-    const stored = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v4", "memory.json"), "utf8"));
-    const global = stored.facts.find((fact: any) => fact.scope === "user" && fact.key === "preference.reply");
-    let globalMutation: Promise<unknown> | undefined;
-    app.emit("pi-continuity:memory-mutation", {
-      version: 1,
-      sessionId: "first",
-      action: "delete",
-      key: global.key,
-      expectedUpdatedAt: global.updatedAt,
-      respond: (operation: Promise<unknown>) => { globalMutation = operation; },
-    });
-    assert.ok(globalMutation);
-    await assert.rejects(globalMutation, /memory fact is unavailable/);
-  } finally {
-    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
-  }
 });
 
 test("circuit breaker aborts the third identical call within 30 seconds", async () => {
@@ -1032,7 +946,7 @@ test("read-only execution completion skips Verify", async () => {
     const tool = app.tools.get("continuity_update");
     await tool.execute("call", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
     await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
-    app.emit("pi-verify:result", { version: 1, cwd, state: "cancelled", runId: "old-run", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "cancelled", runId: "old-run", results: [] });
     const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
     assert.equal(completed.terminate, true);
@@ -1154,7 +1068,7 @@ test("execution completion requires a qualifying Verify result after mutation", 
     const blocked = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
     assert.equal(blocked.terminate, undefined);
-    app.emit("pi-verify:result", { version: 1, cwd, state: "passed", runId: "run", results: [] });
+    app.emit("pi-verify:result", { version: 1, sessionId: ctx.sessionManager.getSessionId(), cwd, state: "passed", runId: "run", results: [] });
     const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
     assert.equal(completed.terminate, true);
@@ -1857,142 +1771,139 @@ test("duplicate continuity instance does not register stale planning handlers", 
   assert.equal(app.handlers.get("tool_call")?.length, calls);
 });
 
-test("memory candidates survive manual and turn-end compact into model context", async () => {
+test("session startup safely reassociates a moved repository and retains a backup", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-extension-memory-"));
-  const cwd = join(root, "repo"), agent = join(root, "agent"), notifications: string[] = [],
-    memoryV4 = join(agent, "pi-continuity", "memory-v4");
-  await mkdir(cwd);
-  await exec("git", ["init", "-q", cwd]);
-  await exec("git", ["-C", cwd, "config", "user.email", "test@example.invalid"]);
-  await exec("git", ["-C", cwd, "config", "user.name", "test"]);
-  await writeFile(join(cwd, "README.md"), "project\n");
-  await exec("git", ["-C", cwd, "add", "."]);
-  await exec("git", ["-C", cwd, "commit", "-qm", "base"]);
-  await mkdir(memoryV4, { recursive: true });
-  await writeFile(join(memoryV4, "memory.json"), "malformed");
-  process.env.PI_CODING_AGENT_DIR = agent;
-  const ctx: any = {
-    cwd, hasUI: true, mode: "json",
-    sessionManager: { getSessionId: () => "memory-session" },
-    ui: {
-      notify: (message: string) => notifications.push(message),
-      confirm: async () => true,
-      setStatus: () => {}, setWidget: () => {},
-    },
-  };
+  const root = await mkdtemp(join(tmpdir(), "continuity-v5-owner-startup-")), oldPath = join(root, "old"), cwd = join(root, "moved");
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
-    const first = runtime();
-    for (const handler of first.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
-    await first.commands.get("memory").handler("backups", ctx);
-    assert.match(notifications.at(-1)!, /memory\.json\.reset-unsupported-/);
-    const result = await first.tools.get("memory").execute(
-      "call", {
-        action: "add",
-        key: "workflow.verify",
-        kind: "workflow",
-        text: "Run npm test before release",
-        source: "project instructions",
-        confidence: 1,
-      }, undefined, undefined, ctx,
-    );
-    assert.match(result.content[0].text, /queued: project\/workflow\.verify/);
-    await first.commands.get("memory").handler("compact", ctx);
-    await first.tools.get("memory").execute(
-      "call", {
-        action: "add",
-        key: "workflow.lint",
-        kind: "workflow",
-        text: "Run npm run check before release",
-        source: "project instructions",
-        confidence: 1,
-      }, undefined, undefined, ctx,
-    );
-    for (const handler of first.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    await mkdir(oldPath); await exec("git", ["init", "-q"], { cwd: oldPath }); await exec("git", ["config", "user.email", "test@example.com"], { cwd: oldPath }); await exec("git", ["config", "user.name", "Test"], { cwd: oldPath });
+    await writeFile(join(oldPath, "one.txt"), "one\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "one"], { cwd: oldPath }); const first = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
+    await writeFile(join(oldPath, "two.txt"), "two\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "two"], { cwd: oldPath }); const second = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
+    const oldOwner = (await projectContext(oldPath, "fallback")).owner, id = serverNoteId(), continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity"), statePath = join(continuityRoot, "memory-v5", "state.json");
+    await writeJsonAtomic(join(continuityRoot, "workspaces.json"), [{ id: "old-workspace", canonicalPath: oldPath, projectOwner: oldOwner, createdAt: "2020-01-01T00:00:00Z", lastSeenAt: "2020-01-01T00:00:00Z" }]);
+    await writeJsonAtomic(statePath, { ...emptyMemoryState(), revision: 1, updatedAt: new Date().toISOString(), notes: [{ id, scope: "project", owner: oldOwner, trigger: "changing the boundary", guidance: "Preserve it.", authority: "project_contract", origin: "agent", sourceRefs: [{ type: "repository", path: "one.txt", excerptSha256: "a".repeat(64), captureCommit: first }, { type: "repository", path: "two.txt", excerptSha256: "b".repeat(64), captureCommit: second }], revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }] });
+    await rename(oldPath, cwd);
+    const ctx: any = { cwd, hasUI: false, mode: "json", sessionManager: { getSessionId: () => "owner-move-session", getEntries: () => [] }, ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} } };
+    const app = runtime(); for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const currentOwner = (await projectContext(cwd, "fallback")).owner, state = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(state.notes[0]?.owner, currentOwner); assert.equal(state.notes[0]?.revision, 2); assert.equal(state.audits?.at(-1)?.type, "owner_reassociation"); assert.equal(isMemoryState(state), true);
+    const backups = await readdir(join(continuityRoot, "memory-v5", "backups")); assert.ok(backups.some((name) => name.startsWith("owner-reassociation-")));
+  } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
+});
 
-    const second = runtime();
-    for (const handler of second.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
-    for (const handler of second.handlers.get("input") ?? [])
-      await handler({ source: "user", text: "Improve memory prompt injection relevance and token use" }, ctx);
-    assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
-    for (const handler of second.handlers.get("input") ?? [])
-      await handler({ source: "user", text: "verify lint release check" }, ctx);
-    assert.equal(
-      await second.handlers.get("context")?.[0]({ messages: [] }, ctx),
-      undefined,
-    );
-    const memory = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.match(memory.message.content, /Memory workflow\.verify: Run npm test before release/);
-    assert.match(memory.message.content, /Memory workflow\.lint: Run npm run check before release/);
-    await second.commands.get("memory").handler("off", ctx);
-    assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
-    await second.tools.get("memory").execute(
-      "call", { action: "add", key: "workflow.toggle", text: "Verify lint release check remains stored" },
-      undefined, undefined, ctx,
-    );
-    await second.commands.get("memory").handler("compact", ctx);
-    assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
-    await second.commands.get("memory").handler("on", ctx);
-    const afterEnable = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.equal(afterEnable.message.content.match(/^Memory /gm)?.length, 2);
-    assert.doesNotMatch(afterEnable.message.content, /workflow\.toggle/);
+test("explicit V4 migration command requires UI confirmation and a reviewer", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-v5-migrate-command-")), cwd = join(root, "repo");
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    await mkdir(cwd); await exec("git", ["init", "-q"], { cwd });
+    const continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity");
+    await writeJsonAtomic(join(continuityRoot, "memory-v4", "memory.json"), { schemaVersion: 4, facts: [] });
+    await writeJsonAtomic(join(continuityRoot, "memory-v4", "candidates.json"), { schemaVersion: 4, candidates: [] });
+    const notices: string[] = []; let confirmed = false;
+    const ctx: any = { cwd, hasUI: false, mode: "json", sessionManager: { getSessionId: () => "migrate-command-session", getEntries: () => [] }, modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false }, ui: { notify: (message: string) => notices.push(message), setStatus: () => {}, setWidget: () => {}, confirm: async () => confirmed } };
+    const app = runtime(); for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    let snapshot: any; app.emit("pi-continuity:state-request", { version: 4, sessionId: "migrate-command-session", respond: (value: unknown) => { snapshot = value; } });
+    assert.equal(snapshot.v4MigrationAvailable, true);
+    let response: Promise<unknown> | undefined;
+    app.emit("pi-continuity:memory-mutation", { version: 2, sessionId: "migrate-command-session", expectedGeneration: 1, action: "migrate", respond: (value: unknown) => { response = Promise.resolve(value); } });
+    await assert.rejects(response!, /Memory Reviewer is not configured/);
+    app.emit("pi-continuity:memory-mutation", { version: 2, sessionId: "migrate-command-session", expectedGeneration: 1, action: "migrate", scope: "user", respond: (value: unknown) => { response = Promise.resolve(value); } });
+    await assert.rejects(response!, /invalid memory migration fields/);
+    const command = app.commands.get("memory").handler;
+    await command("migrate-v4", ctx); assert.match(notices.at(-1) ?? "", /Interactive UI required/);
+    ctx.hasUI = true; await command("migrate-v4", ctx); assert.doesNotMatch(notices.at(-1) ?? "", /migration failed/i);
+    confirmed = true; await command("migrate-v4", ctx); assert.match(notices.at(-1) ?? "", /Memory Reviewer is not configured/);
+    assert.equal(JSON.parse(await readFile(join(continuityRoot, "memory-v5", "migration.json"), "utf8")).status, "pending");
+  } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
+});
 
-    await writeFile(join(cwd, "guide.txt"), "current\n");
-    await second.tools.get("memory").execute(
-      "call", {
-        action: "add", key: "workflow.evidence",
-        text: "Verify lint release check obsolete command text", source: "guide.txt",
-        evidencePaths: ["guide.txt"],
-      }, undefined, undefined, ctx,
-    );
-    await second.commands.get("memory").handler("compact", ctx);
-    await writeFile(join(cwd, "guide.txt"), "changed\n");
-    const suspectContext = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(suspectContext?.message.content ?? "", /workflow\.evidence|obsolete command text/);
-    await second.commands.get("memory").handler("show", ctx);
-    assert.match(notifications.at(-1)!, /workflow\.evidence \[suspect:/);
-    await second.commands.get("memory").handler("forget suspect", ctx);
-    assert.match(notifications.at(-1)!, /Forgot 1 suspect memory fact/);
-    const afterSuspectCleanup = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(afterSuspectCleanup.message.content, /workflow\.evidence/);
+test("interactive memory edit, forget, project purge, and rollback persist V5 state and audit", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-v5-memory-commands-")), cwd = join(root, "repo");
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const userId = "00000000-0000-4000-8000-000000000001", projectId = "00000000-0000-4000-8000-000000000002", foreignId = "00000000-0000-4000-8000-000000000003";
+  try {
+    await mkdir(cwd); await exec("git", ["init", "-q"], { cwd });
+    const owner = (await projectContext(cwd, "fallback")).owner;
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "state.json");
+    const note = (id: string, scope: "user" | "project", noteOwner: string) => ({
+      id, scope, owner: noteOwner, trigger: "replying to a request", guidance: "Keep replies concise.", authority: scope === "user" ? "user_instruction" : "project_contract", origin: "user",
+      sourceRefs: [{ type: "direct_user_edit" as const }], revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+    });
+    await writeJsonAtomic(statePath, { ...emptyMemoryState(), revision: 1, updatedAt: new Date().toISOString(), notes: [note(userId, "user", "default"), note(projectId, "project", owner), note(foreignId, "project", "other-owner")] });
+    const notices: string[] = [], confirmations: string[] = []; let editorCalls = 0;
+    const ctx: any = {
+      cwd, hasUI: true, mode: "tui", sessionManager: { getSessionId: () => "memory-command-session", getEntries: () => [] },
+      ui: { notify: (message: string) => notices.push(message), setStatus: () => {}, setWidget: () => {}, confirm: async (title: string) => { confirmations.push(title); return true; }, editor: async () => {
+        editorCalls++;
+        if (editorCalls === 2) { const current = JSON.parse(await readFile(statePath, "utf8")); current.revision++; current.notes = current.notes.map((item: any) => item.id === userId ? { ...item, revision: item.revision + 1 } : item); await writeJsonAtomic(statePath, current); }
+        return "Trigger:\nreplying to a request\n\nGuidance:\nUse compact answers.";
+      } },
+    };
+    const app = runtime(); for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const command = app.commands.get("memory").handler;
+    await command(`edit user ${userId}`, ctx);
+    let state = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(state.notes.find((item: any) => item.id === userId)?.guidance, "Use compact answers."); assert.equal(state.notes.find((item: any) => item.id === userId)?.revision, 2); assert.equal(state.audits?.at(-1)?.type, "direct_edit");
+    await command(`edit user ${userId}`, ctx);
+    state = JSON.parse(await readFile(statePath, "utf8")); assert.equal(state.notes.find((item: any) => item.id === userId)?.revision, 3); assert.ok(notices.some((message) => /changed/i.test(message)));
+    await command(`forget user ${userId}`, ctx); await command("forget project", ctx);
+    state = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(state.notes.some((item: any) => item.id === userId), false); assert.equal(state.notes.some((item: any) => item.id === projectId), false); assert.equal(state.notes.some((item: any) => item.id === foreignId), true);
+    const backupPath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "backups", "pre-migration.json");
+    await writeJsonAtomic(backupPath, emptyMemoryState());
+    await writeJsonAtomic(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "migration.json"), { version: 1, sourceHashes: {}, status: "activated", completedRecordIds: [], reviewerBatchIds: [], activatedStateRevision: state.revision, preMigrationBackup: backupPath, retryCount: 0, diagnostics: [] });
+    await command("rollback", ctx);
+    state = JSON.parse(await readFile(statePath, "utf8")); assert.equal(isMemoryState(state), true); assert.deepEqual(state.notes, []);
+    const journal = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "migration.json"), "utf8")); assert.equal(journal.status, "rolled_back");
+    assert.deepEqual(confirmations, ["Save user memory?", "Save user memory?", "Forget user memory?", "Forget all project memory?", "Rollback Memory V5 migration?"]);
+  } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
+});
 
-    const rejectedRemove = await second.tools.get("memory").execute(
-      "call", { action: "remove", key: "workflow.lint" },
-      undefined, undefined, ctx,
-    );
-    assert.match(rejectedRemove.content[0].text, /source\/reason/);
-    assert.equal(rejectedRemove.details.memoryError, true);
-    await second.tools.get("memory").execute(
-      "call", { action: "remove", key: "workflow.lint", source: "package.json no longer defines this command" },
-      undefined, undefined, ctx,
-    );
-    await second.commands.get("memory").handler("compact", ctx);
-    const afterModelCleanup = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(afterModelCleanup?.message.content ?? "", /workflow\.lint/);
-
-    await second.commands.get("memory").handler("forget workflow.verify", ctx);
-    const afterForget = await second.handlers.get("before_agent_start")?.[0]({}, ctx);
-    assert.doesNotMatch(afterForget?.message.content ?? "", /workflow\.verify/);
-    const gitDir = join(cwd, ".git"), unavailableGit = join(cwd, ".git-unavailable");
-    await rename(gitDir, unavailableGit);
-    try {
-      const third = runtime();
-      for (const handler of third.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-      for (const handler of third.handlers.get("input") ?? [])
-        await handler({ source: "user", text: "verify lint release check" }, ctx);
-      const unavailable = await third.handlers.get("before_agent_start")?.[0]({}, ctx);
-      assert.equal(unavailable, undefined);
-    } finally { await rename(unavailableGit, gitDir); }
-    await second.commands.get("memory").handler("owners", ctx);
-    const owner = notifications.at(-1)!.split(/\s/)[0]!;
-    assert.match(owner, /^[a-f0-9-]+$/);
-    await second.commands.get("memory").handler(`forget owner ${owner}`, ctx);
-    assert.equal(await second.handlers.get("before_agent_start")?.[0]({}, ctx), undefined);
+test("review settlement uses Verify-compatible identity and rejects stale generations", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR, root = await mkdtemp(join(tmpdir(), "continuity-v5-settlement-")), cwd = join(root, "repo");
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    await mkdir(cwd); await exec("git", ["init"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
+    await writeFile(join(cwd, "file.txt"), "one\n"); await exec("git", ["add", "."], { cwd }); await exec("git", ["commit", "-m", "initial"], { cwd }); await writeFile(join(cwd, "file.txt"), "two\n");
+    const branch: any[] = [{ id: "tool-result", type: "message", message: { role: "toolResult", toolCallId: "memory-call", content: [] } }];
+    const app = runtime(["memory", "continuity_update"]), ctx: any = {
+      cwd, hasUI: false, mode: "json", modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+      sessionManager: { getSessionId: () => "settlement-session", getSessionFile: () => "session.jsonl", getEntries: () => [], getBranch: () => branch, buildContextEntries: () => [] },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const owner = (await projectContext(cwd, "fallback")).owner, identity = await worktreeFingerprint(cwd), created = serverNoteId();
+    const review: ReviewRecord = { reviewId: serverReviewId(), sessionId: "settlement-session", toolCallId: "memory-call", projectOwner: owner, reviewedAt: new Date().toISOString(), status: "approved_pending", requiresVerification: true, generation: 1, taskGeneration: 1, worktreeIdentity: identity, operations: [{ operation: "add", noteId: created, scope: "project", owner, trigger: "changing the boundary", guidance: "Preserve the documented boundary.", authority: "project_contract", sourceRefs: [] }], rejectionCounts: {} };
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "state.json");
+    const pendingState = { ...emptyMemoryState(), revision: 1, reviews: [review], updatedAt: new Date().toISOString() };
+    assert.equal(isMemoryState(pendingState), true);
+    await writeJsonAtomic(statePath, pendingState);
+    app.emit("pi-verify:result", { version: 1, sessionId: "settlement-session", cwd, state: "passed", runId: "verify-run", worktreeId: identity, results: [] });
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    const stateEntries = await readdir(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5"));
+    assert.ok(stateEntries.includes("state.json"), `state entries: ${stateEntries.join(", ")}`);
+    const committed = JSON.parse(await readFile(statePath, "utf8")); assert.equal(committed.notes[0]?.id, created); assert.equal(committed.reviews[0]?.status, "committed");
+    const stale = { ...review, reviewId: serverReviewId(), toolCallId: "stale-call", generation: 0, status: "approved_pending" as const, operations: [] };
+    branch.push({ id: "stale-result", type: "message", message: { role: "toolResult", toolCallId: "stale-call", content: [] } });
+    const staleState = { ...committed, reviews: [...committed.reviews, stale] };
+    assert.equal(isReviewRecord(stale), true, JSON.stringify(stale));
+    assert.equal(committed.reviews.every(isReviewRecord), true, JSON.stringify(committed.reviews));
+    assert.equal(committed.notes.every(isNotebookNote), true, JSON.stringify(committed.notes));
+    assert.equal(isMemoryState(staleState), true, JSON.stringify(staleState));
+    await writeJsonAtomic(statePath, staleState);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    const discarded = JSON.parse(await readFile(statePath, "utf8")); assert.equal(discarded.reviews.find((item: any) => item.reviewId === stale.reviewId)?.status, "discarded");
+    let response: Promise<unknown> | undefined;
+    app.emit("pi-continuity:memory-mutation", { version: 2, sessionId: "settlement-session", expectedGeneration: 1, action: "update", scope: "project", id: created, trigger: "changing the boundary", guidance: "Preserve the reviewed boundary.", expectedRevision: 1, respond: (value: unknown) => { response = Promise.resolve(value); } });
+    await response; const edited = JSON.parse(await readFile(statePath, "utf8")); assert.equal(edited.notes[0]?.revision, 2); assert.equal(edited.notes[0]?.origin, "user");
+    app.emit("pi-continuity:memory-mutation", { version: 2, sessionId: "settlement-session", expectedGeneration: 0, action: "delete", scope: "project", id: created, expectedRevision: 2, respond: (value: unknown) => { response = Promise.resolve(value); } });
+    await assert.rejects(response!, /stale/);
+    app.emit("pi-continuity:memory-mutation", { version: 2, sessionId: "settlement-session", expectedGeneration: 1, action: "delete", scope: "project", owner: "forged", id: created, expectedRevision: 2, respond: (value: unknown) => { response = Promise.resolve(value); } });
+    await assert.rejects(response!, /fields/);
   } finally {
-    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
   }
 });

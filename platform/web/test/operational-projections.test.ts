@@ -31,11 +31,29 @@ test("operational projections structurally share unchanged branches and ignore s
   assert.strictEqual(applyOperationalEvent(withJob, "unknown", {}), withJob);
 
   const continuity = applyOperationalEvent(withJob, "pi-continuity:state-change", {
-    version: 3, revision: 1, sessionId: "session", available: true, memory: [], globalMemory: [],
+    version: 4, revision: 1, sessionId: "session", available: true, memory: [], globalMemory: [], v4MigrationAvailable: true,
   }, [], "session");
+  assert.equal(continuity.continuity.v4MigrationAvailable, true);
   assert.strictEqual(applyOperationalEvent(continuity, "pi-continuity:state-change", {
-    version: 3, revision: 1, sessionId: "session", available: false, memory: [], globalMemory: [],
+    version: 4, revision: 1, sessionId: "session", available: false, memory: [], globalMemory: [],
   }, [], "session"), continuity);
+});
+
+test("Memory V5 projections fail closed for missing, malformed, or cross-scope notes", () => {
+  const initial = initialOperational(["continuity_update"], []);
+  const missing = applyOperationalEvent(initial, "pi-continuity:state-change", { version: 4, revision: 1, sessionId: "s", available: true }, [], "s");
+  assert.equal(missing.continuity.availability, "unavailable");
+  assert.equal(initial.continuity.v4MigrationAvailable, false);
+  const malformed = applyOperationalEvent(initial, "pi-continuity:state-change", {
+    version: 4, revision: 2, sessionId: "s", available: true,
+    memory: [{ id: "00000000-0000-4000-8000-000000000001", scope: "user", trigger: "x", guidance: "y", authority: "user_instruction", origin: "user", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "user" }], globalMemory: [],
+  }, [], "s");
+  assert.equal(malformed.continuity.availability, "unavailable");
+  const unsafePath = applyOperationalEvent(initial, "pi-continuity:state-change", {
+    version: 4, revision: 3, sessionId: "s", available: true,
+    memory: [{ id: "00000000-0000-4000-8000-000000000001", scope: "project", trigger: "x", guidance: "y", authority: "project_contract", origin: "agent", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "repo", relatedPaths: ["../secret"] }], globalMemory: [],
+  }, [], "s");
+  assert.equal(unsafePath.continuity.availability, "unavailable");
 });
 
 test("operational projections bound package payloads and isolate malformed versions", () => {
@@ -57,22 +75,22 @@ test("operational projections bound package payloads and isolate malformed versi
 test("state snapshots reject stale revisions and policy unregister removes owner", () => {
   let state = initialOperational([], ["pylon-core.ts"]);
   state = applyOperationalEvent(state, "pi-continuity:state-change", {
-    version: 3, revision: 2, sessionId: "session", available: true,
-    memory: [{ key: "project.arch", kind: "architecture", text: "Use the coordinator", source: "test", confidence: 0.9, updatedAt: new Date(0).toISOString() }],
-    globalMemory: [{ key: "user.preference", kind: "preference", text: "Keep output concise", source: "user", confidence: 1, updatedAt: new Date(0).toISOString() }],
+    version: 4, revision: 2, sessionId: "session", available: true,
+    memory: [{ id: "00000000-0000-0000-0000-000000000001", scope: "project", trigger: "Architecture", guidance: "Use the coordinator", authority: "project_contract", origin: "agent", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "test" }],
+    globalMemory: [{ id: "00000000-0000-0000-0000-000000000002", scope: "user", trigger: "Preference", guidance: "Keep output concise", authority: "user_instruction", origin: "user", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "user" }],
     work: { mode: "executing", goal: "Ship", approved: true, planSummary: "Implement", createdAt: "now", updatedAt: "now", todos: [{ id: "todo_1", text: "Build", status: "in_progress", updatedAt: "now" }] },
   }, [], "session");
-  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 3, revision: 2, sessionId: "session", available: false, memory: [], globalMemory: [] }, [], "session");
-  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 3, revision: 3, sessionId: "old-session", available: false, memory: [], globalMemory: [] }, [], "session");
+  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 4, revision: 2, sessionId: "session", available: false, memory: [], globalMemory: [] }, [], "session");
+  state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 4, revision: 3, sessionId: "old-session", available: false, memory: [], globalMemory: [] }, [], "session");
   assert.equal(state.continuity.revision, 2);
   assert.equal(state.continuity.work?.goal, "Ship");
-  assert.equal(state.continuity.memory[0]?.key, "project.arch");
-  assert.equal(state.continuity.globalMemory[0]?.key, "user.preference");
+  assert.equal(state.continuity.memory[0]?.trigger, "Architecture");
+  assert.equal(state.continuity.globalMemory[0]?.trigger, "Preference");
   state = applyOperationalEvent(state, "pi-continuity:state-change", {
-    version: 2, revision: 3, sessionId: "session", available: true, memory: [],
+    version: 3, revision: 3, sessionId: "session", available: true, memory: [],
   }, [], "session");
   assert.equal(state.continuity.availability, "unavailable");
-  assert.equal(state.continuity.globalMemory[0]?.key, "user.preference");
+  assert.equal(state.continuity.globalMemory[0]?.trigger, "Preference");
 
   state = applyOperationalEvent(state, "pi-timeline:state-change", {
     version: 4,

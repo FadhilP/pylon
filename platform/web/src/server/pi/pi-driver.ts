@@ -196,17 +196,23 @@ export interface StartProviderLoginInput {
 }
 
 export interface UpdateContinuityMemoryInput {
-  expectedGeneration?: number;
-  key: string;
-  text: string;
-  kind: "workflow" | "structure" | "architecture" | "warning" | "preference";
-  expectedUpdatedAt: string;
+  expectedGeneration: number;
+  scope: "user" | "project";
+  id: string;
+  trigger: string;
+  guidance: string;
+  expectedRevision: number;
 }
 
 export interface DeleteContinuityMemoryInput {
-  expectedGeneration?: number;
-  key: string;
-  expectedUpdatedAt: string;
+  expectedGeneration: number;
+  scope: "user" | "project";
+  id: string;
+  expectedRevision: number;
+}
+
+export interface MigrateContinuityMemoryInput {
+  expectedGeneration: number;
 }
 
 export interface ReplacementResult {
@@ -344,6 +350,7 @@ export interface PiDriver {
   logoutProvider?(provider: string, expectedGeneration: number): Promise<void>;
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
+  migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
   keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined | void;
   dismissCommandResult?(resultId: string, sessionGeneration: number): void;

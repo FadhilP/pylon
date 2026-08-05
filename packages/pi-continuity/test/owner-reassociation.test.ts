@@ -1,175 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
-import { candidate, compact, type Fact } from "../src/memory.ts";
-import {
-  findMovedProjectOwner,
-  isOwnerReassociationMarker,
-  OWNER_REASSOCIATION_GRACE_MS,
-  reassociateOwnerRecords,
-} from "../src/owner-reassociation.ts";
-import { captureEvidence, projectContext } from "../src/worktree.ts";
+import { randomUUID } from "node:crypto";
+import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
+import { projectContext } from "../src/worktree.ts";
+import type { NotebookNote } from "../src/memory.ts";
 import type { Workspace } from "../src/workspace.ts";
 
 const exec = promisify(execFile);
-const git = (cwd: string, args: string[]) => exec("git", ["-C", cwd, ...args]);
-const workspace = (path: string, owner: string, age = OWNER_REASSOCIATION_GRACE_MS + 1): Workspace => ({
-  id: owner,
-  canonicalPath: path,
-  projectOwner: owner,
-  createdAt: new Date(Date.now() - age).toISOString(),
-  lastSeenAt: new Date(Date.now() - age).toISOString(),
+const note = (owner: string, trigger: string, commits: string[] = []): NotebookNote => ({
+  id: randomUUID(), scope: "project", owner, trigger, guidance: "Keep the boundary.", authority: commits.length ? "project_contract" : "imported", origin: commits.length ? "agent" : "migration",
+  sourceRefs: commits.map((captureCommit, index) => ({ type: "repository" as const, path: `src/${index}.ts`, excerptSha256: String(index).repeat(64), captureCommit })),
+  revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z",
 });
 
-async function repository() {
-  const root = await mkdtemp(join(tmpdir(), "continuity-owner-move-"));
-  const oldPath = join(root, "old"), movedPath = join(root, "moved");
-  await git(root, ["init", "-q", oldPath]);
-  await git(oldPath, ["config", "user.email", "test@example.invalid"]);
-  await git(oldPath, ["config", "user.name", "test"]);
-  await writeFile(join(oldPath, "evidence.txt"), "stable\n");
-  await git(oldPath, ["add", "."]);
-  await git(oldPath, ["commit", "-qm", "first"]);
-  const first = String((await git(oldPath, ["rev-parse", "HEAD"])).stdout).trim();
-  const evidence = await captureEvidence(oldPath, ["evidence.txt"]);
-  const old = await projectContext(oldPath, "old");
-  await rename(oldPath, movedPath);
-  const moved = await projectContext(movedPath, "moved");
-  return { root, oldPath, movedPath, first, evidence, old, moved };
-}
+test("owner reassociation revises moved notes and backs current-owner collisions out of the result", () => {
+  const oldMove = note("old", "move"), oldMoveDuplicate = note("old", "move"), oldSame = note("old", "same"), currentSame = note("current", "same");
+  const result = reassociateOwnerNotes("old", "current", [oldMove, oldMoveDuplicate, oldSame, currentSame], "2025-02-01T00:00:00Z");
+  assert.equal(result.notes.filter((item) => item.owner === "current").length, 3);
+  assert.equal(result.notes.some((item) => item.owner === "old"), false);
+  assert.deepEqual(result.moved.map((item) => item.id), [oldMove.id, oldMoveDuplicate.id]);
+  assert.deepEqual(result.suppressed.map((item) => item.id), [oldSame.id]);
+  assert.equal(result.notes.find((item) => item.id === oldMove.id)?.revision, 2);
+});
 
-test("reassociates one orphaned moved repository using local commit and matching evidence", async () => {
-  const repo = await repository();
+test("moved owner detection requires stale missing homes and two commits from exactly one owner", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-v5-owner-move-")), oldPath = join(root, "old"), currentPath = join(root, "current");
   try {
-    assert.notEqual(repo.old.owner, repo.moved.owner);
-    const fact = compact([], [candidate({ key: "workflow.test", text: "Run tests" }, {
-      owner: repo.old.owner,
-      captureCommit: repo.first,
-      evidencePaths: repo.evidence,
-    })]).facts;
-    assert.equal(await findMovedProjectOwner(
-      repo.movedPath,
-      repo.moved.owner,
-      [workspace(repo.oldPath, repo.old.owner)],
-      fact,
-      [],
-    ), repo.old.owner);
-
-    await mkdir(repo.oldPath);
-    assert.equal(await findMovedProjectOwner(
-      repo.movedPath,
-      repo.moved.owner,
-      [workspace(repo.oldPath, repo.old.owner)],
-      fact,
-      [],
-    ), undefined, "a live prior workspace must block reassociation");
-  } finally {
-    await rm(repo.root, { recursive: true, force: true });
-  }
-});
-
-test("requires exact commit object IDs", async () => {
-  const repo = await repository();
-  try {
-    const base = compact([], [candidate({ key: "one", text: "One" }, {
-      owner: repo.old.owner,
-      captureCommit: repo.first,
-      evidencePaths: repo.evidence,
-    })]).facts[0]!;
-    const blob = String((await git(repo.movedPath, ["hash-object", "evidence.txt"])).stdout).trim();
-    await git(repo.movedPath, ["tag", "-a", "memory-test", "-m", "tag"]);
-    const tag = String((await git(repo.movedPath, ["rev-parse", "memory-test^{tag}"])).stdout).trim();
-    for (const captureCommit of [repo.first.slice(0, 12), `${repo.first}^`, blob, tag]) {
-      assert.equal(await findMovedProjectOwner(
-        repo.movedPath,
-        repo.moved.owner,
-        [workspace(repo.oldPath, repo.old.owner)],
-        [{ ...base, captureCommit }],
-        [],
-      ), undefined);
-    }
-  } finally {
-    await rm(repo.root, { recursive: true, force: true });
-  }
-});
-
-test("rejects stale evidence, missing commits, recent paths, and ambiguous owners", async () => {
-  const repo = await repository();
-  try {
-    const base = compact([], [candidate({ key: "one", text: "One" }, {
-      owner: repo.old.owner,
-      captureCommit: repo.first,
-      evidencePaths: repo.evidence,
-    })]).facts[0]!;
-    await writeFile(join(repo.movedPath, "evidence.txt"), "changed\n");
-    assert.equal(await findMovedProjectOwner(
-      repo.movedPath,
-      repo.moved.owner,
-      [workspace(repo.oldPath, repo.old.owner)],
-      [base],
-      [],
-    ), undefined);
-    assert.equal(await findMovedProjectOwner(
-      repo.movedPath,
-      repo.moved.owner,
-      [workspace(repo.oldPath, repo.old.owner, 1)],
-      [{ ...base, captureCommit: "f".repeat(40) }],
-      [],
-    ), undefined);
-
-    await writeFile(join(repo.movedPath, "second.txt"), "second\n");
-    await git(repo.movedPath, ["add", "."]);
-    await git(repo.movedPath, ["commit", "-qm", "second"]);
-    const second = String((await git(repo.movedPath, ["rev-parse", "HEAD"])).stdout).trim();
-    const facts: Fact[] = [
-      { ...base, evidencePaths: undefined },
-      { ...base, key: "two", captureCommit: second, evidencePaths: undefined },
-      { ...base, owner: "other-owner", key: "other-one", evidencePaths: undefined },
-      { ...base, owner: "other-owner", key: "other-two", captureCommit: second, evidencePaths: undefined },
-    ];
-    assert.equal(await findMovedProjectOwner(
-      repo.movedPath,
-      repo.moved.owner,
-      [workspace(repo.oldPath, repo.old.owner), workspace(join(repo.root, "other-missing"), "other-owner")],
-      facts,
-      [],
-    ), undefined, "multiple qualifying owners are ambiguous");
-  } finally {
-    await rm(repo.root, { recursive: true, force: true });
-  }
-});
-
-test("record migration keeps current-owner collisions and backs up old-owner records", () => {
-  const oldFact = (key: string, text: string, owner: string): Fact => ({
-    key,
-    text,
-    owner,
-    scope: "project",
-    kind: "workflow",
-    source: "test",
-    confidence: 1,
-    updatedAt: new Date().toISOString(),
-    captureCommit: "a".repeat(40),
-  });
-  const facts = [oldFact("same", "old", "old"), oldFact("same", "current", "current"), oldFact("moved", "move me", "old")];
-  const oldCandidate = candidate({ key: "same", text: "old candidate" }, { owner: "old", captureCommit: "a".repeat(40) });
-  const currentCandidate = candidate({ key: "same", text: "current candidate" }, { owner: "current", captureCommit: "a".repeat(40) });
-  const moved = reassociateOwnerRecords("old", "current", facts, [oldCandidate, currentCandidate]);
-  assert.deepEqual(moved.facts.map((fact) => [fact.owner, fact.key, fact.text]), [
-    ["current", "same", "current"],
-    ["current", "moved", "move me"],
-  ]);
-  assert.deepEqual(moved.candidates, [currentCandidate]);
-  assert.equal(moved.backup.facts.length, 2);
-  assert.equal(moved.backup.candidates.length, 1);
-  assert.equal(isOwnerReassociationMarker({
-    ...moved.backup,
-    version: 1,
-    status: "records-moved",
-    createdAt: new Date().toISOString(),
-  }), true);
+    await mkdir(oldPath); await exec("git", ["init"], { cwd: oldPath }); await exec("git", ["config", "user.email", "test@example.com"], { cwd: oldPath }); await exec("git", ["config", "user.name", "Test"], { cwd: oldPath });
+    await writeFile(join(oldPath, "one.txt"), "one\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "one"], { cwd: oldPath });
+    const first = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
+    await writeFile(join(oldPath, "two.txt"), "two\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "two"], { cwd: oldPath });
+    const second = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
+    await exec("git", ["tag", "-a", "same-one", first, "-m", "same one"], { cwd: oldPath }); await exec("git", ["tag", "-a", "same-two", first, "-m", "same two"], { cwd: oldPath });
+    const tagOne = String((await exec("git", ["rev-parse", "same-one"], { cwd: oldPath })).stdout).trim(), tagTwo = String((await exec("git", ["rev-parse", "same-two"], { cwd: oldPath })).stdout).trim();
+    await rename(oldPath, currentPath);
+    const currentOwner = (await projectContext(currentPath, "fallback")).owner;
+    const workspace: Workspace = { id: "old-workspace", canonicalPath: oldPath, projectOwner: "old-owner", createdAt: "2020-01-01T00:00:00Z", lastSeenAt: "2020-01-01T00:00:00Z" };
+    const notes = [note("old-owner", "boundary", [first, second])];
+    assert.equal(await findMovedProjectOwner(currentPath, currentOwner, [workspace], notes), "old-owner");
+    assert.equal(await findMovedProjectOwner(currentPath, currentOwner, [workspace], [note("old-owner", "same commit", [tagOne, tagTwo])]), undefined, "two tag OIDs peeling to one commit are not independent proof");
+    await mkdir(oldPath);
+    assert.equal(await findMovedProjectOwner(currentPath, currentOwner, [workspace], notes), undefined, "an existing old home vetoes reassociation");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

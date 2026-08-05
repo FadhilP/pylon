@@ -13,7 +13,10 @@ const commandNames = new Set<string>(COMMAND_NAMES);
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
-const memoryKinds = new Set(["workflow", "structure", "architecture", "warning", "preference"]);
+const memoryScopes = new Set(["user", "project"]);
+const memoryAuthorities = new Set(["user_instruction", "project_contract", "imported"]);
+const memoryOrigins = new Set(["user", "agent", "migration"]);
+const memoryNoteId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
@@ -131,7 +134,7 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && validThinkingList(value.thinkingLevels);
   }
   if (value.kind === "continuity") {
-    return typeof value.memoryEnabled === "boolean" && ["planner", "executor"].every((key) => {
+    return typeof value.memoryEnabled === "boolean" && ["planner", "executor", "memoryReviewer"].every((key) => {
       const profile = value[key];
       return profile === undefined || record(profile)
         && boundedString(profile.model, 400)
@@ -328,13 +331,30 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (value.type === "startProviderLogin" && value.authType !== "api_key" && value.authType !== "oauth") {
     return { ok: false, error: "invalid provider authentication type" };
   }
-  if (value.type === "updateContinuityMemory" || value.type === "deleteContinuityMemory") {
-    if (!boundedString(value.key, 200) || typeof value.expectedUpdatedAt !== "string"
-      || Number.isNaN(Date.parse(value.expectedUpdatedAt))) return { ok: false, error: "invalid memory target" };
+  if (value.type === "migrateContinuityMemory") {
+    const allowed = new Set(["type", "commandId", "expectedGeneration"]);
+    if (Object.keys(value).some((key) => !allowed.has(key))) {
+      return { ok: false, error: "invalid memory migration" };
+    }
   }
-  if (value.type === "updateContinuityMemory"
-    && (!boundedString(value.text, 1_000) || !value.text.trim() || !memoryKinds.has(String(value.kind)))) {
-    return { ok: false, error: "invalid memory update" };
+  if (value.type === "updateContinuityMemory" || value.type === "deleteContinuityMemory") {
+    const allowed = value.type === "updateContinuityMemory"
+      ? new Set(["type", "commandId", "expectedGeneration", "scope", "id", "trigger", "guidance", "expectedRevision"])
+      : new Set(["type", "commandId", "expectedGeneration", "scope", "id", "expectedRevision"]);
+    if (Object.keys(value).some((key) => !allowed.has(key))
+      || !memoryScopes.has(String(value.scope)) || typeof value.id !== "string" || value.id.length > MAX_ID_LENGTH || !memoryNoteId.test(value.id)
+      || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 1) {
+      return { ok: false, error: "invalid memory target" };
+    }
+  }
+  if (value.type === "updateContinuityMemory") {
+    const trigger = value.trigger;
+    const guidance = value.guidance;
+    if (typeof trigger !== "string" || trigger.length < 1 || trigger.length > 240 || trigger !== trigger.trim()
+      || typeof guidance !== "string" || guidance.length < 1 || guidance.length > 800 || guidance !== guidance.trim()
+      || trigger.length + guidance.length > 1_000) {
+      return { ok: false, error: "invalid memory update" };
+    }
   }
 
   return { ok: true, value: value as unknown as WebCommand };
@@ -849,16 +869,21 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
           Number.isSafeInteger(standardChangesByKind[key]) && (standardChangesByKind[key] as number) >= 0)))) return false;
     if (operational.sieve.contextUsagePercent !== undefined && (typeof operational.sieve.contextUsagePercent !== "number" || !Number.isFinite(operational.sieve.contextUsagePercent) || operational.sieve.contextUsagePercent < 0 || operational.sieve.contextUsagePercent > 100)) return false;
   }
-  for (const facts of [operational.continuity.memory, operational.continuity.globalMemory]) {
-    if (facts !== undefined
-      && (!Array.isArray(facts) || facts.length > 30
-        || !facts.every((fact) => record(fact)
-          && boundedString(fact.key, 200)
-          && memoryKinds.has(String(fact.kind))
-          && boundedString(fact.text, 1_000)
-          && boundedString(fact.source, 500)
-          && typeof fact.confidence === "number" && fact.confidence >= 0 && fact.confidence <= 1
-          && typeof fact.updatedAt === "string" && !Number.isNaN(Date.parse(fact.updatedAt))))) return false;
+  const safeMemoryPath = (path: unknown) => typeof path === "string" && path.length > 0 && path.length <= 240 && !path.startsWith("/") && !path.startsWith("\\") && !/^[a-z]:/i.test(path) && !path.split(/[\\/]+/).some((part) => !part || part === "." || part === "..");
+  const validMemoryNote = (note: unknown, expectedScope: "user" | "project") => record(note)
+    && typeof note.id === "string" && note.id.length <= MAX_ID_LENGTH && memoryNoteId.test(note.id)
+    && note.scope === expectedScope
+    && typeof note.trigger === "string" && note.trigger.length >= 1 && note.trigger.length <= 240 && note.trigger === note.trigger.trim()
+    && typeof note.guidance === "string" && note.guidance.length >= 1 && note.guidance.length <= 800 && note.guidance === note.guidance.trim()
+    && note.trigger.length + note.guidance.length <= 1_000
+    && memoryAuthorities.has(String(note.authority)) && memoryOrigins.has(String(note.origin))
+    && (note.relatedPaths === undefined || Array.isArray(note.relatedPaths) && note.relatedPaths.length <= 5 && note.relatedPaths.every(safeMemoryPath))
+    && Number.isSafeInteger(note.revision) && (note.revision as number) >= 1
+    && typeof note.updatedAt === "string" && !Number.isNaN(Date.parse(note.updatedAt))
+    && typeof note.sourceSummary === "string" && note.sourceSummary.length <= 500;
+  if (operational.continuity.availability === "available") {
+    if (!Array.isArray(operational.continuity.memory) || operational.continuity.memory.length > 1_000 || !operational.continuity.memory.every((note) => validMemoryNote(note, "project"))
+      || !Array.isArray(operational.continuity.globalMemory) || operational.continuity.globalMemory.length > 1_000 || !operational.continuity.globalMemory.every((note) => validMemoryNote(note, "user"))) return false;
   }
   const extensionUi = value.extensionUi;
   return record(extensionUi)
@@ -873,6 +898,121 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && (extensionUi.title === undefined || typeof extensionUi.title === "string")
     && typeof extensionUi.editorText === "string" && extensionUi.editorText.length <= MAX_MESSAGE_LENGTH
     && Number.isSafeInteger(extensionUi.editorRevision) && (extensionUi.editorRevision as number) >= 0;
+}
+
+function operationalValidationIssue(value: unknown): { area: string; detail: string } | undefined {
+  const issue = (area: string, detail: string) => ({ area: `operational.${area}`, detail });
+  if (!record(value)) return issue("data", "must be an object");
+  const names = ["verification", "jobs", "guard", "continuity", "timeline", "tools", "sieve", "health"] as const;
+  for (const name of names) if (!record(value[name])) return issue(name, "must be an object");
+  const operational = value as Record<typeof names[number], Record<string, unknown>>;
+  const available = (feature: Record<string, unknown>) => feature.availability === "available" || feature.availability === "unavailable";
+  for (const name of names.slice(0, -1)) if (!available(operational[name])) return issue(`${name}.availability`, "must be available or unavailable");
+  if (!Array.isArray(operational.verification.checks) || operational.verification.checks.length > 20) return issue("verification.checks", "must be an array with at most 20 items");
+  if (!Array.isArray(operational.jobs.items) || operational.jobs.items.length > 50) return issue("jobs.items", "must be an array with at most 50 items");
+  for (const key of ["blocked", "confirmed"] as const) if (typeof operational.guard[key] !== "number") return issue(`guard.${key}`, "must be a number");
+  if (!Number.isSafeInteger(operational.continuity.revision)) return issue("continuity.revision", "must be a safe integer");
+  if (!Number.isSafeInteger(operational.timeline.revision)) return issue("timeline.revision", "must be a safe integer");
+  if (!Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100) return issue("timeline.checkpoints", "must be an array with at most 100 items");
+  if (!Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100) return issue("tools.policies", "must be an array with at most 100 items");
+  if (!["healthy", "degraded", "unavailable"].includes(String(operational.health.status))) return issue("health.status", "must be healthy, degraded, or unavailable");
+  if (!Array.isArray(operational.health.issues) || operational.health.issues.length > 20) return issue("health.issues", "must be an array with at most 20 items");
+
+  if (operational.sieve.availability === "available") {
+    const sieve = operational.sieve;
+    if (!["enabled", "observe", "disabled"].includes(String(sieve.mode))) return issue("sieve.mode", "is invalid");
+    if (!["stable", "legacy", "standard-v2"].includes(String(sieve.projectionMode))) return issue("sieve.projectionMode", "is invalid");
+    if (!Number.isSafeInteger(sieve.threshold) || (sieve.threshold as number) < 1_000) return issue("sieve.threshold", "must be a safe integer of at least 1000");
+    if (typeof sieve.activePruning !== "boolean") return issue("sieve.activePruning", "must be boolean");
+    if (!["enabled", "observe"].includes(String(sieve.latestMode))) return issue("sieve.latestMode", "is invalid");
+    const statsIssue = (raw: unknown, path: string) => {
+      if (!record(raw)) return issue(path, "must be an object");
+      if (!record(raw.transformedBy)) return issue(`${path}.transformedBy`, "must be an object");
+      if (!record(raw.byTool)) return issue(`${path}.byTool`, "must be an object");
+      if (Object.keys(raw.byTool).length > 33) return issue(`${path}.byTool`, "must contain at most 33 tools");
+      for (const key of ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const) {
+        if (!Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0) return issue(`${path}.${key}`, "must be a non-negative safe integer");
+      }
+      for (const key of ["ageThreshold", "budget", "giantError", "activeThreshold", "staleRead", "duplicate", "errorCap", "mixedText"] as const) {
+        if (!Number.isSafeInteger(raw.transformedBy[key]) || (raw.transformedBy[key] as number) < 0) return issue(`${path}.transformedBy.${key}`, "must be a non-negative safe integer");
+      }
+      for (const [name, usage] of Object.entries(raw.byTool)) {
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue(`${path}.byTool`, "contains an invalid tool name");
+        if (!record(usage)) return issue(`${path}.byTool.${name}`, "must be an object");
+        for (const key of ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"] as const) {
+          if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0) return issue(`${path}.byTool.${name}.${key}`, "must be a non-negative safe integer");
+        }
+      }
+      return undefined;
+    };
+    for (const key of ["latest", "cumulativeActual", "cumulativeProjected"] as const) {
+      const invalid = statsIssue(sieve[key], `sieve.${key}`);
+      if (invalid) return invalid;
+    }
+    for (const key of ["recalls", "recalledChars"] as const) if (!Number.isSafeInteger(sieve[key]) || (sieve[key] as number) < 0) return issue(`sieve.${key}`, "must be a non-negative safe integer");
+    if (!record(sieve.recallsByTool)) return issue("sieve.recallsByTool", "must be an object");
+    if (Object.keys(sieve.recallsByTool).length > 33) return issue("sieve.recallsByTool", "must contain at most 33 tools");
+    for (const [name, usage] of Object.entries(sieve.recallsByTool)) {
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue("sieve.recallsByTool", "contains an invalid tool name");
+      if (!record(usage)) return issue(`sieve.recallsByTool.${name}`, "must be an object");
+      for (const key of ["recalls", "recalledChars"] as const) if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0) return issue(`sieve.recallsByTool.${name}.${key}`, "must be a non-negative safe integer");
+    }
+    if (typeof sieve.updatedAt !== "string" || Number.isNaN(Date.parse(sieve.updatedAt))) return issue("sieve.updatedAt", "must be a valid timestamp");
+    if (sieve.error !== undefined && !boundedString(sieve.error, 500)) return issue("sieve.error", "must be a non-empty string of at most 500 characters");
+    const metricObjectIssue = (raw: unknown, path: string, keys: string[]) => {
+      if (!record(raw)) return issue(path, "must be an object");
+      for (const key of keys) if (!Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0) return issue(`${path}.${key}`, "must be a non-negative safe integer");
+      return undefined;
+    };
+    if (sieve.epoch !== undefined) {
+      const invalid = metricObjectIssue(sieve.epoch, "sieve.epoch", ["frozenResultCount", "frozenSourceChars", "frozenRetainedChars", "rolloverEligibleRetainedChars", "recoverableEntries"]);
+      if (invalid) return invalid;
+      const epoch = sieve.epoch as Record<string, unknown>;
+      for (const key of ["id", "reason", "promptFingerprint"] as const) if (epoch[key] !== undefined && !boundedString(epoch[key], 200)) return issue(`sieve.epoch.${key}`, "must be a non-empty string of at most 200 characters");
+      if (epoch.startedAt !== undefined && (typeof epoch.startedAt !== "string" || Number.isNaN(Date.parse(epoch.startedAt)))) return issue("sieve.epoch.startedAt", "must be a valid timestamp");
+    }
+    if (sieve.stability !== undefined) {
+      const invalid = metricObjectIssue(sieve.stability, "sieve.stability", ["newProjections", "projectionCacheHits", "recoverableEntries", "explicitReflows", "softBudgetExceedances", "prefixChurnViolations", "estimatedInvalidatedChars"]);
+      if (invalid) return invalid;
+      const stability = sieve.stability as Record<string, unknown>;
+      for (const key of ["earliestChangedPriorMessageIndex", "standardComparisons", "standardPrefixChurn", "standardEarliestChangedPriorMessageIndex", "standardEstimatedInvalidatedChars"] as const) {
+        if (stability[key] !== undefined && (!Number.isSafeInteger(stability[key]) || (stability[key] as number) < 0)) return issue(`sieve.stability.${key}`, "must be a non-negative safe integer");
+      }
+      if (stability.standardChangesByKind !== undefined) {
+        const changes = stability.standardChangesByKind;
+        if (!record(changes)) return issue("sieve.stability.standardChangesByKind", "must be an object");
+        for (const key of ["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"] as const) if (!Number.isSafeInteger(changes[key]) || (changes[key] as number) < 0) return issue(`sieve.stability.standardChangesByKind.${key}`, "must be a non-negative safe integer");
+      }
+    }
+    if (sieve.contextUsagePercent !== undefined && (typeof sieve.contextUsagePercent !== "number" || !Number.isFinite(sieve.contextUsagePercent) || sieve.contextUsagePercent < 0 || sieve.contextUsagePercent > 100)) return issue("sieve.contextUsagePercent", "must be a finite percentage from 0 to 100");
+  }
+
+  if (operational.continuity.availability === "available") {
+    const safePath = (path: unknown) => typeof path === "string" && path.length > 0 && path.length <= 240 && !path.startsWith("/") && !path.startsWith("\\") && !/^[a-z]:/i.test(path) && !path.split(/[\\/]+/).some((part) => !part || part === "." || part === "..");
+    const memoryIssue = (raw: unknown, scope: "user" | "project", path: string) => {
+      if (!Array.isArray(raw) || raw.length > 1_000) return issue(path, "must be an array with at most 1000 notes");
+      for (let index = 0; index < raw.length; index++) {
+        const note = raw[index], notePath = `${path}[${index}]`;
+        if (!record(note)) return issue(notePath, "must be an object");
+        if (typeof note.id !== "string" || note.id.length > MAX_ID_LENGTH || !memoryNoteId.test(note.id)) return issue(`${notePath}.id`, "must be a UUID of at most 128 characters");
+        if (note.scope !== scope) return issue(`${notePath}.scope`, `must be ${scope}`);
+        if (typeof note.trigger !== "string" || note.trigger.length < 1 || note.trigger.length > 240 || note.trigger !== note.trigger.trim()) return issue(`${notePath}.trigger`, "must be trimmed and contain 1 to 240 characters");
+        if (typeof note.guidance !== "string" || note.guidance.length < 1 || note.guidance.length > 800 || note.guidance !== note.guidance.trim()) return issue(`${notePath}.guidance`, "must be trimmed and contain 1 to 800 characters");
+        if (note.trigger.length + note.guidance.length > 1_000) return issue(notePath, "trigger and guidance must total at most 1000 characters");
+        if (!memoryAuthorities.has(String(note.authority))) return issue(`${notePath}.authority`, "is invalid");
+        if (!memoryOrigins.has(String(note.origin))) return issue(`${notePath}.origin`, "is invalid");
+        if (note.relatedPaths !== undefined && (!Array.isArray(note.relatedPaths) || note.relatedPaths.length > 5 || !note.relatedPaths.every(safePath))) return issue(`${notePath}.relatedPaths`, "must contain at most 5 safe relative paths");
+        if (!Number.isSafeInteger(note.revision) || (note.revision as number) < 1) return issue(`${notePath}.revision`, "must be a positive safe integer");
+        if (typeof note.updatedAt !== "string" || Number.isNaN(Date.parse(note.updatedAt))) return issue(`${notePath}.updatedAt`, "must be a valid timestamp");
+        if (typeof note.sourceSummary !== "string" || note.sourceSummary.length > 500) return issue(`${notePath}.sourceSummary`, "must be a string of at most 500 characters");
+      }
+      return undefined;
+    };
+    const projectIssue = memoryIssue(operational.continuity.memory, "project", "continuity.memory");
+    if (projectIssue) return projectIssue;
+    return memoryIssue(operational.continuity.globalMemory, "user", "continuity.globalMemory");
+  }
+  return undefined;
 }
 
 export interface RuntimeSnapshotValidationIssue {
@@ -897,6 +1037,8 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
   const missing = requiredAreas.find((area) => !record(value[area]));
   if (missing) return { kind: "snapshot", area: missing, detail: "required runtime data is missing" };
   if (!isRuntimeSnapshot(value)) {
+    const operationalIssue = operationalValidationIssue(value.operational);
+    if (operationalIssue) return { kind: "snapshot", ...operationalIssue };
     const validAreaReplacements: Array<[string, Record<string, unknown>]> = [
       ["workspace", { workspace: undefined }],
       ["runtime policy", {

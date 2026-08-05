@@ -380,6 +380,7 @@ export type PackageSettingsReadModel =
       memoryEnabled: boolean;
       planner?: PackageModelProfileReadModel;
       executor?: PackageModelProfileReadModel;
+      memoryReviewer?: PackageModelProfileReadModel;
     }
   | {
       kind: "sieve";

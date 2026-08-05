@@ -5,10 +5,11 @@
   "type": "module",
   "keywords": ["pi-package"],
   "engines": { "node": ">=22.18.0" },
-  "files": ["extensions", "src", "docs", "README.md", "LICENSE"],
+  "files": ["extensions", "src", "scripts", "docs", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "memory:evaluate": "node --experimental-transform-types scripts/evaluate-memory-v5.ts"
   },
   "pi": { "extensions": ["./extensions/pi-continuity.ts"] },
   "pylon": { "settings": "./src/web-settings.ts" },

@@ -50,15 +50,18 @@ test("usage observer failures do not control the spawned child", async () => {
   assert.equal(run.usage.input, 1);
 });
 
-test("runner reports rejected commands and aborts oversized protocol output", async () => {
+test("runner reports rejected commands and accepts protocol lines larger than 1 MiB", async () => {
   const rejected = await fake(`emit({id:command.id,type:'response',command:'prompt',success:false,error:'denied'});setInterval(()=>{},1000);`);
   assert.match((await runSpawn([], { cwd: rejected.dir, prompt: "x", invocation: rejected.invocation })).error ?? "", /denied/);
 
-  const dir = await mkdtemp(join(tmpdir(), "pi-spawn-overflow-"));
-  const script = join(dir, "overflow.mjs");
-  await writeFile(script, `process.stdout.write('x'.repeat(1024*1024+1));setInterval(()=>{},1000);`);
-  const overflow = await runSpawn([], { cwd: dir, prompt: "x", invocation: { command: process.execPath, args: [script] }, timeoutMs: 5000 });
-  assert.match(overflow.error ?? "", /exceeded 1 MiB/);
+  const large = await fake(`if(command.type==='prompt'){
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'x'.repeat(1024*1024+1)}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  const run = await runSpawn([], { cwd: large.dir, prompt: "x", invocation: large.invocation, timeoutMs: 5000 });
+  assert.equal(run.error, undefined);
+  assert.equal(run.truncated, true);
+  assert.ok(Buffer.byteLength(run.text) <= 50 * 1024);
 });
 
 test("timeout configuration is bounded", () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
@@ -23,6 +23,7 @@ import {
   writeJson,
   writeJsonAtomic,
   updateJson,
+  withFileLock,
   withStateLock,
   rm,
   defaultRoot,
@@ -30,29 +31,43 @@ import {
 import { isWorkspace, registerWorkspace, type Workspace } from "../src/workspace.ts";
 import { pruneOrphanWorkFiles, startSessionGc } from "../src/session-gc.ts";
 import {
-  candidate,
-  compact,
-  normalizeCandidatesFile,
-  normalizeMemoryFile,
-  factsForOwners,
-  isMemoryFile,
-  MEMORY_SCHEMA_VERSION,
-  type PendingCandidate,
-  type Fact,
-  type Scope,
-  type FactStatus,
-  factIdentity,
+  applyReview,
+  directDelete,
+  directEdit,
+  discardExpiredReviews,
+  emptyMemoryState,
+  enforceMemoryLimits,
+  exactDuplicate,
+  isMemoryState,
+  notesForOwners,
+  normalizeMemoryState,
+  stageReview,
+  sha256,
+  strongDuplicate,
+  type MemoryScope,
+  type MemoryStateFile,
+  type NotebookNote,
+  type ReviewRecord,
 } from "../src/memory.ts";
+import {
+  callMemoryReviewer,
+  preflightMemoryProposals,
+  reviewedRecord,
+  userMessageText,
+} from "../src/memory-review.ts";
+import { hasPendingV4Migration, isMigrationJournal, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
+import { reviewerBackedV4MigrationPolicy, MEMORY_V5_ROLLOUT, type MemoryRolloutPolicy } from "../src/memory-rollout.ts";
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
-import { buildContext, promptQuery, shortlistFacts, shortlistResolvedFacts } from "../src/context.ts";
+import { buildContext, promptQuery, shortlistNotes, shortlistResolvedNotes } from "../src/context.ts";
 import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
-import { captureEvidence, classifyProjectFacts, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
+import { captureEvidenceRanges, currentChangedPaths, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
 import {
   loadConfig,
   parseModelRef,
   saveConfig,
+  updateConfig,
   thinkingLevels,
   type ModelProfile,
   type ThinkingLevel,
@@ -67,12 +82,7 @@ import {
 import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
 import { buildContinuityCompaction } from "../src/compaction.ts";
 import { canUseBroadRecall, recallSession } from "../src/recall.ts";
-import {
-  findMovedProjectOwner,
-  isOwnerReassociationMarker,
-  reassociateOwnerRecords,
-  type OwnerReassociationMarker,
-} from "../src/owner-reassociation.ts";
+import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
@@ -109,21 +119,14 @@ const isCurrentHandoffBoundary = (message: any, active: Work | undefined) => {
   );
 };
 
-const Kind = StringEnum([
-    "workflow",
-    "structure",
-    "architecture",
-    "warning",
-    "preference",
-  ] as const),
-  Status = StringEnum(["pending", "in_progress", "done", "blocked"] as const),
+const Status = StringEnum(["pending", "in_progress", "done", "blocked"] as const),
   Action = StringEnum([
     "clarify",
     "set_plan",
     "todo",
     "state",
   ] as const),
-  MemAction = StringEnum(["list", "add", "replace", "remove"] as const),
+  MemAction = StringEnum(["list", "propose"] as const),
   ScopeName = StringEnum(["user", "project"] as const),
   RecallScopeName = StringEnum(["execution", "lineage", "all"] as const),
   RecallModeName = StringEnum(["text", "files", "touched"] as const);
@@ -147,14 +150,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
     workspace: Workspace | undefined,
     all: Workspace[] = [],
     work: Work | undefined,
-    facts: Fact[] = [],
-    memoryFacts: Fact[] = [],
-    candidates: PendingCandidate[] = [],
+    memoryState: MemoryStateFile = emptyMemoryState(),
+    memoryNotes: NotebookNote[] = [],
+    reviewCalledThisTask = false,
+    memoryProposalToken: string | undefined,
+    memoryTaskGeneration = 0,
     project: ProjectContext | undefined,
     savedTools: string[] | undefined,
     lastPrompt = "",
     memoryEnabled = true,
     memoryInjectionEnabled = true,
+    legacyMigrationAvailable = false,
+    activeSessionContext: any,
     tasksVisible = true,
     currentCwd = "",
     latestVerification: any,
@@ -175,6 +182,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
     leasedSessionId = "",
     ephemeralSession = false,
     schedulePlanApproval = (_ctx: any) => {};
+  let memoryLifecycleQueue = Promise.resolve();
+  const withMemoryLifecycle = async <T>(task: () => Promise<T>): Promise<T> => {
+    const previous = memoryLifecycleQueue; let release = () => {};
+    memoryLifecycleQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await task(); } finally { release(); }
+  };
   pi.events.emit("pylon:worktree-observer-request", {
     version: 1,
     respond: (value: any) => {
@@ -273,26 +287,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   const paths = () => ({
     work: workFile,
-    memory: join(root, "memory-v4", "memory.json"),
-    candidates: join(root, "memory-v4", "candidates.json"),
+    memory: join(root, "memory-v5", "state.json"),
+    migration: join(root, "memory-v5", "migration.json"),
+    legacyMemory: join(root, "memory-v4", "memory.json"),
+    legacyCandidates: join(root, "memory-v4", "candidates.json"),
   });
-  const memoryDirectory = () => join(root, "memory-v4");
-  const validCandidatesFile = (value: any) => normalizeCandidatesFile(value) !== undefined;
-  const readCandidateQueue = async () => {
-    const fallback = { schemaVersion: MEMORY_SCHEMA_VERSION, candidates: [] as PendingCandidate[] };
-    return normalizeCandidatesFile(await readVersionedJson(paths().candidates, fallback, validCandidatesFile))!;
-  };
-  const readMemory = async () => {
-    const fallback = { schemaVersion: MEMORY_SCHEMA_VERSION, facts: [] as Fact[] };
-    return normalizeMemoryFile(await readVersionedJson(paths().memory, fallback, isMemoryFile))!;
-  };
-  const ownerFor = (scope: Scope) =>
-    scope === "user" ? "default" : project?.owner;
-  const candidatesForOwners = (items: PendingCandidate[], projectOwner: string) =>
-    items.filter((item) =>
-      (item.scope === "user" && item.owner === "default") ||
-      (item.scope === "project" && item.owner === projectOwner),
-    );
+  const memoryDirectory = () => join(root, "memory-v5");
+  const readMemory = async () => normalizeMemoryState(await readVersionedJson(paths().memory, emptyMemoryState(), isMemoryState))!;
+  const writeMemory = async (state: MemoryStateFile) => writeJsonAtomic(paths().memory, state);
+  const ownerFor = (scope: MemoryScope) => scope === "user" ? "default" : project?.owner;
   const resolveProject = async (cwd: string) => {
     const resolved = await projectContext(cwd, workspace?.projectOwner ?? project?.owner ?? workspace!.id);
     project = resolved;
@@ -303,112 +306,37 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     return resolved;
   };
-  const visibleFacts = async (latest: string, active?: Work) => {
+  const reassociateProjectMemory = async (latest: MemoryStateFile) => {
+    if (!project) return latest;
+    const workspaces = await readJson<Workspace[]>(join(root, "workspaces.json"), [], (items) => Array.isArray(items) && items.every(isWorkspace));
+    const oldOwner = await findMovedProjectOwner(currentCwd, project.owner, workspaces, latest.notes);
+    if (!oldOwner) return latest;
+    const at = new Date().toISOString(), migrationId = randomUUID();
+    const reassociated = reassociateOwnerNotes(oldOwner, project.owner, latest.notes, at);
+    const affected = [...reassociated.moved, ...reassociated.suppressed];
+    if (!affected.length) return latest;
+    const backup = {
+      version: 1, migrationId, oldOwner, currentOwner: project.owner, createdAt: at,
+      fromRevision: latest.revision, movedNoteIds: reassociated.moved.map((note) => note.id),
+      suppressedNoteIds: reassociated.suppressed.map((note) => note.id), notes: affected,
+    };
+    const audit = { type: "owner_reassociation" as const, migrationId, oldOwner, owner: project.owner, at,
+      movedNoteIds: backup.movedNoteIds, suppressedNoteIds: backup.suppressedNoteIds, fromRevision: latest.revision };
+    const next = { ...latest, revision: latest.revision + 1, notes: reassociated.notes, audits: [...(latest.audits ?? []), audit].slice(-100), updatedAt: at };
+    enforceMemoryLimits(next);
+    await writeJsonAtomic(join(memoryDirectory(), "backups", `owner-reassociation-${migrationId}.json`), backup);
+    return next;
+  };
+  const visibleNotes = async (latest: string, active?: Work) => {
     project = await resolveProject(currentCwd);
     const query = promptQuery(latest, active);
-    if (!query) return { query, facts: [] as Fact[] };
-    // Prefilter permissively, classify only relevant project facts, then apply the stricter unchecked gate.
-    const owned = factsForOwners(memoryFacts, project.owner), projectFacts = shortlistResolvedFacts(
-      owned.filter((fact) => fact.scope === "project"), query, Number.MAX_SAFE_INTEGER,
-    );
-    const classified = await classifyProjectFacts(currentCwd, projectFacts);
-    const statuses = new Map(classified.map((item) => [factIdentity(item.fact), item.status]));
-    const applicable = [
-      ...owned.filter((fact) => fact.scope === "user"),
-      ...classified.filter((item) => item.status === "active" || item.status === "unchecked").map((item) => item.fact),
-    ];
-    return {
-      query,
-      facts: shortlistResolvedFacts(applicable, query, 2, (fact) =>
-        fact.scope === "project" && statuses.get(factIdentity(fact)) === "active" ? "active" : "unchecked"),
-    };
-  };
-  const reassociateProjectMemory = async () => {
-    if (!project || !workspace) return;
-    const workspaceFile = join(root, "workspaces.json");
-    const markerNames = (await readdir(memoryDirectory()).catch(() => []))
-      .filter((name) => name.startsWith("owner-reassociation-") && name.endsWith(".json"))
-      .sort()
-      .reverse();
-    let markerPath: string | undefined;
-    let marker: OwnerReassociationMarker | undefined;
-    for (const name of markerNames) {
-      const path = join(memoryDirectory(), name);
-      const value = await readJson<OwnerReassociationMarker | undefined>(
-        path,
-        undefined,
-        (item) => item === undefined || isOwnerReassociationMarker(item),
-      );
-      if (value && value.status !== "complete" && value.currentOwner === project.owner) {
-        markerPath = path;
-        marker = value;
-        break;
-      }
-    }
-    await withStateLock(memoryDirectory(), async () => {
-      const latestFacts = (await readMemory()).facts;
-      const latestCandidates = (await readCandidateQueue()).candidates;
-      const latestWorkspaces = await readJson<Workspace[]>(workspaceFile, [], (items) =>
-        Array.isArray(items) && items.every(isWorkspace));
-      if (!marker) {
-        const oldOwner = await findMovedProjectOwner(
-          currentCwd,
-          project!.owner,
-          latestWorkspaces,
-          latestFacts,
-          latestCandidates,
-        );
-        if (!oldOwner) return;
-        const moved = reassociateOwnerRecords(oldOwner, project!.owner, latestFacts, latestCandidates);
-        if (!moved.backup.facts.length && !moved.backup.candidates.length) return;
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        markerPath = join(memoryDirectory(), `owner-reassociation-${stamp}-${randomUUID()}.json`);
-        marker = {
-          ...moved.backup,
-          version: 1,
-          status: "prepared",
-          createdAt: new Date().toISOString(),
-        };
-        await writeJsonAtomic(markerPath, marker);
-      }
-      const moved = reassociateOwnerRecords(
-        marker.oldOwner,
-        marker.currentOwner,
-        latestFacts,
-        latestCandidates,
-      );
-      await writeJsonAtomic(paths().memory, {
-        schemaVersion: MEMORY_SCHEMA_VERSION,
-        facts: moved.facts,
-        updatedAt: new Date().toISOString(),
-      });
-      await writeJsonAtomic(paths().candidates, {
-        schemaVersion: MEMORY_SCHEMA_VERSION,
-        candidates: moved.candidates,
-      });
-      marker = { ...marker, status: "records-moved" };
-      await writeJsonAtomic(markerPath!, marker);
-      memoryFacts = moved.facts;
-      candidates = moved.candidates;
-      facts = memoryFacts;
-    });
-    if (!marker || marker.status !== "records-moved") return;
-    try {
-      all = await updateJson<Workspace[]>(workspaceFile, [], (items) =>
-        items.map((item) => item.projectOwner === marker!.oldOwner
-          ? { ...item, projectOwner: marker!.currentOwner }
-          : item), (items) => Array.isArray(items) && items.every(isWorkspace));
-      marker = { ...marker, status: "complete" };
-      await writeJsonAtomic(markerPath!, marker);
-    } catch {
-      // The records-moved marker makes workspace remapping retryable on the next startup.
-    }
+    if (!query) return { query, notes: [] as NotebookNote[] };
+    return { query, notes: shortlistResolvedNotes(notesForOwners(memoryNotes, project.owner), query, 2) };
   };
   const projectMemory = () => project
-    ? memoryFacts.filter((fact) => fact.scope === "project" && fact.owner === project!.owner)
+    ? memoryNotes.filter((note) => note.scope === "project" && note.owner === project!.owner)
     : [];
-  const globalMemory = () => memoryFacts.filter((fact) =>
-    fact.scope === "user" && fact.owner === "default");
+  const globalMemory = () => memoryNotes.filter((note) => note.scope === "user" && note.owner === "default");
   const stateSnapshot = (available = true) =>
     continuityStateSnapshot(
       leasedSessionId,
@@ -417,77 +345,60 @@ export default function continuityExtension(pi: ExtensionAPI) {
       available,
       projectMemory(),
       globalMemory(),
+      legacyMigrationAvailable,
     );
   const publishState = (available = true) => {
     stateRevision++;
     pi.events.emit("pi-continuity:state-change", stateSnapshot(available));
   };
+  const emitMemoryOutcome = (outcome: "preflight_rejected" | "reviewer_failed" | "staged" | "committed" | "discarded" | "migration_failed" | "migration_committed") =>
+    pi.events.emit("pi-continuity:memory-outcome", { version: 1, outcome, at: new Date().toISOString() });
   const disposeStateRequest = pi.events.on("pi-continuity:state-request", (request: any) => {
     if (request?.version !== CONTINUITY_STATE_VERSION || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
     try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Continuity. */ }
   });
   const disposeMemoryMutation = pi.events.on("pi-continuity:memory-mutation", (request: any) => {
-    if (request?.version !== 1 || request.sessionId !== leasedSessionId || typeof request.respond !== "function") return;
-    const operation = (async () => {
-      if (!memoryEnabled) throw new Error("Continuity memory is disabled in package settings");
-      if (request.action !== "update" && request.action !== "delete") throw new Error("invalid memory action");
-      if (typeof request.key !== "string" || !request.key.trim() || request.key.length > 200
-        || typeof request.expectedUpdatedAt !== "string") throw new Error("invalid memory target");
-      project = await resolveProject(currentCwd);
+    if (request?.version !== 2 && typeof request?.respond === "function") {
+      request.respond(Promise.reject(new Error("Continuity memory mutation version 1 is no longer supported")));
+      return;
+    }
+    if (request?.version !== 2 || typeof request.respond !== "function") return;
+    if (request.sessionId !== leasedSessionId || request.expectedGeneration !== sessionGeneration) {
+      request.respond(Promise.reject(new Error("Continuity memory mutation is stale or belongs to another session")));
+      return;
+    }
+    const operation = withMemoryLifecycle(async () => {
+      if (!memoryEnabled) throw Error("Continuity memory is disabled in package settings");
+      const requestedSession = request.sessionId, requestedGeneration = request.expectedGeneration, requestedCwd = currentCwd;
+      if (request.action === "migrate") {
+        const allowed = new Set(["version", "sessionId", "expectedGeneration", "action", "respond"]);
+        if (Object.keys(request).some((key) => !allowed.has(key))) throw Error("invalid memory migration fields");
+        if (!activeSessionContext || !legacyMigrationAvailable) throw Error("V4 memory migration is unavailable or already changed");
+        const migration = await runV4Migration(activeSessionContext, requestedSession, reviewerBackedV4MigrationPolicy);
+        if (leasedSessionId !== requestedSession || sessionGeneration !== requestedGeneration || currentCwd !== requestedCwd) throw Error("Continuity memory migration became stale");
+        legacyMigrationAvailable = await hasPendingV4Migration(root);
+        if (migration.migrated) emitMemoryOutcome("migration_committed");
+        publishState();
+        return migration;
+      }
+      if (request.action !== "update" && request.action !== "delete") throw Error("invalid memory action");
+      const allowed = request.action === "update" ? new Set(["version", "sessionId", "expectedGeneration", "action", "scope", "id", "trigger", "guidance", "expectedRevision", "respond"]) : new Set(["version", "sessionId", "expectedGeneration", "action", "scope", "id", "expectedRevision", "respond"]);
+      if (Object.keys(request).some((key) => !allowed.has(key))) throw Error("invalid memory mutation fields");
+      if ((request.scope !== "user" && request.scope !== "project") || typeof request.id !== "string" || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1) throw Error("invalid memory target");
+      const resolved = await resolveProject(requestedCwd), owner = request.scope === "user" ? "default" : resolved.owner;
       await withStateLock(memoryDirectory(), async () => {
+        if (leasedSessionId !== requestedSession || sessionGeneration !== requestedGeneration || currentCwd !== requestedCwd || project?.owner !== resolved.owner) throw Error("Continuity memory mutation became stale");
         const latest = await readMemory();
-        const index = latest.facts.findIndex((fact) =>
-          fact.scope === "project" && fact.owner === project!.owner && fact.key === request.key,
-        );
-        if (index < 0) {
-          memoryFacts = latest.facts;
-          facts = memoryFacts;
-          publishState();
-          throw new Error("memory fact is unavailable");
-        }
-        const existing = latest.facts[index]!;
-        if (existing.updatedAt !== request.expectedUpdatedAt) {
-          memoryFacts = latest.facts;
-          facts = memoryFacts;
-          publishState();
-          throw new Error("memory fact changed; review the latest value");
-        }
-        if (request.action === "delete") {
-          latest.facts.splice(index, 1);
-        } else {
-          const checked = candidate({
-            action: "replace",
-            scope: "project",
-            key: existing.key,
-            kind: request.kind,
-            text: request.text,
-            source: existing.source,
-            confidence: existing.confidence,
-          }, {
-            owner: existing.owner,
-            scope: "project",
-            captureCommit: existing.captureCommit,
-            branchAtCapture: existing.branchAtCapture,
-            evidencePaths: existing.evidencePaths,
-          });
-          latest.facts[index] = {
-            ...existing,
-            kind: checked.kind!,
-            text: checked.text!,
-            updatedAt: new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString(),
-          };
-        }
-        memoryFacts = latest.facts;
-        facts = memoryFacts;
-        await writeJson(paths().memory, {
-          schemaVersion: MEMORY_SCHEMA_VERSION,
-          facts: memoryFacts,
-          updatedAt: new Date().toISOString(),
-        });
+        const next = request.action === "delete"
+          ? directDelete(latest, request.scope, owner, request.id, request.expectedRevision)
+          : directEdit(latest, request.scope, owner, request.id, request.expectedRevision, request.trigger, request.guidance);
+        await writeMemory(next);
+        memoryState = next;
+        memoryNotes = next.notes;
       });
       publishState();
-      return { updated: true };
-    })();
+      return { updated: true, revision: memoryState.revision };
+    });
     request.respond(operation);
   });
   const saveWork = async () => {
@@ -529,39 +440,80 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const hideTasks = (ctx: any) => {
     if (ctx.mode === "tui") ctx.ui.setWidget("pi-continuity", undefined);
   };
-  const compactMemory = async () => {
-    if (!memoryEnabled) return;
-    return withStateLock(memoryDirectory(), async () => {
-      const latestFacts = (await readMemory()).facts,
-        latestCandidates = (await readCandidateQueue()).candidates;
-      memoryFacts = latestFacts;
-      candidates = latestCandidates;
-      if (!candidates.length) return;
-      project = await resolveProject(currentCwd);
-      const currentCandidates = candidatesForOwners(candidates, project!.owner);
-      if (!currentCandidates.length) return;
-      // Never compact or inspect another owner's project against the current repository.
-      const provisional = compact(memoryFacts, currentCandidates, Number.MAX_SAFE_INTEGER).facts;
-      const priority = new Map<string, FactStatus>();
-      for (const fact of provisional.filter((item) => item.scope === "user" && item.owner === "default"))
-        priority.set(factIdentity(fact), "unchecked");
-      for (const item of await classifyProjectFacts(currentCwd, provisional.filter((fact) =>
-        fact.scope === "project" && fact.owner === project!.owner,
-      ))) priority.set(factIdentity(item.fact), item.status);
-      // Keep 30 global user facts and 30 facts independently for each project.
-      const result = compact(memoryFacts, currentCandidates, 30, priority);
-      memoryFacts = result.facts;
-      facts = memoryFacts;
-      candidates = latestCandidates.filter((item) => !currentCandidates.includes(item));
-      await writeJson(paths().memory, {
-        schemaVersion: MEMORY_SCHEMA_VERSION,
-        facts: memoryFacts,
-        updatedAt: new Date().toISOString(),
-      });
-      await writeJson(paths().candidates, {
-        schemaVersion: MEMORY_SCHEMA_VERSION,
-        candidates,
-      });
+  const activeBranchHasToolResult = (ctx: any, toolCallId: string) => (ctx.sessionManager.getBranch?.() ?? []).some((entry: any) => entry?.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId === toolCallId);
+  const settleMemoryReviews = async (ctx: any) => withMemoryLifecycle(async () => {
+    if (!memoryEnabled || !project) return;
+    const expectedSession = leasedSessionId, expectedGeneration = sessionGeneration, expectedOwner = project.owner, expectedCwd = currentCwd;
+    await withStateLock(memoryDirectory(), async () => {
+      if (leasedSessionId !== expectedSession || sessionGeneration !== expectedGeneration || currentCwd !== expectedCwd || project?.owner !== expectedOwner) return;
+      let latest = await readMemory(), changed = false;
+      const reconciled = discardExpiredReviews(latest);
+      if (reconciled !== latest) { latest = reconciled; changed = true; }
+      for (const original of latest.reviews.filter((item) => item.status === "approved_pending" && item.sessionId === expectedSession && item.projectOwner === expectedOwner)) {
+        const discard = (reason: string) => {
+          const now = new Date().toISOString();
+          latest = { ...latest, revision: latest.revision + 1, updatedAt: now, reviews: latest.reviews.map((item) => item.reviewId === original.reviewId ? { ...item, status: "discarded" as const, discardReason: reason, settledAt: now } : item) };
+          changed = true; emitMemoryOutcome("discarded");
+        };
+        if (original.generation !== expectedGeneration || original.taskGeneration !== memoryTaskGeneration) { discard("session or task generation changed"); continue; }
+        if (!activeBranchHasToolResult(ctx, original.toolCallId)) { discard("proposal tool result is not on the active branch"); continue; }
+        const branch = ctx.sessionManager.getBranch?.() ?? [], byId = new Map(branch.map((entry: any) => [entry?.id, entry]));
+        if (original.quoteRefs?.some((ref) => {
+          const entry = byId.get(ref.entryId);
+          return !entry || sha256(userMessageText(entry)) !== ref.entrySha256;
+        })) { discard("quoted user instruction changed or left the active branch"); continue; }
+        let evidenceValid = true;
+        for (const batch of original.evidenceBatches ?? []) {
+          try {
+            const fresh = await captureEvidenceRanges(expectedCwd, batch.map(({ path, start, end }) => ({ path, start, end })));
+            if (fresh.some((range, index) => range.excerptSha256 !== batch[index]?.excerptSha256)) evidenceValid = false;
+          } catch { evidenceValid = false; }
+        }
+        if (!evidenceValid) { discard("cited evidence changed or is unavailable after memory review"); continue; }
+        const currentIdentity = original.requiresVerification ? await worktreeFingerprint(expectedCwd) : undefined;
+        if (original.requiresVerification && (!currentIdentity || original.worktreeIdentity !== currentIdentity)) { discard("worktree changed after memory review"); continue; }
+        if (original.requiresVerification) {
+          if (["failed", "stale", "cancelled", "error"].includes(latestVerification?.state)) { discard(`verification ${latestVerification.state}`); continue; }
+          if (latestVerification?.state !== "passed") continue;
+          if (latestVerification.sessionId !== expectedSession || latestVerification.worktreeId !== currentIdentity) { discard("verification does not cover the reviewed worktree"); continue; }
+        }
+        const record = original.requiresVerification ? { ...original, verificationRevision: latestVerification.runId } : original;
+        try { latest = applyReview(latest, record); changed = true; emitMemoryOutcome("committed"); }
+        catch (error: any) { discard(error?.message ?? "review conflict"); }
+      }
+      if (changed) await writeMemory(latest);
+      memoryState = latest;
+      memoryNotes = latest.notes;
+    });
+    publishState();
+  });
+  const runV4Migration = async (ctx: any, expectedSession: string, rolloutPolicy?: MemoryRolloutPolicy) => {
+    const expectedGeneration = sessionGeneration, expectedTaskGeneration = memoryTaskGeneration, expectedCwd = currentCwd;
+    const resolved = await resolveProject(expectedCwd), expectedOwner = resolved.owner, expectedWorkspaceId = workspace?.id;
+    if (!expectedWorkspaceId) throw Error("migration workspace identity is unavailable");
+    const config = await loadConfig(), profile = config.memoryReviewer;
+    if (!profile) throw Error("Memory Reviewer is not configured");
+    const model = await configuredModel(ctx, profile);
+    if (!model) throw Error("Memory Reviewer model or credentials are unavailable");
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth?.ok || !auth.apiKey) throw Error("Memory Reviewer model or credentials are unavailable");
+    const ownerRoots = new Map<string, string>();
+    for (const item of all) if (item.projectOwner) ownerRoots.set(item.projectOwner, item.canonicalPath);
+    ownerRoots.set(expectedOwner, expectedCwd);
+    return migrateV4({
+      root, ownerRoots, model, auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env }, profile, sessionId: expectedSession, rolloutPolicy,
+      onTelemetry: (value) => pi.events.emit("pi-continuity:memory-migration-telemetry", { version: 1, model: modelName(model), thinking: profile.thinking, ...value }),
+      commitAll: async (imported) => withStateLock(memoryDirectory(), async () => {
+        if (leasedSessionId !== expectedSession || sessionGeneration !== expectedGeneration || memoryTaskGeneration !== expectedTaskGeneration || currentCwd !== expectedCwd
+          || workspace?.id !== expectedWorkspaceId || project?.owner !== expectedOwner || (await projectContext(expectedCwd, expectedWorkspaceId)).owner !== expectedOwner) throw Error("migration activation became stale");
+        const latest = await readMemory(), byId = new Map(latest.notes.map((note) => [note.id, note])), missing = imported.filter((note) => !byId.has(note.id));
+        if (!missing.length) { memoryState = latest; memoryNotes = latest.notes; return latest.revision; }
+        if (missing.length !== imported.length) throw Error("migration activation is partially present; manual reconciliation required");
+        for (const note of imported) if (strongDuplicate(latest.notes, note.scope, note.owner, note.trigger, note.guidance)) throw Error(`migration duplicates existing note ${note.id}`);
+        let next = { ...latest, revision: latest.revision + 1, notes: [...latest.notes, ...imported], updatedAt: new Date().toISOString() };
+        next = await reassociateProjectMemory(next);
+        enforceMemoryLimits(next); await writeMemory(next); memoryState = next; memoryNotes = next.notes; return next.revision;
+      }),
     });
   };
   const enabledContinuityTools = () => memoryEnabled ? continuityTools : continuityTools.filter((tool) => tool !== "memory");
@@ -632,7 +584,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     !needsVerification &&
     latestVerification?.state !== "failed";
   const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
-    if (event?.version !== 1 || event.cwd !== currentCwd) return;
+    if (event?.version !== 1 || event.cwd !== currentCwd || event.sessionId !== leasedSessionId) return;
     latestVerification = event;
     if (event.state === "passed") {
       needsVerification = false;
@@ -668,7 +620,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     work.updatedAt = new Date().toISOString();
     void saveWork();
   });
-  pi.on("session_start", async (_e, ctx) => {
+  pi.on("session_start", async (_e, ctx) => withMemoryLifecycle(async () => {
+    gate(false);
     sessionGeneration++;
     const sessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!releaseSessionLease && leasedSessionId === sessionId;
@@ -680,6 +633,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       releaseSessionLease = undefined;
     }
     currentCwd = ctx.cwd;
+    activeSessionContext = ctx;
     memoryEnabled = (await loadConfig()).memoryEnabled !== false;
     memoryInjectionEnabled = memoryEnabled;
     recentCalls.clear();
@@ -688,7 +642,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     seenMutationMessages.clear();
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
-      .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1) as any)
+      .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1 && entry.data.sessionId === sessionId) as any)
       ?.data;
     const reg = await registerWorkspace(root, ctx.cwd);
     workspace = reg.workspace;
@@ -753,17 +707,41 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (changed) await saveWork();
     }
     project = await resolveProject(ctx.cwd);
-    memoryFacts = memoryEnabled ? (await readMemory()).facts : [];
-    facts = memoryFacts;
-    candidates = memoryEnabled ? (await readCandidateQueue()).candidates : [];
-    if (memoryEnabled) await reassociateProjectMemory();
+    memoryState = memoryEnabled ? await withStateLock(memoryDirectory(), async () => {
+      const latest = await readMemory();
+      let reconciled = discardExpiredReviews(latest);
+      reconciled = await reassociateProjectMemory(reconciled);
+      if (reconciled !== latest) await writeMemory(reconciled);
+      return reconciled;
+    }) : emptyMemoryState();
+    memoryNotes = memoryState.notes;
+    reviewCalledThisTask = false;
+    memoryProposalToken = undefined;
+    memoryTaskGeneration++;
+    const startupIdentity = await worktreeFingerprint(ctx.cwd), startupChanges = await currentChangedPaths(ctx.cwd);
+    needsVerification = work?.mode === "executing" && (startupChanges === undefined || startupChanges.size > 0)
+      && !(latestVerification?.state === "passed" && latestVerification.sessionId === sessionId && latestVerification.worktreeId === startupIdentity);
+    if (memoryEnabled) {
+      try {
+        const migration = await runV4Migration(ctx, sessionId, reviewerBackedV4MigrationPolicy);
+        if (migration.migrated) emitMemoryOutcome("migration_committed");
+      } catch (error: any) {
+        emitMemoryOutcome("migration_failed");
+        const reason = error?.message ?? "automatic migration unavailable";
+        await recordPendingV4Migration(root, reason).catch(() => {});
+        if (!/Memory Reviewer/.test(reason)) ctx.ui?.notify?.(`Memory V4 migration deferred: ${reason}`, "warning");
+      }
+      legacyMigrationAvailable = await hasPendingV4Migration(root);
+    } else legacyMigrationAvailable = false;
     gate(work?.mode === "planning");
     tasksVisible = true;
     refresh(ctx);
     publishState();
-  });
-  pi.on("session_shutdown", async () => {
+  }));
+  pi.on("session_shutdown", async () => withMemoryLifecycle(async () => {
     sessionGeneration++;
+    activeSessionContext = undefined;
+    legacyMigrationAvailable = false;
     pendingApproval = undefined;
     approvalContext = undefined;
     publishState(false);
@@ -786,7 +764,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       : undefined);
     releaseSessionLease = undefined;
     leasedSessionId = "";
-  });
+  }));
   pi.on("agent_start", (_e, ctx) => {
     awaitingClarificationProse = false;
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
@@ -794,7 +772,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
-    await compactMemory();
+    await settleMemoryReviews(ctx);
     schedulePlanApproval(ctx);
   });
   pi.on("message_end", async (event, ctx) => {
@@ -849,7 +827,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (["write", "edit", "heartbeat_start"].includes(event.toolName)) invalidateVerification();
   });
   pi.on("input", (event) => {
-    if (event.source !== "extension") lastPrompt = event.text;
+    if (event.source !== "extension") {
+      lastPrompt = event.text;
+      memoryTaskGeneration++;
+      reviewCalledThisTask = false;
+    }
   });
   const activeWork = () =>
     work && !["handed_off", "completed", "cancelled"].includes(work.mode)
@@ -871,9 +853,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", async () => {
     if (!memoryEnabled || !memoryInjectionEnabled) return;
-    const visible = await visibleFacts(lastPrompt, activeWork());
-    facts = visible.facts;
-    const text = buildContext(undefined, facts, visible.query, 100, [], { resolvedQuery: true });
+    const visible = await visibleNotes(lastPrompt, activeWork());
+    const text = buildContext(undefined, visible.notes, visible.query, 100, [], { resolvedQuery: true });
     if (text)
       return {
         message: {
@@ -976,126 +957,88 @@ export default function continuityExtension(pi: ExtensionAPI) {
       };
     },
   });
+  const EvidenceRangeSchema = Type.Object({ path: Type.String({ minLength: 1, maxLength: 240 }), start: Type.Integer({ minimum: 1 }), end: Type.Integer({ minimum: 1 }) }, { additionalProperties: false });
+  const BasisSchema = Type.Union([
+    Type.Object({ type: Type.Literal("user_instruction"), quote: Type.String({ minLength: 1, maxLength: 2_000 }) }, { additionalProperties: false }),
+    Type.Object({ type: Type.Literal("project_contract"), evidence: Type.Array(EvidenceRangeSchema, { minItems: 1, maxItems: 3 }) }, { additionalProperties: false }),
+  ]);
+  const ProposalSchema = Type.Union([
+    Type.Object({ operation: Type.Literal("add"), scope: ScopeName, trigger: Type.String({ minLength: 1, maxLength: 240 }), guidance: Type.String({ minLength: 1, maxLength: 800 }), basis: BasisSchema }, { additionalProperties: false }),
+    Type.Object({ operation: Type.Literal("replace"), scope: ScopeName, targetId: Type.String({ minLength: 36, maxLength: 36 }), expectedRevision: Type.Integer({ minimum: 1 }), trigger: Type.String({ minLength: 1, maxLength: 240 }), guidance: Type.String({ minLength: 1, maxLength: 800 }), basis: BasisSchema }, { additionalProperties: false }),
+    Type.Object({ operation: Type.Literal("remove"), scope: ScopeName, targetId: Type.String({ minLength: 36, maxLength: 36 }), expectedRevision: Type.Integer({ minimum: 1 }), reason: Type.String({ minLength: 1, maxLength: 500 }), basis: BasisSchema }, { additionalProperties: false }),
+  ]);
   pi.registerTool({
-    name: "memory",
-    label: "Memory",
-    description: "List or query durable memory, or queue an add, replace, or remove candidate.",
-    promptSnippet: "Inspect, query, or propose durable memory candidates.",
-    executionMode: "sequential",
+    name: "memory", label: "Memory",
+    description: "List or query durable notebook notes, or submit up to two grounded proposals for immediate Memory Reviewer editing.",
+    promptSnippet: "Inspect durable notes or propose bounded reviewer-gated changes.", executionMode: "sequential", renderShell: "self", renderCall: () => new Container(),
     promptGuidelines: [
-      "Before Verify—or before the final response when Verify is unnecessary—review completed work for up to three stable facts that would change a future decision. Strong candidates are explicit user rules and non-obvious verified workflows, boundaries, or warnings. Use memory list to avoid duplicates, then add or replace valid candidates; continue without a memory call when none qualify. Never save task progress, guesses, temporary state, generic facts, duplicates, or secrets.",
-      "Use one fact per stable named key. List memory with a focused query when the current key is uncertain; replace or remove facts only with direct user or repository evidence. Include the source and repository evidencePaths when applicable. Use user scope for cross-project preferences and project scope otherwise.",
+      "Most tasks should propose no memory. Propose only explicit user instructions or intentional project contracts that change a plausible future decision; never propose implementation descriptions, progress, recent-change summaries, guesses, generic advice, duplicates, or secrets.",
+      "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
-    renderShell: "self",
-    renderCall: () => new Container(),
     renderResult: (result, _options, theme) => {
-      const item = result.content.find((content) => content.type === "text");
-      const text = item?.type === "text" ? item.text : undefined;
-      const details = result.details as any;
-      if (details?.memoryError)
-        return new Text(theme.fg("warning", `⚠ ${text ?? "Invalid memory candidate."}`), 0, 0);
-      if (details?.memoryCandidate) {
-        const memory = details.memoryCandidate as PendingCandidate;
-        return new Text(
-          theme.fg("success", `✓ Memory candidate ${memory.action}: ${memory.scope}/${memory.key}`),
-          0,
-          0,
-        );
-      }
-      if (details?.memoryList)
-        return new Text(text ?? "No current-owner memory facts or pending candidates.", 0, 0);
-      return new Container();
+      const item = result.content.find((content) => content.type === "text"), value = item?.type === "text" ? item.text : "";
+      return new Text((result.details as any)?.memoryError ? theme.fg("warning", `⚠ ${value}`) : value, 0, 0);
     },
-    parameters: Type.Object({
-      action: MemAction,
-      query: Type.Optional(Type.String({ maxLength: 500 })),
-      key: Type.Optional(Type.String({ maxLength: 200 })),
-      kind: Type.Optional(Kind),
-      text: Type.Optional(Type.String({ maxLength: 1000 })),
-      source: Type.Optional(Type.String({ maxLength: 500 })),
-      confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
-      scope: Type.Optional(ScopeName),
-      evidencePaths: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 5 })),
-    }, { additionalProperties: false }),
-    async execute(_i, p, _s, _u, ctx): Promise<any> {
-      if (!memoryEnabled) return {
-        content: [{ type: "text", text: "Continuity memory is disabled in package settings." }],
-        details: { memoryError: true },
-      };
+    parameters: Type.Object({ action: MemAction, query: Type.Optional(Type.String({ maxLength: 500 })), proposals: Type.Optional(Type.Array(ProposalSchema, { minItems: 1, maxItems: 2 })) }, { additionalProperties: false }),
+    async execute(id, p, signal, _onUpdate, ctx): Promise<any> {
+      const failure = (message: string) => ({ content: [{ type: "text" as const, text: message }], details: { memoryError: true } });
+      if (!memoryEnabled) return failure("Continuity memory is disabled in package settings.");
       if (p.action === "list") {
-        project = await resolveProject(ctx.cwd);
-        // Read without a lock: this action never mutates state and storage writes are atomic.
-        memoryFacts = (await readMemory()).facts;
-        candidates = (await readCandidateQueue()).candidates;
-        const owned = factsForOwners(memoryFacts, project.owner);
-        const classified = await classifyProjectFacts(
-          ctx.cwd,
-          owned.filter((fact) => fact.scope === "project"),
-        );
-        const applicability = new Map(classified.map((item) => [factIdentity(item.fact), item]));
-        const stateFor = (fact: Fact) => fact.scope === "user"
-          ? { status: "unchecked" as const, reason: "user memory" }
-          : applicability.get(factIdentity(fact))!;
-        const shownFacts = p.query?.trim() ? shortlistFacts(owned, p.query, undefined, 30) : owned;
-        const pending = candidatesForOwners(candidates, project.owner), shownPending = pending.slice(0, 30);
-        const concise = (text: string) => text.length > 200 ? `${text.slice(0, 197)}...` : text;
-        const text = !shownFacts.length && !pending.length
-          ? p.query?.trim() ? "No matching current-owner memory facts or pending candidates." : "No current-owner memory facts or pending candidates."
-          : [
-            ...(shownFacts.length ? [
-              p.query?.trim() ? "Matching stored facts:" : "Stored facts:",
-              ...shownFacts.map((fact) => {
-                const state = stateFor(fact);
-                return `- ${fact.scope}/${fact.key} [${state.status}: ${concise(state.reason)}]: ${concise(fact.text)}`;
-              }),
-            ] : []),
-            ...(pending.length ? [
-              "Pending candidates:",
-              ...shownPending.map((item) => `- ${item.scope}/${item.key} [${item.action}]: ${concise(item.text ?? item.source)}`),
-              ...(pending.length > shownPending.length ? [`- ${pending.length - shownPending.length} more pending candidates omitted.`] : []),
-            ] : []),
-          ].join("\n");
+        const resolved = await resolveProject(ctx.cwd);
+        memoryState = await readMemory(); memoryNotes = memoryState.notes;
+        const owned = notesForOwners(memoryNotes, resolved.owner), shown = p.query?.trim() ? shortlistNotes(owned, p.query, undefined, 100) : owned;
+        const pending = memoryState.reviews.filter((review) => review.sessionId === leasedSessionId && review.status === "approved_pending");
+        const text = !shown.length && !pending.length ? "No current-owner notebook notes or pending reviewed operations." : [
+          ...shown.map((note) => `- ${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}] When ${note.trigger}: ${note.guidance}`),
+          ...pending.map((review) => `- pending review ${review.reviewId}: ${review.operations.length} approved operation(s)`),
+        ].join("\n");
         return { content: [{ type: "text", text }], details: { memoryList: true } };
       }
-      const requestedScope = (p.scope ?? "project") as Scope;
-      if (requestedScope === "project") project = await resolveProject(ctx.cwd);
-      const owner = ownerFor(requestedScope)!;
+      if (reviewCalledThisTask || memoryProposalToken) return failure("Only one memory proposal call is allowed per task.");
+      const reservationToken = randomUUID(); memoryProposalToken = reservationToken;
+      const proposalTask = memoryTaskGeneration, proposalGeneration = sessionGeneration, proposalSession = leasedSessionId, proposalCwd = ctx.cwd;
+      let reviewerInvoked = false;
       try {
-        if (requestedScope === "user" && p.evidencePaths?.length)
-          throw Error("user memory cannot capture project evidence");
-        const evidence = requestedScope === "project" && p.evidencePaths?.length
-          ? await captureEvidence(ctx.cwd, p.evidencePaths) : undefined;
-        const next = candidate({
-          key: p.key, kind: p.kind, text: p.text, source: p.source,
-          confidence: p.confidence, action: p.action, scope: requestedScope,
-        }, {
-          scope: requestedScope,
-          owner,
-          // Callers cannot supply hashes, ownership, or Git provenance.
-          ...(requestedScope === "project" ? project : {}),
-          ...(evidence?.length ? { evidencePaths: evidence } : {}),
-        });
-        candidates = await withStateLock(memoryDirectory(), async () => (
-          await updateJson(
-            paths().candidates,
-            { schemaVersion: MEMORY_SCHEMA_VERSION, candidates: [] as PendingCandidate[] },
-            (file) => ({
-              schemaVersion: MEMORY_SCHEMA_VERSION,
-              candidates: [...normalizeCandidatesFile(file)!.candidates, next],
-            }),
-            validCandidatesFile,
-          )
-        ).candidates);
-        return {
-          content: [{ type: "text", text: `Memory candidate ${next.action} queued: ${next.scope}/${next.key}.` }],
-          details: { memoryCandidate: next },
-        };
-      } catch (error: any) {
-        return {
-          content: [{ type: "text", text: error?.message ?? "Invalid memory candidate." }],
-          details: { memoryError: true },
-        };
-      }
+        const resolved = await resolveProject(proposalCwd), config = await loadConfig(), profile = config.memoryReviewer;
+        if (!profile) return failure("Memory Reviewer unavailable: configure a dedicated reviewer model.");
+        const model = await configuredModel(ctx, profile);
+        if (!model) return failure("Memory Reviewer unavailable: configured model or credentials are unavailable.");
+        const state = await readMemory();
+        const preflight = await preflightMemoryProposals({ rawProposals: p.proposals, state, cwd: proposalCwd, activeBranch: ctx.sessionManager.getBranch?.() ?? [], sessionId: proposalSession, projectOwner: resolved.owner });
+        const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+        if (!auth.ok || !auth.apiKey) return failure("Memory Reviewer unavailable: configured model has no credentials.");
+        reviewerInvoked = true; reviewCalledThisTask = true;
+        const needsWorktreeIdentity = preflight.proposals.some((proposal) => Boolean(proposal.evidence));
+        const fingerprint = needsWorktreeIdentity ? await worktreeFingerprint(proposalCwd) : undefined;
+        if (needsWorktreeIdentity && !fingerprint) throw Error("Memory review unavailable: worktree identity cannot be proven.");
+        const reviewed = await callMemoryReviewer({ model, auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env }, profile, packet: preflight.packet, sessionId: proposalSession, signal });
+        const record = reviewedRecord({ decisions: reviewed.decisions, preflight: preflight.proposals, packet: preflight.packet, sessionId: proposalSession, toolCallId: id, generation: proposalGeneration, taskGeneration: proposalTask, worktreeIdentity: fingerprint });
+        for (const prepared of preflight.proposals) if (prepared.evidence) {
+          const freshEvidence = await captureEvidenceRanges(proposalCwd, prepared.proposal.basis.type === "project_contract" ? prepared.proposal.basis.evidence : []);
+          if (freshEvidence.some((item, index) => item.excerptSha256 !== prepared.evidence![index]?.excerptSha256)) throw Error("memory evidence changed during review");
+        }
+        await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => {
+          if (proposalGeneration !== sessionGeneration || proposalTask !== memoryTaskGeneration || proposalSession !== leasedSessionId || proposalCwd !== currentCwd || project?.owner !== resolved.owner) throw Error("memory review became stale after a task or session change");
+          if (record.requiresVerification && fingerprint && await worktreeFingerprint(proposalCwd) !== fingerprint) throw Error("worktree changed during memory review");
+          const latest = await readMemory();
+          for (const operation of record.operations) {
+            if (operation.operation === "add") {
+              if (strongDuplicate(latest.notes, operation.scope, operation.owner, operation.trigger, operation.guidance)) throw Error("memory review became a duplicate");
+            } else {
+              const target = latest.notes.find((note) => note.id === operation.targetId);
+              if (!target || target.revision !== operation.expectedRevision) throw Error("memory review became stale");
+            }
+          }
+          const next = stageReview(latest, record);
+          if (proposalGeneration !== sessionGeneration || proposalTask !== memoryTaskGeneration || proposalSession !== leasedSessionId || proposalCwd !== currentCwd || project?.owner !== resolved.owner) throw Error("memory review became stale before staging");
+          await writeMemory(next); memoryState = next; memoryNotes = next.notes;
+        }));
+        emitMemoryOutcome("staged");
+        pi.events.emit("pi-continuity:memory-review-telemetry", { version: 1, ...reviewed.telemetry, proposalCount: preflight.proposals.length, verdicts: reviewed.decisions.map((decision) => decision.verdict) });
+        const lines = reviewed.decisions.map((decision, index) => decision.verdict === "reject" ? `- rejected [${decision.reasonCode}]: proposal ${index + 1}` : `- ${decision.verdict === "accept" ? "accepted" : decision.verdict} and staged: proposal ${index + 1}`);
+        return { content: [{ type: "text", text: `Memory review:\n${lines.join("\n")}` }], details: { memoryReview: true, reviewId: record.reviewId } };
+      } catch (error: any) { emitMemoryOutcome(reviewerInvoked ? "reviewer_failed" : "preflight_rejected"); return failure(error?.message ?? "Memory review failed; nothing was staged."); }
+      finally { if (memoryProposalToken === reservationToken) memoryProposalToken = undefined; if (!reviewerInvoked && memoryTaskGeneration === proposalTask) reviewCalledThisTask = false; }
     },
   });
   pi.registerTool({
@@ -1674,29 +1617,27 @@ export default function continuityExtension(pi: ExtensionAPI) {
     description: "Configure planner/executor models or show status",
     handler: async (args, ctx) => {
       const [roleRaw, ...rest] = args.trim().split(/\s+/);
-      const role = roleRaw as "planner" | "executor";
+      const role = roleRaw as "planner" | "executor" | "memoryReviewer";
       const value = rest.join(" ");
       const config = await loadConfig();
       if (!roleRaw || roleRaw === "status") {
         ctx.ui.notify(
-          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}`,
+          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}`,
           "info",
         );
         return;
       }
-      if (!(["planner", "executor"] as string[]).includes(role)) {
+      if (!(["planner", "executor", "memoryReviewer"] as string[]).includes(role)) {
         ctx.ui.notify(
-          "Usage: /continuity [status|planner|executor] [provider/model[:thinking]|reset]",
+          "Usage: /continuity [status|planner|executor|memoryReviewer] [provider/model[:thinking]|reset]",
           "info",
         );
         return;
       }
       if (value === "reset") {
-        const next = { ...config };
-        delete next[role];
-        await saveConfig(next);
+        await updateConfig((current) => { const next = { ...current }; delete next[role]; return next; });
         ctx.ui.notify(
-          `${role} reset; uses current session model and thinking.`,
+          role === "memoryReviewer" ? "Memory Reviewer reset; memory proposals are unavailable." : `${role} reset; uses current session model and thinking.`,
           "info",
         );
         return;
@@ -1732,13 +1673,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         )) as ThinkingLevel | undefined;
         if (!thinking) return;
       }
-      await saveConfig({
-        ...config,
-        [role]: {
-          model: modelName(model),
-          ...(thinking ? { thinking } : {}),
-        },
-      });
+      await updateConfig((current) => ({
+        ...current,
+        [role]: { model: modelName(model), ...(thinking ? { thinking } : {}) },
+      }));
       ctx.ui.notify(
         `${role}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`,
         "info",
@@ -1755,120 +1693,111 @@ export default function continuityExtension(pi: ExtensionAPI) {
       ),
   });
   pi.registerCommand("memory", {
-    description: "Inspect, compact, or forget project memory",
+    description: "Show, edit, or forget user and project notebook notes",
     handler: async (args, ctx) => {
       if (!memoryEnabled) return void ctx.ui.notify("Continuity memory is disabled in package settings.", "info");
       const sub = args.trim();
-      if (sub === "off") {
-        memoryInjectionEnabled = false;
-        ctx.ui.notify("Memory injection disabled for this session.", "info");
-      } else if (sub === "on") {
-        memoryInjectionEnabled = true;
-        ctx.ui.notify("Memory injection enabled for this session.", "info");
-      } else if (sub === "backups") {
-        const backups = (await readdir(memoryDirectory()).catch(() => []))
-          .filter((name) => name.includes(".reset-unsupported-"))
-          .map((name) => join(memoryDirectory(), name));
-        ctx.ui.notify(backups.join("\n") || "No memory reset backups.", "info");
-      } else if (sub === "compact") {
-        project = await resolveProject(ctx.cwd);
-        await compactMemory();
-        ctx.ui.notify(
-          `Applied memory candidates. ${factsForOwners(memoryFacts, project.owner).length} current-owner facts.`,
-          "info",
-        );
-      } else if (sub === "show") {
-        project = await resolveProject(ctx.cwd);
-        const owned = factsForOwners(memoryFacts, project.owner), statuses = new Map<string, { status: FactStatus; reason: string }>();
-        for (const fact of owned.filter((item) => item.scope === "user")) statuses.set(factIdentity(fact), { status: "unchecked", reason: "user memory" });
-        for (const item of await classifyProjectFacts(ctx.cwd, owned.filter((item) => item.scope === "project")))
-          statuses.set(factIdentity(item.fact), { status: item.status, reason: item.reason });
-        ctx.ui.notify(owned.map((fact) => {
-          const state = statuses.get(factIdentity(fact))!;
-          const provenance = fact.evidencePaths?.length ? `${fact.evidencePaths.length} evidence file(s)` : fact.captureCommit ? "capture commit" : "no provenance";
-          return `${fact.scope}/${fact.key} [${state.status}: ${state.reason}; ${provenance}]: ${fact.text}`;
-        }).join("\n") || "No facts.", "info");
-      } else if (sub === "owners") {
-        project = await resolveProject(ctx.cwd);
-        const counts = new Map<string, number>();
-        for (const item of [...memoryFacts, ...candidates]) counts.set(item.owner!, (counts.get(item.owner!) ?? 0) + 1);
-        ctx.ui.notify([...counts].map(([owner, count]) => `${owner}${owner === project!.owner || owner === "default" ? " (current)" : ""}: ${count}`).join("\n") || "No owners.", "info");
-      } else if (sub === "forget project") {
-        if (!ctx.hasUI || !(await ctx.ui.confirm("Forget project memory?", workspace?.canonicalPath || ctx.cwd))) return;
-        project = await resolveProject(ctx.cwd);
-        await withStateLock(memoryDirectory(), async () => {
-          const latestFacts = (await readMemory()).facts, latestCandidates = (await readCandidateQueue()).candidates;
-          memoryFacts = latestFacts.filter((fact) => fact.scope !== "project" || fact.owner !== project!.owner);
-          candidates = latestCandidates.filter((item) => item.scope !== "project" || item.owner !== project!.owner);
-          await writeJson(paths().memory, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: memoryFacts, updatedAt: new Date().toISOString() });
-          await writeJson(paths().candidates, { schemaVersion: MEMORY_SCHEMA_VERSION, candidates });
-        });
-        facts = memoryFacts;
-      } else if (sub === "forget suspect") {
-        if (!ctx.hasUI || !(await ctx.ui.confirm("Forget currently suspect project memory?", workspace?.canonicalPath || ctx.cwd))) return;
-        project = await resolveProject(ctx.cwd);
-        let removed = 0;
-        await withStateLock(memoryDirectory(), async () => {
-          const latestFacts = (await readMemory()).facts;
-          // Reclassify under the lock; unverifiable facts are deliberately retained.
-          const suspect = new Set((await classifyProjectFacts(ctx.cwd, latestFacts.filter((fact) =>
-            fact.scope === "project" && fact.owner === project!.owner,
-          ))).filter((item) => item.status === "suspect").map((item) => factIdentity(item.fact)));
-          removed = suspect.size;
-          memoryFacts = latestFacts.filter((fact) => !suspect.has(factIdentity(fact)));
-          candidates = (await readCandidateQueue()).candidates.filter((item) => !suspect.has(factIdentity(item)));
-          await writeJson(paths().memory, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: memoryFacts, updatedAt: new Date().toISOString() });
-          await writeJson(paths().candidates, { schemaVersion: MEMORY_SCHEMA_VERSION, candidates });
-        });
-        facts = memoryFacts;
-        ctx.ui.notify(`Forgot ${removed} suspect memory fact(s).`, "info");
-      } else if (sub.startsWith("forget owner ")) {
-        const owner = sub.slice("forget owner ".length).trim();
-        if (!owner) return void ctx.ui.notify("Owner ID required.", "error");
-        if (!ctx.hasUI || !(await ctx.ui.confirm("Forget owner memory?", owner))) return;
-        await withStateLock(memoryDirectory(), async () => {
-          memoryFacts = (await readMemory()).facts.filter((fact) => fact.owner !== owner);
-          candidates = (await readCandidateQueue()).candidates.filter((item) => item.owner !== owner);
-          await writeJson(paths().memory, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: memoryFacts, updatedAt: new Date().toISOString() });
-          await writeJson(paths().candidates, { schemaVersion: MEMORY_SCHEMA_VERSION, candidates });
-        });
-        facts = memoryFacts;
-      } else if (sub.startsWith("forget ")) {
-        const target = sub.slice("forget ".length).trim();
-        const match = /^(user|project)\s+(.+)$/.exec(target);
-        const scope = (match?.[1] ?? "project") as Scope, key = (match?.[2] ?? target).trim();
-        if (!key) return void ctx.ui.notify("Memory key required.", "error");
-        project = await resolveProject(ctx.cwd);
-        const owner = scope === "user" ? "default" : project.owner;
-        let removed = false;
-        await withStateLock(memoryDirectory(), async () => {
-          const latestFacts = (await readMemory()).facts, latestCandidates = (await readCandidateQueue()).candidates;
-          removed = latestFacts.some((fact) => fact.scope === scope && fact.owner === owner && fact.key === key);
-          memoryFacts = latestFacts.filter((fact) => fact.scope !== scope || fact.owner !== owner || fact.key !== key);
-          candidates = latestCandidates.filter((item) => item.scope !== scope || item.owner !== owner || item.key !== key);
-          await writeJson(paths().memory, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: memoryFacts, updatedAt: new Date().toISOString() });
-          await writeJson(paths().candidates, { schemaVersion: MEMORY_SCHEMA_VERSION, candidates });
-        });
-        facts = memoryFacts;
-        ctx.ui.notify(removed ? `Forgot memory ${scope}/${key}.` : `Memory ${scope}/${key} not found.`, "info");
-      } else {
-        // `facts` is a transient injection shortlist; status must reload durable state.
-        project = await resolveProject(ctx.cwd);
-        memoryFacts = (await readMemory()).facts;
-        candidates = (await readCandidateQueue()).candidates;
-        const owned = factsForOwners(memoryFacts, project.owner);
-        const projectFacts = owned.filter((fact) => fact.scope === "project");
-        const statuses = await classifyProjectFacts(ctx.cwd, projectFacts);
-        const active = statuses.filter((item) => item.status === "active").length;
-        const unchecked = owned.filter((fact) => fact.scope === "user").length +
-          statuses.filter((item) => item.status === "unchecked").length;
-        const visible = active + unchecked;
-        const pending = candidatesForOwners(candidates, project.owner).length;
-        ctx.ui.notify(
-          `Injection ${memoryInjectionEnabled ? "on" : "off"}; ${owned.length} current-owner stored facts, ${visible} visible (active/unchecked: ${active}/${unchecked}), ${pending} current-owner pending candidate${pending === 1 ? "" : "s"} (normally compacted at settlement).`,
-          "info",
-        );
+      if (sub === "off" || sub === "on") {
+        memoryInjectionEnabled = sub === "on";
+        return void ctx.ui.notify(`Memory injection ${sub} for this session.`, "info");
       }
+      project = await resolveProject(ctx.cwd); memoryState = await readMemory(); memoryNotes = memoryState.notes;
+      if (sub === "migrate-v4") {
+        if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for V4 memory migration.", "error");
+        if (!(await ctx.ui.confirm("Migrate Memory V4 to V5?", "A configured Memory Reviewer will normalize the preserved V4 facts. Backups are retained and /memory rollback remains available until the next V5 write."))) return;
+        try {
+          const migration = await withMemoryLifecycle(() => runV4Migration(ctx, leasedSessionId, reviewerBackedV4MigrationPolicy));
+          legacyMigrationAvailable = await hasPendingV4Migration(root); publishState();
+          if (!migration.migrated) return void ctx.ui.notify("No V4 migration was performed; the source is absent, already migrated, or the migration was previously rolled back.", "info");
+          emitMemoryOutcome("migration_committed");
+          return void ctx.ui.notify(`Memory V4 migrated to V5. ${migration.rejected} record(s) were rejected; use /memory rollback before another V5 write to restore the prior notebook.`, "info");
+        } catch (error: any) {
+          emitMemoryOutcome("migration_failed");
+          legacyMigrationAvailable = await hasPendingV4Migration(root); publishState();
+          return void ctx.ui.notify(`Memory V4 migration failed: ${error?.message ?? error}`, "error");
+        }
+      }
+      if (sub === "backups") {
+        const directories = [memoryDirectory(), join(root, "memory-v4")], backups: string[] = [];
+        for (const directory of directories) for (const name of await readdir(directory, { recursive: true }).catch(() => [] as string[])) if (name.includes("backup") || name.includes("reset-unsupported") || name.includes("corrupt") || name.includes("pre-migration") || name.startsWith("memory-v4") || name.startsWith("candidates-v4")) backups.push(join(directory, name));
+        return void ctx.ui.notify(backups.join("\n") || "No memory backups.", "info");
+      }
+      if (sub === "rollback") {
+        const journal = await readJson<MigrationJournal | undefined>(paths().migration, undefined, (value) => value === undefined || isMigrationJournal(value));
+        if (!journal || journal.status !== "activated" || journal.activatedStateRevision !== memoryState.revision || !journal.preMigrationBackup) return void ctx.ui.notify("Migration rollback is unavailable after new V5 writes or without an activated migration.", "error");
+        if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory rollback.", "error");
+        if (!(await ctx.ui.confirm("Rollback Memory V5 migration?", "This restores the notebook from immediately before migration."))) return;
+        const backup = journal.preMigrationBackup;
+        await withMemoryLifecycle(() => withFileLock(join(memoryDirectory(), "migration-operation"), async () => {
+          await withStateLock(memoryDirectory(), async () => {
+            const latest = await readMemory();
+            if (latest.revision !== journal.activatedStateRevision) throw Error("Memory changed after migration; rollback requires manual reconciliation.");
+            let restored: MemoryStateFile;
+            if (backup === "empty") restored = emptyMemoryState();
+            else {
+              const backupRoot = resolve(memoryDirectory(), "backups"), backupPath = resolve(backup), rel = relative(backupRoot, backupPath);
+              if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) throw Error("Migration backup path is outside the protected backup directory.");
+              const parsed = JSON.parse(await readFile(backupPath, "utf8"));
+              if (!isMemoryState(parsed)) throw Error("Migration backup is missing or invalid; rollback aborted.");
+              restored = parsed;
+            }
+            const next = { ...restored, revision: latest.revision + 1, updatedAt: new Date().toISOString() };
+            enforceMemoryLimits(next); await writeMemory(next); memoryState = next; memoryNotes = next.notes;
+          });
+          await writeJsonAtomic(paths().migration, { ...journal, status: "rolled_back", activatedStateRevision: undefined });
+        }));
+        publishState(); return void ctx.ui.notify("Memory migration rolled back.", "info");
+      }
+      if (sub === "owners") {
+        const counts = new Map<string, number>();
+        for (const note of memoryNotes) counts.set(note.owner, (counts.get(note.owner) ?? 0) + 1);
+        return void ctx.ui.notify([...counts].map(([owner, count]) => `${owner}${owner === project!.owner || owner === "default" ? " (current)" : ""}: ${count}`).join("\n") || "No owners.", "info");
+      }
+      if (sub === "show") {
+        const owned = notesForOwners(memoryNotes, project.owner);
+        return void ctx.ui.notify(owned.map((note) => `${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}]\nWhen ${note.trigger}\n${note.guidance}`).join("\n\n") || "No notes.", "info");
+      }
+      if (sub === "forget project") {
+        if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory deletion.", "error");
+        if (!(await ctx.ui.confirm("Forget all project memory?", "These rules will be removed from this project."))) return;
+        await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => {
+          let latest = await readMemory();
+          for (const note of latest.notes.filter((item) => item.scope === "project" && item.owner === project!.owner)) latest = directDelete(latest, "project", project!.owner, note.id, note.revision);
+          await writeMemory(latest); memoryState = latest; memoryNotes = latest.notes;
+        }));
+        publishState(); return void ctx.ui.notify("Project memory removed.", "info");
+      }
+      const editMatch = /^edit\s+(user|project)\s+([0-9a-f-]+)$/i.exec(sub);
+      if (editMatch) {
+        if (!ctx.hasUI || ctx.mode !== "tui") return void ctx.ui.notify("Interactive UI required for memory edit.", "error");
+        const scope = editMatch[1] as MemoryScope, owner = scope === "user" ? "default" : project.owner;
+        const note = memoryNotes.find((item) => item.id === editMatch[2] && item.scope === scope && item.owner === owner);
+        if (!note) return void ctx.ui.notify("Memory note not found.", "error");
+        const value = await ctx.ui.editor(`Edit ${scope} memory`, `Trigger:\n${note.trigger}\n\nGuidance:\n${note.guidance}`);
+        const parsed = /^Trigger:\s*\n([\s\S]*?)\n\s*Guidance:\s*\n([\s\S]+)$/i.exec(value ?? "");
+        if (!parsed) return void ctx.ui.notify("Keep Trigger and Guidance headings.", "error");
+        if (!(await ctx.ui.confirm(`Save ${scope} memory?`, scope === "user" ? "This rule applies across every project." : "This rule applies to this project."))) return;
+        try {
+          await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => { const next = directEdit(await readMemory(), scope, owner, note.id, note.revision, parsed[1]!, parsed[2]!); await writeMemory(next); memoryState = next; memoryNotes = next.notes; }));
+          publishState(); ctx.ui.notify("Memory note updated.", "info");
+        } catch (error: any) { ctx.ui.notify(error?.message ?? "Memory update failed.", "error"); }
+        return;
+      }
+      const forgetMatch = /^forget\s+(user|project)\s+([0-9a-f-]+)$/i.exec(sub);
+      if (forgetMatch) {
+        const scope = forgetMatch[1] as MemoryScope, owner = scope === "user" ? "default" : project.owner;
+        const note = memoryNotes.find((item) => item.id === forgetMatch[2] && item.scope === scope && item.owner === owner);
+        if (!note) return void ctx.ui.notify("Memory note not found.", "error");
+        if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory deletion.", "error");
+        if (!(await ctx.ui.confirm(`Forget ${scope} memory?`, scope === "user" ? "This rule will be removed from every project." : "This rule will be removed from this project."))) return;
+        try {
+          await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => { const next = directDelete(await readMemory(), scope, owner, note.id, note.revision); await writeMemory(next); memoryState = next; memoryNotes = next.notes; }));
+          publishState(); ctx.ui.notify("Memory note removed.", "info");
+        } catch (error: any) { ctx.ui.notify(error?.message ?? "Memory delete failed.", "error"); }
+        return;
+      }
+      const gates = Object.entries(MEMORY_V5_ROLLOUT).map(([name, gate]) => `${name}=${gate.enabled ? "enabled" : "pending"}`).join(", ");
+      ctx.ui.notify(`Injection ${memoryInjectionEnabled ? "on" : "off"}; ${notesForOwners(memoryNotes, project.owner).length} current-owner notes. Rollout: ${gates}. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`, "info");
     },
   });
 }

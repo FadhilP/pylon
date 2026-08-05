@@ -16,6 +16,7 @@ const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "lo
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
   initialProviderQuery?: string;
+  initialPackageQuery?: string;
   providerAuth?: ProviderAuthReadModel;
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
@@ -43,11 +44,11 @@ interface SettingsDialogProps {
   onUpdateGlobalToolPolicy: (tool: string, mode: ToolExposureMode | "inherit", expectedRevision: number) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", initialPackageQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
-  const [packageQuery, setPackageQuery] = useState("");
+  const [packageQuery, setPackageQuery] = useState(initialPackageQuery);
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
   const [toolPolicyBusy, setToolPolicyBusy] = useState("");
   const filteredPackages = packages.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()));
@@ -426,6 +427,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <label className="checkbox-field"><input type="checkbox" checked={settings.memoryEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, memoryEnabled: event.target.checked })} />Durable memory</label>
       <ProfileFields label="Planner" profile={settings.planner} models={models} disabled={disabled} onChange={(planner) => onUpdate({ ...settings, planner })} />
       <ProfileFields label="Executor" profile={settings.executor} models={models} disabled={disabled} onChange={(executor) => onUpdate({ ...settings, executor })} />
+      <ProfileFields label="Memory reviewer" profile={settings.memoryReviewer} models={models} disabled={disabled} onChange={(memoryReviewer) => onUpdate({ ...settings, memoryReviewer })} />
     </div>;
   }
   if (settings.kind === "sieve") {

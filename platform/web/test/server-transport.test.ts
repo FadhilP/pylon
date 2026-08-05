@@ -211,6 +211,7 @@ class FakeDriver implements PiDriver {
   updateRuntimePolicy(): Promise<void> { return Promise.resolve(); }
   updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
+  migrateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
   keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
     this.keepAlives.push({ requestId, sessionGeneration });

@@ -27,9 +27,10 @@ export function tabId(): string {
   }
 }
 
+export class ApiHttpError extends Error { constructor(readonly status: number, message: string) { super(message); this.name = "ApiHttpError"; } }
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => ({})) as { error?: unknown };
-  if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `Request failed (${response.status})`);
+  if (!response.ok) throw new ApiHttpError(response.status, typeof body.error === "string" ? body.error : `Request failed (${response.status})`);
   return body as T;
 }
 

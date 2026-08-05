@@ -3,6 +3,7 @@ const patterns = [
   /\b(?:sk-ant-|sk-proj-|ghp_|github_pat_|AIza|xox[baprs]-)[\w.-]{10,}/,
   /\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/,
   /\b(?:api[_-]?key|token|password|secret|cookie)\s*[:=]\s*\S+/i,
+  /["'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|cookie)["']\s*:\s*["'][^"']{6,}/i,
   /\b[A-Za-z0-9+/_=-]{50,}\b/,
 ];
 export function assertSafe(...texts: (string | undefined)[]) {

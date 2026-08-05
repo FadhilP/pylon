@@ -152,6 +152,30 @@ test("oversized turns use Pi's valid split cut and keep tool calls paired with r
   assert.notEqual(result.firstKeptEntryId, "result-entry");
 });
 
+test("accepts Pi metadata backscan as a safe retained boundary", () => {
+  const request = { ...user("Current request", "request"), parentId: null };
+  const older = { ...assistant("Summarized older response", "older"), parentId: request.id };
+  const telemetry = { ...entry({ id: "telemetry", type: "custom", customType: "pi-sieve-telemetry", data: { version: 1 } }), parentId: older.id };
+  const suffix = { ...assistant("Retained suffix", "suffix"), parentId: telemetry.id };
+  const entries = [request, older, telemetry, suffix];
+  const result = build(entries, work(), 1);
+
+  assert.equal(result.firstKeptEntryId, "telemetry");
+  const compacted = entry({
+    id: "compacted",
+    parentId: suffix.id,
+    type: "compaction",
+    summary: result.summary,
+    firstKeptEntryId: result.firstKeptEntryId,
+    tokensBefore: result.tokensBefore,
+    details: result.details,
+  });
+  const context = buildSessionContext([...entries, compacted], compacted.id).messages as any[];
+  assert.deepEqual(context.map((message) => message.role), ["compactionSummary", "assistant"]);
+  assert.equal(context.some((message) => message.role === "assistant" && JSON.stringify(message.content).includes("Summarized older response")), false);
+  assert.match(JSON.stringify(context.at(-1)?.content), /Retained suffix/);
+});
+
 test("the chosen cut removes the handoff so Pi keeps the Continuity summary visible", () => {
   const boundary = { ...handoff("run", "timeline", "h"), parentId: null };
   const request = { ...user("Visible request", "u"), parentId: "h" };

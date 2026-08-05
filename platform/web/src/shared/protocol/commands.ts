@@ -39,6 +39,7 @@ export const COMMAND_NAMES = [
   "logoutProvider",
   "updateContinuityMemory",
   "deleteContinuityMemory",
+  "migrateContinuityMemory",
   "handoffSession",
   "applySessionChanges",
   "updateProjectWorktreeSettings",
@@ -111,8 +112,9 @@ export type WebCommand =
   | ({ type: "startProviderLogin"; provider: string; authType: "api_key" | "oauth" } & CommandBase)
   | ({ type: "cancelProviderLogin" } & CommandBase)
   | ({ type: "logoutProvider"; provider: string } & CommandBase)
-  | ({ type: "updateContinuityMemory"; key: string; text: string; kind: "workflow" | "structure" | "architecture" | "warning" | "preference"; expectedUpdatedAt: string } & CommandBase)
-  | ({ type: "deleteContinuityMemory"; key: string; expectedUpdatedAt: string } & CommandBase)
+  | ({ type: "updateContinuityMemory"; scope: "user" | "project"; id: string; trigger: string; guidance: string; expectedRevision: number } & CommandBase)
+  | ({ type: "deleteContinuityMemory"; scope: "user" | "project"; id: string; expectedRevision: number } & CommandBase)
+  | ({ type: "migrateContinuityMemory" } & CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
   | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)

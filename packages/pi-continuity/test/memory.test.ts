@@ -1,198 +1,87 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { promisify } from "node:util";
-import { compact, candidate, factsForOwners, normalizeCandidatesFile, normalizeMemoryFile, isMemoryFile, MEMORY_SCHEMA_VERSION, type Fact } from "../src/memory.ts";
-import { readJson, readVersionedJson, writeJson } from "../src/storage.ts";
-import { captureEvidence, classifyProjectFacts, projectContext } from "../src/worktree.ts";
+import { randomUUID } from "node:crypto";
+import {
+  applyReview, directDelete, directEdit, discardExpiredReviews, emptyMemoryState, enforceMemoryLimits, exactDuplicate,
+  isMemoryState, normalizeMemoryState, normalizeProposalBatch, notesForOwners, parseReviewerOutput,
+  renderNote, stageReview, type MemoryStateFile, type NotebookNote, type ReviewRecord,
+} from "../src/memory.ts";
 
-const exec = promisify(execFile);
+const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
+  id: randomUUID(), scope: "project", owner: "owner", trigger: "changing package settings",
+  guidance: "Apply updates to subsequent runtimes; do not expect hot reconfiguration.", authority: "project_contract",
+  origin: "agent", sourceRefs: [{ type: "repository", path: "src/config.ts", excerptSha256: "a".repeat(64) }],
+  relatedPaths: ["src/config.ts"], revision: 1, createdAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z", ...overrides,
+});
+const state = (...notes: NotebookNote[]): MemoryStateFile => ({ ...emptyMemoryState(), notes, updatedAt: "2025-01-01T00:00:00.000Z" });
 
-test("memory deterministic", () => {
-  const c = candidate({
-    key: "workflow.test",
-    kind: "workflow",
-    text: "npm test",
-    source: "README",
-    confidence: 1,
-    action: "add",
-  });
-  const result = compact([], [c]);
-  assert.equal(result.facts.length, 1);
-  assert.deepEqual(result.candidates, []);
-});
-test("V4 candidate queue drops malformed records without losing valid records", () => {
-  const pending = candidate({ text: "npm test" });
-  const normalized = normalizeCandidatesFile({
-    schemaVersion: MEMORY_SCHEMA_VERSION,
-    candidates: [pending, { ...pending, id: "broken", text: "" }],
-  });
-  assert.deepEqual(normalized?.candidates, [pending]);
-  assert.equal(normalizeCandidatesFile({ schemaVersion: 1, candidates: [pending] }), undefined);
-});
-test("memory is keyed and retention favors preferences and warnings", () => {
-  const first = candidate({
-      key: "workflow.test", kind: "workflow", text: "npm test", source: "README",
-      confidence: 1, action: "add",
-    }),
-    second = candidate({
-      key: "workflow.test", kind: "workflow", text: "npm run test", source: "package.json",
-      confidence: 1, action: "add",
-    });
-  const keyed = compact([], [first, second]);
-  assert.equal(keyed.facts.length, 1);
-  assert.equal(keyed.facts[0].text, "npm run test");
-
-  const facts: Fact[] = [
-    { key: "workflow.build", kind: "workflow", text: "Build", source: "scripts", confidence: 1, updatedAt: "2026-03-01" },
-    { key: "warning.deploy", kind: "warning", text: "Check deploy", source: "README", confidence: 0.5, updatedAt: "2026-02-01" },
-    { key: "preference.style", kind: "preference", text: "Keep output terse", source: "user", confidence: 0.5, updatedAt: "2026-01-01" },
-  ];
-  assert.deepEqual(
-    compact(facts, [], 2).facts.map((fact) => fact.key),
-    ["preference.style", "warning.deploy"],
-  );
-});
-test("V4 memory keeps valid records and resets unsupported files", async () => {
-  const root = await mkdtemp(join(tmpdir(), "continuity-memory-"));
-  const path = join(root, "memory.json");
-  const valid = compact([], [candidate({ text: "Run npm test" })]).facts[0]!;
-  await writeJson(path, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: [valid, { bad: true }] });
-  const loaded = normalizeMemoryFile(await readJson(
-    path, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: [] as Fact[] }, isMemoryFile,
-  ));
-  assert.deepEqual(loaded?.facts, [valid]);
-  await writeJson(path, { schemaVersion: 1, facts: [] });
-  const reset = await readVersionedJson(path, { schemaVersion: MEMORY_SCHEMA_VERSION, facts: [] as Fact[] }, isMemoryFile);
-  assert.deepEqual(reset.facts, []);
-  assert.ok((await readdir(root)).some((name) => name.startsWith("memory.json.reset-unsupported-")));
+test("V5 state validates strict records and owner visibility", () => {
+  const user = note({ id: randomUUID(), scope: "user", owner: "default", authority: "user_instruction" });
+  const file = state(note(), user);
+  assert.equal(isMemoryState(file), true);
+  assert.deepEqual(notesForOwners(file.notes, "owner"), file.notes);
+  assert.equal(notesForOwners(file.notes, "other").length, 1);
+  assert.equal(normalizeMemoryState({ ...file, unknown: true }), undefined);
+  assert.equal(normalizeMemoryState({ ...file, notes: [{ ...file.notes[0], owner: undefined }] }), undefined);
+  assert.equal(normalizeMemoryState({ ...file, notes: [{ ...user, owner: "forged" }] }), undefined);
 });
 
-test("text-only add defaults and replace/remove require keys", () => {
-  const added = candidate({ text: "Use npm test" });
-  assert.equal(added.kind, "workflow");
-  assert.equal(added.confidence, 0.5);
-  assert.equal(added.scope, "project");
-  assert.match(added.key, /^memory\./);
-  assert.throws(() => candidate({ action: "replace", text: "x" }), /requires a key/);
-  assert.throws(() => candidate({ action: "replace", key: "x" }), /requires text/);
-  assert.throws(() => candidate({ action: "remove" }), /requires a key/);
-  assert.throws(() => candidate({ action: "remove", key: "x" }), /nonempty source/);
-  const removal = candidate({ action: "remove", key: "x", source: "repository contradicted it" }, {
-    owner: "project", captureCommit: "a".repeat(40),
-    evidencePaths: [{ path: "package.json", sha256: "b".repeat(64) }],
-  });
-  assert.equal(removal.source, "repository contradicted it");
-  assert.equal(removal.evidencePaths?.[0]?.path, "package.json");
-  assert.throws(() => candidate({ action: "invalid" as any, text: "x" }), /invalid memory action/);
-  assert.throws(() => candidate({ text: "x".repeat(1001) }), /field limits/);
+test("proposal schema enforces batch, scope, fields, and exact target shape", () => {
+  const proposals = normalizeProposalBatch([{ operation: "add", scope: "project", trigger: " changing settings ", guidance: " restart later ", basis: { type: "project_contract", evidence: [{ path: "src/a.ts", start: 1, end: 2 }] } }]);
+  assert.equal((proposals[0] as any).trigger, "changing settings");
+  assert.throws(() => normalizeProposalBatch([]), /one or two/);
+  assert.throws(() => normalizeProposalBatch([proposals[0], proposals[0], proposals[0]]), /one or two/);
+  assert.throws(() => normalizeProposalBatch([{ ...proposals[0], scope: "user" }]), /user memory/);
+  assert.throws(() => normalizeProposalBatch([{ ...proposals[0], owner: "forged" }]), /invalid/);
 });
 
-test("compaction keeps 30 global user facts and 30 facts per project", () => {
-  const sameKey = compact([], [
-    candidate({ key: "same", text: "user", scope: "user" }, { owner: "default" }),
-    candidate({ key: "same", text: "project" }, { owner: "project-a" }),
-  ]).facts;
-  assert.equal(sameKey.length, 2);
-  const afterProjectRemove = compact(sameKey, [candidate({
-    action: "remove", key: "same", source: "project evidence contradicted it",
-  }, { owner: "project-a" })]).facts;
-  assert.deepEqual(afterProjectRemove.map((fact) => `${fact.scope}/${fact.key}`), ["user/same"]);
-  const candidates = [
-    ...Array.from({ length: 31 }, (_, i) => candidate({ key: `user-${i}`, text: `user ${i}`, scope: "user" }, { owner: "default" })),
-    ...Array.from({ length: 31 }, (_, i) => candidate({ key: `a-${i}`, text: `project a ${i}` }, { owner: "project-a" })),
-    ...Array.from({ length: 31 }, (_, i) => candidate({ key: `b-${i}`, text: `project b ${i}` }, { owner: "project-b" })),
-  ];
-  const facts = compact([], candidates).facts;
-  assert.equal(facts.filter((fact) => fact.scope === "user").length, 30);
-  assert.equal(facts.filter((fact) => fact.owner === "project-a").length, 30);
-  assert.equal(facts.filter((fact) => fact.owner === "project-b").length, 30);
+test("reviewer output is strict and complete", () => {
+  const output = parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 0, verdict: "accept", operation: "add", trigger: "using filters", guidance: "Prefer a dropdown for finite categories.", authority: "user_instruction", reasonCode: "durable_rule" }] }), 1);
+  assert.equal(output.decisions[0]?.verdict, "accept");
+  assert.throws(() => parseReviewerOutput('{"version":1,"decisions":[]}', 1), /incomplete/);
+  assert.throws(() => parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local", extra: true }] }), 1), /invalid/);
+  assert.throws(() => parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "task_local" }] }), 1), /unknown/);
 });
 
-test("memory visibility includes global user facts and isolates projects", () => {
-  const facts = compact([], [
-    candidate({ key: "user", text: "user fact", scope: "user" }, { owner: "default" }),
-    candidate({ key: "project-a", text: "first project", scope: "project" }, { owner: "project-a" }),
-    candidate({ key: "project-b", text: "second project", scope: "project" }, { owner: "project-b" }),
-  ]).facts;
-  assert.deepEqual(
-    factsForOwners(facts, "project-a").map((fact) => fact.key).sort(),
-    ["project-a", "user"],
-  );
-});
-test("non-Git projects use the supplied canonical workspace identity", async () => {
-  const root = await mkdtemp(join(tmpdir(), "continuity-non-git-"));
-  assert.deepEqual(await projectContext(root, "workspace-id"), { owner: "workspace-id" });
+test("review staging and settlement are atomic and idempotent", () => {
+  const review: ReviewRecord = { reviewId: randomUUID(), sessionId: "s", toolCallId: "c", projectOwner: "owner", reviewedAt: "2025-01-02T00:00:00.000Z", status: "approved_pending", requiresVerification: false, generation: 1, taskGeneration: 1, operations: [{ operation: "add", noteId: randomUUID(), scope: "project", owner: "owner", trigger: "changing settings", guidance: "Restart the runtime after configuration changes.", authority: "project_contract", sourceRefs: [{ type: "repository", path: "src/config.ts", excerptSha256: "b".repeat(64) }] }], rejectionCounts: {} };
+  const staged = stageReview(state(), review), committed = applyReview(staged, review, "2025-01-03T00:00:00.000Z");
+  assert.equal(committed.notes.length, 1);
+  assert.equal(committed.reviews[0]?.status, "committed");
+  assert.equal(applyReview(committed, review), committed);
 });
 
-test("linked worktrees share project identity while divergence is suspect, not deleted", async () => {
-  const root = await mkdtemp(join(tmpdir(), "continuity-git-"));
-  const base = join(root, "base"), linked = join(root, "linked");
-  await exec("git", ["init", "-q", base]);
-  await exec("git", ["-C", base, "config", "user.email", "test@example.invalid"]);
-  await exec("git", ["-C", base, "config", "user.name", "test"]);
-  await writeFile(join(base, "file.txt"), "base\n");
-  await exec("git", ["-C", base, "add", "."]);
-  await exec("git", ["-C", base, "commit", "-qm", "base"]);
-  await exec("git", ["-C", base, "worktree", "add", "-q", "-b", "linked", linked]);
-  const main = await projectContext(base, "base"), other = await projectContext(linked, "linked");
-  assert.equal(main.owner, other.owner);
-  const evidencePaths = await captureEvidence(base, ["file.txt"]);
-  const fact = compact([], [candidate({ key: "workflow.test", text: "Run tests", scope: "project" }, {
-    owner: main.owner, captureCommit: main.captureCommit, evidencePaths,
-  })]).facts;
-  assert.equal((await classifyProjectFacts(linked, fact))[0]!.status, "active");
-  await exec("git", ["-C", linked, "checkout", "--orphan", "rebased"]);
-  await writeFile(join(linked, "other.txt"), "unrelated\n");
-  await exec("git", ["-C", linked, "add", "."]);
-  await exec("git", ["-C", linked, "commit", "-qm", "unrelated"]);
-  assert.equal((await classifyProjectFacts(linked, fact))[0]!.status, "suspect");
-  assert.equal((await classifyProjectFacts(linked, [{ ...fact[0]!, captureCommit: "0".repeat(40) }]))[0]!.status, "unverifiable");
-  assert.equal(fact.length, 1, "suspect facts remain persisted");
-  await exec("git", ["-C", linked, "checkout", "-q", "linked"]);
-  assert.equal((await classifyProjectFacts(linked, fact))[0]!.status, "active", "returning to captured history revives fact");
+test("direct edit and delete use scoped revision CAS and user authority", () => {
+  const original = note(), edited = directEdit(state(original), "project", "owner", original.id, 1, "changing settings", "Restart after changing settings.");
+  assert.equal(edited.notes[0]?.revision, 2);
+  assert.equal(edited.notes[0]?.origin, "user");
+  assert.equal(edited.notes[0]?.authority, "user_instruction");
+  assert.deepEqual(edited.notes[0]?.sourceRefs, [{ type: "direct_user_edit" }]);
+  assert.equal(edited.audits?.at(-1)?.type, "direct_edit");
+  assert.throws(() => directEdit(edited, "project", "owner", original.id, 1, "x", "y"), /changed/);
+  const deleted = directDelete(edited, "project", "owner", original.id, 2);
+  assert.equal(deleted.notes.length, 0);
+  assert.equal(deleted.audits?.at(-1)?.type, "direct_delete");
 });
 
-test("evidence is hashed server-side and changed evidence is suspect", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "continuity-evidence-"));
-  await writeFile(join(root, "guide.txt"), "first\n");
-  const evidencePaths = await captureEvidence(root, ["guide.txt"]);
-  assert.match(evidencePaths[0]!.sha256, /^[0-9a-f]{64}$/);
-  const fact: Fact = {
-    key: "guide", kind: "workflow", text: "follow guide", source: "guide", confidence: 1,
-    updatedAt: new Date().toISOString(), scope: "project", owner: "project", evidencePaths,
-  };
-  assert.equal((await classifyProjectFacts(root, [fact]))[0]!.status, "active");
-  await writeFile(join(root, "guide.txt"), "changed\n");
-  assert.equal((await classifyProjectFacts(root, [fact]))[0]!.status, "suspect");
-  await rm(join(root, "guide.txt"));
-  assert.equal((await classifyProjectFacts(root, [fact]))[0]!.status, "suspect");
-  assert.equal((await classifyProjectFacts(root, [{ ...fact, evidencePaths: undefined }]))[0]!.status, "unchecked");
-  await assert.rejects(captureEvidence(root, ["../guide.txt"]), /invalid|escape/);
-  await writeFile(join(root, ".env"), "secret\n");
-  await assert.rejects(captureEvidence(root, [".env"]), /sensitive/);
-  const outside = join(root, "outside"), linked = join(root, "linked");
-  await mkdir(outside);
-  await writeFile(join(outside, "guide.txt"), "outside\n");
-  try {
-    await symlink(outside, linked, "junction");
-    await assert.rejects(captureEvidence(root, ["linked/guide.txt"]), /symlink/);
-  } catch (error: any) {
-    if (error?.code !== "EPERM") throw error;
-    t.diagnostic("symlink creation unavailable; escape rejection covered by traversal test");
-  }
+test("abandoned pending reviews are explicitly discarded after retention", () => {
+  const review: ReviewRecord = { reviewId: randomUUID(), sessionId: "s", toolCallId: "old", projectOwner: "owner", reviewedAt: "2020-01-01T00:00:00.000Z", status: "approved_pending", requiresVerification: false, generation: 1, taskGeneration: 1, operations: [], rejectionCounts: {} };
+  const reconciled = discardExpiredReviews({ ...state(), reviews: [review] }, new Date("2020-02-15T00:00:00.000Z"));
+  assert.equal(reconciled.reviews[0]?.status, "discarded"); assert.match(reconciled.reviews[0]?.discardReason ?? "", /abandoned/);
 });
 
-test("retention evicts suspect facts before active facts", () => {
-  const facts = Array.from({ length: 31 }, (_, index) => compact([], [candidate({
-    key: `fact-${index}`, text: `fact ${index}`, source: "test",
-  })]).facts[0]!);
-  const statuses = new Map(facts.map((fact, index) => [
-    `${fact.scope}\0${fact.owner}\0${fact.key}`, index === 0 ? "suspect" as const : "active" as const,
-  ]));
-  assert.equal(compact(facts, [], 30, statuses).facts.some((fact) => fact.key === "fact-0"), false);
+test("pending review capacity rejects new staging without evicting approved operations", () => {
+  const reviews = Array.from({ length: 200 }, (_, index): ReviewRecord => ({ reviewId: randomUUID(), sessionId: "s", toolCallId: `call-${index}`, projectOwner: "owner", reviewedAt: new Date(1_700_000_000_000 + index).toISOString(), status: "approved_pending", requiresVerification: false, generation: 1, taskGeneration: 1, operations: [], rejectionCounts: {} }));
+  const full: MemoryStateFile = { ...state(), reviews };
+  const next: ReviewRecord = { ...reviews[0]!, reviewId: randomUUID(), toolCallId: "next" };
+  assert.throws(() => stageReview(full, next), /ledger is full/);
+  assert.equal(full.reviews.length, 200);
 });
 
+test("deduplication, rendering, and safety ceilings never evict", () => {
+  const first = note();
+  assert.equal(exactDuplicate([first], "project", "owner", ` ${first.trigger.toUpperCase()} `, first.guidance)?.id, first.id);
+  assert.match(renderNote(first), /^Memory: When changing package settings,/);
+  const oversized = state(...Array.from({ length: 1_001 }, (_, index) => note({ id: randomUUID(), trigger: `trigger ${index}` })));
+  assert.throws(() => enforceMemoryLimits(oversized), /1,000-note/);
+});

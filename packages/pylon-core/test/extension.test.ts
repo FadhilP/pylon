@@ -54,6 +54,46 @@ function harness() {
   };
 }
 
+test("Memory reviewer telemetry is persisted without proposal text", () => {
+  const runtime = harness();
+  runtime.events.emit("pi-continuity:memory-review-telemetry", { version: 1, model: "provider/reviewer", thinking: "high", durationMs: 12, proposalCount: 1, verdicts: ["reject"], usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.01 }, proposalText: "must not persist" });
+  assert.equal(runtime.entries[0]?.customType, "pi-continuity-memory-telemetry");
+  assert.equal(JSON.stringify(runtime.entries[0]).includes("must not persist"), false);
+});
+
+test("compact command waits for completion and reports actionable failures", async () => {
+  const runtime = harness();
+  const notifications: Array<[string, string]> = [];
+  const context = (compact: (value: any) => void) => ({
+    compact,
+    ui: { notify: (message: string, severity: string) => notifications.push([message, severity]) },
+  });
+
+  let options: any;
+  const completed = runtime.commands.get("compact").handler(" focus on current edits ", context((value) => { options = value; }));
+  assert.equal(options.customInstructions, "focus on current edits");
+  assert.deepEqual(notifications, []);
+  options.onComplete();
+  await completed;
+
+  const failed = runtime.commands.get("compact").handler("", context((value) => { options = value; }));
+  assert.equal(options.customInstructions, undefined);
+  options.onError(new Error("provider unavailable"));
+  await failed;
+  assert.deepEqual(notifications, [[
+    "Compaction failed. Reason: provider unavailable. Retry; if it keeps failing, try a different model.",
+    "error",
+  ]]);
+  options.onComplete();
+  assert.equal(notifications.length, 1);
+
+  await runtime.commands.get("compact").handler("", context(() => { throw new Error(""); }));
+  assert.deepEqual(notifications.at(-1), [
+    "Compaction failed. Reason: no explanation was returned. Retry; if it keeps failing, try a different model.",
+    "error",
+  ]);
+});
+
 test("extension validates, unregisters, diagnoses, and cleans listener", async () => {
   const runtime = harness();
   let acknowledged = false;
@@ -222,9 +262,12 @@ test("doctor reports quarantined state and unavailable configured models", async
     await mkdir(join(root, "pi-advisor"), { recursive: true });
     await mkdir(join(root, "pi-scout"), { recursive: true });
     await mkdir(join(root, "pi-grunt"), { recursive: true });
+    await mkdir(join(root, "pi-continuity", "memory-v5"), { recursive: true });
     await writeFile(join(root, "pi-advisor", "config.json"), JSON.stringify({ version: 1, advisorModel: "openai/test-model" }));
     await writeFile(join(root, "pi-grunt", "config.json"), JSON.stringify({ version: 1, model: "openai/worker-model" }));
     await writeFile(join(root, "pi-scout", "config.json.corrupt-test"), "bad");
+    await writeFile(join(root, "pi-continuity", "config.json"), JSON.stringify({ version: 2, memoryEnabled: true }));
+    await writeFile(join(root, "pi-continuity", "memory-v5", "migration.json"), JSON.stringify({ version: 1, status: "failed", failureReason: "reviewer unavailable" }));
     const runtime = harness();
     let diagnostic = "";
     let severity = "";
@@ -238,6 +281,8 @@ test("doctor reports quarantined state and unavailable configured models", async
     assert.match(diagnostic, /Quarantined state: .*config\.json\.corrupt-test/);
     assert.match(diagnostic, /Advisor: openai\/test-model \(credentials unavailable\)/);
     assert.match(diagnostic, /Grunt: openai\/worker-model \(model unavailable\)/);
+    assert.match(diagnostic, /Memory Reviewer: not configured/);
+    assert.match(diagnostic, /Memory migration: failed \(reviewer unavailable\)/);
     assert.equal(severity, "warning");
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

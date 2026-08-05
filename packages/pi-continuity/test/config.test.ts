@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { defaultConfig, loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
+import { defaultConfig, loadConfig, parseModelRef, saveConfig, updateConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
 test("model profiles parse, persist, and reset to defaults", async () => {
@@ -20,7 +20,7 @@ test("model profiles parse, persist, and reset to defaults", async () => {
   const path = join(root, "config.json");
   await saveConfig(
     {
-      version: 1,
+      version: 2,
       memoryEnabled: false,
       planner: { model: "provider/planner", thinking: "high" },
       executor: { model: "provider/executor" },
@@ -28,12 +28,22 @@ test("model profiles parse, persist, and reset to defaults", async () => {
     path,
   );
   assert.deepEqual(await loadConfig(path), {
-    version: 1,
+    version: 2,
     memoryEnabled: false,
     planner: { model: "provider/planner", thinking: "high" },
     executor: { model: "provider/executor" },
   });
-  assert.deepEqual(defaultConfig(), { version: 1, memoryEnabled: true });
+  assert.deepEqual(defaultConfig(), { version: 2, memoryEnabled: true });
+});
+
+test("concurrent role updates retain independent Continuity settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-config-race-")), path = join(root, "config.json");
+  await Promise.all([
+    updateConfig((config) => ({ ...config, planner: { model: "provider/planner" } }), path),
+    updateConfig((config) => ({ ...config, memoryReviewer: { model: "provider/reviewer", thinking: "high" } }), path),
+  ]);
+  const config = await loadConfig(path);
+  assert.equal(config.planner?.model, "provider/planner"); assert.equal(config.memoryReviewer?.model, "provider/reviewer");
 });
 
 test("web settings toggle durable memory without changing model profiles", async () => {

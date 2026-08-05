@@ -1,87 +1,57 @@
 import type { Work } from "./active-work.ts";
-import type { Fact } from "./memory.ts";
+import type { NotebookNote } from "./memory.ts";
 
-export const CONTINUITY_STATE_VERSION = 3 as const;
-
+export const CONTINUITY_STATE_VERSION = 4 as const;
+export type ContinuityMemoryNoteReadModel = Pick<NotebookNote, "id" | "scope" | "trigger" | "guidance" | "authority" | "origin" | "revision" | "updatedAt"> & {
+  relatedPaths?: string[];
+  sourceSummary: string;
+};
 export interface ContinuityStateSnapshot {
   version: typeof CONTINUITY_STATE_VERSION;
   revision: number;
   sessionId: string;
   available: boolean;
-  memory: Array<Pick<Fact, "key" | "kind" | "text" | "source" | "confidence" | "updatedAt" | "captureCommit" | "branchAtCapture" | "evidencePaths">>;
-  globalMemory: Array<Pick<Fact, "key" | "kind" | "text" | "source" | "confidence" | "updatedAt">>;
+  memory: ContinuityMemoryNoteReadModel[];
+  globalMemory: ContinuityMemoryNoteReadModel[];
+  v4MigrationAvailable: boolean;
   work?: Pick<Work, "mode" | "goal" | "approved" | "planSummary" | "currentTodoId" | "latestFailure" | "nextAction" | "runId" | "createdAt" | "updatedAt" | "completedAt"> & {
     todos: Array<Pick<Work["todos"][number], "id" | "text" | "status" | "updatedAt">>;
   };
 }
-
-export interface ContinuityStateRequest {
-  version: typeof CONTINUITY_STATE_VERSION;
-  sessionId: string;
-  respond(value: ContinuityStateSnapshot): void;
-}
-
-const globalMemoryFact = (fact: Fact) => ({
-  key: fact.key.slice(0, 200),
-  kind: fact.kind,
-  text: fact.text.slice(0, 1_000),
-  source: fact.source.slice(0, 500),
-  confidence: fact.confidence,
-  updatedAt: fact.updatedAt,
+export interface ContinuityStateRequest { version: typeof CONTINUITY_STATE_VERSION; sessionId: string; respond(value: ContinuityStateSnapshot): void }
+const sourceSummary = (note: NotebookNote) => {
+  const repository = note.sourceRefs.filter((ref) => ref.type === "repository").length;
+  if (repository) return `${repository} repository source${repository === 1 ? "" : "s"}`;
+  if (note.sourceRefs.some((ref) => ref.type === "user_message")) return "user instruction";
+  if (note.sourceRefs.some((ref) => ref.type === "direct_user_edit")) return "direct user edit";
+  return "migration";
+};
+const memoryNote = (note: NotebookNote): ContinuityMemoryNoteReadModel => ({
+  id: note.id,
+  scope: note.scope,
+  trigger: note.trigger,
+  guidance: note.guidance,
+  authority: note.authority,
+  origin: note.origin,
+  ...(note.relatedPaths?.length ? { relatedPaths: note.relatedPaths.slice(0, 5) } : {}),
+  revision: note.revision,
+  updatedAt: note.updatedAt,
+  sourceSummary: sourceSummary(note),
 });
-
-const memoryFact = (fact: Fact) => ({
-  key: fact.key.slice(0, 200),
-  kind: fact.kind,
-  text: fact.text.slice(0, 1_000),
-  source: fact.source.slice(0, 500),
-  confidence: fact.confidence,
-  updatedAt: fact.updatedAt,
-  ...(fact.captureCommit ? { captureCommit: fact.captureCommit.slice(0, 128) } : {}),
-  ...(fact.branchAtCapture ? { branchAtCapture: fact.branchAtCapture.slice(0, 240) } : {}),
-  ...(fact.evidencePaths?.length ? {
-    evidencePaths: fact.evidencePaths.slice(0, 5).map((item) => ({
-      path: item.path.slice(0, 500),
-      sha256: item.sha256.slice(0, 128),
-    })),
-  } : {}),
-});
-
-export function continuityStateSnapshot(
-  sessionId: string,
-  revision: number,
-  work?: Work,
-  available = true,
-  memory: Fact[] = [],
-  globalMemory: Fact[] = [],
-): ContinuityStateSnapshot {
+export function continuityStateSnapshot(sessionId: string, revision: number, work?: Work, available = true, memory: NotebookNote[] = [], globalMemory: NotebookNote[] = [], v4MigrationAvailable = false): ContinuityStateSnapshot {
   return {
-    version: CONTINUITY_STATE_VERSION,
-    revision,
-    sessionId,
-    available,
-    memory: memory.slice(0, 30).map(memoryFact),
-    globalMemory: globalMemory.slice(0, 30).map(globalMemoryFact),
-    ...(work ? {
-      work: {
-        mode: work.mode,
-        goal: work.goal.slice(0, 2_000),
-        approved: work.approved,
-        planSummary: work.planSummary.slice(0, 4_000),
-        ...(work.currentTodoId ? { currentTodoId: work.currentTodoId.slice(0, 120) } : {}),
-        ...(work.latestFailure ? { latestFailure: work.latestFailure.slice(0, 1_000) } : {}),
-        ...(work.nextAction ? { nextAction: work.nextAction.slice(0, 1_000) } : {}),
-        ...(work.runId ? { runId: work.runId.slice(0, 128) } : {}),
-        createdAt: work.createdAt,
-        updatedAt: work.updatedAt,
-        ...(work.completedAt ? { completedAt: work.completedAt } : {}),
-        todos: work.todos.slice(0, 12).map((todo) => ({
-          id: todo.id.slice(0, 120),
-          text: todo.text.slice(0, 500),
-          status: todo.status,
-          updatedAt: todo.updatedAt,
-        })),
-      },
-    } : {}),
+    version: 4, revision, sessionId, available,
+    memory: memory.slice(0, 1_000).map(memoryNote),
+    globalMemory: globalMemory.slice(0, 1_000).map(memoryNote),
+    v4MigrationAvailable,
+    ...(work ? { work: {
+      mode: work.mode, goal: work.goal.slice(0, 2_000), approved: work.approved, planSummary: work.planSummary.slice(0, 4_000),
+      ...(work.currentTodoId ? { currentTodoId: work.currentTodoId.slice(0, 120) } : {}),
+      ...(work.latestFailure ? { latestFailure: work.latestFailure.slice(0, 1_000) } : {}),
+      ...(work.nextAction ? { nextAction: work.nextAction.slice(0, 1_000) } : {}),
+      ...(work.runId ? { runId: work.runId.slice(0, 128) } : {}),
+      createdAt: work.createdAt, updatedAt: work.updatedAt, ...(work.completedAt ? { completedAt: work.completedAt } : {}),
+      todos: work.todos.slice(0, 12).map((todo) => ({ id: todo.id.slice(0, 120), text: todo.text.slice(0, 500), status: todo.status, updatedAt: todo.updatedAt })),
+    } } : {}),
   };
 }

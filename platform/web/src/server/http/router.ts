@@ -210,7 +210,7 @@ export class ServerTransport {
       this.send(response, 200, accepted);
     } catch (error) {
       if (error instanceof Error && error.name === "IdempotencyConflictError") throw httpError(409, error.message);
-      if (error instanceof Error && error.name === "StaleGenerationError") throw httpError(409, error.message);
+      if (error instanceof Error && (error.name === "StaleGenerationError" || error.name === "StaleMemoryError")) throw httpError(409, error.message);
       throw error;
     }
   }
@@ -578,6 +578,9 @@ export class ServerTransport {
         return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "deleteContinuityMemory":
         return this.driver.deleteContinuityMemory(command).then(() => accepted(command.expectedGeneration));
+      case "migrateContinuityMemory":
+        return this.driver.migrateContinuityMemory({ expectedGeneration: command.expectedGeneration })
+          .then(() => accepted(command.expectedGeneration));
       case "handoffSession":
         if (!this.driver.handoffSession) return Promise.reject(httpError(409, "workspace handoff is unavailable"));
         return this.driver.handoffSession(command).then((result) => accepted(result.sessionGeneration));

@@ -36,6 +36,7 @@ import { createPylonModelRuntime } from "./runtime-factory.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
+  MigrateContinuityMemoryInput,
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
@@ -101,6 +102,13 @@ function sameCheckout(left: CheckoutState, right: CheckoutState): boolean {
 class WorkspaceApplyConflictError extends Error {
   constructor(readonly conflicts: Array<{ path: string; context?: string }>) {
     super(`Session changes conflict in ${conflicts.slice(0, 8).map((item) => item.path).join(", ")}${conflicts.length > 8 ? ` and ${conflicts.length - 8} more` : ""}.`);
+  }
+}
+
+class InvalidRuntimeSnapshotError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidRuntimeSnapshotError";
   }
 }
 
@@ -993,7 +1001,31 @@ export class RuntimeCoordinator implements PiDriver {
       if (this.registry().isSessionArchived(input.sessionId)) throw new Error("session is archived");
       if (input.sessionId === this.selectedId) return this.replacement(false);
       const awake = this.slots.get(input.sessionId);
-      if (awake) return this.select(awake);
+      if (awake) {
+        try {
+          return await this.select(awake);
+        } catch (error) {
+          if (!(error instanceof InvalidRuntimeSnapshotError) || !this.slotCanSleep(awake)) throw error;
+          const session = await this.sessionIndex.resolve(input.sessionId);
+          if (!session?.path || session.id !== input.sessionId) throw error;
+          const target = {
+            ...this.baseTarget(),
+            cwd: this.registry().effectiveCwd(session.id, session.cwd),
+            sessionPath: session.path,
+            projectId: this.registry().projectForSession(session.id, session.cwd)?.id,
+          };
+          await this.disposeSlot(awake);
+          let recovered: RuntimeSlot | undefined;
+          try {
+            recovered = await this.createSlot(target);
+            if (recovered.id !== input.sessionId) throw new Error("reconstructed session identity does not match the requested session");
+            return await this.select(recovered);
+          } catch (recoveryError) {
+            if (recovered) await this.disposeSlot(recovered).catch(() => undefined);
+            throw recoveryError;
+          }
+        }
+      }
       const session = await this.sessionIndex.resolve(input.sessionId);
       if (!session) throw new Error("session is unavailable");
       const slot = await this.createSlot({
@@ -1362,17 +1394,30 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
-    this.assertGeneration(input.expectedGeneration);
-    const slot = this.selected();
-    slot.lastActivityAt = Date.now();
-    await slot.driver.updateContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
+    await this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected(); slot.lastActivityAt = Date.now();
+      await slot.driver.updateContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
+      this.assertGeneration(input.expectedGeneration);
+    });
   }
 
   async deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void> {
-    this.assertGeneration(input.expectedGeneration);
-    const slot = this.selected();
-    slot.lastActivityAt = Date.now();
-    await slot.driver.deleteContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
+    await this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected(); slot.lastActivityAt = Date.now();
+      await slot.driver.deleteContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
+      this.assertGeneration(input.expectedGeneration);
+    });
+  }
+
+  async migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void> {
+    await this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected(); slot.lastActivityAt = Date.now();
+      await slot.driver.migrateContinuityMemory({ expectedGeneration: slot.innerGeneration });
+      this.assertGeneration(input.expectedGeneration);
+    });
   }
 
   async answerUiRequest(input: UiResponse): Promise<void> {
@@ -2057,7 +2102,7 @@ export class RuntimeCoordinator implements PiDriver {
       useCachedWorkspace = true;
     } while (revision !== slot.eventRevision);
     const issue = describeRuntimeSnapshotIssue(runtime);
-    if (issue) throw new Error(issue);
+    if (issue) throw new InvalidRuntimeSnapshotError(issue);
     this.selectedId = slot.id;
     this.generation++;
     this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });

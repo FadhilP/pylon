@@ -144,7 +144,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     ].filter(Boolean).join("\n");
   };
   const publish = (details: Details, cwd: string) => {
-    const event = { version: 1 as const, cwd, ...details };
+    const event = { version: 1 as const, sessionId: currentSessionId, cwd, ...details };
     if (["failed", "cancelled", "stale", "error"].includes(details.state))
       nonPassingState = details.state;
     pi.events.emit("pi-verify:result", event);

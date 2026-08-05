@@ -103,7 +103,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const activity: SpawnActivity[] = [];
   const usage = emptyUsage();
   let stdout = "", stderr = "", commandError = "", timedOut = false, aborted = false;
-  let protocolOverflow = false, settled = false, commandId = 0;
+  let settled = false, commandId = 0;
 
   const stopWithCommandError = (message: string) => {
     if (commandError) return;
@@ -154,12 +154,6 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
 
   child.stdout!.on("data", (chunk) => {
     stdout += chunk.toString();
-    if (Buffer.byteLength(stdout) > 1024 * 1024) {
-      protocolOverflow = true;
-      stdout = "";
-      terminate(child);
-      return;
-    }
     const lines = stdout.split("\n");
     stdout = lines.pop() ?? "";
     for (const line of lines) processLine(line.endsWith("\r") ? line.slice(0, -1) : line);
@@ -191,8 +185,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const final = messages.at(-1);
   const rawText = textContent(final);
   const capped = truncateHead(rawText, { maxBytes: 50 * 1024, maxLines: 2000 });
-  const error = protocolOverflow ? "Spawn protocol output exceeded 1 MiB."
-    : aborted ? "Spawned thread turn was aborted."
+  const error = aborted ? "Spawned thread turn was aborted."
     : timedOut ? "Spawned thread turn timed out."
     : commandError || (!settled ? `Spawned thread exited before settlement${exitCode ? ` (code ${exitCode})` : ""}.` : "")
       || (final?.stopReason === "error" ? final.errorMessage || "Spawned thread model error." : "")

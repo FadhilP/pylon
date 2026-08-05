@@ -227,12 +227,7 @@ function updateDelegatedRun(
   const details = object(raw.details);
   const activity = delegatedActivity(details.activity);
   const previousActivity = previous?.activity ?? [];
-  if (previous && previous.status !== "running" && status === "running") {
-    return {
-      ...previous,
-      activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
-    };
-  }
+  const nextStatus = previous && previous.status !== "running" && status === "running" ? previous.status : status;
   const request = delegatedRequest(input);
   const response = status === "running" ? undefined : messageText(raw);
   const agentName = text(details.agentName, 24) || undefined;
@@ -248,7 +243,7 @@ function updateDelegatedRun(
     id,
     kind,
     turn: previous?.turn ?? Math.max(0, Math.floor(turn)),
-    status,
+    status: nextStatus,
     ...(agentName ? { agentName } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(request ? { request } : {}),
@@ -260,6 +255,70 @@ function updateDelegatedRun(
     ...(usage ? { usage } : {}),
     activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
   };
+}
+
+export function projectDelegatedToolEvent(
+  phase: "start" | "update" | "end",
+  toolId: string,
+  previous: DelegatedAgentRunReadModel | undefined,
+  raw: Record<string, unknown>,
+  turn: number,
+): DelegatedAgentRunReadModel | undefined {
+  const input = raw.args ?? raw.input;
+  const name = raw.name ?? raw.toolName;
+  const kind = delegatedAgentKind(name, input) ?? previous?.kind;
+  if (!kind) return undefined;
+  if (phase === "start") return updateDelegatedRun(previous, kind, toolId, turn, input, undefined, "running");
+  if (phase === "update") return updateDelegatedRun(previous, kind, toolId, turn, input, raw.partialResult, "running");
+  const result = raw.result ?? raw;
+  const details = object(object(result).details);
+  const failed = raw.isError === true || raw.failed === true || Boolean(raw.error) || Boolean(details.failureCode)
+    || typeof details.status === "string" && !["completed", "running"].includes(details.status);
+  return updateDelegatedRun(previous, kind, toolId, turn, input, result, failed ? "failed" : "completed");
+}
+
+function mergeDelegatedRun(
+  transcript: DelegatedAgentRunReadModel,
+  live: DelegatedAgentRunReadModel,
+): DelegatedAgentRunReadModel {
+  const terminal = transcript.status !== "running" ? transcript : live;
+  const activity = live.activity.length >= transcript.activity.length ? live.activity : transcript.activity;
+  const usage = terminal.usage ?? live.usage ?? transcript.usage;
+  const durationMs = terminal.durationMs ?? live.durationMs ?? transcript.durationMs;
+  return {
+    id: transcript.id,
+    kind: transcript.kind,
+    turn: transcript.turn,
+    status: terminal.status,
+    activity: structuredClone(activity),
+    ...(live.agentName ?? transcript.agentName ? { agentName: live.agentName ?? transcript.agentName } : {}),
+    ...(live.startedAt ?? transcript.startedAt ? { startedAt: live.startedAt ?? transcript.startedAt } : {}),
+    ...(live.request ?? transcript.request ? { request: live.request ?? transcript.request } : {}),
+    ...(terminal.response ?? live.response ?? transcript.response ? { response: terminal.response ?? live.response ?? transcript.response } : {}),
+    ...(live.modelName ?? transcript.modelName ? { modelName: live.modelName ?? transcript.modelName } : {}),
+    ...(live.thinkingLevel ?? transcript.thinkingLevel ? { thinkingLevel: live.thinkingLevel ?? transcript.thinkingLevel } : {}),
+    ...(live.threadId ?? transcript.threadId ? { threadId: live.threadId ?? transcript.threadId } : {}),
+    ...(live.action ?? transcript.action ? { action: live.action ?? transcript.action } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(usage ? { usage: { ...usage } } : {}),
+  };
+}
+
+export function mergeDelegatedRuns(
+  transcript: readonly DelegatedAgentRunReadModel[],
+  live: readonly DelegatedAgentRunReadModel[],
+): DelegatedAgentRunReadModel[] {
+  const runs = new Map(transcript.map((run) => [run.id, structuredClone(run)]));
+  for (const run of live) {
+    const persisted = runs.get(run.id);
+    runs.delete(run.id);
+    runs.set(run.id, persisted ? mergeDelegatedRun(persisted, run) : structuredClone(run));
+  }
+  while (runs.size > MAX_DELEGATED_RUNS) {
+    const terminal = [...runs].find(([, run]) => run.status !== "running");
+    runs.delete(terminal?.[0] ?? runs.keys().next().value!);
+  }
+  return [...runs.values()];
 }
 
 export function browserJson(value: unknown): string | undefined {
@@ -863,15 +922,14 @@ export class RuntimeProjection {
     const input = raw.args ?? raw.input;
     const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running" };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.start", item);
-    const kind = delegatedAgentKind(name, input);
-    if (kind) this.setDelegatedRun(updateDelegatedRun(undefined, kind, toolId, this.runtime.metrics.userMessages, input, undefined, "running"));
+    const run = projectDelegatedToolEvent("start", toolId, undefined, raw, this.runtime.metrics.userMessages);
+    if (run) this.setDelegatedRun(run);
   }
   private toolUpdate(raw: Record<string, unknown>): void {
     const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool");
     const old = this.delegatedRuns.get(toolId);
-    const kind = delegatedAgentKind(raw.name ?? raw.toolName) ?? old?.kind;
-    if (!kind) return;
-    const next = updateDelegatedRun(old, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, raw.partialResult, "running");
+    const next = projectDelegatedToolEvent("update", toolId, old, raw, this.runtime.metrics.userMessages);
+    if (!next) return;
     if (old && equalDelegatedRunExceptDuration(old, next)) {
       this.delegatedRuns.set(toolId, next);
       return;
@@ -883,13 +941,8 @@ export class RuntimeProjection {
     const item: ToolActivityReadModel = { id: toolId, name: old?.name ?? text(raw.name ?? raw.toolName, 200), input: old?.input ?? browserJson(raw.args ?? raw.input), status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed", summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.end", item);
     const previous = this.delegatedRuns.get(toolId);
-    const kind = delegatedAgentKind(item.name) ?? previous?.kind;
-    if (!kind) return;
-    const result = raw.result ?? raw;
-    const details = object(object(result).details);
-    const failed = item.status === "failed" || Boolean(details.failureCode)
-      || typeof details.status === "string" && !["completed", "running"].includes(details.status);
-    this.setDelegatedRun(updateDelegatedRun(previous, kind, toolId, this.runtime.metrics.userMessages, raw.args ?? raw.input, result, failed ? "failed" : "completed"));
+    const run = projectDelegatedToolEvent("end", toolId, previous, { ...raw, name: item.name }, this.runtime.metrics.userMessages);
+    if (run) this.setDelegatedRun(run);
   }
   private setDelegatedRun(run: DelegatedAgentRunReadModel): void {
     this.delegatedRuns.set(run.id, run);

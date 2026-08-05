@@ -1,42 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { candidate } from "../src/memory.ts";
-import { fresh, isWork } from "../src/active-work.ts";
-import { validateQuestion } from "../src/questions.ts";
+import { normalizeProposalBatch } from "../src/memory.ts";
 
-test("questions validate", () => {
-  assert.throws(() => validateQuestion("q", [{ label: "x" }, { label: "x" }]));
-  validateQuestion("q", [{ label: "x" }, { label: "y" }]);
+test("proposal validation rejects secrets and path traversal", () => {
+  assert.throws(() => normalizeProposalBatch([{ operation: "add", scope: "user", trigger: "using auth", guidance: "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456", basis: { type: "user_instruction", quote: "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456" } }]), /invalid|credential|safety/);
+  assert.throws(() => normalizeProposalBatch([{ operation: "add", scope: "project", trigger: "changing config", guidance: "Keep the boundary.", basis: { type: "project_contract", evidence: [{ path: "../secret", start: 1, end: 1 }] } }]), /invalid/);
 });
-test("secret rejected", () =>
-  assert.throws(
-    () =>
-      candidate({
-        key: "x",
-        kind: "warning",
-        text: "api_key=sk-proj-abcdefghijklmnopqrstuvwxyz",
-        source: "x",
-        confidence: 1,
-        action: "add",
-      }),
-    /possible credential/,
-  ));
-
-test("work schema rejects malformed persisted state", () => {
-  assert.equal(isWork(fresh("goal")), true);
-  assert.equal(
-    isWork({
-      ...fresh("goal"),
-      runId: "run",
-      timelineId: "timeline",
-      baseModel: { provider: "provider", id: "model" },
-      baseThinking: "high",
-    }),
-    true,
-  );
-  assert.equal(isWork({ ...fresh("goal"), runId: "" }), false);
-  assert.equal(isWork({ ...fresh("goal"), timelineId: "" }), false);
-  assert.equal(isWork({ ...fresh("goal"), schemaVersion: 2 }), false);
-  assert.equal(isWork({ ...fresh("goal"), todos: [{ bad: true }] }), false);
-});
-

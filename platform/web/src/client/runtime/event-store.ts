@@ -2,13 +2,13 @@ import { useSyncExternalStore } from "react";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
-import type { ConnectionState, ContinuityMemoryFactReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
+import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
-import { ApiClient } from "./api-client";
+import { ApiClient, ApiHttpError } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
 import { liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity } from "../../shared/transcript";
 import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
@@ -732,28 +732,35 @@ export class RuntimeEventStore {
     });
   }
 
-  async updateContinuityMemory(fact: ContinuityMemoryFactReadModel, text: string, kind: ContinuityMemoryFactReadModel["kind"]): Promise<void> {
+  async updateContinuityMemory(note: ContinuityMemoryNoteReadModel, trigger: string, guidance: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
       type: "updateContinuityMemory",
-      key: fact.key,
-      text,
-      kind,
-      expectedUpdatedAt: fact.updatedAt,
+      scope: note.scope,
+      id: note.id,
+      trigger,
+      guidance,
+      expectedRevision: note.revision,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
   }
 
-  async deleteContinuityMemory(fact: ContinuityMemoryFactReadModel): Promise<void> {
+  async deleteContinuityMemory(note: ContinuityMemoryNoteReadModel): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
       type: "deleteContinuityMemory",
-      key: fact.key,
-      expectedUpdatedAt: fact.updatedAt,
+      scope: note.scope,
+      id: note.id,
+      expectedRevision: note.revision,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
+  }
+
+  async migrateContinuityMemory(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "migrateContinuityMemory", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
   async switchSession(sessionId: string): Promise<void> {
@@ -855,7 +862,8 @@ export class RuntimeEventStore {
   private async sendCommand(command: WebCommand): Promise<AcceptedCommand> {
     try { return await this.api.command(command); }
     catch (error) {
-      if (!["setPackageEnabled", "updatePackageSettings", "updateHookSettings", "timeline", "updateContinuityMemory", "deleteContinuityMemory"].includes(command.type)) {
+      if ((command.type === "updateContinuityMemory" || command.type === "deleteContinuityMemory" || command.type === "migrateContinuityMemory") && error instanceof ApiHttpError && error.status === 409) await this.bootstrap();
+      if (!["setPackageEnabled", "updatePackageSettings", "updateHookSettings", "timeline", "updateContinuityMemory", "deleteContinuityMemory", "migrateContinuityMemory"].includes(command.type)) {
         this.set({
           ...this.snapshot,
           error: error instanceof Error ? error.message : "Command failed",

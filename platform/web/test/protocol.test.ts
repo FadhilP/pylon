@@ -21,7 +21,7 @@ test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
 });
 
-test("command validation allowlists bounded v27 commands and attachments", () => {
+test("command and memory validation allowlists bounded v27 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -93,9 +93,16 @@ test("command validation allowlists bounded v27 commands and attachments", () =>
   assert.equal(validateCommand({ type: "reorderActiveSession", sessionId: "session-one", beforeSessionId: "session-two", commandId: "session-order", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "archiveSession", sessionId: "x".repeat(129), commandId: "archive-session", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "newSession", projectId: "project-one", parentSessionId: "session-1", commandId: "new", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "Use the coordinator", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updateContinuityMemory", key: "project.arch", text: "", kind: "architecture", expectedUpdatedAt: new Date(0).toISOString(), commandId: "memory", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
+  const memoryNote = { scope: "project" as const, id: "00000000-0000-0000-0000-000000000001", trigger: "Architecture", guidance: "Use the coordinator", expectedRevision: 1, commandId: "memory", expectedGeneration: 1 };
+  assert.equal(validateCommand({ type: "updateContinuityMemory", ...memoryNote }).ok, true);
+  assert.equal(validateCommand({ type: "updateContinuityMemory", ...memoryNote, trigger: " " }).ok, false);
+  assert.equal(validateCommand({ type: "updateContinuityMemory", ...memoryNote, owner: "forged" }).ok, false);
+  assert.equal(validateCommand({ type: "updateContinuityMemory", ...memoryNote, guidance: "x".repeat(800), trigger: "x".repeat(240) }).ok, false);
+  assert.equal(validateCommand({ type: "deleteContinuityMemory", scope: "user", id: memoryNote.id, expectedRevision: 1, commandId: "memory-delete", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1, scope: "user" }).ok, false);
+  assert.equal(validateCommand({ type: "updatePackageSettings",  packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { kind: "continuity", memoryEnabled: true, memoryReviewer: { model: "provider/reviewer", thinking: "high" } }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", models: ["provider/worker"], agentThinkingLevels: ["low", "high"] }, commandId: "spawn-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: [] }, commandId: "spawn-settings-invalid", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "handoffSession", destination: "checkout", commandId: "handoff", expectedGeneration: 1 }).ok, true);
@@ -197,7 +204,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     },
     operational: {
       verification: { availability: "available", checks: [] }, jobs: { availability: "unavailable", items: [] },
-      guard: { availability: "available", blocked: 0, confirmed: 0 }, continuity: { availability: "available", revision: 0 },
+      guard: { availability: "available", blocked: 0, confirmed: 0 }, continuity: { availability: "available", revision: 0, memory: [], globalMemory: [] },
       timeline: { availability: "available", revision: 0, checkpoints: [] }, tools: { availability: "available", policies: [] },
       sieve: { availability: "unavailable" },
       health: { status: "degraded", issues: ["jobs unavailable"] },
@@ -249,6 +256,28 @@ test("event and snapshot validators reject incompatible versions", () => {
     area: "protocol",
     detail: `expected ${PROTOCOL_VERSION}, received ${PROTOCOL_VERSION + 1}`,
   });
+  const invalidChecks = { ...snapshot, operational: { ...snapshot.operational, verification: { availability: "available", checks: "invalid" } } };
+  assert.deepEqual(runtimeSnapshotValidationIssue(invalidChecks), {
+    kind: "snapshot",
+    area: "operational.verification.checks",
+    detail: "must be an array with at most 20 items",
+  });
+  assert.match(describeRuntimeSnapshotIssue(invalidChecks) ?? "", /Invalid runtime snapshot in operational\.verification\.checks/);
+  const invalidMemoryPath = {
+    ...snapshot,
+    operational: {
+      ...snapshot.operational,
+      continuity: {
+        availability: "available", revision: 1, globalMemory: [],
+        memory: [{
+          id: "00000000-0000-4000-8000-000000000001", scope: "project", trigger: "Building releases", guidance: "Run the release check.",
+          authority: "project_contract", origin: "agent", relatedPaths: ["C:\\secrets"], revision: 1,
+          updatedAt: "2026-08-05T00:00:00.000Z", sourceSummary: "1 repository source",
+        }],
+      },
+    },
+  };
+  assert.equal(runtimeSnapshotValidationIssue(invalidMemoryPath)?.area, "operational.continuity.memory[0].relatedPaths");
   const invalidConversation = { ...snapshot, conversation: { ...snapshot.conversation, messages: "invalid" } };
   assert.equal(runtimeSnapshotValidationIssue(invalidConversation)?.area, "conversation");
   assert.match(describeRuntimeSnapshotIssue(invalidConversation) ?? "", new RegExp(`session session-1, generation 1, ready true, protocol ${PROTOCOL_VERSION}`));

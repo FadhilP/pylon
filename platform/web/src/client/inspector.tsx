@@ -1,6 +1,7 @@
 import {
   IconActivityHeartbeat,
   IconAdjustmentsHorizontal,
+  IconAlertTriangle,
   IconCheck,
   IconChevronDown,
   IconCircle,
@@ -25,7 +26,7 @@ import DOMPurify from "dompurify";
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
-import type { JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
+import type { ContinuityMemoryNoteReadModel, JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
 import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
@@ -59,13 +60,15 @@ interface InspectorProps {
   live: RuntimeStoreSnapshot;
   availableViews: Set<ViewId>;
   timelineEnabled: boolean;
+  memoryReviewerConfigured?: boolean;
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
   onOpenGlobalPolicy: () => void;
+  onOpenMemoryReviewerSettings: () => void;
 }
 
-export function Inspector({ current, live, availableViews, timelineEnabled, overlay, onClose, onNavigate, onOpenGlobalPolicy }: InspectorProps) {
+export function Inspector({ current, live, availableViews, timelineEnabled, memoryReviewerConfigured, overlay, onClose, onNavigate, onOpenGlobalPolicy, onOpenMemoryReviewerSettings }: InspectorProps) {
   const items = navigation.filter((item) => availableViews.has(item.id));
   return (
     <aside id="session-inspector" className="inspector" aria-label="Session inspector">
@@ -86,7 +89,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, over
         {current === "overview" && <Overview live={live} />}
         {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
         {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
-        {current === "memory" && <Memory live={live} />}
+        {current === "memory" && <Memory live={live} reviewerConfigured={memoryReviewerConfigured} onOpenReviewerSettings={onOpenMemoryReviewerSettings} />}
         {current === "tools" && <Tools live={live} />}
       </div>
     </aside>
@@ -413,135 +416,130 @@ function PolicySelectField({ label, description, value, inheritedLabel, disabled
   </div>;
 }
 
-function Memory({ live }: { live: RuntimeStoreSnapshot }) {
-  const memory = live.runtime?.operational.continuity.memory ?? [];
+function Memory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: RuntimeStoreSnapshot; reviewerConfigured?: boolean; onOpenReviewerSettings: () => void }) {
+  const continuity = live.runtime?.operational.continuity;
+  const memory = continuity?.memory ?? [];
   const globalMemory = live.runtime?.operational.continuity.globalMemory ?? [];
   const [editing, setEditing] = useState("");
-  const [text, setText] = useState("");
-  const [kind, setKind] = useState<(typeof memory)[number]["kind"]>("workflow");
+  const [trigger, setTrigger] = useState("");
+  const [guidance, setGuidance] = useState("");
   const [busy, setBusy] = useState("");
-  const [deleting, setDeleting] = useState<(typeof memory)[number]>();
+  const [deleting, setDeleting] = useState<ContinuityMemoryNoteReadModel>();
+  const [confirmingMigration, setConfirmingMigration] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const noteKey = (note: ContinuityMemoryNoteReadModel) => `${note.scope}:${note.id}`;
   const query = search.trim().toLowerCase();
-  const matches = (fact: (typeof memory)[number]) => !query || [fact.key, fact.kind, fact.text, fact.source, ...(fact.evidencePaths ?? []).map((evidence) => evidence.path)]
+  const matches = (note: ContinuityMemoryNoteReadModel) => !query || [note.trigger, note.guidance, note.authority, note.origin, ...(note.relatedPaths ?? [])]
     .some((value) => value.toLowerCase().includes(query));
   const visibleGlobalMemory = globalMemory.filter(matches);
   const visibleMemory = memory.filter(matches);
   const total = globalMemory.length + memory.length;
   const shown = visibleGlobalMemory.length + visibleMemory.length;
-  const idle = live.connection === "connected"
-    && live.runtime?.ready === true
-    && live.runtime.conversation.streaming === false
-    && !live.pendingUi
-    && !busy;
-  const edit = (fact: (typeof memory)[number]) => {
-    setEditing(fact.key);
-    setText(fact.text);
-    setKind(fact.kind);
-    setError("");
+  const idle = live.connection === "connected" && live.runtime?.ready === true
+    && live.runtime.conversation.streaming === false && !live.pendingUi && !busy;
+  const edit = (note: ContinuityMemoryNoteReadModel) => {
+    setEditing(noteKey(note)); setTrigger(note.trigger); setGuidance(note.guidance); setError("");
   };
-  const save = async (fact: (typeof memory)[number]) => {
-    if (!idle || !text.trim()) return;
-    setBusy(fact.key);
-    setError("");
+  const save = async (note: ContinuityMemoryNoteReadModel) => {
+    if (!idle || !trigger.trim() || !guidance.trim()) return;
+    setBusy(noteKey(note)); setError("");
     try {
-      await runtimeStore.updateContinuityMemory(fact, text.trim(), kind);
+      await runtimeStore.updateContinuityMemory(note, trigger.trim(), guidance.trim());
       setEditing("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to update memory");
-    } finally {
-      setBusy("");
-    }
+      if (cause instanceof Error && /\b(?:stale|changed|revision)\b/i.test(cause.message)) setEditing("");
+    } finally { setBusy(""); }
   };
-  const remove = async (fact: (typeof memory)[number]) => {
+  const remove = async (note: ContinuityMemoryNoteReadModel) => {
     if (!idle) return;
-    setBusy(fact.key);
-    setError("");
+    setBusy(noteKey(note)); setError("");
     try {
-      await runtimeStore.deleteContinuityMemory(fact);
+      await runtimeStore.deleteContinuityMemory(note);
       setEditing("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to delete memory");
-    } finally {
-      setBusy("");
-      setDeleting(undefined);
-    }
+    } finally { setBusy(""); setDeleting(undefined); }
   };
+  const migrate = async () => {
+    if (!idle || reviewerConfigured !== true) return;
+    setBusy("migration"); setError("");
+    try { await runtimeStore.migrateContinuityMemory(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to migrate V4 memory"); }
+    finally { setBusy(""); setConfirmingMigration(false); }
+  };
+  const rows = (notes: ContinuityMemoryNoteReadModel[]) => notes.map((note) => {
+    const key = noteKey(note);
+    const isEditing = editing === key;
+    return <details className="memory-ledger-row" key={key} open={isEditing || undefined}>
+      <summary>
+        <div><strong>{note.trigger}</strong><span>{note.authority.replaceAll("_", " ")}</span></div>
+        <IconChevronDown className="memory-ledger-chevron" size={13} />
+        <p>{note.guidance}</p>
+      </summary>
+      <div className="memory-ledger-detail">
+        {isEditing ? <div className="memory-editor">
+          <label>Trigger<input value={trigger} maxLength={240} disabled={Boolean(busy)} onChange={(event) => setTrigger(event.target.value)} /></label>
+          <label>Guidance<textarea value={guidance} maxLength={800} rows={5} disabled={Boolean(busy)} onChange={(event) => setGuidance(event.target.value)} /></label>
+          <div><button className="primary-button" type="button" disabled={!idle || !trigger.trim() || !guidance.trim() || trigger.trim().length + guidance.trim().length > 1_000} onClick={() => void save(note)}>{busy === key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
+        </div> : <>
+          <dl>
+            <div><dt>Authority</dt><dd>{note.authority.replaceAll("_", " ")}</dd></div>
+            <div><dt>Origin</dt><dd>{note.origin}</dd></div>
+            <div><dt>Updated</dt><dd><time dateTime={note.updatedAt}>{displayTime(note.updatedAt)}</time></dd></div>
+            <div><dt>Source summary</dt><dd title={note.sourceSummary}>{note.sourceSummary}</dd></div>
+            <div><dt>Related paths</dt><dd title={(note.relatedPaths ?? []).join("\n")}>{note.relatedPaths?.length ? note.relatedPaths.join(", ") : "None"}</dd></div>
+          </dl>
+          <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(note)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => { setError(""); setDeleting(note); }}><IconTrash size={13} />Delete</button></footer>
+        </>}
+      </div>
+    </details>;
+  });
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
   return <div className="memory-page memory-ledger">
+    {reviewerConfigured === false && <div className="memory-reviewer-warning" role="status">
+      <IconAlertTriangle size={15} />
+      <span><strong>Memory Reviewer is not configured.</strong> New memories proposed by the model will not be stored.</span>
+    </div>}
+    {continuity?.v4MigrationAvailable && <div className="memory-migration-banner" role="status">
+      <div><IconRestore size={16} /><span><strong>Previous memory found</strong><small>Review and migrate preserved V4 notes into the V5 notebook.</small></span></div>
+      <button className="secondary-button" type="button" disabled={!idle || reviewerConfigured === undefined}
+        onClick={() => reviewerConfigured === false ? onOpenReviewerSettings() : setConfirmingMigration(true)}>
+        {reviewerConfigured === false ? "Select Memory Reviewer" : reviewerConfigured === undefined ? "Loading settings…" : "Migrate memory"}
+      </button>
+    </div>}
     <label className="memory-ledger-search">
-      <IconSearch size={13} />
-      <span className="sr-only">Search memory</span>
-      <input type="search" value={search} placeholder={`Search ${total} fact${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} />
+      <IconSearch size={13} /><span className="sr-only">Search memory</span>
+      <input type="search" value={search} placeholder={`Search ${total} note${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} />
       <span className="mono">{query ? `${shown}/${total}` : total}</span>
     </label>
-
     <section className="memory-ledger-scope" aria-labelledby="global-memory-title">
-      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>{globalMemory.length} · read-only</span></header>
-      <div className="memory-ledger-list">
-        {visibleGlobalMemory.map((fact) => <details className="memory-ledger-row" key={fact.key}>
-          <summary>
-            <div><strong>{fact.key}</strong><span>{fact.kind.toUpperCase()}</span></div>
-            <span className="memory-ledger-confidence mono">{Math.round(fact.confidence * 100)}%</span>
-            <IconChevronDown className="memory-ledger-chevron" size={13} />
-            <p>{fact.text}</p>
-          </summary>
-          <div className="memory-ledger-detail">
-            <dl>
-              <div><dt>Source</dt><dd title={fact.source}>{fact.source}</dd></div>
-              <div><dt>Updated</dt><dd><time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time></dd></div>
-            </dl>
-            <p className="memory-ledger-note">Available in every project · read-only here</p>
-          </div>
-        </details>)}
-        {!query && globalMemory.length === 0 && <div className="memory-ledger-empty"><strong>No global memory</strong><span>Continuity has not saved durable user facts.</span></div>}
+      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>Global · editable across projects</span></header>
+      <div className="memory-ledger-list">{rows(visibleGlobalMemory)}
+        {!query && globalMemory.length === 0 && <div className="memory-ledger-empty"><strong>No global memory</strong><span>Continuity has not saved durable user notes.</span></div>}
       </div>
     </section>
-
     <section className="memory-ledger-scope" aria-labelledby="project-memory-title">
-      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>{memory.length} · editable</span></header>
-      <div className="memory-ledger-list">
-        {visibleMemory.map((fact) => <details className="memory-ledger-row" key={fact.key} open={editing === fact.key || undefined}>
-          <summary>
-            <div><strong>{fact.key}</strong><span>{fact.kind.toUpperCase()}</span></div>
-            <span className="memory-ledger-confidence mono">{Math.round(fact.confidence * 100)}%</span>
-            <IconChevronDown className="memory-ledger-chevron" size={13} />
-            <p>{fact.text}</p>
-          </summary>
-          <div className="memory-ledger-detail">
-            {editing === fact.key ? <div className="memory-editor">
-              <label>Kind<select value={kind} disabled={Boolean(busy)} onChange={(event) => setKind(event.target.value as typeof kind)}>
-                {["workflow", "structure", "architecture", "warning", "preference"].map((value) => <option value={value} key={value}>{value}</option>)}
-              </select></label>
-              <label>Fact<textarea value={text} maxLength={1_000} rows={5} disabled={Boolean(busy)} onChange={(event) => setText(event.target.value)} /></label>
-              <div><button className="primary-button" type="button" disabled={!idle || !text.trim()} onClick={() => void save(fact)}>{busy === fact.key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
-            </div> : <>
-              <dl>
-                <div><dt>Source</dt><dd title={fact.source}>{fact.source}</dd></div>
-                <div><dt>Evidence</dt><dd title={(fact.evidencePaths ?? []).map((evidence) => evidence.path).join("\n")}>{fact.evidencePaths?.length ?? 0} files</dd></div>
-                <div><dt>Updated</dt><dd><time dateTime={fact.updatedAt}>{displayTime(fact.updatedAt)}</time></dd></div>
-              </dl>
-              <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(fact)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => { setError(""); setDeleting(fact); }}><IconTrash size={13} />Delete</button></footer>
-            </>}
-          </div>
-        </details>)}
-        {!query && memory.length === 0 && <div className="memory-ledger-empty"><strong>No project memory</strong><span>Continuity has not saved durable facts for this project.</span></div>}
+      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>Project · editable</span></header>
+      <div className="memory-ledger-list">{rows(visibleMemory)}
+        {!query && memory.length === 0 && <div className="memory-ledger-empty"><strong>No project memory</strong><span>Continuity has not saved durable notes for this project.</span></div>}
       </div>
     </section>
-
-    {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a key, kind, source, or evidence path.</span></div>}
-    {!idle && memory.length > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
+    {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a trigger, guidance, authority, origin, or related path.</span></div>}
+    {!idle && total > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
     {error && <p className="ui-request-error" role="alert">{error}</p>}
     {deleting && <ActionDialog
-      title="Delete project memory?"
-      description={`“${deleting.key}” will be removed from Continuity memory for this project.`}
-      confirmLabel="Delete memory"
-      busyLabel="Deleting…"
-      busy={busy === deleting.key}
-      danger
-      onCancel={() => setDeleting(undefined)}
-      onConfirm={() => void remove(deleting)}
+      title={`Delete ${deleting.scope === "user" ? "global" : "project"} memory?`}
+      description={deleting.scope === "user" ? "This rule will be removed from every project." : "This rule will be removed from this project."}
+      confirmLabel="Delete memory" busyLabel="Deleting…" busy={busy === noteKey(deleting)} danger
+      onCancel={() => setDeleting(undefined)} onConfirm={() => void remove(deleting)}
+    />}
+    {confirmingMigration && <ActionDialog
+      title="Migrate previous memory?"
+      description="The configured Memory Reviewer will keep, revise, or reject each V4 note. Backups remain available for rollback until the next V5 write."
+      confirmLabel="Migrate memory" busyLabel="Migrating…" busy={busy === "migration"}
+      onCancel={() => setConfirmingMigration(false)} onConfirm={() => void migrate()}
     />}
   </div>;
 }

@@ -126,6 +126,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("packages");
   const [settingsProviderQuery, setSettingsProviderQuery] = useState("");
+  const [settingsPackageQuery, setSettingsPackageQuery] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalSessionId, setTerminalSessionId] = useState<string>();
   const [retainedTerminals, setRetainedTerminals] = useState<RetainedTerminal[]>([]);
@@ -191,6 +192,10 @@ export function App() {
     && (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
   const memoryEnabled = activePackages.has("pi-continuity")
     || live.runtime?.operational.continuity.availability === "available";
+  const continuitySettings = packages.find((item) => item.id === "pi-continuity")?.settings;
+  const memoryReviewerConfigured = !packagesLoading && continuitySettings?.kind === "continuity"
+    ? Boolean(continuitySettings.memoryReviewer?.model)
+    : undefined;
   const stateqlEnabled = activePackages.has("pi-stateql");
   const availableViews = useMemo(() => new Set<ViewId>([
     "overview",
@@ -863,6 +868,7 @@ export function App() {
         onOpenSettings={() => {
           setSettingsTab("packages");
           setSettingsProviderQuery("");
+          setSettingsPackageQuery("");
           setSettingsOpen(true);
           if (mobile) setSidebarOpen(false);
         }}
@@ -984,6 +990,7 @@ export function App() {
             onOpenLogin={(provider) => {
               setSettingsTab("providers");
               setSettingsProviderQuery(provider ?? "");
+              setSettingsPackageQuery("");
               setSettingsOpen(true);
             }}
           />
@@ -1002,6 +1009,7 @@ export function App() {
               live={live}
               availableViews={availableViews}
               timelineEnabled={timelineEnabled}
+              memoryReviewerConfigured={memoryReviewerConfigured}
               overlay={inspectorOverlay}
               onClose={() => setRightPanel(null)}
               onNavigate={selectView}
@@ -1009,6 +1017,14 @@ export function App() {
                 setRightPanel(null);
                 setSettingsTab("policy");
                 setSettingsProviderQuery("");
+                setSettingsPackageQuery("");
+                setSettingsOpen(true);
+              }}
+              onOpenMemoryReviewerSettings={() => {
+                setRightPanel(null);
+                setSettingsTab("packages");
+                setSettingsProviderQuery("");
+                setSettingsPackageQuery("continuity");
                 setSettingsOpen(true);
               }}
             />}
@@ -1087,6 +1103,7 @@ export function App() {
       {settingsOpen && <SettingsDialog
         initialTab={settingsTab}
         initialProviderQuery={settingsProviderQuery}
+        initialPackageQuery={settingsPackageQuery}
         providerAuth={live.runtime?.providerAuth}
         pendingUi={live.pendingUi}
         packages={packages}

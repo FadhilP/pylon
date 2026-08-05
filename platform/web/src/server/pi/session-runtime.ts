@@ -30,13 +30,14 @@ import {
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
-import type { ChangedFileReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, DelegatedAgentRunReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
+  MigrateContinuityMemoryInput,
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
@@ -82,7 +83,7 @@ import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
-import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex } from "./projections.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, mergeDelegatedRuns, projectConversation, projectConversationTurnIndex, projectDelegatedToolEvent } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
@@ -327,6 +328,7 @@ const OPTIONAL_TOOLS = [
   "heartbeat_cancel",
 ] as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const MAX_LIVE_DELEGATED_RUNS = 100;
 const ACTIVE_AUTH_RUNTIMES = new WeakSet<ModelRuntime>();
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
@@ -383,6 +385,7 @@ export class SessionRuntime implements PiDriver {
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
   private readonly turnChanges = new Map<string, ChangedFileReadModel[]>();
   private turnChangesLeafId: string | null | undefined;
+  private readonly liveDelegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
   private timingSessionId?: string;
   private workStartedAt?: string;
   private workStartedAtMs?: number;
@@ -693,13 +696,16 @@ export class SessionRuntime implements PiDriver {
             : capture.notifications.some((notification) => notification.payload.type === "warning")
               ? "warning"
               : "info";
-          this.commandResult = {
-            id: capture.id.slice(0, 128),
-            command: capture.name,
-            output,
-            severity,
-            occurredAt: new Date().toISOString(),
-          };
+          const compactCommand = capture.name === "compact" || /^compact:\d+$/.test(capture.name);
+          this.commandResult = compactCommand && !output && severity === "info"
+            ? undefined
+            : {
+              id: capture.id.slice(0, 128),
+              command: capture.name,
+              output,
+              severity,
+              occurredAt: new Date().toISOString(),
+            };
           this.emitCommandResult();
         }
         if (!accepted && knownCommand && !files.length && !input.images?.length) resolve(this.accepted(input.commandId));
@@ -1305,6 +1311,7 @@ export class SessionRuntime implements PiDriver {
     if (settings.kind === "continuity") {
       if (settings.planner) assertProfile(settings.planner.model, settings.planner.thinking);
       if (settings.executor) assertProfile(settings.executor.model, settings.executor.thinking);
+      if (settings.memoryReviewer) assertProfile(settings.memoryReviewer.model, settings.memoryReviewer.thinking);
       return;
     }
     if (settings.kind === "advisor" || settings.kind === "scout") {
@@ -1587,19 +1594,25 @@ export class SessionRuntime implements PiDriver {
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
     return this.continuityMemoryMutation({
       action: "update",
-      key: input.key,
-      text: input.text,
-      kind: input.kind,
-      expectedUpdatedAt: input.expectedUpdatedAt,
+      scope: input.scope,
+      id: input.id,
+      trigger: input.trigger,
+      guidance: input.guidance,
+      expectedRevision: input.expectedRevision,
     }, input.expectedGeneration);
   }
 
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void> {
     return this.continuityMemoryMutation({
       action: "delete",
-      key: input.key,
-      expectedUpdatedAt: input.expectedUpdatedAt,
+      scope: input.scope,
+      id: input.id,
+      expectedRevision: input.expectedRevision,
     }, input.expectedGeneration);
+  }
+
+  migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void> {
+    return this.continuityMemoryMutation({ action: "migrate" }, input.expectedGeneration);
   }
 
   async answerUiRequest(input: UiResponse): Promise<void> {
@@ -1727,6 +1740,7 @@ export class SessionRuntime implements PiDriver {
 
   private async bindSession(session: AgentSession, generation: number): Promise<void> {
     if (this.timingSessionId !== session.sessionId) {
+      this.liveDelegatedRuns.clear();
       this.timingSessionId = session.sessionId;
       this.workStartedAt = undefined;
       this.workStartedAtMs = undefined;
@@ -1774,6 +1788,28 @@ export class SessionRuntime implements PiDriver {
         ? payload as Record<string, unknown>
         : {};
       const kind = String(raw.type ?? "");
+      const phase = kind === "tool_execution_start" ? "start"
+        : kind === "tool_execution_update" ? "update"
+        : kind === "tool_execution_end" ? "end"
+        : undefined;
+      if (phase && typeof raw.toolCallId === "string" && raw.toolCallId) {
+        const previous = this.liveDelegatedRuns.get(raw.toolCallId);
+        const run = projectDelegatedToolEvent(
+          phase,
+          raw.toolCallId,
+          previous,
+          raw,
+          this.lastSnapshot?.metrics.userMessages ?? session.getSessionStats().userMessages,
+        );
+        if (run) {
+          this.liveDelegatedRuns.delete(run.id);
+          this.liveDelegatedRuns.set(run.id, structuredClone(run));
+          while (this.liveDelegatedRuns.size > MAX_LIVE_DELEGATED_RUNS) {
+            const terminal = [...this.liveDelegatedRuns].find(([, item]) => item.status !== "running");
+            this.liveDelegatedRuns.delete(terminal?.[0] ?? this.liveDelegatedRuns.keys().next().value!);
+          }
+        }
+      }
       if (deferUserMessageEndEntryId(raw, () => this.gate.accepts(generation), () => this.latestUserEntryId(session), (forwarded) => {
         this.emit({
           type: "session.event",
@@ -2087,20 +2123,24 @@ export class SessionRuntime implements PiDriver {
 
   private continuityMemoryMutation(
     mutation: Record<string, unknown>,
-    expectedGeneration = this.gate.generation,
+    expectedGeneration: number,
   ): Promise<void> {
     this.gate.assert(expectedGeneration);
     const session = this.controlSession();
     return new Promise<void>((resolve, reject) => {
       let answered = false;
       this.eventBus.emit("pi-continuity:memory-mutation", {
-        version: 1,
+        version: 2,
         sessionId: session.sessionId,
+        expectedGeneration,
         ...mutation,
         respond: (result: unknown | Promise<unknown>) => {
           if (answered) return;
           answered = true;
-          Promise.resolve(result).then(() => resolve(), reject);
+          Promise.resolve(result).then(() => resolve(), (error) => {
+            if (error instanceof Error && /\b(?:stale|changed|revision)\b/i.test(error.message)) error.name = "StaleMemoryError";
+            reject(error);
+          });
         },
       });
       if (!answered) reject(new Error("Continuity memory is unavailable"));
@@ -2131,6 +2171,7 @@ export class SessionRuntime implements PiDriver {
     const tailStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
     const historyStart = Math.min(tailStart, latestVisibleUserIndex(messages) ?? tailStart);
     const projectedConversation = projectConversation(messages, { start: historyStart, limitMessages: false });
+    const delegatedRuns = mergeDelegatedRuns(projectedConversation.delegatedRuns, [...this.liveDelegatedRuns.values()]);
     const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = message.entryId ? this.workDurations.get(message.entryId) : undefined;
       const controls = this.turnControls.get(message.id);
@@ -2181,7 +2222,7 @@ export class SessionRuntime implements PiDriver {
       conversation: {
         messages: projectedMessages,
         tools: [],
-        delegatedRuns: projectedConversation.delegatedRuns,
+        delegatedRuns,
         ...(historyStart > 0 ? {
           historyCursor: encodeHistoryCursor(historyStart),
           historyRemaining: historyStart,
@@ -2536,7 +2577,7 @@ export class SessionRuntime implements PiDriver {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 3,
+          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 4,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;

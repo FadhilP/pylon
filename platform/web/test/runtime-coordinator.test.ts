@@ -210,6 +210,99 @@ test("targeted session refresh isolates cwd values and follows path changes", as
   }
 });
 
+test("session switching restores live delegated-agent metadata from the background runtime", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-live-delegate-switch-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const other = SessionManager.create(cwd);
+  persistSession(other, "Other session");
+  const coordinator = new RuntimeCoordinator({ sleepAfterMs: 60_000, viewOnlySleepAfterMs: 60_000 });
+
+  try {
+    const initial = await coordinator.start({ cwd, agentDir, repositoryRoot: root });
+    await coordinator.switchSession({ sessionId: other.getSessionId() });
+    const background = (coordinator as any).slots.get(initial.sessionId).driver.runtime.session;
+    background._emit({
+      type: "tool_execution_start", toolCallId: "spawn-background", toolName: "spawn_agent",
+      args: { action: "create", prompt: "Inspect auth" },
+    });
+    background._emit({
+      type: "tool_execution_update", toolCallId: "spawn-background", toolName: "spawn_agent",
+      args: { action: "create", prompt: "Inspect auth" },
+      partialResult: {
+        content: [{ type: "text", text: "Private agent is working" }],
+        details: {
+          piSpawn: { version: 1, kind: "agent", id: "child-session" },
+          agentName: "Ada", startedAt: "2026-07-30T10:00:00.000Z", state: "running",
+          model: "provider/child", durationMs: 1_000,
+          usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.01 },
+          activity: [{ kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" }],
+        },
+      },
+    });
+
+    await coordinator.switchSession({ sessionId: initial.sessionId });
+    const [run] = (await coordinator.snapshot()).conversation.delegatedRuns;
+    assert.equal(run?.status, "running");
+    assert.equal(run?.agentName, "Ada");
+    assert.equal(run?.threadId, "child-session");
+    assert.equal(run?.activity.length, 1);
+    assert.equal(run?.usage?.output, 3);
+
+    await coordinator.switchSession({ sessionId: other.getSessionId() });
+    background._emit({
+      type: "tool_execution_end", toolCallId: "spawn-background", toolName: "spawn_agent", isError: false,
+      result: {
+        content: [{ type: "text", text: "Done" }],
+        details: {
+          piSpawn: { version: 1, kind: "agent", id: "child-session" },
+          agentName: "Ada", status: "completed", model: "provider/child", durationMs: 2_000,
+          usage: { input: 4, output: 6, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+          activity: [
+            { kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" },
+            { kind: "result", tool: "read", text: "source" },
+          ],
+        },
+      },
+    });
+    await coordinator.switchSession({ sessionId: initial.sessionId });
+    const [completed] = (await coordinator.snapshot()).conversation.delegatedRuns;
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed?.response, "Done");
+    assert.equal(completed?.activity.length, 2);
+    assert.equal(completed?.usage?.output, 6);
+  } finally {
+    await coordinator.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("memory mutations forward scoped IDs and revisions, and reject changed generations", async () => {
+  const coordinator = new RuntimeCoordinator();
+  try {
+    const internal = coordinator as any; internal.generation = 1; internal.selectedId = "session";
+    let release!: () => void; const updates: any[] = [], deletes: any[] = [], migrations: any[] = [];
+    internal.slots.set("session", { id: "session", innerGeneration: 7, lastActivityAt: 0, unsubscribe: () => {}, driver: {
+      updateContinuityMemory: (input: any) => { updates.push(input); return Promise.resolve(); },
+      deleteContinuityMemory: (input: any) => { deletes.push(input); return Promise.resolve(); },
+      migrateContinuityMemory: (input: any) => { migrations.push(input); return migrations.length === 2 ? new Promise<void>((resolve) => { release = resolve; }) : Promise.resolve(); }, dispose: async () => {},
+    } });
+    const userId = "00000000-0000-4000-8000-000000000001", projectId = "00000000-0000-4000-8000-000000000002";
+    await coordinator.updateContinuityMemory({ expectedGeneration: 1, scope: "user", id: userId, trigger: "responding", guidance: "Keep replies concise.", expectedRevision: 3 });
+    await coordinator.deleteContinuityMemory({ expectedGeneration: 1, scope: "project", id: projectId, expectedRevision: 4 });
+    await coordinator.migrateContinuityMemory({ expectedGeneration: 1 });
+    assert.deepEqual(updates[0], { expectedGeneration: 7, scope: "user", id: userId, trigger: "responding", guidance: "Keep replies concise.", expectedRevision: 3 });
+    assert.deepEqual(deletes[0], { expectedGeneration: 7, scope: "project", id: projectId, expectedRevision: 4 });
+    assert.deepEqual(migrations[0], { expectedGeneration: 7 });
+    const pending = coordinator.migrateContinuityMemory({ expectedGeneration: 1 });
+    await Promise.resolve(); internal.generation = 2; release();
+    await assert.rejects(pending, /stale/i);
+  } finally { await coordinator.dispose(); }
+});
+
 test("session selection retries a snapshot invalidated by a background completion", async () => {
   const coordinator = new RuntimeCoordinator();
   const events: any[] = [];
@@ -266,6 +359,171 @@ test("session selection retries a snapshot invalidated by a background completio
   assert.equal(events.some((event) => event.type === "session.event"), false);
   assert.equal(replacement.runtime.conversation.messages[0]?.text, "Completed while switching");
   assert.equal(completion?.cue, "turn-complete");
+});
+
+test("awake sessions recover once from an invalid runtime snapshot", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  internal.generation = 4;
+  internal.selectedId = "selected";
+  internal.target = { cwd: "repo", agentDir: "agent", repositoryRoot: "root" };
+  internal.projectRegistry = {
+    isSessionArchived: () => false,
+    effectiveCwd: () => "repo",
+    projectForSession: () => ({ id: "project-1" }),
+  };
+  const poisoned = { id: "poisoned", eventRevision: 0, lastActivityAt: 0 };
+  internal.slots.set(poisoned.id, poisoned);
+  internal.sessionIndex.resolve = async () => ({ id: poisoned.id, cwd: "repo", path: "session.jsonl" });
+  internal.slotCanSleep = () => true;
+  internal.publishStatus = () => {};
+  const invalid = runtime(poisoned.id);
+  (invalid.operational.verification as any).checks = "invalid";
+  const recovered: any = { id: poisoned.id, eventRevision: 0, lastActivityAt: 0 };
+  let created = 0;
+  const disposed: unknown[] = [];
+  internal.snapshotFor = async (slot: unknown) => slot === poisoned ? invalid : runtime(poisoned.id);
+  internal.disposeSlot = async (slot: any) => {
+    disposed.push(slot);
+    if (internal.slots.get(slot.id) === slot) internal.slots.delete(slot.id);
+  };
+  internal.createSlot = async (target: unknown) => {
+    created++;
+    recovered.target = target;
+    internal.slots.set(recovered.id, recovered);
+    return recovered;
+  };
+
+  const result = await coordinator.switchSession({ sessionId: poisoned.id });
+
+  assert.equal(result.sessionId, poisoned.id);
+  assert.equal(result.sessionGeneration, 5);
+  assert.equal(internal.selectedId, poisoned.id);
+  assert.equal(created, 1);
+  assert.deepEqual(disposed, [poisoned]);
+  assert.equal((recovered as any).target.sessionPath, "session.jsonl");
+  assert.equal(events.filter((event) => event.type === "session.replaced").length, 1);
+});
+
+test("awake-session recovery stops after one invalid reconstruction", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  internal.generation = 4;
+  internal.selectedId = "selected";
+  internal.target = { cwd: "repo", agentDir: "agent", repositoryRoot: "root" };
+  internal.projectRegistry = {
+    isSessionArchived: () => false,
+    effectiveCwd: () => "repo",
+    projectForSession: () => ({ id: "project-1" }),
+  };
+  const poisoned = { id: "poisoned", eventRevision: 0, lastActivityAt: 0 };
+  const recovered = { id: poisoned.id, eventRevision: 0, lastActivityAt: 0 };
+  internal.slots.set(poisoned.id, poisoned);
+  internal.sessionIndex.resolve = async () => ({ id: poisoned.id, cwd: "repo", path: "session.jsonl" });
+  internal.slotCanSleep = () => true;
+  internal.publishStatus = () => {};
+  const invalid = runtime(poisoned.id);
+  (invalid.operational.verification as any).checks = "invalid";
+  let snapshots = 0;
+  const disposed: unknown[] = [];
+  internal.snapshotFor = async () => { snapshots++; return invalid; };
+  internal.disposeSlot = async (slot: any) => {
+    disposed.push(slot);
+    if (internal.slots.get(slot.id) === slot) internal.slots.delete(slot.id);
+  };
+  internal.createSlot = async () => {
+    internal.slots.set(recovered.id, recovered);
+    return recovered;
+  };
+
+  await assert.rejects(coordinator.switchSession({ sessionId: poisoned.id }), /operational\.verification\.checks/);
+
+  assert.equal(snapshots, 2);
+  assert.deepEqual(disposed, [poisoned, recovered]);
+  assert.equal(internal.selectedId, "selected");
+  assert.equal(internal.generation, 4);
+  assert.equal(events.some((event) => event.type === "session.replaced"), false);
+});
+
+test("awake-session recovery leaves running invalid slots untouched", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.generation = 4;
+  internal.selectedId = "selected";
+  internal.projectRegistry = { isSessionArchived: () => false };
+  const awake = { id: "awake", eventRevision: 0, lastActivityAt: 0 };
+  internal.slots.set(awake.id, awake);
+  const invalid = runtime(awake.id);
+  (invalid.operational.verification as any).checks = "invalid";
+  internal.snapshotFor = async () => invalid;
+  internal.slotCanSleep = () => false;
+  let resolved = false;
+  let disposed = false;
+  internal.sessionIndex.resolve = async () => { resolved = true; return undefined; };
+  internal.disposeSlot = async () => { disposed = true; };
+
+  await assert.rejects(coordinator.switchSession({ sessionId: awake.id }), /operational\.verification\.checks/);
+
+  assert.equal(resolved, false);
+  assert.equal(disposed, false);
+  assert.equal(internal.slots.get(awake.id), awake);
+  assert.equal(internal.selectedId, "selected");
+  assert.equal(internal.generation, 4);
+});
+
+test("awake-session recovery does not recreate until old-slot disposal completes", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.generation = 4;
+  internal.selectedId = "selected";
+  internal.target = { cwd: "repo", agentDir: "agent", repositoryRoot: "root" };
+  internal.projectRegistry = {
+    isSessionArchived: () => false,
+    effectiveCwd: () => "repo",
+    projectForSession: () => ({ id: "project-1" }),
+  };
+  const awake = { id: "awake", eventRevision: 0, lastActivityAt: 0 };
+  internal.slots.set(awake.id, awake);
+  internal.sessionIndex.resolve = async () => ({ id: awake.id, cwd: "repo", path: "session.jsonl" });
+  internal.slotCanSleep = () => true;
+  const invalid = runtime(awake.id);
+  (invalid.operational.verification as any).checks = "invalid";
+  internal.snapshotFor = async () => invalid;
+  internal.disposeSlot = async () => { throw new Error("disposal failed"); };
+  let created = false;
+  internal.createSlot = async () => { created = true; };
+
+  await assert.rejects(coordinator.switchSession({ sessionId: awake.id }), /disposal failed/);
+
+  assert.equal(created, false);
+  assert.equal(internal.selectedId, "selected");
+  assert.equal(internal.generation, 4);
+});
+
+test("awake-session recovery does not intercept non-validation failures", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.generation = 4;
+  internal.selectedId = "selected";
+  internal.projectRegistry = { isSessionArchived: () => false };
+  const awake = { id: "awake", eventRevision: 0, lastActivityAt: 0 };
+  internal.slots.set(awake.id, awake);
+  let resolved = false;
+  let disposed = false;
+  internal.sessionIndex.resolve = async () => { resolved = true; return undefined; };
+  internal.snapshotFor = async () => { throw new Error("workspace refresh failed"); };
+  internal.disposeSlot = async () => { disposed = true; };
+
+  await assert.rejects(coordinator.switchSession({ sessionId: awake.id }), /workspace refresh failed/);
+
+  assert.equal(resolved, false);
+  assert.equal(disposed, false);
+  assert.equal(internal.selectedId, "selected");
+  assert.equal(internal.generation, 4);
 });
 
 test("session status publishes work timer changes even when runtime state is unchanged", () => {
