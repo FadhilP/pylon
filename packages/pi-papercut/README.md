@@ -18,26 +18,17 @@ Run `/reload` after installation.
 
 ### `papercut`
 
-The model calls the capture-only tool in the moment with one or two sentences describing what it was doing, what got in the way, and optionally a tentative cause or improvement. Capture does not interrupt or expand the current task.
+The single tool captures, lists, and updates papercuts. Capture is the default action, keeping the frequent call small:
 
 ```ts
-papercut({
-  message: "Running setup required an undocumented retry; the prerequisite should be documented."
-})
+papercut({ message: "Running setup required an undocumented retry; the prerequisite should be documented." })
+papercut({ action: "list", status: "open" })
+papercut({ action: "resolve", ids: ["a1b2c3d4"], note: "Documented setup and added a regression test." })
+papercut({ action: "dismiss", ids: ["a1b2c3d4"], note: "Intentional platform behavior." })
+papercut({ action: "reopen", ids: ["a1b2c3d4"] })
 ```
 
-Exact normalized duplicates of open records increment their occurrence count instead of creating another record. Closed records do not suppress a new occurrence. Messages are capped at 500 characters and likely credentials are rejected.
-
-### `papercuts`
-
-The management tool lists or atomically updates the backlog:
-
-```ts
-papercuts({ action: "list", status: "open" })
-papercuts({ action: "resolve", ids: ["a1b2c3d4"], note: "Documented setup and added a regression test." })
-papercuts({ action: "dismiss", ids: ["a1b2c3d4"], note: "Intentional platform behavior." })
-papercuts({ action: "reopen", ids: ["a1b2c3d4"] })
-```
+The model captures friction in the moment with one or two sentences describing what it was doing, what got in the way, and optionally a tentative cause or improvement. Capture does not interrupt or expand the current task. Exact normalized duplicates of open records increment their occurrence count instead of creating another record. Closed records do not suppress a new occurrence. Messages are capped at 500 characters and likely credentials are rejected.
 
 IDs may be full UUIDs or unique prefixes of at least four characters. Resolution requires a note. Batch updates validate every ID before writing, so a bad target changes nothing. Implementation-related papercuts should be marked resolved only after suitable verification.
 
@@ -55,7 +46,7 @@ Session transcript review is intentionally not included.
 
 ## Pylon Web settings
 
-The package appears in **Settings → Packages** with the standard package on/off switch. Its `papercut` and `papercuts` tools are published under **Tool exposure**, where each can inherit the default or be set to active, deferred, or disabled.
+The package appears in **Settings → Packages** with the standard package on/off switch. Its `papercut` tool is published under **Tool exposure**, where it can inherit the default or be set to active, deferred, or disabled.
 
 ## Storage and privacy
 
