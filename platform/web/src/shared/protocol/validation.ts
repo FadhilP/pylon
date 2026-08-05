@@ -756,17 +756,15 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (!conversation.delegatedRuns.every((run) => validDelegatedRun(run))) return false;
   if (!Number.isSafeInteger(conversation.queue.steering) || !Number.isSafeInteger(conversation.queue.followUp)
     || typeof conversation.retry.active !== "boolean" || typeof conversation.compaction.active !== "boolean") return false;
-  if (conversation.queue.pending !== undefined) {
-    const pending = conversation.queue.pending;
-    if (!record(pending) || !identifier(pending.id)
-      || typeof pending.preview !== "string" || pending.preview.length > 2_000
-      || !Number.isSafeInteger(pending.attachmentCount) || (pending.attachmentCount as number) < 0
-      || (pending.attachmentCount as number) > MAX_IMAGES
-      || !Number.isSafeInteger(pending.fileAttachmentCount) || (pending.fileAttachmentCount as number) < 0
-      || (pending.fileAttachmentCount as number) > MAX_TEXT_FILES
-      || typeof pending.planMode !== "boolean"
-      || !["queued", "delivering"].includes(String(pending.state))) return false;
-  }
+  if (conversation.queue.items !== undefined && (!Array.isArray(conversation.queue.items)
+    || conversation.queue.items.length > 100 || !conversation.queue.items.every((item) => record(item) && identifier(item.id)
+      && typeof item.preview === "string" && item.preview.length <= 2_000
+      && Number.isSafeInteger(item.attachmentCount) && (item.attachmentCount as number) >= 0
+      && (item.attachmentCount as number) <= MAX_IMAGES
+      && Number.isSafeInteger(item.fileAttachmentCount) && (item.fileAttachmentCount as number) >= 0
+      && (item.fileAttachmentCount as number) <= MAX_TEXT_FILES
+      && typeof item.planMode === "boolean"
+      && ["queued", "delivering"].includes(String(item.state))))) return false;
   const controls = value.sessionControls;
   if (!record(controls) || !Array.isArray(controls.models) || controls.models.length > 500
     || !Array.isArray(controls.thinkingLevels) || !controls.thinkingLevels.every((level) => thinkingLevels.has(String(level)))

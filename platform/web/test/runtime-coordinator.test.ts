@@ -526,6 +526,220 @@ test("awake-session recovery does not intercept non-validation failures", async 
   assert.equal(internal.generation, 4);
 });
 
+test("queued prompts stay ordered and continue after queued control failures", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const prompted: string[] = [];
+  const steered: string[] = [];
+  let state = "running";
+  const slot = {
+    id: "session",
+    innerGeneration: 7,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "running",
+    lastWorkStartedAt: "2026-07-30T10:00:00.000Z",
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    pendingControls: undefined as any,
+    driver: {
+      runtimeState: () => state,
+      runtimeDetails: () => ({ workStartedAt: state === "running" ? "2026-07-30T10:00:00.000Z" : undefined }),
+      prompt: async (input: any) => { prompted.push(input.message); return { commandId: input.commandId, sessionGeneration: 7, accepted: true }; },
+      steer: async (input: any) => { steered.push(input.message); return { commandId: input.commandId, sessionGeneration: 7, accepted: true }; },
+      setSessionControls: async () => { throw new Error("model unavailable"); },
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+  internal.invalidateWorkspaceInventory = () => {};
+  internal.refreshWorkspace = async () => {};
+  const enqueue = (message: string) => coordinator.queuePrompt({ message, commandId: `command-${message}`, expectedGeneration: 1 });
+
+  await enqueue("first");
+  await enqueue("second");
+  await enqueue("third");
+  const [first, second, third] = internal.queueReadModel(slot).items;
+  assert.deepEqual([first.preview, second.preview, third.preview], ["first", "second", "third"]);
+
+  assert.equal((await coordinator.queuedPrompt({ queueId: second.id, expectedGeneration: 1 })).message, "second");
+  await coordinator.restoreQueuedPrompt({ queueId: second.id, expectedGeneration: 1 });
+  await coordinator.steerQueuedPrompt({ queueId: third.id, commandId: "steer-third", expectedGeneration: 1 });
+  assert.deepEqual(steered, ["third"]);
+
+  state = "idle";
+  await enqueue("fourth");
+  slot.pendingControls = { input: {}, model: {} };
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    sessionId: slot.id,
+    sessionGeneration: 7,
+    payload: { type: "agent_end", stopped: false },
+  });
+  await waitFor(() => prompted.length === 1);
+  assert.deepEqual(prompted, ["first"]);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => item.preview), ["fourth"]);
+
+  await internal.settleAgentRun(slot);
+  assert.deepEqual(prompted, ["first", "fourth"]);
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
+test("multiple queued prompts advance after streaming settles", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const prompted: string[] = [];
+  let state = "running";
+  let workStartedAt: string | undefined = "turn-original";
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "running",
+    lastWorkStartedAt: workStartedAt,
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    driver: {
+      runtimeState: () => state,
+      runtimeDetails: () => ({ workStartedAt }),
+      prompt: async (input: any) => {
+        if (state !== "idle") throw new Error("Agent is already processing");
+        prompted.push(input.message);
+        state = "running";
+        workStartedAt = `turn-${prompted.length}`;
+        return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
+      },
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+  internal.invalidateWorkspaceInventory = () => {};
+  internal.refreshWorkspace = async () => {};
+  const enqueue = (message: string) => coordinator.queuePrompt({ message, commandId: `command-${message}`, expectedGeneration: 1 });
+  const endTurn = () => internal.onSlotEvent(slot, {
+    type: "session.event",
+    sessionId: slot.id,
+    sessionGeneration: 4,
+    payload: { type: "agent_end", stopped: false },
+  });
+
+  await enqueue("first");
+  await enqueue("second");
+  endTurn();
+  await waitFor(() => Boolean((slot as any).queueFlushTimer));
+  workStartedAt = undefined;
+  state = "idle";
+  await waitFor(() => prompted.length === 1);
+  assert.deepEqual(prompted, ["first"]);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => item.preview), ["second"]);
+
+  endTurn();
+  await waitFor(() => Boolean((slot as any).queueFlushTimer));
+  workStartedAt = undefined;
+  state = "idle";
+  await waitFor(() => prompted.length === 2);
+  assert.deepEqual(prompted, ["first", "second"]);
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
+test("queue pump retries only a transient busy prompt rejection", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let attempts = 0;
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    driver: {
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+      prompt: async (input: any) => {
+        if (++attempts === 1) throw new Error("Agent is already processing. Specify streamingBehavior to queue the message.");
+        return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
+      },
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+
+  await coordinator.queuePrompt({ message: "retry me", commandId: "command-retry", expectedGeneration: 1 });
+  await waitFor(() => attempts === 2);
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
+test("queued follow-up remains visible while a turn timer is active", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const prompted: string[] = [];
+  const published: string[][] = [];
+  let workStartedAt: string | undefined = "2026-08-05T04:42:30.383Z";
+  coordinator.subscribe((event) => {
+    if (event.type === "queue.changed") published.push(event.queue.items?.map((item) => `${item.preview}:${item.state}`) ?? []);
+  });
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "idle",
+    lastWorkStartedAt: workStartedAt,
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    driver: {
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt }),
+      prompt: async (input: any) => { prompted.push(input.message); return { commandId: input.commandId, sessionGeneration: 4, accepted: true }; },
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+  internal.invalidateWorkspaceInventory = () => {};
+  internal.refreshWorkspace = async () => {};
+  const enqueue = (message: string) => coordinator.queuePrompt({ message, commandId: `command-${message}`, expectedGeneration: 1 });
+
+  await enqueue("during tool work");
+  assert.deepEqual(prompted, []);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => item.preview), ["during tool work"]);
+  assert.deepEqual(published, [["during tool work:queued"]]);
+
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    sessionId: slot.id,
+    sessionGeneration: 4,
+    payload: { type: "agent_end", willRetry: true },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(prompted, []);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => item.preview), ["during tool work"]);
+
+  workStartedAt = undefined;
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    sessionId: slot.id,
+    sessionGeneration: 4,
+    payload: { type: "agent_end", stopped: false },
+  });
+  await waitFor(() => prompted.length === 1);
+  assert.deepEqual(prompted, ["during tool work"]);
+  assert.deepEqual(published.slice(-2), [["during tool work:delivering"], []]);
+
+  await enqueue("truly idle");
+  assert.deepEqual(prompted, ["during tool work", "truly idle"]);
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
 test("session status publishes work timer changes even when runtime state is unchanged", () => {
   const coordinator = new RuntimeCoordinator();
   const events: Array<{ workStartedAt?: string | null }> = [];

@@ -78,7 +78,7 @@ export interface DelegatedAgentRunReadModel {
 export interface QueueReadModel {
   steering: number;
   followUp: number;
-  pending?: QueuedPromptReadModel;
+  items?: QueuedPromptReadModel[];
 }
 
 export interface QueuedPromptReadModel {

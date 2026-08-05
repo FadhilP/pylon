@@ -33,6 +33,16 @@ test("history windows remain bounded while rotating through many session generat
   assert.match(source, /jumpToHistory[\s\S]*?this\.setHistorySegments\(historyKey/);
 });
 
+test("queue updates feed the visible composer queue", async () => {
+  const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
+
+  assert.match(store, /case "queue\.update": return \{ \.\.\.runtime, conversation: \{ \.\.\.conversation, queue: payload/);
+  assert.match(panel, /const queuedItems = runtime\?\.conversation\.queue\.items \?\? \[\]/);
+  assert.match(panel, /queuedItems\.length > 0 && <section className="composer-surface queue-surface"/);
+  assert.match(panel, /queuedItems\.map\(\(queued, index\)/);
+});
+
 test("retryable agent events preserve active work while terminal errors settle it", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
   assert.match(source, /"agent\.start", "agent\.end", "agent\.error"/);

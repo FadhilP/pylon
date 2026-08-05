@@ -1758,14 +1758,21 @@
   .model-matrix-help { padding: 3px 4px 0; color: var(--text-muted); font-size: 12px; }
   .prompt-metrics { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .prompt-metrics span + span { padding-left: 10px; border-left: 1px solid var(--line); }
-  .queued-prompt { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 8px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); animation: request-in var(--motion-standard) var(--motion-ease-out); }
-  .queued-prompt > div:first-child { display: grid; min-width: 0; gap: 2px; }
-  .queued-prompt strong { font-size: 12px; }
-  .queued-prompt span { overflow: hidden; color: var(--text-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .queued-prompt small { color: var(--text-muted); font-size: 12px; }
-  .queued-prompt > div:last-child { display: flex; flex: 0 0 auto; gap: 5px; }
-  .queued-prompt button { min-height: 27px; padding: 0 7px; border-radius: 6px; color: var(--text-muted); font-size: 12px; }
-  .queued-prompt button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  .queue-surface { gap: 0; padding: 0; animation: request-in var(--motion-standard) var(--motion-ease-out); }
+  .queue-surface > header { display: flex; align-items: center; gap: 7px; padding: 7px 10px 6px; color: var(--text-muted); }
+  .queue-surface > header strong { color: var(--text-soft); font-size: 11px; font-weight: 620; letter-spacing: .04em; text-transform: uppercase; }
+  .queue-surface > header span { min-width: 18px; padding: 1px 5px; border-radius: 5px; background: var(--surface-active); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
+  .queue-surface ol { max-height: 166px; margin: 0; padding: 0 5px 5px; overflow-y: auto; list-style: none; }
+  .queue-surface li { display: grid; min-width: 0; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 42px; padding: 5px 5px 5px 3px; border-top: 1px solid var(--line); }
+  .queue-surface li.is-delivering { opacity: .68; }
+  .queue-position { color: var(--text-muted); font: 11px ui-monospace, "SFMono-Regular", Consolas, monospace; text-align: center; }
+  .queue-surface li > div:not(.queue-actions) { display: grid; min-width: 0; gap: 1px; }
+  .queue-surface li > div > strong { overflow: hidden; font-size: 12px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-surface li small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-actions { display: flex; gap: 2px; }
+  .queue-actions button { display: inline-flex; min-height: 28px; align-items: center; gap: 4px; padding: 0 6px; border-radius: 6px; color: var(--text-muted); font-size: 11px; transition: background var(--motion-fast) ease, color var(--motion-fast) ease, transform 100ms ease; }
+  .queue-actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  .queue-actions button:active:not(:disabled) { transform: translateY(1px); }
   .prompt-send,
   .prompt-abort {
     display: grid;
@@ -2719,8 +2726,9 @@
     .model-matrix-help { line-height: 1.35; }
     .prompt-metrics { gap: 6px; font-size: 12px; }
     .prompt-metrics span + span { padding-left: 6px; }
-    .queued-prompt { align-items: stretch; flex-direction: column; }
-    .queued-prompt > div:last-child { justify-content: flex-end; }
+    .queue-surface li { grid-template-columns: 18px minmax(0, 1fr) auto; gap: 4px; }
+    .queue-actions button { width: 28px; justify-content: center; padding: 0; }
+    .queue-actions button span { display: none; }
     .repo-crumb { max-width: 230px; }
     .agents-trigger span { display: none; }
     .branch-label, .topbar-divider { display: none; }

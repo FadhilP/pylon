@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { MEMORY_V5_ROLLOUT, assertRolloutEnabled, reviewerBackedV4MigrationPolicy } from "../src/memory-rollout.ts";
 
-test("checked-in rollout manifest matches immutable default-off operation gates", async () => {
-  const manifest = JSON.parse(await readFile(new URL("../docs/memory-v5-rollout-gates.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.gates, MEMORY_V5_ROLLOUT);
-  assert.equal(manifest.requirements.minimumCorpusSize, 500);
-  assert.equal(manifest.requirements.minimumPrecision, 0.99);
+test("immutable operation gates default off", () => {
+  assert.deepEqual(MEMORY_V5_ROLLOUT, {
+    user_instruction_add: { enabled: false, corpusSize: 0 },
+    project_contract_write: { enabled: false, corpusSize: 0 },
+    merge_replace: { enabled: false, corpusSize: 0 },
+    reviewer_remove: { enabled: false, corpusSize: 0 },
+    v4_migration: { enabled: false, corpusSize: 0 },
+  });
   for (const operation of Object.keys(MEMORY_V5_ROLLOUT) as Array<keyof typeof MEMORY_V5_ROLLOUT>) assert.throws(() => assertRolloutEnabled(operation), /rollout gate/);
 });
 

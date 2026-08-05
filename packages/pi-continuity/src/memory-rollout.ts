@@ -5,7 +5,7 @@ export const REQUIRED_ZERO_COUNTS = ["unsupportedCitations", "secretWrites", "st
 export type MemoryRolloutGate = { enabled: boolean; corpusSize: number; precision?: number; noOpAgreement?: number; corpusSha256?: string; zeroCounts?: Record<string, number> };
 const gate = (value: MemoryRolloutGate): Readonly<MemoryRolloutGate> => Object.freeze({ ...value, ...(value.zeroCounts ? { zeroCounts: Object.freeze({ ...value.zeroCounts }) } : {}) });
 
-/** Release-owned constants mirrored by docs/memory-v5-rollout-gates.json and validated in tests/CI. */
+/** Release-owned constants validated in tests/CI. */
 export const MEMORY_V5_ROLLOUT: Readonly<Record<MemoryOperationClass, Readonly<MemoryRolloutGate>>> = Object.freeze({
   user_instruction_add: gate({ enabled: false, corpusSize: 0 }),
   project_contract_write: gate({ enabled: false, corpusSize: 0 }),

@@ -7,7 +7,7 @@ import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
-import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
+import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -85,7 +85,7 @@ export function ConversationPanel({
   const [historyLoading, setHistoryLoading] = useState<"page" | "all" | "newer">();
   const [openMenu, setOpenMenu] = useState<"plus" | "model">();
   const [planMode, setPlanMode] = useState(false);
-  const [queueBusy, setQueueBusy] = useState<"edit" | "steer">();
+  const [queueBusy, setQueueBusy] = useState<{ id: string; action: "edit" | "steer" }>();
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
@@ -145,7 +145,7 @@ export function ConversationPanel({
   const streaming = runtime?.conversation.streaming === true;
   const running = Boolean(runtime?.conversation.workStartedAt);
   const stopping = runtime?.conversation.stopping === true;
-  const queued = runtime?.conversation.queue.pending;
+  const queuedItems = runtime?.conversation.queue.items ?? [];
   const composerBlocked = Boolean(live.pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const sending = submitting && !edit && !undo && !fork;
@@ -316,7 +316,7 @@ export function ConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
-    if ((!value && images.length === 0 && files.length === 0) || !connected || queued || composerBlocked) return;
+    if ((!value && images.length === 0 && files.length === 0) || !connected || composerBlocked) return;
     const loginProvider = !images.length && !files.length ? loginCommandProvider(value) : null;
     if (loginProvider !== null) {
       onOpenLogin?.(loginProvider);
@@ -377,24 +377,25 @@ export function ConversationPanel({
     finally { setControlBusy(""); }
   };
   const controlsDisabled = !connected || submitting || Boolean(controlBusy);
-  const restoreQueued = async () => {
-    if (!queued || queued.state !== "queued") return;
-    setQueueBusy("edit");
+  const restoreQueued = async (queued: QueuedPromptReadModel) => {
+    if (queued.state !== "queued") return;
+    setQueueBusy({ id: queued.id, action: "edit" });
     try {
       const restored = await runtimeStore.restoreQueuedPrompt(queued.id);
       updateMessage(restored.message);
       setImages((restored.images ?? []).map((image) => ({ ...image, id: crypto.randomUUID() })));
       setFiles((restored.files ?? []).map((file) => ({ ...file, id: crypto.randomUUID() })));
       setPlanMode(restored.planMode);
+      requestAnimationFrame(() => promptRef.current?.focus());
     } catch {
       // Store routes the failure through the application toast.
     } finally {
       setQueueBusy(undefined);
     }
   };
-  const steerQueued = async () => {
-    if (!queued || queued.state !== "queued") return;
-    setQueueBusy("steer");
+  const steerQueued = async (queued: QueuedPromptReadModel) => {
+    if (queued.state !== "queued") return;
+    setQueueBusy({ id: queued.id, action: "steer" });
     try { await runtimeStore.steerQueuedPrompt(queued.id); }
     catch { /* Store routes the failure through the application toast. */ }
     finally { setQueueBusy(undefined); }
@@ -730,8 +731,38 @@ export function ConversationPanel({
         })}
       </div>}
       <RetainedUiDialog request={live.pendingUi} />
+      {queuedItems.length > 0 && <section className="composer-surface queue-surface" aria-label="Queued messages">
+        <header><strong>Queued</strong><span>{queuedItems.length}</span></header>
+        <ol>
+          {queuedItems.map((queued, index) => {
+            const busy = queueBusy?.id === queued.id ? queueBusy.action : undefined;
+            const attachments = queued.attachmentCount + queued.fileAttachmentCount;
+            return <li className={queued.state === "delivering" ? "is-delivering" : ""} key={queued.id}>
+              <span className="queue-position" aria-hidden="true">{index + 1}</span>
+              <div>
+                <strong>{queued.state === "delivering" ? "Sending next" : queued.preview || `${attachments} attached file${attachments === 1 ? "" : "s"}`}</strong>
+                {(attachments > 0 || queued.planMode) && <small>
+                  {queued.attachmentCount > 0 && `${queued.attachmentCount} image${queued.attachmentCount === 1 ? "" : "s"}`}
+                  {queued.attachmentCount > 0 && queued.fileAttachmentCount > 0 && " · "}
+                  {queued.fileAttachmentCount > 0 && `${queued.fileAttachmentCount} file${queued.fileAttachmentCount === 1 ? "" : "s"}`}
+                  {attachments > 0 && queued.planMode && " · "}
+                  {queued.planMode && "Plan mode"}
+                </small>}
+              </div>
+              <div className="queue-actions">
+                <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy) || hasDraft} title={hasDraft ? "Finish or clear the current draft before editing a queued message" : "Edit in composer"} onClick={() => void restoreQueued(queued)} aria-label={`Edit queued message ${index + 1}`}>
+                  {busy === "edit" ? <IconLoader2 className="prompt-send-spinner" size={14} /> : <IconPencil size={14} />}<span>Edit</span>
+                </button>
+                <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy)} onClick={() => void steerQueued(queued)} aria-label={`Steer with queued message ${index + 1}`}>
+                  {busy === "steer" ? <IconLoader2 className="prompt-send-spinner" size={14} /> : <IconArrowBackUp size={14} />}<span>Steer</span>
+                </button>
+              </div>
+            </li>;
+          })}
+        </ol>
+      </section>}
       <form
-        className={`prompt-form${dropActive ? " is-drop-active" : ""}${live.pendingUi || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
+        className={`prompt-form${dropActive ? " is-drop-active" : ""}${live.pendingUi || runtime?.commandResult || queuedItems.length > 0 || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
         onDragEnter={(event) => { event.preventDefault(); setDropActive(true); }}
         onDragOver={(event) => event.preventDefault()}
@@ -762,36 +793,19 @@ export function ConversationPanel({
             onSelect={(event) => setCaretPosition(event.currentTarget.selectionStart)}
             onPaste={(event) => void onPaste(event)}
             onKeyDown={onPromptKeyDown}
-            placeholder={!projectAvailable ? "Add a project to start" : connected ? (queued ? "A message is already queued" : running ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
-            disabled={!connected || submitting || Boolean(queued) || composerBlocked}
+            placeholder={!projectAvailable ? "Add a project to start" : connected ? (running || queuedItems.length > 0 ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
+            disabled={!connected || submitting || composerBlocked}
             aria-autocomplete="list"
             aria-controls={suggestions.length ? "slash-command-suggestions" : fileSuggestions.length ? "file-mention-suggestions" : undefined}
             aria-expanded={suggestions.length > 0 || fileSuggestions.length > 0}
           />
         </div>
-        {queued && <div className="queued-prompt" role="status">
-          <div>
-            <strong>{queued.state === "delivering" ? "Sending next" : "Queued next"}</strong>
-            <span>{queued.preview || `${queued.attachmentCount + queued.fileAttachmentCount} attached files`}</span>
-            {(queued.attachmentCount > 0 || queued.fileAttachmentCount > 0 || queued.planMode) && <small>
-              {queued.attachmentCount > 0 && `${queued.attachmentCount} image${queued.attachmentCount === 1 ? "" : "s"}`}
-              {queued.attachmentCount > 0 && queued.fileAttachmentCount > 0 && " · "}
-              {queued.fileAttachmentCount > 0 && `${queued.fileAttachmentCount} file${queued.fileAttachmentCount === 1 ? "" : "s"}`}
-              {(queued.attachmentCount > 0 || queued.fileAttachmentCount > 0) && queued.planMode && " · "}
-              {queued.planMode && "Plan mode"}
-            </small>}
-          </div>
-          <div>
-            <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy)} onClick={() => void restoreQueued()}>{queueBusy === "edit" ? "Restoring…" : "Edit"}</button>
-            <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy)} onClick={() => void steerQueued()}>{queueBusy === "steer" ? "Steering…" : "Steer now"}</button>
-          </div>
-        </div>}
         <div className="prompt-toolbar">
           <div className="prompt-left">
             <PlusMenu
               open={openMenu === "plus"}
               active={planMode}
-              disabled={!connected || submitting || Boolean(queued) || composerBlocked}
+              disabled={!connected || submitting || composerBlocked}
               available={planAvailable}
               onToggle={() => setOpenMenu((current) => current === "plus" ? undefined : "plus")}
               onClose={() => setOpenMenu(undefined)}
@@ -829,7 +843,7 @@ export function ConversationPanel({
               </button>
             : <button
                 className="prompt-send"
-                disabled={!connected || composerBlocked || submitting || Boolean(queued) || !hasDraft || !controls?.model}
+                disabled={!connected || composerBlocked || submitting || !hasDraft || !controls?.model}
                 type="submit"
                 aria-label={sending ? "Sending message" : running ? "Queue message" : "Send message"}
               >

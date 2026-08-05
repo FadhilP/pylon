@@ -167,7 +167,7 @@ interface RuntimeSlot {
   lastWorkStartedAt?: string;
   pendingUi?: UiRequest;
   nativeQueue: { steering: number; followUp: number };
-  queuedPrompt?: {
+  queuedPrompts: Array<{
     id: string;
     commandId: string;
     message: string;
@@ -175,7 +175,8 @@ interface RuntimeSlot {
     files?: PromptTextFile[];
     planMode: boolean;
     state: "queued" | "delivering";
-  };
+  }>;
+  queueFlushTimer?: NodeJS.Timeout;
   pendingControls?: {
     input: SetSessionControlsInput;
     model: ModelOptionReadModel;
@@ -466,11 +467,8 @@ export class RuntimeCoordinator implements PiDriver {
   async queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
-    if (slot.queuedPrompt) throw new Error("a prompt is already queued");
-    if (slot.driver.runtimeState() !== "running") {
-      return this.withLifecycle(() => this.messageCommand("prompt", input));
-    }
-    slot.queuedPrompt = {
+    if (slot.queuedPrompts.length >= 100) throw new Error("the prompt queue is full");
+    slot.queuedPrompts.push({
       id: randomUUID(),
       commandId: input.commandId,
       message: input.message,
@@ -478,10 +476,11 @@ export class RuntimeCoordinator implements PiDriver {
       ...(input.files?.length ? { files: structuredClone(input.files) } : {}),
       planMode: input.planMode === true,
       state: "queued",
-    };
+    });
     slot.receivedInput = true;
     slot.lastActivityAt = Date.now();
     this.publishQueue(slot);
+    if (!slot.driver.runtimeDetails().workStartedAt) await this.flushQueuedPrompt(slot);
     return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
   }
 
@@ -503,7 +502,7 @@ export class RuntimeCoordinator implements PiDriver {
     const slot = this.selected();
     const queued = this.selectedQueuedPrompt(input.queueId);
     if (queued.state !== "queued") throw new Error("queued prompt is already being delivered");
-    slot.queuedPrompt = undefined;
+    slot.queuedPrompts.splice(slot.queuedPrompts.indexOf(queued), 1);
     slot.lastActivityAt = Date.now();
     this.publishQueue(slot);
   }
@@ -523,7 +522,7 @@ export class RuntimeCoordinator implements PiDriver {
         images: queued.images,
         files: queued.files,
       });
-      slot.queuedPrompt = undefined;
+      slot.queuedPrompts.splice(slot.queuedPrompts.indexOf(queued), 1);
       this.publishQueue(slot);
       return {
         ...accepted,
@@ -1470,6 +1469,7 @@ export class RuntimeCoordinator implements PiDriver {
       lastState: driver.runtimeState(),
       lastWorkStartedAt: driver.runtimeDetails().workStartedAt,
       nativeQueue: { steering: 0, followUp: 0 },
+      queuedPrompts: [],
       unsubscribe: () => undefined,
     };
     driver.setWorkspaceApplyHandler((request) => this.handleWorkspaceApplyTool(slot, request));
@@ -2186,9 +2186,10 @@ export class RuntimeCoordinator implements PiDriver {
       if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
         this.invalidateWorkspaceInventory(slot);
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
-        const completed = payload.stopped !== true && payload.willRetry !== true;
+        const willRetry = payload.willRetry === true && payload.stopped !== true;
+        const completed = !willRetry && payload.stopped !== true;
         const completionCue = completed && slot.id !== this.selectedId ? "turn-complete" : undefined;
-        queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true).then(
+        if (!willRetry) queueMicrotask(() => void this.settleAgentRun(slot, payload.stopped === true).then(
           () => this.publishStatus(slot.id, completed, completionCue),
           () => this.publishStatus(slot.id),
         ));
@@ -2404,27 +2405,24 @@ export class RuntimeCoordinator implements PiDriver {
     return slot;
   }
 
-  private selectedQueuedPrompt(queueId: string): NonNullable<RuntimeSlot["queuedPrompt"]> {
-    const queued = this.selected().queuedPrompt;
-    if (!queued || queued.id !== queueId) throw new Error("queued prompt is unavailable");
+  private selectedQueuedPrompt(queueId: string): RuntimeSlot["queuedPrompts"][number] {
+    const queued = this.selected().queuedPrompts.find((item) => item.id === queueId);
+    if (!queued) throw new Error("queued prompt is unavailable");
     return queued;
   }
 
   private queueReadModel(slot: RuntimeSlot): QueueReadModel {
-    const queued = slot.queuedPrompt;
     return {
       steering: slot.nativeQueue.steering,
-      followUp: slot.nativeQueue.followUp + (queued ? 1 : 0),
-      ...(queued ? {
-        pending: {
-          id: queued.id,
-          preview: queued.message.replace(/\s+/g, " ").trim().slice(0, 2_000),
-          attachmentCount: queued.images?.length ?? 0,
-          fileAttachmentCount: queued.files?.length ?? 0,
-          planMode: queued.planMode,
-          state: queued.state,
-        },
-      } : {}),
+      followUp: slot.nativeQueue.followUp + slot.queuedPrompts.length,
+      items: slot.queuedPrompts.map((queued) => ({
+        id: queued.id,
+        preview: queued.message.replace(/\s+/g, " ").trim().slice(0, 2_000),
+        attachmentCount: queued.images?.length ?? 0,
+        fileAttachmentCount: queued.files?.length ?? 0,
+        planMode: queued.planMode,
+        state: queued.state,
+      })),
     };
   }
 
@@ -2438,9 +2436,26 @@ export class RuntimeCoordinator implements PiDriver {
     });
   }
 
+  private scheduleQueuedPrompt(slot: RuntimeSlot, delayMs = 20): void {
+    if (slot.queueFlushTimer || slot.queuedPrompts[0]?.state !== "queued") return;
+    slot.queueFlushTimer = setTimeout(() => {
+      slot.queueFlushTimer = undefined;
+      if (this.slots.get(slot.id) === slot) void this.flushQueuedPrompt(slot);
+    }, delayMs);
+    slot.queueFlushTimer.unref?.();
+  }
+
   private async flushQueuedPrompt(slot: RuntimeSlot): Promise<void> {
-    const queued = slot.queuedPrompt;
+    const queued = slot.queuedPrompts[0];
     if (!queued || queued.state !== "queued") return;
+    if (slot.driver.runtimeDetails().workStartedAt) {
+      this.scheduleQueuedPrompt(slot, 100);
+      return;
+    }
+    if (slot.driver.runtimeState() !== "idle") {
+      this.scheduleQueuedPrompt(slot);
+      return;
+    }
     queued.state = "delivering";
     this.publishQueue(slot);
     try {
@@ -2452,13 +2467,17 @@ export class RuntimeCoordinator implements PiDriver {
         files: queued.files,
         planMode: queued.planMode,
       });
-      slot.queuedPrompt = undefined;
+      if (this.slots.get(slot.id) !== slot) return;
+      if (slot.queuedPrompts[0] === queued) slot.queuedPrompts.shift();
       slot.lastActivityAt = Date.now();
       this.publishQueue(slot);
-    } catch {
-      if (slot.queuedPrompt === queued) {
+    } catch (error) {
+      if (this.slots.get(slot.id) !== slot) return;
+      if (slot.queuedPrompts.includes(queued)) {
         queued.state = "queued";
         this.publishQueue(slot);
+        const transientBusy = error instanceof Error && /already processing|streamingBehavior/.test(error.message);
+        if (!slot.driver.runtimeDetails().workStartedAt && (transientBusy || slot.driver.runtimeState() !== "idle")) this.scheduleQueuedPrompt(slot);
       }
     }
   }
@@ -2513,8 +2532,6 @@ export class RuntimeCoordinator implements PiDriver {
             },
           });
         }
-        this.emitControlsChanged(slot);
-        return;
       }
       this.emitControlsChanged(slot);
     }
@@ -2522,7 +2539,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private slotCanSleep(slot: RuntimeSlot): boolean {
-    return !slot.queuedPrompt && !slot.pendingControls && !slot.pendingApply && slot.driver.canSleep();
+    return !slot.queuedPrompts?.length && !slot.pendingControls && !slot.pendingApply && slot.driver.canSleep();
   }
 
   private emitControlsChanged(slot: RuntimeSlot): void {
@@ -2750,6 +2767,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async disposeSlot(slot: RuntimeSlot): Promise<void> {
+    if (slot.queueFlushTimer) clearTimeout(slot.queueFlushTimer);
     slot.unsubscribe();
     this.slots.delete(slot.id);
     await slot.driver.dispose();

@@ -1033,7 +1033,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     description: "List or query durable notebook notes, or submit up to two grounded proposals for immediate Memory Reviewer editing.",
     promptSnippet: "Inspect durable notes or propose bounded reviewer-gated changes.", executionMode: "sequential", renderShell: "self", renderCall: () => new Container(),
     promptGuidelines: [
-      "Most tasks should propose no memory. Propose only explicit user instructions or intentional project contracts that change a plausible future decision; never propose implementation descriptions, progress, recent-change summaries, guesses, generic advice, duplicates, or secrets.",
+      "Propose clear, potentially reusable, explicitly stated user preferences or instructions, and intentional project conventions or contracts, when they could plausibly guide a future session. Do not require certainty of admission: the Memory Reviewer may accept, rewrite, merge, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {

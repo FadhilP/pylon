@@ -138,7 +138,7 @@ export class RuntimeEventStore {
   async sendMessage(message: string, images?: PromptImage[], files?: PromptTextFile[], planMode = false): Promise<void> {
     const runtime = this.snapshot.runtime;
     if (!runtime || this.snapshot.connection !== "connected" || !runtime.ready) throw new Error("Runtime is not connected");
-    const type = runtime.conversation.workStartedAt ? "queuePrompt" : "prompt";
+    const type = runtime.conversation.workStartedAt || runtime.conversation.queue.items?.length ? "queuePrompt" : "prompt";
     await this.sendCommand({
       type,
       message,

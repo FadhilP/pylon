@@ -307,8 +307,11 @@ test("event and snapshot validators reject incompatible versions", () => {
       ...snapshot.conversation,
       queue: {
         steering: 0,
-        followUp: 1,
-        pending: { id: "queue-1", preview: "next", attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" },
+        followUp: 2,
+        items: [
+          { id: "queue-1", preview: "next", attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" },
+          { id: "queue-2", preview: "after that", attachmentCount: 0, fileAttachmentCount: 0, planMode: false, state: "queued" },
+        ],
       },
     },
   }), true);
@@ -319,7 +322,7 @@ test("event and snapshot validators reject incompatible versions", () => {
       queue: {
         steering: 0,
         followUp: 1,
-        pending: { id: "queue-1", preview: "x".repeat(2_001), attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" },
+        items: [{ id: "queue-1", preview: "x".repeat(2_001), attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" }],
       },
     },
   }), false);
