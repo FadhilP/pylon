@@ -1,3 +1,4 @@
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ModelProfile } from "./config.ts";
 import { shortlistNotes } from "./context.ts";
@@ -142,7 +143,7 @@ export async function preflightMemoryProposals(input: {
 
 export async function callMemoryReviewer(input: {
   model: any;
-  auth: { apiKey: string; headers?: Record<string, string>; env?: Record<string, string> };
+  auth: { apiKey: string; headers?: ProviderHeaders; env?: Record<string, string> };
   profile: ModelProfile;
   packet: ReviewPacket;
   sessionId: string;

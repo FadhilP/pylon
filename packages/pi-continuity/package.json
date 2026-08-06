@@ -4,7 +4,7 @@
   "description": "Read-only planning, durable workspace memory, and task continuity for Pi",
   "type": "module",
   "keywords": ["pi-package"],
-  "engines": { "node": ">=22.18.0" },
+  "engines": { "node": ">=22.19.0" },
   "files": ["extensions", "src", "docs", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test test/*.test.ts",

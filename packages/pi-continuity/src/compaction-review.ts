@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ModelProfile } from "./config.ts";
 import {
@@ -140,7 +141,7 @@ export function validateCompactionReview(
 
 export async function callCompactionReviewer(input: {
   model: any;
-  auth: { apiKey: string; headers?: Record<string, string>; env?: Record<string, string> };
+  auth: { apiKey: string; headers?: ProviderHeaders; env?: Record<string, string> };
   profile: ModelProfile;
   packet: CompactionReviewPacket;
   sessionId: string;

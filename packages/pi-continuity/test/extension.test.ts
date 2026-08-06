@@ -173,6 +173,121 @@ test("memory retrieval uses the expanded prompt and outgoing context keeps only 
   }
 });
 
+test("stored plan intent retrieves memory absent from the user prompt", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-plan-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    const now = new Date().toISOString();
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
+      ...emptyMemoryState(), revision: 1, updatedAt: now,
+      notes: [{
+        id: serverNoteId(), scope: "user", owner: "default",
+        trigger: "running database migrations", guidance: "Create a backup before schema changes.",
+        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
+        revision: 1, createdAt: now, updatedAt: now,
+      }],
+    });
+    const app = runtime(["read", "edit", "continuity_update"]);
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json",
+      sessionManager: {
+        getSessionId: () => "memory-plan", getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const beforeAgentStart = app.handlers.get("before_agent_start")![0];
+    assert.equal(await beforeAgentStart({ prompt: "Add account history" }, ctx), undefined);
+
+    const plan = await app.tools.get("continuity_update").execute("plan", {
+      action: "set_plan", goal: "Add account history",
+      planSummary: "Inspect storage, then run the database migration",
+      todos: ["Inspect storage", "Apply schema migration"],
+    }, undefined, undefined, ctx);
+    assert.match(plan.content[0].text, /Relevant memory for the stored plan/);
+    assert.match(plan.content[0].text, /Create a backup before schema changes/);
+
+    for (const handler of app.handlers.get("input") ?? [])
+      handler({ source: "interactive", text: "Give me a progress update" });
+    const resumed = await beforeAgentStart({ prompt: "Give me a progress update" }, ctx);
+    assert.match(resumed.message.content, /Create a backup before schema changes/,
+      "active plan intent must participate even when the new prompt does not match");
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("consequential actions surface memory once before execution and reset on new input", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-preflight-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    const now = new Date().toISOString();
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
+      ...emptyMemoryState(), revision: 1, updatedAt: now,
+      notes: [{
+        id: serverNoteId(), scope: "user", owner: "default",
+        trigger: "adding package dependencies", guidance: "Use the approved registry for dependency installation.",
+        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
+        revision: 1, createdAt: now, updatedAt: now,
+      }],
+    });
+    const app = runtime(["bash", "edit", "continuity_update"]);
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json", signal: undefined,
+      sessionManager: {
+        getSessionId: () => "memory-preflight", getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const toolCall = app.handlers.get("tool_call")![0];
+    const toolResult = app.handlers.get("tool_result")![0];
+
+    const blocked = await toolCall({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
+    assert.equal(blocked.block, true);
+    assert.match(blocked.reason, /Use the approved registry/);
+    await toolResult({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
+
+    const sibling = await toolCall({ toolName: "edit", toolCallId: "sibling", input: { path: "package.json" } }, ctx);
+    assert.equal(sibling.block, true);
+    assert.match(sibling.reason, /sibling consequential action was deferred/i);
+    await toolResult({ toolName: "edit", toolCallId: "sibling", input: { path: "package.json" } }, ctx);
+
+    for (const handler of app.handlers.get("turn_end") ?? [])
+      await handler({ toolResults: [], message: { content: [] } }, ctx);
+    assert.equal(await toolCall({ toolName: "bash", toolCallId: "install-retry", input: { command: "npm install useful-package" } }, ctx), undefined,
+      "the reconsidered retry must proceed without another memory block");
+
+    for (const handler of app.handlers.get("input") ?? [])
+      handler({ source: "interactive", text: "Start another dependency task" });
+    const nextTask = await toolCall({ toolName: "bash", toolCallId: "install-next", input: { command: "npm install useful-package" } }, ctx);
+    assert.equal(nextTask.block, true);
+    assert.match(nextTask.reason, /Use the approved registry/);
+
+    for (const handler of app.handlers.get("agent_end") ?? []) await handler({}, ctx);
+    const afterAbortedBatch = await toolCall({ toolName: "bash", toolCallId: "install-after-abort", input: { command: "npm install useful-package" } }, ctx);
+    assert.equal(afterAbortedBatch.block, true);
+    assert.match(afterAbortedBatch.reason, /Use the approved registry/,
+      "an unfinished blocked batch must not consume the memory preflight");
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("manual and automatic compaction always use deterministic Continuity output", async () => {
   await saveConfig({ version: 2, memoryEnabled: true });
   const app = runtime();

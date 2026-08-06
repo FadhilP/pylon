@@ -466,7 +466,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       return `${name}: ${found.length === tools.length ? "registered" : found.length ? `partial (${found.join(", ")})` : "not observed"}`;
     });
     const [major, minor] = process.versions.node.split(".").map(Number);
-    const nodeCompatible = major > 22 || (major === 22 && minor >= 18);
+    const nodeCompatible = major > 22 || (major === 22 && minor >= 19);
     const executables = await Promise.all([
       ["Git", "git", true],
       ["ripgrep", "rg", false],
@@ -555,7 +555,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     const health = await collectHealth();
     return {
       lines: [
-        `Node: ${process.versions.node} (${nodeCompatible ? "compatible" : "requires >=22.18.0"})`,
+        `Node: ${process.versions.node} (${nodeCompatible ? "compatible" : "requires >=22.19.0"})`,
         `Pi API: ${missingApi.length ? `missing ${missingApi.join(", ")}` : "compatible"}`,
         `Policy protocol: v${PROTOCOL_VERSION} (${policies.size} registered, ${rejected.length} rejected)`,
         "Executables:",

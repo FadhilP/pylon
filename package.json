@@ -41,7 +41,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "verify": "npm run test:bundle && npm run test:update && npm run test:storage && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",
@@ -101,7 +101,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.83.0",
-    "@earendil-works/pi-tui": "0.83.0"
+    "@earendil-works/pi-ai": "0.84.0",
+    "@earendil-works/pi-tui": "0.84.0"
   }
 }

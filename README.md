@@ -6,7 +6,7 @@ Pylon is optimized for **cost efficiency and output quality rather than speed**.
 
 ## Web App Setup (Recommended)
 
-Pylon requires Node.js 22.18 or newer. Install it globally, open the project you want to work on, and start the web app:
+Pylon requires Node.js 22.19 or newer. Install it globally, open the project you want to work on, and start the web app:
 
 ```sh
 npm install --global @fadhilp/pylon
@@ -68,7 +68,7 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 
 ## Requirements
 
-- Node.js 22.18 or newer
+- Node.js 22.19 or newer
 - [Pi](https://pi.dev)
 - Peer packages declared in [`package.json`](./package.json)
 

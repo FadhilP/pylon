@@ -7,7 +7,7 @@ const aliases: Record<string, string> = {
   deploy: "release", publish: "release", ship: "release", bundle: "build", compile: "build",
   configuration: "config", setting: "config",
 };
-const ignoredWords = new Set(["about", "and", "could", "from", "have", "into", "just", "now", "please", "right", "should", "than", "that", "then", "these", "this", "those", "would", "with"]);
+const ignoredWords = new Set(["about", "and", "could", "from", "have", "into", "just", "now", "please", "right", "should", "than", "that", "then", "these", "this", "those", "user", "work", "would", "with"]);
 const normalizeWord = (word: string) => {
   let value = word;
   if (value.length > 4 && value.endsWith("ies")) value = `${value.slice(0, -3)}y`;
@@ -36,20 +36,30 @@ export function shortlistNotes(notes: NotebookNote[], latest = "", work?: Work, 
   return shortlistResolvedNotes(notes, promptQuery(latest, work), limit);
 }
 export function shortlistResolvedNotes(notes: NotebookNote[], queryText: string, limit = 2) {
-  const query = words(queryText), queryIdentifiers = identifiers(queryText);
-  if (!query.size && !queryIdentifiers.size) return [];
+  return shortlistResolvedQueries(notes, [queryText], limit);
+}
+export function shortlistResolvedQueries(notes: NotebookNote[], queryTexts: string[], limit = 2) {
+  const queries = queryTexts.map((text) => ({ words: words(text), identifiers: identifiers(text) }))
+    .filter((query) => query.words.size || query.identifiers.size);
+  if (!queries.length) return [];
   const seen = new Set<string>();
   return notes.map((note): ScoredNote | undefined => {
     if (seen.has(note.id)) return;
     seen.add(note.id);
     const hintText = (note.relatedPaths ?? []).join(" "), hintWords = words(hintText), ruleWords = words(`${note.trigger} ${note.guidance}`);
-    const hintMatches = [...hintWords].filter((word) => query.has(word));
-    const ruleMatches = [...ruleWords].filter((word) => query.has(word));
-    const distinct = new Set([...hintMatches, ...ruleMatches]);
-    const exactIdentifier = [...identifiers(`${hintText} ${note.trigger} ${note.guidance}`)].some((value) => queryIdentifiers.has(value));
-    const hintAndRule = hintMatches.some((hint) => ruleMatches.some((rule) => rule !== hint));
-    const strength = exactIdentifier ? 3 : hintAndRule ? 2 : ruleMatches.length >= 2 ? 1 : 0;
-    return strength ? { note, strength, matches: distinct.size } : undefined;
+    const noteIdentifiers = identifiers(`${hintText} ${note.trigger} ${note.guidance}`);
+    let best: ScoredNote | undefined;
+    for (const query of queries) {
+      const hintMatches = [...hintWords].filter((word) => query.words.has(word));
+      const ruleMatches = [...ruleWords].filter((word) => query.words.has(word));
+      const distinct = new Set([...hintMatches, ...ruleMatches]);
+      const exactIdentifier = [...noteIdentifiers].some((value) => query.identifiers.has(value));
+      const hintAndRule = hintMatches.some((hint) => ruleMatches.some((rule) => rule !== hint));
+      const strength = exactIdentifier ? 3 : hintAndRule ? 2 : ruleMatches.length >= 2 ? 1 : 0;
+      if (strength && (!best || strength > best.strength || strength === best.strength && distinct.size > best.matches))
+        best = { note, strength, matches: distinct.size };
+    }
+    return best;
   }).filter((item): item is ScoredNote => item !== undefined)
     .sort((a, b) => b.strength - a.strength || b.matches - a.matches || b.note.updatedAt.localeCompare(a.note.updatedAt) || a.note.id.localeCompare(b.note.id))
     .slice(0, limit).map((item) => item.note);
@@ -65,12 +75,35 @@ function dedupeStrings(values: string[]) {
   });
 }
 
-export function buildContext(work: Work | undefined, notes: NotebookNote[], latest = "", budget = 450, parent: NotebookNote[] = [], options: { resolvedQuery?: boolean; candidateLimit?: number } = {}) {
-  const query = options.resolvedQuery ? latest : promptQuery(latest, work);
+export function retrievalQueries(latest = "", work?: Work) {
+  const current = work?.todos.find((todo) => todo.id === work.currentTodoId)?.text;
+  return dedupeStrings([
+    promptQuery(latest, work),
+    work?.goal ?? "",
+    current ?? "",
+    work?.planSummary ?? "",
+    work?.nextAction ?? "",
+  ]);
+}
+
+export function buildMemoryInjection(notes: NotebookNote[], queryTexts: string[], budget = 100, excludedIds: ReadonlySet<string> = new Set(), candidateLimit = 8) {
+  const header = "Continuity state. Memory may be stale; direct instructions and repository evidence win.";
+  const max = budget * 4, available = Math.min(600, max - header.length - 1);
+  const selected: NotebookNote[] = []; let used = 0;
+  for (const note of shortlistResolvedQueries(notes.filter((note) => !excludedIds.has(note.id)), queryTexts, candidateLimit)) {
+    const line = renderNote(note), size = line.length + (selected.length ? 1 : 0);
+    if (size <= available - used) { selected.push(note); used += size; }
+    if (selected.length >= 2) break;
+  }
+  return { text: selected.length ? `${header}\n${selected.map(renderNote).join("\n")}` : "", notes: selected };
+}
+
+export function buildContext(work: Work | undefined, notes: NotebookNote[], latest = "", budget = 450, parent: NotebookNote[] = [], options: { resolvedQuery?: boolean; resolvedQueries?: string[]; candidateLimit?: number } = {}) {
+  const queries = options.resolvedQueries ?? [options.resolvedQuery ? latest : promptQuery(latest, work)];
   const candidateLimit = options.candidateLimit ?? 8;
-  const selected = shortlistResolvedNotes(notes, query, candidateLimit);
+  const selected = shortlistResolvedQueries(notes, queries, candidateLimit);
   const selectedIds = new Set(selected.map((note) => note.id));
-  const selectedParent = shortlistResolvedNotes(parent, query, candidateLimit).filter((note) => !selectedIds.has(note.id));
+  const selectedParent = shortlistResolvedQueries(parent, queries, candidateLimit).filter((note) => !selectedIds.has(note.id));
   const lines = ["Continuity state. Memory may be stale; direct instructions and repository evidence win."];
   if (work) {
     const remaining = work.todos.filter((todo) => todo.status !== "done");

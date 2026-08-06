@@ -67,7 +67,7 @@ Read-only work can complete without Verify. Verification is a completion gate, n
 
 Memory V5 is a durable notebook of future-facing rules, separate from Active Work and read-only `continuity_recall` history. Notes contain an opaque ID, scope/derived owner, trigger, guidance, authority, origin, bounded source addresses, revision, and timestamps. Confidence, fixed kinds, Git applicability states, the 30-fact cap, and unreviewed candidates are removed.
 
-State is atomically replaced under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-continuity/memory-v5/state.json` with mode `0600`. A shared reviewed-operation ledger makes settlement idempotent. Storage permits up to 1,000 notes per owner and 2 MiB total; writes fail visibly rather than evicting notes. Retrieval lexically matches trigger, guidance, identifiers, and related paths, then injects at most two complete `Memory: When …` rules within a bounded prompt budget.
+State is atomically replaced under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-continuity/memory-v5/state.json` with mode `0600`. A shared reviewed-operation ledger makes settlement idempotent. Storage permits up to 1,000 notes per owner and 2 MiB total; writes fail visibly rather than evicting notes. Retrieval lexically matches trigger, guidance, identifiers, and related paths, then injects at most two complete `Memory: When …` rules within a bounded prompt budget. Prompt and active-work intent are scored separately, stored plans trigger another bounded retrieval, and newly matched rules defer consequential `bash`, `edit`, `write`, `grunt`, or `heartbeat_start` actions once so the model can reconsider before retrying.
 
 ### Reviewer-gated proposals
 

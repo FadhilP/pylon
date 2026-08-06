@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { buildContext, promptQuery, shortlistNotes, shortlistResolvedNotes } from "../src/context.ts";
+import { buildContext, buildMemoryInjection, promptQuery, retrievalQueries, shortlistNotes, shortlistResolvedNotes, shortlistResolvedQueries } from "../src/context.ts";
 import type { NotebookNote } from "../src/memory.ts";
 
 const note = (trigger: string, guidance: string, relatedPaths?: string[]): NotebookNote => ({ id: randomUUID(), scope: "project", owner: "o", trigger, guidance, authority: "project_contract", origin: "agent", sourceRefs: [], ...(relatedPaths ? { relatedPaths } : {}), revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" });
@@ -35,6 +35,50 @@ test("promptQuery uses active work only for content-free continuation", () => {
   const work: any = { goal: "Implement package configuration", currentTodoId: "todo_1", todos: [{ id: "todo_1", text: "Update runtime settings" }] };
   assert.equal(promptQuery("continue", work), "Implement package configuration Update runtime settings");
   assert.equal(promptQuery("configure package", work), "configure package");
+});
+
+test("retrieval queries score prompt and planned intent independently", () => {
+  const rule = note("running database migrations", "Create a backup before schema changes.");
+  const work: any = {
+    goal: "Add account history", planSummary: "Apply the database migration after reconnaissance",
+    currentTodoId: "todo_1", todos: [{ id: "todo_1", text: "Inspect account schema" }],
+  };
+  assert.equal(shortlistResolvedQueries([rule], retrievalQueries("Add account history", work))[0]?.id, rule.id);
+  assert.equal(shortlistResolvedQueries([note("database packages", "Keep both stable.")], ["database", "packages"]).length, 0,
+    "separate intent fields must not combine weak matches");
+});
+
+test("generic agent vocabulary does not retrieve unrelated rules", () => {
+  const rule = note("work involving StateQL", "Treat StateQL as a project owned by the user.");
+  assert.equal(shortlistResolvedNotes([rule], "Could relevant memory affect steps the model will take for the user?").length, 0);
+
+  const applicable = note("delegating agent tasks", "Use the high-effort worker profile.");
+  assert.equal(shortlistResolvedNotes([applicable], "delegate this agent task with the high-effort profile")[0]?.id, applicable.id);
+});
+
+test("multi-query ties remain deterministic regardless of note order", () => {
+  const first = note("package configuration changes", "Restart runtime services.");
+  const second = note("package configuration changes", "Reload runtime settings.");
+  const expected = [first.id, second.id].sort();
+  assert.deepEqual(shortlistResolvedQueries([first, second], ["package configuration"], 2).map((item) => item.id), expected);
+  assert.deepEqual(shortlistResolvedQueries([second, first], ["package configuration"], 2).map((item) => item.id), expected);
+});
+
+test("memory injection reports only complete newly rendered notes", () => {
+  const first = note("database migrations", "Create a backup first.");
+  const oversized = note("database migration schema", `Oversized ${"guidance ".repeat(80)}`);
+  const injection = buildMemoryInjection([oversized, first], ["database migration schema"], 100, new Set());
+  assert.deepEqual(injection.notes.map((item) => item.id), [first.id]);
+  assert.match(injection.text, /Create a backup first/);
+  assert.doesNotMatch(injection.text, /Oversized/);
+  assert.equal(buildMemoryInjection([first], ["database migration"], 100, new Set([first.id])).text, "");
+
+  const surfaced = Array.from({ length: 8 }, (_, index) =>
+    note(`database migration schema ${index}`, "Create a backup first."));
+  const ninth = note("database migration schema fallback", "Use the final fallback rule.");
+  const backfilled = buildMemoryInjection([...surfaced, ninth], ["database migration schema"], 100, new Set(surfaced.map((item) => item.id)));
+  assert.deepEqual(backfilled.notes.map((item) => item.id), [ninth.id],
+    "surfaced candidates must not consume the discovery limit");
 });
 
 test("context injects at most two complete notebook rules within budget", () => {

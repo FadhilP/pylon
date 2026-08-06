@@ -254,7 +254,7 @@ test("runner aborts pending UI handlers when the child turn times out", async ()
     cwd: child.dir,
     prompt: "x",
     invocation: child.invocation,
-    timeoutMs: 50,
+    timeoutMs: 1_000, // Allow child Node startup while package tests run concurrently.
     onUiRequest: (_request, signal) => new Promise((resolve) => {
       signal.addEventListener("abort", () => { uiAborted = true; resolve({ cancelled: true }); }, { once: true });
     }),

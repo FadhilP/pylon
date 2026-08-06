@@ -4,7 +4,7 @@
   "description": "Optional runtime coordination for interoperable Pi packages",
   "type": "module",
   "keywords": ["pi-package"],
-  "engines": { "node": ">=22.18.0" },
+  "engines": { "node": ">=22.19.0" },
   "files": ["extensions", "src", "README.md", "LICENSE"],
   "exports": {
     "./delegate-retry": "./src/delegate-retry.ts",

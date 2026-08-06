@@ -57,9 +57,9 @@ import {
   userMessageText,
 } from "../src/memory-review.ts";
 import { hasPendingV4Migration, isMigrationJournal, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
-import { assertSafe } from "../src/secrets.ts";
+import { assertSafe, sanitizeAndClip } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
-import { buildContext, promptQuery, shortlistNotes } from "../src/context.ts";
+import { buildContext, buildMemoryInjection, retrievalQueries, shortlistNotes } from "../src/context.ts";
 import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidenceRanges, currentChangedPaths, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
@@ -87,6 +87,27 @@ import { canUseBroadRecall, recallProjectSessions, recallSession } from "../src/
 import { loadProjectRecallSessions } from "../src/project-recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
+const memoryPreflightTools = new Set(["bash", "edit", "grunt", "heartbeat_start", "write"]);
+const memoryActionFields = ["action", "checkCommands", "command", "label", "operation", "package", "packages", "path", "paths", "query", "sql", "suggestedPaths", "target", "targetedContext", "task"];
+const memoryAction = (toolName: string, input: any) => {
+  if (!memoryPreflightTools.has(toolName)) return;
+  const fields: Array<[string, string]> = [];
+  for (const field of memoryActionFields) {
+    const value = input?.[field];
+    if (typeof value === "string") fields.push([field, value]);
+    else if (Array.isArray(value))
+      fields.push(...value.filter((item): item is string => typeof item === "string").map((item) => [field, item] as [string, string]));
+  }
+  const raw = `${toolName.replaceAll("_", " ")} ${fields.map(([, value]) => value).join(" ")}`;
+  const signals = [
+    /\b(?:npm|pnpm|yarn|bun)\b[^\n]*\b(?:add|install|remove|uninstall)\b|\b(?:pip|cargo|go)\s+(?:install|get)\b/i.test(raw) ? "dependency package" : "",
+    /\b(?:migrat\w*|schema)\b/i.test(raw) ? "database migration" : "",
+    /\b(?:deploy|publish|release)\w*\b/i.test(raw) ? "deploy publish release" : "",
+  ].filter(Boolean);
+  const query = sanitizeAndClip(`${raw} ${signals.join(" ")}`, 2_000).trim();
+  const signatureFields = fields.map(([field, value]) => [field, sanitizeAndClip(value, 500).toLowerCase().replace(/\s+/g, " ").trim()]);
+  return { query, signature: sha256(JSON.stringify([toolName, signatureFields])) };
+};
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
@@ -198,6 +219,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     memoryEnabled = true,
     memoryInjectionEnabled = true,
     memoryContextToken: string | undefined,
+    surfacedMemoryIds = new Set<string>(),
+    pendingPreflightMemoryIds = new Set<string>(),
+    preflightedMemoryActions = new Set<string>(),
     legacyMigrationAvailable = false,
     activeSessionContext: any,
     tasksVisible = true,
@@ -367,11 +391,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
     await writeJsonAtomic(join(memoryDirectory(), "backups", `owner-reassociation-${migrationId}.json`), backup);
     return next;
   };
-  const visibleNotes = async (latest: string, active?: Work) => {
+  const newlyRelevantMemory = async (queries: string[], markSurfaced = true) => {
+    if (!queries.length) return { text: "", notes: [] as NotebookNote[] };
     project = await resolveProject(currentCwd);
-    const query = promptQuery(latest, active);
-    if (!query) return { query, notes: [] as NotebookNote[] };
-    return { query, notes: notesForOwners(memoryNotes, project.owner) };
+    const injection = buildMemoryInjection(
+      notesForOwners(memoryNotes, project.owner),
+      queries,
+      100,
+      surfacedMemoryIds,
+    );
+    if (markSurfaced) for (const note of injection.notes) surfacedMemoryIds.add(note.id);
+    return injection;
   };
   const projectMemory = () => project
     ? memoryNotes.filter((note) => note.scope === "project" && note.owner === project!.owner)
@@ -697,6 +727,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     recentCalls.clear();
     pendingMutations.clear();
     deniedToolCalls.clear();
+    surfacedMemoryIds.clear();
+    pendingPreflightMemoryIds.clear();
+    preflightedMemoryActions.clear();
     seenMutationMessages.clear();
     terminatingToolCalls.clear();
     automaticCompaction = undefined;
@@ -836,6 +869,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     terminatingToolCalls.clear();
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
+  pi.on("agent_end", () => {
+    if (!pendingPreflightMemoryIds.size) return;
+    pendingPreflightMemoryIds.clear();
+    preflightedMemoryActions.clear();
+  });
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
@@ -876,6 +914,28 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Plan mode is read-only. Memory mutations are blocked; use memory list only.",
       };
+    if (memoryEnabled && memoryInjectionEnabled) {
+      const action = memoryAction(event.toolName, event.input);
+      if (action && pendingPreflightMemoryIds.size) {
+        deniedToolCalls.add(event.toolCallId);
+        return {
+          block: true,
+          reason: "A sibling consequential action was deferred because Continuity surfaced relevant memory in this tool batch. Reconsider the batch, then retry appropriate actions.",
+        };
+      }
+      if (action && !preflightedMemoryActions.has(action.signature)) {
+        const injection = await newlyRelevantMemory([...retrievalQueries("", activeWork()), action.query], false);
+        if (injection.text) {
+          preflightedMemoryActions.add(action.signature);
+          for (const note of injection.notes) pendingPreflightMemoryIds.add(note.id);
+          deniedToolCalls.add(event.toolCallId);
+          return {
+            block: true,
+            reason: `Continuity surfaced relevant memory before this action. Reconsider it, then retry if still appropriate.\n${injection.text}`,
+          };
+        }
+      }
+    }
     if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
       pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
@@ -902,9 +962,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
       lastPrompt = event.text;
       memoryTaskGeneration++;
       reviewCalledThisTask = false;
+      surfacedMemoryIds.clear();
+      pendingPreflightMemoryIds.clear();
+      preflightedMemoryActions.clear();
     }
   });
   pi.on("turn_end", (event, ctx) => {
+    for (const id of pendingPreflightMemoryIds) surfacedMemoryIds.add(id);
+    pendingPreflightMemoryIds.clear();
     const toolResults = Array.isArray(event.toolResults) ? event.toolResults : [];
     const hasToolCalls = Array.isArray((event.message as any)?.content) &&
       (event.message as any).content.some((part: any) => part?.type === "toolCall");
@@ -1037,14 +1102,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     memoryContextToken = undefined;
     if (!memoryEnabled || !memoryInjectionEnabled) return;
-    const visible = await visibleNotes(event.prompt, activeWork());
-    const text = buildContext(undefined, visible.notes, visible.query, 100, [], { resolvedQuery: true });
-    if (text) {
+    const injection = await newlyRelevantMemory(retrievalQueries(event.prompt, activeWork()));
+    if (injection.text) {
       memoryContextToken = randomUUID();
       return {
         message: {
           customType: "pi-continuity-memory",
-          content: text,
+          content: injection.text,
           display: false,
           details: { version: 1, token: memoryContextToken },
         },
@@ -1496,13 +1560,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
           pendingApproval = { runId: work.runId, revision: work.planRevision! };
         tasksVisible = true;
         refresh(ctx);
+        const memory = memoryEnabled && memoryInjectionEnabled
+          ? await newlyRelevantMemory(retrievalQueries("", work))
+          : { text: "" };
         return {
           content: [
             {
               type: "text",
-              text: planning
+              text: (planning
                 ? "Plan stored. Await explicit /plan approve."
-                : "Executing task list stored.",
+                : "Executing task list stored.") + (memory.text ? `\n\nRelevant memory for the stored plan:\n${memory.text}` : ""),
             },
           ],
           ...(planning ? { details: { plan: formatPlan(work) } } : {}),
