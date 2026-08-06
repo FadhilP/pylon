@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { JobManager, pruneStaleSessionDirs, STALE_SESSION_DIR_MS, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs, MIN_CHECK_INTERVAL_MS } from "../src/polling.ts";
@@ -81,6 +82,34 @@ test("start returns, captures UTF-8 output, and completes", async () => {
   assert.equal(job.completionAnnounced, false);
   assert.match(jobContext([job]), /status available now/);
   assert.equal(job.completionAnnounced, false);
+  await manager.shutdown();
+});
+
+test("running status includes a bounded current output snapshot", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-"));
+  const manager = new JobManager(dir);
+  await manager.init();
+  const script = join(dir, "running-output.js");
+  await writeFile(
+    script,
+    `process.stdout.write("x".repeat(20000) + "STDOUT_END\\n");\nprocess.stderr.write("y".repeat(20000) + "STDERR_END\\n");\nsetTimeout(()=>{},10000);`,
+  );
+  const job = await manager.start(`node "${script}"`, process.cwd());
+  for (let i = 0; i < 100; i++) {
+    if (job.stdoutTail.toString().includes("STDOUT_END") && job.stderrTail.toString().includes("STDERR_END")) break;
+    await delay(10);
+  }
+  const formatted = manager.format(job);
+  assert.match(formatted.text, /Job .*: running/);
+  assert.match(formatted.text, /Current output snapshot/);
+  assert.match(formatted.text, /stdout tail:.*STDOUT_END/s);
+  assert.match(formatted.text, /stderr tail:.*STDERR_END/s);
+  assert.match(formatted.text, /earlier stdout omitted/);
+  assert.match(formatted.text, /earlier stderr omitted/);
+  assert.equal(formatted.truncated, true);
+  assert.ok(Buffer.byteLength(formatted.text) < 4000);
+  await manager.stop(job);
+  await closed(job);
   await manager.shutdown();
 });
 

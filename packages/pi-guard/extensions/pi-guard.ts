@@ -6,7 +6,17 @@ import {
 import { createHash } from "node:crypto";
 import { readFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
-import { commandRisk, pathRisk, POLICY_VERSION } from "../src/policy.ts";
+import {
+  BLOCK_GUARD_RULES,
+  commandRisk,
+  GUARD_RISK_CATEGORIES,
+  mergeGuardRules,
+  pathRisk,
+  POLICY_VERSION,
+  validateGuardRules,
+  type GuardRisk,
+  type GuardRiskCategory,
+} from "../src/policy.ts";
 
 const APPROVAL_RECORD_VERSION = 1;
 const choices = [
@@ -19,7 +29,7 @@ const choices = [
 type ApprovalIdentity = {
   policyVersion: number;
   cwd: string;
-  reason: string;
+  category: GuardRiskCategory;
   operation: "command" | "path" | "path-tree";
   value: string;
 };
@@ -34,10 +44,28 @@ type StoredApproval = "allowed" | "missing" | "invalid" | "error";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const identityKey = (approval: ApprovalIdentity) => JSON.stringify(approval);
 
+function spawnedPolicy(): { enabled: boolean; rules: ReturnType<typeof mergeGuardRules>; timeout?: number | null } | undefined {
+  const serialized = process.env.PI_SPAWN_GUARD_POLICY;
+  if (serialized === undefined) return;
+  if (Buffer.byteLength(serialized) > 16 * 1024) return { enabled: true, rules: BLOCK_GUARD_RULES };
+  try {
+    const value = JSON.parse(serialized) as Record<string, unknown>;
+    const rules = validateGuardRules(value.rules);
+    const timeout = value.timeoutSeconds;
+    if (value.version !== 1 || typeof value.enabled !== "boolean" || !rules
+      || timeout !== undefined && timeout !== null && (!Number.isInteger(timeout) || (timeout as number) < 15 || (timeout as number) > 86_400)) {
+      return { enabled: true, rules: BLOCK_GUARD_RULES };
+    }
+    return { enabled: value.enabled, rules: mergeGuardRules(rules), ...(timeout !== undefined ? { timeout: timeout as number | null } : {}) };
+  } catch {
+    return { enabled: true, rules: BLOCK_GUARD_RULES };
+  }
+}
+
 function approvalScope(
   approval: ApprovalIdentity,
 ): { remembered: ApprovalIdentity; candidates: ApprovalIdentity[]; directory?: string } {
-  if (approval.operation !== "path" || approval.reason !== "write target is outside workspace")
+  if (approval.operation !== "path" || approval.category !== GUARD_RISK_CATEGORIES.PATH_OUTSIDE_WORKSPACE)
     return { remembered: approval, candidates: [approval] };
 
   const root = parse(approval.value).root;
@@ -71,7 +99,7 @@ function sameApproval(value: unknown, approval: ApprovalIdentity): value is Appr
   const candidate = value as Partial<ApprovalIdentity>;
   return candidate.policyVersion === approval.policyVersion &&
     candidate.cwd === approval.cwd &&
-    candidate.reason === approval.reason &&
+    candidate.category === approval.category &&
     candidate.operation === approval.operation &&
     candidate.value === approval.value;
 }
@@ -114,11 +142,13 @@ async function saveProjectApproval(approval: ApprovalIdentity): Promise<boolean>
 }
 
 export default function guardExtension(pi: ExtensionAPI) {
+  const bootstrap = spawnedPolicy();
   let blocked = 0;
   let confirmed = 0;
-  let enabled = true;
+  let enabled = bootstrap?.enabled ?? true;
   let lastCtx: any;
-  let approvalTimeoutSeconds: number | null | undefined;
+  let approvalTimeoutSeconds: number | null | undefined = bootstrap?.timeout;
+  let guardRules = bootstrap?.rules ?? mergeGuardRules();
   // This closure is per extension instance; Pi replaces it when a session is replaced.
   const sessionApprovals = new Set<string>();
   const disposePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
@@ -130,6 +160,11 @@ export default function guardExtension(pi: ExtensionAPI) {
     const value = event.dialogTimeouts?.guard;
     if (value === null || Number.isInteger(value) && value >= 15 && value <= 86_400) {
       approvalTimeoutSeconds = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(event, "guardRules")) {
+      const overrides = validateGuardRules(event.guardRules);
+      // Invalid runtime policy must never weaken a detected risk.
+      guardRules = overrides ? mergeGuardRules(overrides) : BLOCK_GUARD_RULES;
     }
   });
   const dialogOptions = (signal?: AbortSignal) => approvalTimeoutSeconds === undefined
@@ -148,6 +183,7 @@ export default function guardExtension(pi: ExtensionAPI) {
 
   const approve = async (
     ctx: any,
+    category: GuardRiskCategory,
     reason: string,
     detail: string,
     operation: ApprovalIdentity["operation"],
@@ -164,7 +200,7 @@ export default function guardExtension(pi: ExtensionAPI) {
       return false;
     }
     const scope = approvalScope({
-      policyVersion: POLICY_VERSION, cwd, reason, operation, value,
+      policyVersion: POLICY_VERSION, cwd, category, operation, value,
     });
     if (scope.candidates.some((approval) => sessionApprovals.has(identityKey(approval))))
       return true;
@@ -216,20 +252,20 @@ export default function guardExtension(pi: ExtensionAPI) {
 
   const allowOrBlock = async (
     ctx: any,
-    reason: string,
+    risk: GuardRisk,
     detail: string,
     operation: ApprovalIdentity["operation"],
     value: string,
     signal?: AbortSignal,
     toolCallId?: string,
   ) => {
-    if (await approve(ctx, reason, detail, operation, value, signal)) {
+    if (await approve(ctx, risk.category, risk.reason, detail, operation, value, signal)) {
       confirmed++;
-      publish(ctx, "confirmed", reason, toolCallId);
+      publish(ctx, "confirmed", risk.reason, toolCallId);
       return true;
     }
     blocked++;
-    publish(ctx, "blocked", reason, toolCallId);
+    publish(ctx, "blocked", risk.reason, toolCallId);
     return false;
   };
 
@@ -247,11 +283,16 @@ export default function guardExtension(pi: ExtensionAPI) {
         return { block: true, reason: `Pi Guard blocked ${reason}.` };
       }
       const risk = commandRisk(command);
-      if (!risk) return;
-      if (await allowOrBlock(ctx, risk, String(command ?? ""), "command", String(command ?? ""), undefined, event.toolCallId)) return;
+      if (!risk || guardRules[risk.category] === "allow") return;
+      if (guardRules[risk.category] === "block") {
+        blocked++;
+        publish(ctx, "blocked", risk.reason, event.toolCallId);
+        return { block: true, reason: `Pi Guard blocked ${risk.reason}.` };
+      }
+      if (await allowOrBlock(ctx, risk, command, "command", command, undefined, event.toolCallId)) return;
       return {
         block: true,
-        reason: `Pi Guard blocked ${risk}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
+        reason: `Pi Guard blocked ${risk.reason}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
       };
     }
 
@@ -265,14 +306,14 @@ export default function guardExtension(pi: ExtensionAPI) {
       publish(ctx, "blocked", reason, event.toolCallId);
       return { block: true, reason: `Pi Guard blocked ${reason}.` };
     }
-    if (!risk) return;
-    if (risk.action === "block") {
+    if (!risk || guardRules[risk.category] === "allow") return;
+    if (guardRules[risk.category] === "block") {
       blocked++;
       publish(ctx, "blocked", risk.reason, event.toolCallId);
       return { block: true, reason: `Pi Guard blocked ${risk.reason}.` };
     }
     const detail = `${event.input.path}\nResolved target: ${risk.target}`;
-    if (await allowOrBlock(ctx, risk.reason, detail, "path", risk.target, undefined, event.toolCallId)) return;
+    if (await allowOrBlock(ctx, risk, detail, "path", risk.target!, undefined, event.toolCallId)) return;
     return {
       block: true,
       reason: `Pi Guard blocked ${risk.reason}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
@@ -282,11 +323,18 @@ export default function guardExtension(pi: ExtensionAPI) {
   pi.on("user_bash", async (event, ctx) => {
     if (!enabled) return;
     const risk = commandRisk(event.command);
-    if (!risk) return;
+    if (!risk || guardRules[risk.category] === "allow") return;
+    if (guardRules[risk.category] === "block") {
+      blocked++;
+      publish(ctx, "blocked", risk.reason);
+      return {
+        result: { output: `Pi Guard blocked ${risk.reason}.`, exitCode: 126, cancelled: true, truncated: false },
+      };
+    }
     if (await allowOrBlock(ctx, risk, event.command, "command", event.command)) return;
     return {
       result: {
-        output: `Pi Guard blocked ${risk}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
+        output: `Pi Guard blocked ${risk.reason}${ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available"}.`,
         exitCode: 126,
         cancelled: true,
         truncated: false,

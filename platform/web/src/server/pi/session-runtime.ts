@@ -31,12 +31,13 @@ import {
   type InlineExtension,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_GUARD_RULES } from "../../shared/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
 import type { ChangedFileReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
-import { isStateQLSnapshot } from "../../shared/protocol/validation.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import { isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -117,6 +118,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
     global: {
       timelineEnabled: true,
       guardEnabled: true,
+      guardRules: { ...DEFAULT_GUARD_RULES },
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
@@ -131,6 +133,7 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
       verify: { mode: "auto" },
       timelineEnabled: true,
       guardEnabled: true,
+      guardRules: { ...DEFAULT_GUARD_RULES },
       workspace: "local",
       guardTimeoutSeconds: 60,
       clarifyTimeoutSeconds: 60,
@@ -261,6 +264,69 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
   // ponytail: reject escape-heavy aggregate payloads instead of budgeting for the protocol's theoretical JSON worst case.
   if (Buffer.byteLength(JSON.stringify(result), "utf8") > 512 * 1024) throw new Error("StateQL returned an oversized snapshot");
   return result;
+}
+
+const MAX_STATEQL_ROWS_BYTES = 256 * 1024;
+
+function stateqlJsonValue(value: unknown, depth: number, budget: { bytes: number }): unknown {
+  if (depth > 6) throw new Error("StateQL returned invalid rows");
+  budget.bytes++;
+  if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
+  if (value === null || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) {
+    budget.bytes += Buffer.byteLength(String(value), "utf8");
+    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value.length > 64 * 1024) throw new Error("StateQL returned invalid rows");
+    budget.bytes += Buffer.byteLength(value, "utf8");
+    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 100) throw new Error("StateQL returned invalid rows");
+    return value.map((item) => stateqlJsonValue(item, depth + 1, budget));
+  }
+  if (!value || typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
+    throw new Error("StateQL returned invalid rows");
+  }
+  const entries = Object.entries(value);
+  if (entries.length > 100) throw new Error("StateQL returned invalid rows");
+  const result: Record<string, unknown> = Object.create(null);
+  for (const [key, item] of entries) {
+    if (key.length > 500) throw new Error("StateQL returned invalid rows");
+    budget.bytes += Buffer.byteLength(key, "utf8");
+    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
+    result[key] = stateqlJsonValue(item, depth + 1, budget);
+  }
+  return result;
+}
+
+function stateqlRowsResult(value: unknown, handle: string, offset: number, limit: number, actorId: string, sessionGeneration: number): StateQLRowsPage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("StateQL returned invalid rows");
+  const raw = value as Record<string, unknown>;
+  if (raw.result_id !== handle || raw.offset !== offset || raw.limit !== limit || !Array.isArray(raw.rows)) {
+    throw new Error("StateQL returned invalid rows");
+  }
+  const budget = { bytes: 0 };
+  const rows = raw.rows.map((row) => stateqlJsonValue(row, 0, budget));
+  const candidate = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration,
+    actor_id: actorId,
+    handle,
+    offset: raw.offset,
+    limit: raw.limit,
+    rows,
+    returned: raw.returned,
+    total: raw.total,
+    truncated: raw.truncated,
+    next_offset: raw.next_offset,
+  };
+  if (!isStateQLRowsPage(candidate)) throw new Error("StateQL returned invalid rows");
+  const page = candidate as StateQLRowsPage;
+  if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
+  return page;
 }
 
 function heliosResult(value: unknown, sessionGeneration: number): HeliosBrowserResult {
@@ -848,17 +914,17 @@ export class SessionRuntime implements PiDriver {
 
   async abort(): Promise<void> {
     if (!this.runtime || !this.gate.ready) throw new Error("runtime is not ready");
+    const session = this.runtime.session;
     const hadPendingUi = this.ui.hasPendingDialog;
     if (hadPendingUi) this.ui.cancelGeneration(this.gate.generation);
     if (this.stopping && !hadPendingUi) return;
-    const hadActiveRun = Boolean(this.workStartedAt || this.runtime.session.isStreaming);
     if (!this.stopping) {
       this.stopping = true;
       this.refreshSnapshot();
     }
     try {
-      await this.runtime.session.abort();
-      if (!hadActiveRun) {
+      await session.abort();
+      if (this.runtime?.session === session && !session.isStreaming) {
         this.stopping = false;
         this.refreshSnapshot();
       }
@@ -1095,6 +1161,47 @@ export class SessionRuntime implements PiDriver {
         new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("StateQL snapshot request timed out")), { once: true })),
       ]);
       return stateqlResult(value, runtime.session.sessionId, this.gate.generation);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
+  }
+
+  async stateqlRows(handle: string, offset: number, limit: number): Promise<StateQLRowsPage> {
+    if (!handle.trim() || handle.length > 200 || !Number.isSafeInteger(offset) || offset < 0 || offset > 10_000
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("StateQL rows request is invalid");
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:stateql-rows-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      handle,
+      offset,
+      limit,
+      signal: controller.signal,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("StateQL rows are unavailable");
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("StateQL rows request timed out")), { once: true })),
+      ]);
+      return stateqlRowsResult(value, handle, offset, limit, runtime.session.sessionId, this.gate.generation);
     } finally {
       clearTimeout(timeout);
       controller.abort();
@@ -2042,6 +2149,16 @@ export class SessionRuntime implements PiDriver {
           assistantMessage: assistantMessage ?? null,
           errorMessage: this.agentError,
         };
+      } else if (kind === "agent_settled" && this.workStartedAt) {
+        this.workStartedAt = undefined;
+        this.workStartedAtMs = undefined;
+        this.workModelName = undefined;
+        this.workThinkingLevel = undefined;
+        this.workTurnId = undefined;
+        this.workUserEntryId = undefined;
+        this.workAssistantEntryIdAtStart = undefined;
+        this.stopping = false;
+        this.refreshSnapshot();
       } else if (kind === "compaction_end" && raw.aborted !== true) {
         const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result)
           ? raw.result as Record<string, unknown>
@@ -2385,18 +2502,19 @@ export class SessionRuntime implements PiDriver {
       ...(this.commandResult ? { commandResult: { ...this.commandResult } } : {}),
       runtimePolicy: {
         ...this.runtimePolicy,
-        global: { ...this.runtimePolicy.global, toolOverrides: cloneToolOverrides(this.runtimePolicy.global.toolOverrides) },
-        project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify), toolOverrides: cloneToolOverrides(this.runtimePolicy.project.toolOverrides) },
+        global: { ...this.runtimePolicy.global, guardRules: { ...(this.runtimePolicy.global.guardRules ?? DEFAULT_GUARD_RULES) }, toolOverrides: cloneToolOverrides(this.runtimePolicy.global.toolOverrides) },
+        project: { ...this.runtimePolicy.project, verify: cloneVerifyPolicy(this.runtimePolicy.project.verify), ...(this.runtimePolicy.project.guardRules ? { guardRules: { ...this.runtimePolicy.project.guardRules } } : {}), toolOverrides: cloneToolOverrides(this.runtimePolicy.project.toolOverrides) },
         session: {
           toolOverrides: cloneToolOverrides(this.runtimePolicy.session.toolOverrides),
           ...(this.runtimePolicy.session.verify ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) } : {}),
           ...(this.runtimePolicy.session.timelineEnabled !== undefined ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled } : {}),
           ...(this.runtimePolicy.session.guardEnabled !== undefined ? { guardEnabled: this.runtimePolicy.session.guardEnabled } : {}),
+          ...(this.runtimePolicy.session.guardRules ? { guardRules: { ...this.runtimePolicy.session.guardRules } } : {}),
           ...(this.runtimePolicy.session.workspace ? { workspace: this.runtimePolicy.session.workspace } : {}),
           ...(this.runtimePolicy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: this.runtimePolicy.session.guardTimeoutSeconds } : {}),
           ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds } : {}),
         },
-        effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify), toolOverrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides) },
+        effective: { ...this.runtimePolicy.effective, verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify), guardRules: { ...(this.runtimePolicy.effective.guardRules ?? DEFAULT_GUARD_RULES) }, toolOverrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides) },
         availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map((check) => ({ ...check })),
       },
     };
@@ -2425,6 +2543,7 @@ export class SessionRuntime implements PiDriver {
       verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
       timelineEnabled: this.runtimePolicy.effective.timelineEnabled,
       guardEnabled: this.runtimePolicy.effective.guardEnabled,
+      guardRules: { ...(this.runtimePolicy.effective.guardRules ?? DEFAULT_GUARD_RULES) },
       dialogTimeouts: {
         guard: this.runtimePolicy.effective.guardTimeoutSeconds,
         clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,
@@ -2508,6 +2627,20 @@ export class SessionRuntime implements PiDriver {
     this.busUnsubscribers.push(this.eventBus.on("pi-verify:catalog", (payload) => {
       if (!this.gate.accepts(generation)) return;
       this.captureVerifyCatalog(payload);
+    }));
+    this.busUnsubscribers.push(this.eventBus.on("pylon:spawn-runtime-policy-request", (payload) => {
+      if (!this.gate.accepts(generation) || !payload || typeof payload !== "object") return;
+      const request = payload as { version?: unknown; cwd?: unknown; sessionId?: unknown; provide?: unknown };
+      if (request.version !== 1 || typeof request.cwd !== "string" || typeof request.sessionId !== "string" || typeof request.provide !== "function") return;
+      const project = this.projectRegistry?.projectForSession(request.sessionId, request.cwd);
+      if (!project) return;
+      const policy = this.projectRegistry!.runtimePolicy(project.id, request.sessionId).effective;
+      request.provide({
+        version: 1,
+        enabled: policy.guardEnabled,
+        rules: { ...(policy.guardRules ?? DEFAULT_GUARD_RULES) },
+        timeoutSeconds: policy.guardTimeoutSeconds,
+      });
     }));
     for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change", "pi-sieve:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {

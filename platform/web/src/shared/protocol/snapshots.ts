@@ -1,3 +1,4 @@
+import type { EffectiveGuardRules, GuardRuleOverrides } from "../guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, SlashCommandResultReadModel, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
 
@@ -47,6 +48,7 @@ export interface RuntimePolicyReadModel {
   global: {
     timelineEnabled: boolean;
     guardEnabled: boolean;
+    guardRules?: EffectiveGuardRules;
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
@@ -57,6 +59,7 @@ export interface RuntimePolicyReadModel {
     toolOverrides?: ToolOverrideReadModel;
     timelineEnabled?: boolean;
     guardEnabled?: boolean;
+    guardRules?: GuardRuleOverrides;
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -66,6 +69,7 @@ export interface RuntimePolicyReadModel {
     toolOverrides?: ToolOverrideReadModel;
     timelineEnabled?: boolean;
     guardEnabled?: boolean;
+    guardRules?: GuardRuleOverrides;
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
@@ -74,6 +78,7 @@ export interface RuntimePolicyReadModel {
     verify: VerifyPolicyReadModel;
     timelineEnabled: boolean;
     guardEnabled: boolean;
+    guardRules?: EffectiveGuardRules;
     workspace: WorkspacePolicyMode;
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
@@ -177,6 +182,20 @@ export interface StateQLHistoryEntryReadModel {
   cached: boolean;
   success: boolean;
   error_code: string | null;
+}
+
+export interface StateQLRowsPage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  actor_id: string;
+  handle: string;
+  offset: number;
+  limit: number;
+  rows: Array<Record<string, unknown>>;
+  returned: number;
+  total: number;
+  truncated: boolean;
+  next_offset: number | null;
 }
 
 export interface StateQLSnapshot {
@@ -288,6 +307,7 @@ export interface SessionSummary {
   projectId: string;
   name?: string;
   parentSession?: { id: string; title: string };
+  runningUnderParentSessionId?: string;
   cwdLabel: string;
   createdAt: string;
   modifiedAt: string;
@@ -379,6 +399,7 @@ export type PackageSettingsReadModel =
   | {
       kind: "continuity";
       memoryEnabled: boolean;
+      keepRecentTokens: number;
       planner?: PackageModelProfileReadModel;
       executor?: PackageModelProfileReadModel;
       memoryReviewer?: PackageModelProfileReadModel;
@@ -426,6 +447,8 @@ export interface HookSourceReadModel {
   name: string;
   kind: HookKind;
   content: string;
+  /** Re-add this session-start source after each successful compaction. */
+  reinjectOnCompaction?: boolean;
 }
 
 export interface HookReadModel {

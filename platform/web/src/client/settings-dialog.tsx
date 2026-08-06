@@ -1,5 +1,6 @@
 import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, IconStack2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS } from "../shared/guard-policy";
 import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, ToolPolicyReadModel, UiRequestReadModel } from "../shared/protocol/events";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel, ToolExposureMode } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
@@ -287,6 +288,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
 const defaultGlobalPolicy: RuntimePolicyReadModel["global"] = {
   timelineEnabled: true,
   guardEnabled: true,
+  guardRules: { ...DEFAULT_GUARD_RULES },
   workspace: "local",
   guardTimeoutSeconds: 60,
   clarifyTimeoutSeconds: 60,
@@ -351,6 +353,19 @@ function GlobalPolicySettings({ policy, disabled, onUpdate }: {
           <span><strong>Guard</strong><small>Ask before guarded commands and paths run.</small></span>
           <label className="settings-policy-switch"><input type="checkbox" role="switch" checked={draft.guardEnabled} disabled={controlsDisabled} onChange={(event) => void save({ ...draft, guardEnabled: event.target.checked })} /><span aria-hidden="true" /><small>{draft.guardEnabled ? "Enabled" : "Disabled"}</small></label>
         </div>
+        {GUARD_RISK_CATEGORIES.map((category) => <label className="settings-policy-row" key={category}>
+          <span><strong>{GUARD_RULE_LABELS[category]}</strong><small>{GUARD_RULE_DESCRIPTIONS[category]}</small></span>
+          <select
+            value={(draft.guardRules ?? DEFAULT_GUARD_RULES)[category]}
+            disabled={controlsDisabled || !draft.guardEnabled}
+            onChange={(event) => void save({
+              ...draft,
+              guardRules: { ...(draft.guardRules ?? DEFAULT_GUARD_RULES), [category]: event.target.value as typeof GUARD_ACTIONS[number] },
+            })}
+          >
+            {GUARD_ACTIONS.map((action) => <option value={action} key={action}>{action === "allow" ? "Allow" : action === "confirm" ? "Confirm" : "Block"}</option>)}
+          </select>
+        </label>)}
         <RuntimePolicyTimeoutControl
           label="Guard timeout"
           description="How long a confirmation request stays open."
@@ -425,6 +440,13 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   if (settings.kind === "continuity") {
     return <div className="package-fields continuity-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.memoryEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, memoryEnabled: event.target.checked })} />Durable memory</label>
+      <label>Continuity retained tokens<input key={settings.keepRecentTokens} type="number" min={1_000} max={50_000} step={1_000} defaultValue={settings.keepRecentTokens} disabled={disabled} onBlur={(event) => {
+        const keepRecentTokens = Number(event.target.value);
+        if (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 1_000 && keepRecentTokens <= 50_000) {
+          if (keepRecentTokens !== settings.keepRecentTokens) onUpdate({ ...settings, keepRecentTokens });
+        } else event.currentTarget.value = String(settings.keepRecentTokens);
+      }} /></label>
+      <p className="settings-policy-note">Recent raw history kept by Continuity compaction. This overrides Pi&apos;s retained-token value only for Continuity-owned compactions.</p>
       <ProfileFields label="Planner" profile={settings.planner} models={models} disabled={disabled} onChange={(planner) => onUpdate({ ...settings, planner })} />
       <ProfileFields label="Executor" profile={settings.executor} models={models} disabled={disabled} onChange={(executor) => onUpdate({ ...settings, executor })} />
       <ProfileFields label="Memory reviewer" profile={settings.memoryReviewer} models={models} disabled={disabled} onChange={(memoryReviewer) => onUpdate({ ...settings, memoryReviewer })} />

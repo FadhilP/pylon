@@ -123,9 +123,18 @@ test("StateQL password broker reuses endpoint consent, separates kinds and targe
     requestedReadOnly: true,
   });
   const target = { driver: "postgres" as const, username: "postgres", hostname: "db.example.com", port: 5432, database: "app" };
-  const first = host.requestStateQLPassword(connectRequest("A"), target);
+  for (const timeoutMs of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, 24 * 60 * 60_000 + 1]) {
+    await assert.rejects(
+      host.requestStateQLPassword(connectRequest("Z"), target, { timeoutMs }),
+      /password dialog timeout is invalid/,
+    );
+  }
+  assert.equal(requests.length, 0);
+
+  const first = host.requestStateQLPassword(connectRequest("A"), target, { timeoutMs: 90_000 });
   const joined = host.requestStateQLPassword(connectRequest("B"), target);
   const prompt = requests[0];
+  assert.equal(prompt.timeoutSeconds, 90);
   assert.equal(prompt.payload.title, "Enter database password");
   assert.equal(prompt.payload.inputType, "password");
   assert.match(String(prompt.payload.message), /connect to postgres@db\.example\.com:5432\/app with read-only access/);
@@ -144,8 +153,9 @@ test("StateQL password broker reuses endpoint consent, separates kinds and targe
   assert.equal(await source, DATABASE_URL);
 
   const otherTarget = { ...target, hostname: "other.example.com" };
-  const other = host.requestStateQLPassword(connectRequest("D"), otherTarget);
+  const other = host.requestStateQLPassword(connectRequest("D"), otherTarget, { timeoutMs: 0 });
   assert.equal(requests.length, 3);
+  assert.equal(requests[2].timeoutSeconds, undefined);
   bridge.answer({ requestId: requests[2].requestId, sessionGeneration: 3, method: "input", value: "other password" });
   assert.equal(await other, "other password");
 
@@ -161,6 +171,13 @@ test("StateQL password broker reuses endpoint consent, separates kinds and targe
   assert.match(String(requests[4].payload.message), /read-write access/);
   bridge.answer({ requestId: requests[4].requestId, sessionGeneration: 3, method: "input", value: password });
   assert.equal(await escalation, password);
+
+  const defaultTarget = { ...target, hostname: "default.example.com" };
+  const defaultTimeout = host.requestStateQLPassword(connectRequest("G"), defaultTarget);
+  assert.equal(requests.length, 6);
+  assert.equal(requests[5].timeoutSeconds, 60);
+  bridge.answer({ requestId: requests[5].requestId, sessionGeneration: 3, method: "input", value: password });
+  assert.equal(await defaultTimeout, password);
   assert.equal(JSON.stringify({ requests, snapshot: bridge.snapshot() }).includes(password), false);
 });
 

@@ -13,7 +13,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
@@ -396,7 +397,11 @@ function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
   fullPath?: boolean;
 }) {
   const name = file.path.split("/").at(-1) ?? file.path;
-  return <button type="button" className={selectedPath === file.path ? "is-active" : ""} onClick={() => onSelect(file.path)}>
+  const startDrag = (event: ReactDragEvent<HTMLButtonElement>) => {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(WORKSPACE_FILE_DRAG_TYPE, file.path);
+  };
+  return <button type="button" draggable className={selectedPath === file.path ? "is-active" : ""} onDragStart={startDrag} onClick={() => onSelect(file.path)}>
     <IconFile size={14} />
     <span title={file.path}>{fullPath ? file.path : name}</span>
     {file.status && <small className={`is-${file.status}`}>{file.status[0].toUpperCase()}</small>}

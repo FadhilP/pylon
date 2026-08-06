@@ -351,6 +351,69 @@ test("spawn activity progress sends correlated deltas and returns the complete i
   } finally { f.restore(); }
 });
 
+test("spawned RPC dialogs use the invoking parent UI and identify their origin", async () => {
+  const dialogs: any[] = [];
+  let f: Awaited<ReturnType<typeof fixture>>;
+  f = await fixture(async (_args, options) => {
+    const controller = new AbortController();
+    assert.deepEqual(await options.onUiRequest({
+      id: "select-1", method: "select", title: "Scope?", options: ["Small", "Large"], timeout: 5000,
+    }, controller.signal), { value: "Small" });
+    assert.deepEqual(await options.onUiRequest({
+      id: "confirm-1", method: "confirm", title: "Guard", message: "Allow command?",
+    }, controller.signal), { confirmed: true });
+    assert.deepEqual(await options.onUiRequest({
+      id: "input-1", method: "input", title: "Custom answer", placeholder: "Type here",
+    }, controller.signal), { value: "Other" });
+    assert.deepEqual(await options.onUiRequest({
+      id: "editor-1", method: "editor", title: "Edit", prefill: "draft",
+    }, controller.signal), { cancelled: true });
+    return completed("done");
+  });
+  try {
+    f.ctx.hasUI = true;
+    f.ctx.ui = {
+      select: async (title: string, options: string[], dialogOptions: any) => {
+        dialogs.push({ method: "select", title, options, dialogOptions });
+        return "Small";
+      },
+      confirm: async (title: string, message: string, dialogOptions: any) => {
+        dialogs.push({ method: "confirm", title, message, dialogOptions });
+        return true;
+      },
+      input: async (title: string, placeholder: string, dialogOptions: any) => {
+        dialogs.push({ method: "input", title, placeholder, dialogOptions });
+        return "Other";
+      },
+    };
+    const result = await f.tools.get("spawn_session").execute("create", {
+      action: "create", prompt: "ask the user",
+    }, undefined, undefined, f.ctx);
+    assert.equal(result.details.status, "completed");
+    assert.deepEqual(dialogs.map(({ method }) => method), ["select", "confirm", "input"]);
+    assert.ok(dialogs.every(({ title }) => /^Session [A-Za-z-]+: /.test(title)));
+    assert.deepEqual(dialogs[0].options, ["Small", "Large"]);
+    assert.equal(dialogs[0].dialogOptions.timeout, 5000);
+    assert.ok(dialogs.every(({ dialogOptions }) => dialogOptions.signal instanceof AbortSignal));
+  } finally { f.restore(); }
+});
+
+test("spawned RPC dialogs cancel when the invoking parent has no UI", async () => {
+  const f = await fixture(async (_args, options) => {
+    assert.deepEqual(await options.onUiRequest({
+      id: "confirm-1", method: "confirm", title: "Guard", message: "Allow command?",
+    }, new AbortController().signal), { confirmed: false });
+    return completed("done");
+  });
+  try {
+    f.ctx.hasUI = false;
+    const result = await f.tools.get("spawn_agent").execute("create", {
+      action: "create", prompt: "ask the user",
+    }, undefined, undefined, f.ctx);
+    assert.equal(result.details.status, "completed");
+  } finally { f.restore(); }
+});
+
 test("private agents stay outside the normal session index and preserve creation policy", async () => {
   const f = await fixture();
   try {
@@ -462,6 +525,7 @@ test("spawned sessions snapshot Pylon hooks and apply before-agent-start context
   try {
     f.busHandlers.set("pylon:spawn-hooks-request", [(request: any) => request.provide({
       sessionStart: { customType: "pylon-session-start-hook", content: "SESSION HOOK" },
+      sessionCompact: { customType: "pylon-session-start-hook", content: "COMPACTION HOOK" },
       beforeAgentStart: "BEFORE HOOK",
     })]);
     const created = await f.tools.get("spawn_session").execute("create", {
@@ -476,6 +540,18 @@ test("spawned sessions snapshot Pylon hooks and apply before-agent-start context
     const childContext = { sessionManager: manager };
     (f.handlers.get("session_start") ?? [])[0]?.({}, childContext);
     assert.deepEqual(f.sentMessages, [{ customType: "pylon-session-start-hook", content: "SESSION HOOK", display: false }]);
+    const compact = (f.handlers.get("session_compact") ?? [])[0];
+    assert.ok(compact);
+    compact({ compactionEntry: { id: "compact-1" } }, childContext);
+    assert.deepEqual(f.sentMessages.at(-1), {
+      customType: "pylon-session-start-hook",
+      content: "COMPACTION HOOK",
+      display: false,
+      details: { version: 1, compactionEntryId: "compact-1" },
+    });
+    manager.appendCustomMessageEntry("pylon-session-start-hook", "COMPACTION HOOK", false, { version: 1, compactionEntryId: "compact-1" });
+    compact({ compactionEntry: { id: "compact-1" } }, childContext);
+    assert.equal(f.sentMessages.length, 2);
     const before = (f.handlers.get("before_agent_start") ?? [])[0];
     assert.ok(before);
     assert.equal(before({ systemPrompt: "BASE" }, childContext).systemPrompt, "BASE\n\nBEFORE HOOK");

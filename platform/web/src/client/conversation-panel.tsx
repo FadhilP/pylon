@@ -5,7 +5,7 @@ import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport }
 import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
-import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../shared/composer-input";
+import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
@@ -405,6 +405,19 @@ export function ConversationPanel({
   const onDrop = async (event: ReactDragEvent<HTMLFormElement>) => {
     event.preventDefault();
     setDropActive(false);
+    const workspacePath = event.dataTransfer.getData(WORKSPACE_FILE_DRAG_TYPE);
+    if (workspacePath) {
+      const start = promptRef.current?.selectionStart ?? message.length;
+      const end = promptRef.current?.selectionEnd ?? start;
+      const next = insertFileMention(message, start, end, workspacePath);
+      updateMessage(next.value);
+      setCaretPosition(next.caret);
+      requestAnimationFrame(() => {
+        promptRef.current?.focus();
+        promptRef.current?.setSelectionRange(next.caret, next.caret);
+      });
+      return;
+    }
     try {
       const dropped = [...event.dataTransfer.files];
       if (!dropped.length) throw new Error("No files were dropped.");
@@ -824,7 +837,7 @@ export function ConversationPanel({
         }}
         onDrop={(event) => { if (draftingOnly) event.preventDefault(); else void onDrop(event); }}
       >
-        {dropActive && <div className="composer-drop-overlay"><IconFileText size={18} />Drop images, text, or code files</div>}
+        {dropActive && <div className="composer-drop-overlay"><IconFileText size={18} />Drop workspace files to reference, or external files to attach</div>}
         {images.length > 0 && <ImageStrip
           images={images}
           label="Attached images"

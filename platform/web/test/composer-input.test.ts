@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../src/shared/composer-input.ts";
+import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../src/shared/composer-input.ts";
 
 test("file mentions follow the caret and quote paths containing spaces", () => {
   const value = "Compare @src/fo with @ignored";
@@ -13,6 +13,17 @@ test("file mentions follow the caret and quote paths containing spaces", () => {
   assert.equal(fileMentionAtCaret("mail@example.com", 16), undefined);
   assert.equal(fileMentionAtCaret("Read @\"src/foo bar", 18)?.query, "src/foo bar");
   assert.equal(fileMentionAtCaret("Read (@src", 10)?.query, "src");
+});
+
+test("dropped workspace paths become file mentions at the selection", () => {
+  assert.deepEqual(insertFileMention("Compare this", 7, 12, "assets/model.bin"), {
+    value: "Compare @assets/model.bin",
+    caret: 25,
+  });
+  assert.deepEqual(insertFileMention("Readthen", 4, 4, "docs/my file.txt"), {
+    value: "Read @\"docs/my file.txt\" then",
+    caret: 24,
+  });
 });
 
 test("login command parsing only intercepts the exact local command", () => {

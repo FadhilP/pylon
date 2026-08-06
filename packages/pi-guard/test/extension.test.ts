@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import guard from "../extensions/pi-guard.ts";
+import { GUARD_RISK_CATEGORIES as category } from "../src/policy.ts";
 
 function harness() {
   const handlers = new Map<string, Function[]>();
@@ -178,6 +179,39 @@ test("Guard uses the effective runtime-policy timeout", { concurrency: false }, 
     true,
   );
   assert.deepEqual(neverPrompts[0].dialogOptions, { timeout: 0 });
+});
+
+test("runtime guardRules applies allow, confirm, block, and fails closed when malformed", { concurrency: false }, async () => {
+  const { root, outside, agent } = await paths();
+  process.env.PI_CODING_AGENT_DIR = agent;
+  const app = harness();
+  const prompts: any[] = [];
+  app.events.emit("pylon:runtime-policy", {
+    version: 2,
+    guardRules: {
+      [category.COMMAND_RECURSIVE_DELETION]: "allow",
+      [category.COMMAND_DESTRUCTIVE_GIT_RESET]: "block",
+      [category.COMMAND_FORCED_GIT_PUSH]: "confirm",
+      [category.PATH_GIT_INTERNALS]: "allow",
+      [category.PATH_ENVIRONMENT_FILE]: "block",
+      [category.PATH_WORKSPACE_ESCAPE]: "confirm",
+    },
+  });
+  assert.equal(await app.tool({ type: "tool_call", toolName: "bash", input: { command: "rm -rf generated" } }, context(root, [], prompts)), undefined);
+  assert.equal((await app.tool({ type: "tool_call", toolName: "bash", input: { command: "git reset --hard HEAD" } }, context(root, [], prompts))).block, true);
+  assert.equal(await app.tool({ type: "tool_call", toolName: "bash", input: { command: "git push -f origin main" } }, context(root, ["Allow once"], prompts)), undefined);
+  assert.equal(await app.tool(event("write", ".git/config"), context(root, [], prompts)), undefined);
+  assert.equal((await app.tool(event("write", ".env.local"), context(root, [], prompts))).block, true);
+  assert.equal(await app.tool(event("write", "../escaped.txt"), context(root, ["Allow once"], prompts)), undefined);
+  assert.equal(prompts.length, 2, "only confirm rules prompt");
+
+  app.events.emit("pylon:runtime-policy", {
+    version: 2,
+    guardRules: { [category.COMMAND_RECURSIVE_DELETION]: "allow", unknown: "block" },
+  });
+  const malformedPrompts: any[] = [];
+  assert.equal((await app.tool(event("write", outside), context(root, ["Allow once"], malformedPrompts))).block, true);
+  assert.deepEqual(malformedPrompts, [], "invalid rules block rather than using a permissive override");
 });
 
 test("Guard applies command policy to Heartbeat and can be disabled by runtime policy", { concurrency: false }, async () => {

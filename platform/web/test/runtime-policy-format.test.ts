@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveGuardRule } from "../src/shared/guard-policy.ts";
 import type { RuntimePolicyReadModel } from "../src/shared/protocol/snapshots.ts";
 import { formatPolicyTimeout, runtimePolicySources } from "../src/shared/runtime-policy-format.ts";
 
@@ -57,6 +58,13 @@ test("runtime policy sources follow structural overrides", () => {
     guardTimeout: "Project",
     clarifyTimeout: "This session",
   });
+});
+
+test("Guard category resolution reports the nearest override", () => {
+  const category = "command.recursive-deletion";
+  assert.deepEqual(resolveGuardRule(category, { [category]: "confirm" }), { value: "confirm", source: "Global" });
+  assert.deepEqual(resolveGuardRule(category, { [category]: "confirm" }, { [category]: "allow" }), { value: "allow", source: "Project" });
+  assert.deepEqual(resolveGuardRule(category, { [category]: "confirm" }, { [category]: "allow" }, { [category]: "block" }), { value: "block", source: "This session" });
 });
 
 test("policy timeout labels preserve Never and natural units", () => {

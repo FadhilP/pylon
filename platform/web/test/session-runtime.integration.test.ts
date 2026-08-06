@@ -100,6 +100,40 @@ test("user completion resolves its entry ID after persistence", async () => {
   ), false);
 });
 
+test("agent_settled recovers missed agent_end state and abort does not latch stopping", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-settled-fallback-"));
+  const cwd = join(root, "workspace"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+
+    session._emit({ type: "agent_start" });
+    assert.ok((await driver.snapshot()).conversation.workStartedAt);
+    session._emit({ type: "agent_settled" });
+    let conversation = (await driver.snapshot()).conversation;
+    assert.equal(conversation.workStartedAt, undefined);
+    assert.equal(conversation.stopping ?? false, false);
+
+    session._emit({ type: "agent_start" });
+    assert.ok((await driver.snapshot()).conversation.workStartedAt);
+    await driver.abort();
+    assert.equal((await driver.snapshot()).conversation.stopping ?? false, false);
+    await driver.abort();
+    assert.equal((await driver.snapshot()).conversation.stopping ?? false, false);
+
+    session._emit({ type: "agent_settled" });
+    conversation = (await driver.snapshot()).conversation;
+    assert.equal(conversation.workStartedAt, undefined);
+    assert.equal(conversation.stopping ?? false, false);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("terminal agent errors come only from the latest assistant response", () => {
   assert.equal(terminalAgentError([
     { role: "assistant", stopReason: "error", errorMessage: " old failure " },
@@ -346,6 +380,50 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal("ignored" in snapshot, false);
     assert.equal("ignored" in snapshot.session, false);
     assert.equal("ignored" in snapshot.history[0]!, false);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("StateQL rows bridge normalizes a bounded page", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-stateql-rows-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const probe: InlineExtension = {
+    name: "pylon-stateql-rows-probe",
+    factory(pi) {
+      pi.events.on("pylon:stateql-rows-request", (value: any) => {
+        if (value?.version !== 1 || !value.claim()) return;
+        const rows = value.handle === "oversized"
+          ? Array.from({ length: 5 }, (_, id) => ({ id, text: "x".repeat(60 * 1024) }))
+          : [{ id: 1, nested: [true, null] }];
+        value.respond(Promise.resolve({
+          result_id: value.handle === "wrong-result" ? "other-result" : value.handle,
+          offset: value.offset,
+          limit: value.limit,
+          rows,
+          returned: rows.length,
+          total: rows.length,
+          truncated: false,
+          next_offset: null,
+          ignored: "value",
+        }));
+      });
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [probe] });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const page = await driver.stateqlRows("result-1", 0, 10);
+    assert.equal(page.sessionGeneration, handle.sessionGeneration);
+    assert.equal(page.actor_id, handle.sessionId);
+    assert.equal(page.rows[0]?.id, 1);
+    assert.equal("ignored" in page, false);
+    await assert.rejects(driver.stateqlRows("", 0, 10), /request is invalid/);
+    await assert.rejects(driver.stateqlRows("wrong-result", 0, 10), /returned invalid rows/);
+    await assert.rejects(driver.stateqlRows("oversized", 0, 10), /returned oversized rows/);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
@@ -708,7 +786,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     const initialHooks = (await driver.listHookSettings()).settings;
     const futureHooks = {
       sessionStart: { enabled: false, sources: [] },
-      beforeAgentStart: { enabled: true, sources: [{ id: "future", name: "Future", kind: "text" as const, content: "future sessions" }] },
+      beforeAgentStart: { enabled: true, sources: [{ id: "future", name: "Future", kind: "text" as const, content: "future sessions", reinjectOnCompaction: false }] },
     };
     await driver.updateHookSettings({ settings: futureHooks });
     assert.deepEqual((await driver.listHookSettings()).settings, futureHooks);

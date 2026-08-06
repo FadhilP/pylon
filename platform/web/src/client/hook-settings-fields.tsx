@@ -8,7 +8,7 @@ const MAX_TOTAL_BYTES = 96 * 1024;
 type HookKey = keyof HookSettingsReadModel;
 
 const HOOKS: Array<{ key: HookKey; name: string; summary: string; detail: string }> = [
-  { key: "sessionStart", name: "session_start", summary: "Once, when a logical session begins", detail: "Persisted once in the session context. Resumes and reloads do not duplicate it." },
+  { key: "sessionStart", name: "session_start", summary: "Once, when a logical session begins", detail: "Persisted once in session context. Individual sources can also be restored after compaction." },
   { key: "beforeAgentStart", name: "before_agent_start", summary: "Before every prompt sent to the agent", detail: "Appended to the system prompt for the current run without accumulating in history." },
 ];
 
@@ -60,7 +60,7 @@ export function HookSettingsFields({ settings, loading, disabled, onUpdate }: {
 
   const addWritten = () => {
     if (hook.sources.length >= MAX_SOURCES) return setError(`Each hook supports up to ${MAX_SOURCES} sources.`);
-    const nextSource = { id: crypto.randomUUID(), name: `Written source ${hook.sources.length + 1}`, kind: "text" as const, content: "" };
+    const nextSource = { id: crypto.randomUUID(), name: `Written source ${hook.sources.length + 1}`, kind: "text" as const, content: "", reinjectOnCompaction: false };
     setSourceId(nextSource.id);
     void updateHook({ ...hook, sources: [...hook.sources, nextSource] });
   };
@@ -78,7 +78,7 @@ export function HookSettingsFields({ settings, loading, disabled, onUpdate }: {
       if (size > MAX_SOURCE_BYTES) return setError(`${file.name} exceeds the 64 KiB source limit.`);
       nextTotal += size;
       if (nextTotal > MAX_TOTAL_BYTES) return setError("Hook sources exceed the 96 KiB workspace limit.");
-      additions.push({ id: crypto.randomUUID(), name: file.name.slice(0, 200) || "Imported source", kind: "file", content });
+      additions.push({ id: crypto.randomUUID(), name: file.name.slice(0, 200) || "Imported source", kind: "file", content, reinjectOnCompaction: false });
     }
     setSourceId(additions[0]?.id);
     void updateHook({ ...hook, sources: [...hook.sources, ...additions] });
@@ -121,13 +121,14 @@ export function HookSettingsFields({ settings, loading, disabled, onUpdate }: {
         {hook.sources.length === 0 && <button className="hook-source-empty" type="button" disabled={disabled} onClick={addWritten}>Add a file or write instructions to enable this hook.</button>}
         {hook.sources.map((item, index) => <div key={item.id} className={`hook-source-row${item.id === sourceId ? " is-selected" : ""}`} onClick={() => setSourceId(item.id)}>
           {item.kind === "file" ? <IconFileText size={15} /> : <IconPencil size={15} />}
-          <button type="button" onClick={() => setSourceId(item.id)}><strong>{item.name}</strong><small>{item.kind === "file" ? "Imported snapshot" : "Written in Pylon"} · {bytes(item.content).toLocaleString()} bytes</small></button>
+          <button type="button" onClick={() => setSourceId(item.id)}><strong>{item.name}</strong><small>{item.kind === "file" ? "Imported snapshot" : "Written in Pylon"} · {bytes(item.content).toLocaleString()} bytes{hookKey === "sessionStart" && item.reinjectOnCompaction ? " · restores after compaction" : ""}</small></button>
           <span className="hook-source-order"><button type="button" aria-label={`Move ${item.name} up`} disabled={disabled || index === 0} onClick={(event) => { event.stopPropagation(); moveSource(item.id, -1); }}><IconArrowUp size={13} /></button><button type="button" aria-label={`Move ${item.name} down`} disabled={disabled || index === hook.sources.length - 1} onClick={(event) => { event.stopPropagation(); moveSource(item.id, 1); }}><IconArrowDown size={13} /></button><button type="button" aria-label={`Remove ${item.name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); removeSource(item.id); }}><IconTrash size={13} /></button></span>
         </div>)}
       </div>
 
-      {source && <div className="hook-source-editor">
+      {source && <div className={`hook-source-editor${hookKey === "sessionStart" ? " has-reinject" : ""}`}>
         <label>Name<input value={source.name} maxLength={200} disabled={disabled} onChange={(event) => updateSource({ ...source, name: event.target.value }, false)} onBlur={saveSource} /></label>
+        {hookKey === "sessionStart" && <label className="hook-reinject"><input type="checkbox" checked={source.reinjectOnCompaction === true} disabled={disabled} onChange={(event) => updateSource({ ...source, reinjectOnCompaction: event.target.checked }, true)} /><span><strong>Restore after compaction</strong><small>Re-add this source after each successful context compaction.</small></span></label>}
         <label>Instructions <span>{bytes(source.content).toLocaleString()} / {MAX_SOURCE_BYTES.toLocaleString()} bytes</span><textarea value={source.content} disabled={disabled} spellCheck={false} onChange={(event) => {
           if (bytes(event.target.value) <= MAX_SOURCE_BYTES && totalBytes - bytes(source.content) + bytes(event.target.value) <= MAX_TOTAL_BYTES) updateSource({ ...source, content: event.target.value }, false);
         }} onBlur={saveSource} /></label>

@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extension from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
 import { emptyMemoryState, isMemoryState, isNotebookNote, isReviewRecord, serverNoteId, serverReviewId, type ReviewRecord } from "../src/memory.ts";
@@ -186,11 +187,10 @@ test("manual and automatic compaction always use deterministic Continuity output
     message("current", "user", "Current request", "old-assistant"),
     message("suffix", "assistant", "Current response", "current"),
   ];
-  const event = (reason: string, customInstructions?: string) => ({
+  const event = (reason: string, customInstructions?: string, signal = new AbortController().signal) => ({
     branchEntries: branch,
     preparation: { firstKeptEntryId: "suffix", tokensBefore: 42_000, settings: { keepRecentTokens: 1 } },
-    reason, willRetry: false, customInstructions,
-    signal: new AbortController().signal,
+    reason, willRetry: false, customInstructions, signal,
   });
   const notices: string[] = [];
   const ctx: any = {
@@ -203,12 +203,47 @@ test("manual and automatic compaction always use deterministic Continuity output
     assert.equal(result.compaction.details.mode, "generic");
     assert.match(result.compaction.summary, /Deterministic Transcript Context/);
   }
-  await assert.rejects(compact(event("manual", "focus on decisions"), ctx), /configured Compaction Reviewer/);
+  assert.deepEqual(await compact(event("manual", undefined, AbortSignal.abort()), ctx), { cancel: true });
+  assert.deepEqual(notices, []);
+
+  assert.deepEqual(await compact(event("manual", "focus on decisions"), ctx), { cancel: true });
+  assert.deepEqual(notices, ["Compaction cancelled because Continuity could not produce deterministic output."]);
 
   await saveConfig({ version: 2, memoryEnabled: true, compactionReviewer: { model: "provider/reviewer" } });
   const fallback = await compact(event("manual"), ctx);
   assert.equal(fallback.compaction.details.mode, "generic");
   assert.equal(fallback.compaction.details.supplements.length, 0);
+});
+
+test("Continuity retained-token setting overrides a cloned Pi preparation", async () => {
+  await saveConfig({ version: 2, memoryEnabled: true, keepRecentTokens: 1_000 });
+  const app = runtime();
+  const compact = app.handlers.get("session_before_compact")![0];
+  const message = (id: string, role: string, text: string, parentId: string | null) => ({
+    id, parentId, type: "message", timestamp: Date.now(),
+    message: { role, content: [{ type: "text", text }], timestamp: Date.now() },
+  });
+  const branch = [
+    message("current", "user", "Current request", null),
+    message("suffix-1", "assistant", "x".repeat(20_000), "current"),
+    message("suffix-2", "assistant", "y".repeat(20_000), "suffix-1"),
+  ];
+  const preparation = {
+    firstKeptEntryId: "current",
+    tokensBefore: 42_000,
+    settings: { keepRecentTokens: 50_000 },
+  };
+  for (const reason of ["manual", "threshold"]) {
+    const result = await compact({
+      branchEntries: branch,
+      preparation,
+      reason,
+      willRetry: false,
+      signal: new AbortController().signal,
+    }, { modelRegistry: { find: () => undefined }, ui: { notify: () => {} } });
+    assert.equal(result.compaction.firstKeptEntryId, "suffix-2");
+    assert.equal(preparation.settings.keepRecentTokens, 50_000, "incoming Pi preparation remains unchanged");
+  }
 });
 
 test("over-threshold tool work compacts and resumes through public extension APIs", async () => {
@@ -218,7 +253,7 @@ test("over-threshold tool work compacts and resumes through public extension API
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    await saveConfig({ version: 2, memoryEnabled: false });
+    await saveConfig({ version: 2, memoryEnabled: false, keepRecentTokens: 50_000 });
     await writeFile(join(agentDir, "settings.json"), JSON.stringify({
       compaction: { enabled: true, reserveTokens: 30_000 },
     }));
@@ -239,12 +274,14 @@ test("over-threshold tool work compacts and resumes through public extension API
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const turnCtx = { ...ctx };
+    assert.notEqual(turnCtx, ctx);
     for (const handler of app.handlers.get("tool_execution_end") ?? [])
-      await handler({ toolCallId: "call-1", result: { terminate: false } }, ctx);
+      await handler({ toolCallId: "call-1", result: { terminate: false } }, turnCtx);
     for (const handler of app.handlers.get("turn_end") ?? []) await handler({
       message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }] },
       toolResults: [{ role: "toolResult", toolCallId: "call-1" }],
-    }, ctx);
+    }, turnCtx);
 
     assert.equal(compactCalls.length, 1, "custom reserveTokens threshold should trigger before Pi's default threshold");
     const duplicateAutoCompact = await app.handlers.get("session_before_compact")![0]({ reason: "threshold" }, ctx);
@@ -435,9 +472,35 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     const recall = app.tools.get("continuity_recall");
     assert.equal(recall.executionMode, "sequential");
     assert.match(recall.description, /historical evidence/i);
-    assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*text.*files.*touched/);
+    assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*project_sessions.*text.*files.*touched/);
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
+
+    const historical = SessionManager.create(cwd);
+    historical.appendMessage({ role: "user", content: "Historical project-session marker", timestamp: Date.now() });
+    historical.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Historical response" }],
+      api: "openai-completions",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const projectRecall = await recall.execute(
+      "project-recall",
+      { scope: "project_sessions", query: "project-session marker" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.match(projectRecall.content[0].text, /Historical project-session marker/);
+    assert.equal(projectRecall.details.effectiveScope, "project_sessions");
+    assert.equal(projectRecall.details.sessionsSearched, 1);
+    assert.equal(app.appended.length, 0);
+    assert.equal(app.customMessages.length, 0);
+
     await app.tools.get("continuity_update").execute(
       "plan",
       { action: "set_plan", goal: "Recall", todos: ["Recall history"] },
@@ -466,6 +529,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     assert.equal(getEntriesCalls, callsBefore, "all entries must not be read before boundary proof");
     assert.equal(app.appended.length, appendedBefore);
     assert.equal(app.customMessages.length, messagesBefore);
+
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

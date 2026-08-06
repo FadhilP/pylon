@@ -25,6 +25,7 @@ export type AgentPolicy = {
 
 export type SpawnHooks = {
   sessionStart?: { customType: string; content: string };
+  sessionCompact?: { customType: string; content: string };
   beforeAgentStart?: string;
 };
 
@@ -116,7 +117,9 @@ const validHooks = (value: any): value is SpawnHooks => value !== undefined
   && typeof value === "object" && !Array.isArray(value)
   && (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024))
   && (value.sessionStart === undefined || boundedText(value.sessionStart?.customType, 128)
-    && boundedText(value.sessionStart?.content, 300 * 1024));
+    && boundedText(value.sessionStart?.content, 300 * 1024))
+  && (value.sessionCompact === undefined || boundedText(value.sessionCompact?.customType, 128)
+    && boundedText(value.sessionCompact?.content, 300 * 1024));
 
 function validMarker(value: any): value is SpawnMarker {
   return value?.version === 1

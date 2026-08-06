@@ -13,6 +13,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
+import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
@@ -61,6 +62,8 @@ const LEFT_PANEL_WIDTH_KEY = "pylon-left-panel-width";
 const DEFAULT_LEFT_PANEL_WIDTH = 280;
 const RIGHT_PANEL_WIDTH_KEY = "pylon-right-panel-width";
 const DEFAULT_RIGHT_PANEL_WIDTH = 380;
+const DATABASE_PANEL_WIDTH_KEY = "pylon-database-panel-width";
+const DEFAULT_DATABASE_PANEL_WIDTH = 920;
 const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
 const DEFAULT_TERMINAL_HEIGHT = 280;
 const MAX_RETAINED_TERMINALS = 8;
@@ -90,6 +93,12 @@ function initialPanelWidth(): number {
   try { stored = Number(localStorage.getItem(RIGHT_PANEL_WIDTH_KEY)); }
   catch { /* Storage can be unavailable in hardened browser contexts. */ }
   return panelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_RIGHT_PANEL_WIDTH);
+}
+function initialDatabasePanelWidth(): number {
+  let stored = Number.NaN;
+  try { stored = Number(localStorage.getItem(DATABASE_PANEL_WIDTH_KEY)); }
+  catch { /* Storage can be unavailable in hardened browser contexts. */ }
+  return panelWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_DATABASE_PANEL_WIDTH);
 }
 function terminalHeight(value: number): number {
   return Math.round(Math.max(160, Math.min(window.innerHeight * .7, value)));
@@ -123,6 +132,7 @@ export function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
   const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
   const [rightPanelWidth, setRightPanelWidth] = useState(initialPanelWidth);
+  const [databasePanelWidth, setDatabasePanelWidth] = useState(initialDatabasePanelWidth);
   const [browserMirrorRequest, setBrowserMirrorRequest] = useState("");
   const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
@@ -539,13 +549,42 @@ export function App() {
       if (mobile) setSidebarOpen(false);
       return;
     }
+    const listedParentId = session.runningUnderParentSessionId;
+    const openParentActivity = async (parentId: string) => {
+      if (runtimeStore.getSnapshot().runtime?.sessionId !== parentId) await runtimeStore.switchSession(parentId);
+      const run = [...(runtimeStore.getSnapshot().runtime?.conversation.delegatedRuns ?? [])]
+        .reverse()
+        .find((candidate) => candidate.kind === "spawn_session" && candidate.threadId === session.id);
+      if (!run) {
+        try {
+          await runtimeStore.switchSession(session.id);
+          return;
+        } catch {
+          throw new Error("Spawned session activity is not available yet. Try again.");
+        }
+      }
+      setSelectedAgentId(run.id);
+      setRightPanel("agents");
+    };
     setSessionBusy(session.id);
-    setSessionTransition(true);
+    setSessionTransition(!listedParentId || live.runtime?.sessionId !== listedParentId);
     try {
-      await runtimeStore.switchSession(session.id);
+      if (listedParentId) {
+        await openParentActivity(listedParentId);
+      } else {
+        try {
+          await runtimeStore.switchSession(session.id);
+        } catch (cause) {
+          const parentId = cause instanceof Error
+            ? /currently running under its parent session \(([^)]+)\)/i.exec(cause.message)?.[1]
+            : undefined;
+          if (!parentId) throw cause;
+          await openParentActivity(parentId);
+        }
+      }
       if (mobile) setSidebarOpen(false);
     } catch (cause) {
-      reportError(cause, "Unable to switch session");
+      reportError(cause, "Unable to open session");
     } finally {
       setSessionBusy("");
       setSessionTransition(false);
@@ -1044,7 +1083,7 @@ export function App() {
         <div
           ref={workspaceRef}
           className={`workspace-layout ${rightPanel ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
-          style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}
+          style={{ "--inspector-width": `${rightPanel === "database" ? databasePanelWidth : rightPanelWidth}px` } as CSSProperties}
         >
           <ConversationPanel
             key={pendingSession
@@ -1100,10 +1139,12 @@ export function App() {
           {rightPanel && inspectorOverlay && <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />}
           {rightPanel && <PanelResizer
             container={workspaceRef}
-            width={rightPanelWidth}
+            width={rightPanel === "database" ? databasePanelWidth : rightPanelWidth}
             onCommit={(width) => {
-              setRightPanelWidth(width);
-              try { localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(width)); }
+              const database = rightPanel === "database";
+              if (database) setDatabasePanelWidth(width);
+              else setRightPanelWidth(width);
+              try { localStorage.setItem(database ? DATABASE_PANEL_WIDTH_KEY : RIGHT_PANEL_WIDTH_KEY, String(width)); }
               catch { /* Resizing still works for the current page. */ }
             }}
           />}
@@ -1246,6 +1287,7 @@ export function App() {
           settings.guardTimeoutSeconds,
           settings.clarifyTimeoutSeconds,
           expectedRevision,
+          settings.guardRules ?? DEFAULT_GUARD_RULES,
         )}
         onUpdateGlobalToolPolicy={(tool, mode, expectedRevision) => runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)}
       />}

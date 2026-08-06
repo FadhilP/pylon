@@ -1,3 +1,4 @@
+import type { GuardRuleOverrides } from "../guard-policy.ts";
 import type { DialogTimeoutSeconds, HookSettingsReadModel, PackageSettingsReadModel, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "./snapshots.ts";
 
 export const COMMAND_NAMES = [
@@ -124,6 +125,7 @@ export type WebCommand =
       verify: VerifyPolicyReadModel | { mode: "inherit" };
       timeline: "inherit" | "enabled" | "disabled";
       guard: "inherit" | "enabled" | "disabled";
+      guardRules: GuardRuleOverrides;
       workspace: WorkspacePolicyMode | "inherit";
       guardTimeoutSeconds: DialogTimeoutSeconds | "inherit";
       clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit";

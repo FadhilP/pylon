@@ -43,7 +43,7 @@ test("session_start shuts down the previous manager before replacing it", async 
       kind: "register",
       owner: "pi-heartbeat",
       managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
-      enabledTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+      enabledTools: ["heartbeat_start"],
     });
     const started = await tools.get("heartbeat_start").execute(
       "start",
@@ -71,7 +71,7 @@ test("session_start shuts down the previous manager before replacing it", async 
 });
 
 test("early targeted and list checks are rejected without conflicting context", async () => {
-  const { handlers, tools, ctx } = harness();
+  const { handlers, tools, ctx, events } = harness();
   await handlers.get("session_start")!({}, ctx);
   try {
     const started = await tools.get("heartbeat_start").execute(
@@ -85,6 +85,11 @@ test("early targeted and list checks are rejected without conflicting context", 
       ctx,
     );
     const id = started.details.id;
+    assert.deepEqual(events.filter((event) => event.name === "pylon:tool-policy").at(-1)?.value.enabledTools, [
+      "heartbeat_start",
+      "heartbeat_status",
+      "heartbeat_cancel",
+    ]);
     const injected = handlers.get("context")!({ messages: [] });
     assert.match(injected.messages.at(-1).content, /Do not call heartbeat_status yet/);
 
@@ -122,6 +127,10 @@ test("completed job remains in context until its output is fetched", async () =>
     }
     assert.match(injected.messages.at(-1).content, /completed/);
     assert.match(injected.messages.at(-1).content, /status available now/);
+    assert.deepEqual(events.filter((event) => event.name === "pylon:tool-policy").at(-1)?.value.enabledTools, [
+      "heartbeat_start",
+      "heartbeat_status",
+    ]);
     const lifecycle = events.filter((event) => event.name === "pi-heartbeat:job");
     assert.ok(lifecycle.length >= 2);
     assert.ok(lifecycle.every((event) => event.value.sessionId === ctx.sessionManager.getSessionId()));
@@ -134,6 +143,9 @@ test("completed job remains in context until its output is fetched", async () =>
       .get("heartbeat_status")
       .execute("status", { id: started.details.id });
     assert.match(status.content[0].text, /stdout tail:\ndone/);
+    assert.deepEqual(events.filter((event) => event.name === "pylon:tool-policy").at(-1)?.value.enabledTools, [
+      "heartbeat_start",
+    ]);
     assert.equal(handlers.get("context")!({ messages: [] }), undefined);
   } finally {
     await handlers.get("session_shutdown")!();

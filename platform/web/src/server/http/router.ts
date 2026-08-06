@@ -12,7 +12,7 @@ import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from ".
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
 import { applySecurityHeaders, httpError, MAX_JSON_BODY_BYTES, readJson, readJsonWithSize, requestAllowed, SessionStore, type BrowserSession, type SecurityOptions, validCsrf, validTabId } from "./security.ts";
-import { TerminalServer } from "./terminal.ts";
+import { TerminalServer, type TerminalSpawn } from "./terminal.ts";
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -25,6 +25,7 @@ const MAX_COMMAND_BODY_BYTES = 42 * 1024 * 1024;
 export interface ServerTransportOptions extends SecurityOptions {
   secureCookies?: boolean;
   dialogReconnectGraceMs?: number;
+  terminalSpawn?: TerminalSpawn;
 }
 
 /** HTTP/SSE adapter. It deliberately owns no Pi state beyond bounded projections. */
@@ -44,7 +45,7 @@ export class ServerTransport {
     this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
     this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
     this.unsubscribe = driver.subscribe((event) => this.onDriverEvent(event));
-    this.terminal = new TerminalServer(driver, this.sessions, options);
+    this.terminal = new TerminalServer(driver, this.sessions, options, options.terminalSpawn);
   }
 
   static async create(driver: PiDriver, options: ServerTransportOptions): Promise<ServerTransport> {
@@ -90,6 +91,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/hooks") return await this.hookSettings(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/stateql") return await this.stateqlSnapshot(request, response, url);
+      if (request.method === "POST" && url.pathname === "/api/v1/stateql/rows") return await this.stateqlRows(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-browser") return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
@@ -267,6 +269,30 @@ export class ServerTransport {
     if (!this.driver.stateqlSnapshot) throw httpError(409, "StateQL snapshot is unavailable");
     const result = await this.driver.stateqlSnapshot(historyLimit);
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading StateQL status");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
+  private async stateqlRows(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = await readJson(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw httpError(400, "invalid StateQL rows request");
+    const body = input as Record<string, unknown>;
+    if (typeof body.generation !== "number" || !Number.isSafeInteger(body.generation)
+      || body.generation !== this.journal.sessionGeneration) {
+      throw httpError(409, "stale session generation");
+    }
+    if (typeof body.handle !== "string" || !body.handle.trim() || body.handle.length > 200
+      || typeof body.offset !== "number" || !Number.isSafeInteger(body.offset) || body.offset < 0 || body.offset > 10_000
+      || typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) {
+      throw httpError(400, "invalid StateQL rows request");
+    }
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.stateqlRows) throw httpError(409, "StateQL rows are unavailable");
+    this.renew(tabId);
+    const result = await this.driver.stateqlRows(body.handle, body.offset, body.limit);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading StateQL rows");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }

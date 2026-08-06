@@ -270,6 +270,11 @@ export function activeOmissionMarker(
   return `[pi-sieve: ${toolName}; omitted ${omittedChars}/${sourceChars} chars; sieve_recall ${JSON.stringify(toolCallId)}]`;
 }
 
+/** A deliberately content-free recovery marker for Continuity's retained suffix. */
+export function continuityOmissionMarker(toolName: string, toolCallId: string, omittedChars: number) {
+  return `[pi-sieve: ${toolName}; ${omittedChars} chars omitted; sieve_recall ${JSON.stringify(toolCallId)}]`;
+}
+
 export function duplicateMarker(toolName: string, originalToolCallId: string, duplicateToolCallId: string | undefined, sourceChars: number) {
   return `[pi-sieve: duplicate ${toolName} (${sourceChars} chars); same as ${JSON.stringify(originalToolCallId)}${duplicateToolCallId ? `; sieve_recall ${JSON.stringify(duplicateToolCallId)}` : ""}]`;
 }
@@ -1465,6 +1470,193 @@ export function standardV2SieveMessages<T extends ContextMessage>(
   options: SieveOptions = {},
 ): StandardV2TransformResult<T> {
   return standardSieveMessages(messages, threshold, options, true);
+}
+
+export type ContinuityProjectionBoundary = { frozenToolCallIds: Set<string> };
+
+/**
+ * Finds the retained suffix owned by the latest active Continuity v3 compaction.
+ * The session branch, not Sieve state, is the authority so reload is deterministic.
+ */
+export function continuityProjectionBoundary(entries: readonly unknown[]): ContinuityProjectionBoundary | undefined {
+  let compactionIndex = -1;
+  let compaction: Record<string, unknown> | undefined;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index] as Record<string, unknown> | undefined;
+    if (entry?.type === "compaction") {
+      compactionIndex = index;
+      compaction = entry;
+      break;
+    }
+  }
+  if (compactionIndex < 0 || !compaction) return;
+  const details = jsonObject(compaction.details);
+  const firstKeptEntryId = compaction.firstKeptEntryId;
+  if (details?.type !== "pi-continuity-compaction" || details.version !== 3
+    || typeof firstKeptEntryId !== "string" || !firstKeptEntryId) return;
+  const firstKeptIndex = entries.findIndex((entry) => (entry as Record<string, unknown> | undefined)?.id === firstKeptEntryId);
+  if (firstKeptIndex < 0 || firstKeptIndex >= compactionIndex) return;
+  const retained = entries.slice(firstKeptIndex, compactionIndex);
+  const calls = new Map<string, Array<{ name: string; index: number }>>();
+  const results = new Map<string, Array<{ name: string; index: number }>>();
+  for (let index = 0; index < retained.length; index++) {
+    const message = (retained[index] as Record<string, unknown> | undefined)?.message as Record<string, unknown> | undefined;
+    if (message?.role === "assistant" && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        const call = jsonObject(block);
+        if (call?.type === "toolCall" && typeof call.id === "string" && call.id && typeof call.name === "string")
+          calls.set(call.id, [...(calls.get(call.id) ?? []), { name: call.name, index }]);
+      }
+    } else if (message?.role === "toolResult" && typeof message.toolCallId === "string" && message.toolCallId
+      && typeof message.toolName === "string") {
+      results.set(message.toolCallId, [...(results.get(message.toolCallId) ?? []), { name: message.toolName, index }]);
+    }
+  }
+  const frozenToolCallIds = new Set<string>();
+  for (const [id, matchingCalls] of calls) {
+    const matchingResults = results.get(id);
+    if (matchingCalls.length === 1 && matchingResults?.length === 1
+      && matchingResults[0].index > matchingCalls[0].index && matchingResults[0].name === matchingCalls[0].name)
+      frozenToolCallIds.add(id);
+  }
+  return { frozenToolCallIds };
+}
+
+type ContinuityCall = { id: string; name: string; messageIndex: number; batchIndex: number };
+type ContinuityBatch = { calls: ContinuityCall[]; valid: boolean };
+export type ContinuityTransformResult<T extends ContextMessage> = TransformResult<T> & {
+  preservedToolCallIds: Set<string>;
+};
+
+/**
+ * Projects only proven old Continuity pairs. `baselineMessages` lets all runtime
+ * modes apply this after their normal policy without touching raw input.
+ */
+export function continuitySieveMessages<T extends ContextMessage>(
+  messages: readonly T[],
+  frozenToolCallIds: ReadonlySet<string>,
+  baselineMessages: readonly T[] = messages,
+): ContinuityTransformResult<T> {
+  const stats = emptyTransformStats();
+  const empty = (): ContinuityTransformResult<T> => ({
+    messages: [...messages], stats, recoverableActiveResults: [], preservedToolCallIds: new Set(),
+  });
+  if (baselineMessages.length !== messages.length) return empty();
+  for (let index = 0; index < messages.length; index++) {
+    const raw = messages[index] as Record<string, unknown>;
+    const baseline = baselineMessages[index] as Record<string, unknown>;
+    if (raw.role !== baseline.role) return empty();
+    const rawMetadata = { ...raw }, baselineMetadata = { ...baseline };
+    delete rawMetadata.content;
+    delete baselineMetadata.content;
+    if (!isDeepStrictEqual(rawMetadata, baselineMetadata)) return empty();
+    if (raw.role !== "assistant") continue;
+    const callIdentity = (message: Record<string, unknown>) => Array.isArray(message.content)
+      ? message.content.flatMap((block) => {
+        const call = jsonObject(block);
+        return call?.type === "toolCall" ? [{ id: call.id, name: call.name }] : [];
+      })
+      : [];
+    if (!isDeepStrictEqual(callIdentity(raw), callIdentity(baseline))) return empty();
+  }
+
+  const calls: ContinuityCall[] = [];
+  const batches: ContinuityBatch[] = [];
+  const callCounts = new Map<string, number>();
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "assistant" || !Array.isArray(fields.content)) continue;
+    const batch: ContinuityBatch = { calls: [], valid: true };
+    for (const block of fields.content) {
+      const call = jsonObject(block);
+      if (call?.type !== "toolCall") continue;
+      if (typeof call.id !== "string" || !call.id || typeof call.name !== "string") {
+        batch.valid = false;
+        continue;
+      }
+      const tracked = { id: call.id, name: call.name, messageIndex, batchIndex: batches.length };
+      calls.push(tracked);
+      batch.calls.push(tracked);
+      callCounts.set(call.id, (callCounts.get(call.id) ?? 0) + 1);
+    }
+    if (batch.calls.length || !batch.valid) batches.push(batch);
+  }
+  const results = new Map<string, { fields: Record<string, unknown>; messageIndex: number }>();
+  const resultCounts = new Map<string, number>();
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const fields = messages[messageIndex] as Record<string, unknown>;
+    if (fields.role !== "toolResult" || typeof fields.toolCallId !== "string" || !fields.toolCallId) continue;
+    resultCounts.set(fields.toolCallId, (resultCounts.get(fields.toolCallId) ?? 0) + 1);
+    results.set(fields.toolCallId, { fields, messageIndex });
+  }
+  const completed = (call: ContinuityCall) => {
+    const result = results.get(call.id);
+    return callCounts.get(call.id) === 1 && resultCounts.get(call.id) === 1
+      && !!result && result.messageIndex > call.messageIndex && result.fields.toolName === call.name;
+  };
+  const batchComplete = (batch: ContinuityBatch) =>
+    batch.valid && batch.calls.length > 0 && batch.calls.every((call) => frozenToolCallIds.has(call.id) && completed(call));
+  let newestCompletedBatch = -1;
+  for (let index = 0; index < batches.length; index++)
+    if (batchComplete(batches[index])) newestCompletedBatch = index;
+
+  const output = [...baselineMessages];
+  for (let index = 0; index < messages.length; index++)
+    if (messages[index].role === "assistant") output[index] = messages[index];
+  const preservedToolCallIds = new Set<string>();
+  const preserve = (call: ContinuityCall) => {
+    const result = results.get(call.id);
+    if (completed(call) && result) output[result.messageIndex] = messages[result.messageIndex];
+    preservedToolCallIds.add(call.id);
+  };
+  for (let index = 0; index < batches.length; index++) {
+    const batch = batches[index];
+    if (!batch.calls.some((call) => frozenToolCallIds.has(call.id)) || batchComplete(batch) && index !== newestCompletedBatch) continue;
+    for (const call of batch.calls) preserve(call);
+  }
+  const recoverableActiveResults: RecoverableActiveResult[] = [];
+  for (const call of calls) {
+    if (!frozenToolCallIds.has(call.id) || call.batchIndex === newestCompletedBatch
+      || !batchComplete(batches[call.batchIndex]) || !completed(call)) continue;
+    const result = results.get(call.id)!;
+    const fields = result.fields;
+    const source = fields.isError === false ? sieveSource(fields as ContextMessage, false) : undefined;
+    const supported = call.name === READ_TOOL_NAME || source?.toolName === call.name;
+    const sourceChars = textOnlyContentLength(fields.content);
+    const sourceBlocks = textOnlyBlocks(fields.content);
+    if (!supported || !sourceChars || !sourceBlocks || sourceBlocks.length !== (fields.content as unknown[]).length) {
+      preserve(call);
+      continue;
+    }
+    if (sourceBlocks.length === 1
+      && sourceBlocks[0].text.startsWith(`[pi-sieve: ${call.name}; `)
+      && sourceBlocks[0].text.endsWith(`; sieve_recall ${JSON.stringify(call.id)}]`)) {
+      preserve(call);
+      continue;
+    }
+    const marker = continuityOmissionMarker(call.name, call.id, sourceChars);
+    const baselineLength = contentCharacters((output[result.messageIndex] as Record<string, unknown>).content);
+    if (marker.length >= sourceChars || marker.length >= baselineLength) {
+      preserve(call);
+      continue;
+    }
+    output[result.messageIndex] = replaceWithMarker(output[result.messageIndex], marker);
+    stats.scanned++;
+    stats.transformed++;
+    // Reuse the existing bounded-output classification to retain telemetry compatibility.
+    stats.transformedBy.budget++;
+    stats.omittedChars += baselineLength - marker.length;
+    stats.netCharsSaved += baselineLength - marker.length;
+    const usage = stats.byTool[call.name] ?? { scanned: 0, transformed: 0, sourceChars: 0, retainedChars: 0, netCharsSaved: 0 };
+    usage.scanned++;
+    usage.transformed++;
+    usage.sourceChars += baselineLength;
+    usage.retainedChars += marker.length;
+    usage.netCharsSaved += baselineLength - marker.length;
+    stats.byTool[call.name] = usage;
+    recoverableActiveResults.push({ toolCallId: call.id, toolName: call.name, isError: false });
+  }
+  return { messages: output, stats, recoverableActiveResults, preservedToolCallIds };
 }
 
 function cloneProjectionValue<T>(value: T): T {

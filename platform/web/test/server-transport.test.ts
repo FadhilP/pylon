@@ -77,6 +77,7 @@ class FakeDriver implements PiDriver {
   newSessionParent?: string;
   heliosRequests: HeliosBrowserInput[] = [];
   stateqlHistoryLimits: number[] = [];
+  stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   deferDialog = false;
   private pendingDialog?: DriverEvent;
@@ -127,6 +128,22 @@ class FakeDriver implements PiDriver {
       recent_results: [],
       recent_operations: [],
       history: [],
+    });
+  }
+  stateqlRows(handle: string, offset: number, limit: number) {
+    this.stateqlRowsRequests.push({ handle, offset, limit });
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      actor_id: this.current.sessionId,
+      handle,
+      offset,
+      limit,
+      rows: [{ id: 1 }],
+      returned: 1,
+      total: 1,
+      truncated: false,
+      next_offset: null,
     });
   }
   prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -307,9 +324,34 @@ test("terminal upgrade rejects unauthenticated and stale sessions before spawnin
 
 test("terminals stay attached per session until that session deactivates", { timeout: 15_000 }, async () => {
   const driver = new FakeDriver();
-  const running = await startPylonServer({ port: 0, development: false, driver });
-  const port = (running.server.address() as AddressInfo).port;
+  const terminals: Array<{ killed: boolean }> = [];
+  const terminalSpawn = () => {
+    const terminal = {
+      pid: terminals.length + 1,
+      cols: 80,
+      rows: 24,
+      process: "test-shell",
+      handleFlowControl: false,
+      killed: false,
+      onData: () => ({ dispose() {} }),
+      onExit: () => ({ dispose() {} }),
+      resize() {},
+      clear() {},
+      write() {},
+      kill() { terminal.killed = true; },
+      pause() {},
+      resume() {},
+    };
+    terminals.push(terminal);
+    return terminal;
+  };
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], terminalSpawn });
+  server.on("upgrade", transport.handleUpgrade);
   const tab = "terminal-retention-tab";
   let first: WebSocket | undefined;
   let second: WebSocket | undefined;
@@ -336,6 +378,7 @@ test("terminals stay attached per session until that session deactivates", { tim
     second = await connect(replacement.sessionGeneration, cookie, csrf);
     assert.equal(first.readyState, WebSocket.OPEN);
     assert.equal(second.readyState, WebSocket.OPEN);
+    assert.equal(terminals.length, 2);
     await driver.switchSession({ sessionId: "session-1" });
     assert.equal(first.readyState, WebSocket.OPEN);
     assert.equal(second.readyState, WebSocket.OPEN);
@@ -343,12 +386,17 @@ test("terminals stay attached per session until that session deactivates", { tim
     const firstClosed = new Promise<void>((resolve) => first!.once("close", () => resolve()));
     driver.emitStatus("session-1", "sleeping");
     await firstClosed;
+    assert.equal(terminals[0].killed, true);
+    assert.equal(terminals[1].killed, false);
     assert.equal(second.readyState, WebSocket.OPEN);
   } finally {
     first?.close();
     second?.close();
-    await running.close();
+    server.off("upgrade", transport.handleUpgrade);
+    transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+  assert.equal(terminals[1].killed, true);
 });
 
 test("server startup disposes a driver that fails to initialize", async () => {
@@ -579,6 +627,16 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.deepEqual(driver.stateqlHistoryLimits, [25]);
     assert.equal((await fetch(`${origin}/api/v1/stateql?generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
     assert.equal((await fetch(`${origin}/api/v1/stateql?generation=1&historyLimit=101`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 400);
+    const rowsInput = { generation: 1, handle: "result-1", offset: 0, limit: 25 };
+    const rows = await fetch(`${origin}/api/v1/stateql/rows`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(rowsInput) });
+    assert.equal(rows.status, 200);
+    assert.equal(rows.headers.get("cache-control"), "no-store");
+    assert.equal((await body(rows)).handle, "result-1");
+    assert.deepEqual(driver.stateqlRowsRequests, [{ handle: "result-1", offset: 0, limit: 25 }]);
+    assert.equal((await fetch(`${origin}/api/v1/stateql/rows`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ ...rowsInput, generation: 2 }) })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/stateql/rows`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ ...rowsInput, limit: 101 }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/stateql/rows`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ ...rowsInput, handle: "   " }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/stateql/rows`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify(rowsInput) })).status, 403);
     const archives = await fetch(`${origin}/api/v1/archives`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(archives.status, 200);
     assert.deepEqual((await body(archives)).projects, []);

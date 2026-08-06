@@ -16,7 +16,7 @@ Tools: `heartbeat_start`, `heartbeat_status`, and `heartbeat_cancel`.
 
 User command: `/heartbeat [list|status ID|cancel ID]`.
 
-`heartbeat_start` starts up to four long shell jobs and returns an ID immediately. It requires concrete independent work while waiting; otherwise use normal `bash`. Running-job status checks must be more than 30 seconds apart.
+`heartbeat_start` starts up to four long shell jobs and returns an ID immediately. It requires concrete independent work while waiting; otherwise use normal `bash`. Pylon exposes `heartbeat_status` only while a job is active or has an unread result, and exposes `heartbeat_cancel` only while a job is active. Accepted targeted status checks include a small current stdout/stderr snapshot; snapshots may repeat or omit earlier output. List status remains metadata-only, and running-job checks must be more than 30 seconds apart.
 
 Optional arguments include `todoId` and `purpose` (`verification`, `build`, or `other`). Use `purpose: "verification"` for long declared project checks while independent work remains. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity updates explicitly linked todos.
 

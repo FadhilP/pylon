@@ -3,6 +3,8 @@ export function loginCommandProvider(value: string): string | undefined | null {
   return match ? match[1]?.trim() || undefined : null;
 }
 
+export const WORKSPACE_FILE_DRAG_TYPE = "application/x-pylon-workspace-file";
+
 export interface FileMention {
   start: number;
   end: number;
@@ -21,14 +23,35 @@ export function fileMentionAtCaret(value: string, caret: number): FileMention | 
   };
 }
 
+function fileMention(path: string): string {
+  return path.includes(" ") ? `@"${path}"` : `@${path}`;
+}
+
 export function replaceFileMention(
   value: string,
   mention: FileMention,
   path: string,
 ): { value: string; caret: number } {
-  const replacement = path.includes(" ") ? `@"${path}"` : `@${path}`;
+  const replacement = fileMention(path);
   const next = `${value.slice(0, mention.start)}${replacement}${value.slice(mention.end)}`;
   return { value: next, caret: mention.start + replacement.length };
+}
+
+export function insertFileMention(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  path: string,
+): { value: string; caret: number } {
+  const before = value.slice(0, selectionStart);
+  const after = value.slice(selectionEnd);
+  const prefix = before && !/\s$/.test(before) ? " " : "";
+  const suffix = after && !/^\s/.test(after) ? " " : "";
+  const replacement = fileMention(path);
+  return {
+    value: `${before}${prefix}${replacement}${suffix}${after}`,
+    caret: before.length + prefix.length + replacement.length,
+  };
 }
 
 export function isNearTranscriptBottom(

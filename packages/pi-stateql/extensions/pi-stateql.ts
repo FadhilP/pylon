@@ -59,7 +59,7 @@ interface StateQLPasswordTarget {
 
 interface StateQLCredentialHost {
   requestStateQLCredential(request: CredentialRequest): Promise<string | undefined>;
-  requestStateQLPassword?(request: CredentialRequest, target: StateQLPasswordTarget): Promise<string | undefined>;
+  requestStateQLPassword?(request: CredentialRequest, target: StateQLPasswordTarget, options?: { timeoutMs: number }): Promise<string | undefined>;
   invalidateStateQLPassword?(request: CredentialRequest, target: StateQLPasswordTarget): void;
 }
 
@@ -77,6 +77,23 @@ interface SnapshotRequest {
   signal?: AbortSignal;
   claim(): boolean;
   respond(value: Promise<StateQLSnapshot>): void;
+}
+
+interface RowsRequest {
+  version: 1;
+  sessionId: string;
+  handle: string;
+  offset: number;
+  limit: number;
+  signal?: AbortSignal;
+  claim(): boolean;
+  respond(value: Promise<unknown>): void;
+}
+
+function abortSignal(value: unknown): value is AbortSignal | undefined {
+  return value === undefined || Boolean(value) && typeof value === "object"
+    && typeof (value as AbortSignal).aborted === "boolean"
+    && typeof (value as AbortSignal).addEventListener === "function";
 }
 
 const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInput)[]> = {
@@ -168,6 +185,7 @@ interface BrokeredTarget {
 
 interface RuntimeBrokeredTarget extends BrokeredTarget {
   actorId: string;
+  passwordTimeoutMs: number;
   stateqlSessionId?: string;
   request?: CredentialRequest;
 }
@@ -305,7 +323,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
               || target.stateqlSessionId && target.stateqlSessionId !== request.session.id) return undefined;
             target.stateqlSessionId ??= request.session.id;
             target.request = { ...request, signal: undefined };
-            const password = await activeCredentialHost?.requestStateQLPassword?.(request, target.prompt);
+            const password = await activeCredentialHost?.requestStateQLPassword?.(request, target.prompt, { timeoutMs: target.passwordTimeoutMs });
             if (password === undefined) return undefined;
             const source = new URL(target.source);
             source.password = encodeURIComponent(password);
@@ -346,6 +364,28 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(exclusive(() => {
       if (request.signal?.aborted) throw new Error("StateQL snapshot request cancelled");
       return current(request.sessionId).stateql.snapshot({ historyLimit });
+    }));
+  });
+
+  const disposeRows = pi.events.on("pylon:stateql-rows-request", (value: unknown) => {
+    const request = value && typeof value === "object" ? value as Partial<RowsRequest> : undefined;
+    // Validate everything before claiming so malformed requests remain available to another owner.
+    if (request?.version !== 1 || typeof request.sessionId !== "string" || request.sessionId !== runtime?.actorId
+      || typeof request.handle !== "string" || !request.handle.trim() || request.handle.length > 200
+      || typeof request.offset !== "number" || !Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > 10_000
+      || typeof request.limit !== "number" || !Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100
+      || typeof request.claim !== "function" || typeof request.respond !== "function" || !abortSignal(request.signal)) return;
+    if (!request.claim()) return;
+    request.respond(exclusive(async () => {
+      if (request.signal?.aborted) throw new Error("StateQL rows request cancelled");
+      const response = await current(request.sessionId).stateql.executeCommand({
+        command: "rows",
+        handle: request.handle,
+        offset: request.offset,
+        limit: request.limit,
+      } as BatchCommand);
+      if (!response.ok) throw safeFailure(response);
+      return response.data;
     }));
   });
 
@@ -393,6 +433,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-stateql" });
     disposePolicy();
     disposeSnapshot();
+    disposeRows();
     disposeHealth();
     await exclusive(() => {
       runtime?.stateql.close();
@@ -423,15 +464,15 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         ? brokeredTarget(command.target)
         : undefined;
       const insecureBrokeredConnect = Boolean(target && insecureTls(input.target));
+      const passwordTimeoutMs = approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+        ? approvalTiming.timeoutSeconds * 1_000
+        : 0;
       const requiresConfirmation = CONFIRMED_COMMANDS.has(command.command)
         && (!target || insecureBrokeredConnect);
       if (requiresConfirmation) {
         if (!ctx.hasUI) throw new Error(`${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
-        const timeout = approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
-          ? approvalTiming.timeoutSeconds * 1_000
-          : 0;
-        if (!await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), { timeout })) {
+        if (!await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), { timeout: passwordTimeoutMs })) {
           return { content: [{ type: "text" as const, text: "User declined the StateQL operation; nothing was executed." }], details: { command: input.command, declined: true } };
         }
       }
@@ -441,7 +482,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         reference = brokeredReference();
         const { target: _target, ...withoutTarget } = command;
         executionCommand = { ...withoutTarget, secret_env: reference } as BatchCommand & StateQLToolInput;
-        brokeredTargets.set(reference, { ...target, actorId: id });
+        brokeredTargets.set(reference, { ...target, actorId: id, passwordTimeoutMs });
       }
       onUpdate?.({ content: [{ type: "text" as const, text: `Running StateQL ${input.command}...` }], details: { command: input.command } });
       if (ctx.hasUI) ctx.ui.setStatus?.("pi-stateql", `database: ${input.command}`);

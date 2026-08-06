@@ -174,6 +174,32 @@ test("adapter rejects unsafe inputs and malformed or oversized output", async ()
   await assert.rejects(PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }), { maxActionSnapshotLines: 1.5 }), /integer/);
 });
 
+test("adapter safely identifies missing browser stderr", async () => {
+  const missing = await PlaywrightCli.create(async () => ({
+    code: 1,
+    stdout: "",
+    stderr: 'C:\\private\\session.js:169\nError: Daemon pid=123: exited\nError: Browser "firefox" is not installed. Run `playwright-cli install-browser firefox` to install\n    at C:\\private\\secret.js:1',
+    killed: false,
+  }));
+  await assert.rejects(missing.run(SESSION, { kind: "open", profileDirectory: missing.directory, headed: false }), (error: any) => {
+    assert.equal(error.category, "command-failed");
+    assert.equal(error.message, "Playwright browser is not installed; run the matching `playwright-cli install-browser` setup command");
+    assert.doesNotMatch(error.message, /private|secret|pid=123/i);
+    return true;
+  });
+  await missing.dispose();
+
+  for (const stderr of ["", "Error: launch failed for token=secret-value", 'Browser "firefox" may not be installed', 'Error: Browser "firefox" is not installed. Run `playwright-cli install-browser chrome` to install']) {
+    const unknown = await PlaywrightCli.create(async () => ({ code: 1, stdout: "", stderr, killed: false }));
+    await assert.rejects(unknown.run(SESSION, { kind: "tab-list" }), (error: any) => error.message === "Playwright CLI command failed");
+    await unknown.dispose();
+  }
+
+  const oversized = await PlaywrightCli.create(async () => ({ code: 1, stdout: "", stderr: "x".repeat(17 * 1024), killed: false }));
+  await assert.rejects(oversized.run(SESSION, { kind: "tab-list" }), /16KB limit/);
+  await oversized.dispose();
+});
+
 test("adapter classifies only the pinned missing-session error", async () => {
   const missing = await PlaywrightCli.create(async () => ({ code: 1, stdout: JSON.stringify({ isError: true, error: `The browser '${SESSION}' is not open, please run open first` }), stderr: "", killed: false }));
   await assert.rejects(missing.run(SESSION, { kind: "reload" }), (error: any) => error.category === "session-missing");

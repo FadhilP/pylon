@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { copyFile, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
@@ -384,6 +384,66 @@ test("session switching restores live delegated-agent metadata from the backgrou
   }
 });
 
+test("running spawned sessions route through their parent until the child turn ends", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-running-spawn-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const coordinator = new RuntimeCoordinator({ sleepAfterMs: 60_000, viewOnlySleepAfterMs: 60_000 });
+
+  try {
+    const parent = await coordinator.start({ cwd, agentDir, repositoryRoot: root });
+    const parentSlot = (coordinator as any).slots.get(parent.sessionId);
+    const parentPath = parentSlot.driver.runtimeDetails().sessionPath as string;
+    const child = SessionManager.create(cwd, dirname(parentPath), { parentSession: parentPath });
+    child.appendCustomEntry("pi-spawn-session", {
+      version: 1,
+      ownerSessionId: parent.sessionId,
+      ownerSessionFile: parentPath,
+      createdAt: new Date().toISOString(),
+    });
+    persistSession(child, "Running spawned child");
+    const runId = "spawn-run-1";
+    const marker = { version: 1, kind: "session", id: child.getSessionId(), path: child.getSessionFile(), cwd };
+    const session = parentSlot.driver.runtime.session;
+    session._emit({
+      type: "tool_execution_start", toolCallId: "spawn-session", toolName: "spawn_session",
+      args: { action: "create", prompt: "Inspect the child" },
+    });
+    session._emit({
+      type: "tool_execution_update", toolCallId: "spawn-session", toolName: "spawn_session",
+      args: { action: "create", prompt: "Inspect the child" },
+      partialResult: {
+        content: [{ type: "text", text: "Session is working" }],
+        details: { piSpawn: marker, runId, state: "running", startedAt: new Date().toISOString() },
+      },
+    });
+
+    await waitFor(() => (coordinator as any).externalSpawnRuns.has(child.getSessionId()));
+    const running = await coordinator.listSessions();
+    const summary = running.activeSessions.find((item) => item.id === child.getSessionId());
+    assert.equal(summary?.runningUnderParentSessionId, parent.sessionId);
+    assert.equal(summary?.runtimeState, "running");
+    await assert.rejects(coordinator.switchSession({ sessionId: child.getSessionId() }), /running under its parent session/);
+
+    session._emit({
+      type: "tool_execution_end", toolCallId: "spawn-session", toolName: "spawn_session", isError: false,
+      result: {
+        content: [{ type: "text", text: "Session completed" }],
+        details: { piSpawn: marker, runId, status: "completed" },
+      },
+    });
+    await waitFor(() => !(coordinator as any).externalSpawnRuns.has(child.getSessionId()));
+    const completed = await coordinator.listSessions();
+    assert.equal(completed.projects.flatMap((project) => project.sessions)
+      .find((item) => item.id === child.getSessionId())?.runningUnderParentSessionId, undefined);
+    assert.equal((await coordinator.switchSession({ sessionId: child.getSessionId() })).sessionId, child.getSessionId());
+  } finally {
+    await coordinator.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("memory mutations forward scoped IDs and revisions, and reject changed generations", async () => {
   const coordinator = new RuntimeCoordinator();
   try {
@@ -650,8 +710,16 @@ test("queued prompts stay ordered and continue after queued control failures", a
     driver: {
       runtimeState: () => state,
       runtimeDetails: () => ({ workStartedAt: state === "running" ? "2026-07-30T10:00:00.000Z" : undefined }),
-      prompt: async (input: any) => { prompted.push(input.message); return { commandId: input.commandId, sessionGeneration: 7, accepted: true }; },
-      steer: async (input: any) => { steered.push(input.message); return { commandId: input.commandId, sessionGeneration: 7, accepted: true }; },
+      prompt: async (input: any) => {
+        prompted.push(input.message);
+        internal.onSlotEvent(slot, { type: "session.event", payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } } });
+        return { commandId: input.commandId, sessionGeneration: 7, accepted: true };
+      },
+      steer: async (input: any) => {
+        steered.push(input.message);
+        internal.onSlotEvent(slot, { type: "session.event", payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } } });
+        return { commandId: input.commandId, sessionGeneration: 7, accepted: true };
+      },
       setSessionControls: async () => { throw new Error("model unavailable"); },
     },
   };
@@ -716,6 +784,7 @@ test("multiple queued prompts advance after streaming settles", async () => {
         prompted.push(input.message);
         state = "running";
         workStartedAt = `turn-${prompted.length}`;
+        internal.onSlotEvent(slot, { type: "session.event", payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } } });
         return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
       },
     },
@@ -769,6 +838,7 @@ test("queue pump retries only a transient busy prompt rejection", async () => {
       runtimeDetails: () => ({ workStartedAt: undefined }),
       prompt: async (input: any) => {
         if (++attempts === 1) throw new Error("Agent is already processing. Specify streamingBehavior to queue the message.");
+        internal.onSlotEvent(slot, { type: "session.event", payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } } });
         return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
       },
     },
@@ -780,6 +850,170 @@ test("queue pump retries only a transient busy prompt rejection", async () => {
   await coordinator.queuePrompt({ message: "retry me", commandId: "command-retry", expectedGeneration: 1 });
   await waitFor(() => attempts === 2);
   assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
+test("accepted queued prompts remain snapshot-visible until their user message materializes", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "idle",
+    lastWorkStartedAt: undefined,
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    displayPendingPrompts: [] as any[],
+    driver: {
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+      canSleep: () => true,
+      prompt: async (input: any) => ({ commandId: input.commandId, sessionGeneration: 4, accepted: true }),
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+
+  await coordinator.queuePrompt({ message: "keep me visible", commandId: "command-visible", expectedGeneration: 1 });
+
+  assert.equal(slot.queuedPrompts.length, 0);
+  assert.equal(slot.displayPendingPrompts.length, 1);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => [item.commandId, item.state]), [["command-visible", "delivering"]]);
+  assert.equal(internal.queueReadModel(slot).followUp, 0);
+  const replacement = internal.translateSnapshot({
+    conversation: { queue: { steering: 0, followUp: 0 } },
+    sessionControls: {},
+  }, slot);
+  assert.deepEqual(replacement.conversation.queue.items.map((item: any) => item.commandId), ["command-visible"]);
+
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    payload: { type: "message_start", clientMessageId: "another-command", message: { role: "user" } },
+  });
+  assert.equal(slot.displayPendingPrompts.length, 1);
+
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    payload: { type: "message_start", clientMessageId: "command-visible", message: { role: "user" } },
+  });
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+  assert.equal(internal.slotCanSleep(slot), true);
+});
+
+test("steer deliveries remain visible and failures restore only prompts that did not materialize", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let behavior: "accept" | "reject" | "materialize-reject" = "accept";
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "running",
+    lastWorkStartedAt: "turn",
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    displayPendingPrompts: [] as any[],
+    driver: {
+      runtimeState: () => "running",
+      runtimeDetails: () => ({ workStartedAt: "turn" }),
+      steer: async (input: any) => {
+        if (behavior === "materialize-reject") internal.onSlotEvent(slot, {
+          type: "session.event",
+          payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } },
+        });
+        if (behavior !== "accept") throw new Error("steer failed");
+        return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
+      },
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+
+  await coordinator.queuePrompt({ message: "accepted steer", commandId: "command-accepted", expectedGeneration: 1 });
+  let queued = internal.queueReadModel(slot).items[0];
+  await coordinator.steerQueuedPrompt({ queueId: queued.id, expectedGeneration: 1 });
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => [item.commandId, item.state]), [["command-accepted", "delivering"]]);
+  assert.equal(internal.queueReadModel(slot).followUp, 0);
+  await assert.rejects(
+    coordinator.queuePrompt({ message: "duplicate", commandId: "command-accepted", expectedGeneration: 1 }),
+    /already queued/,
+  );
+  await coordinator.queuePrompt({ message: "later", commandId: "command-later", expectedGeneration: 1 });
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => item.commandId), ["command-accepted", "command-later"]);
+  const later = internal.queueReadModel(slot).items[1];
+  await coordinator.restoreQueuedPrompt({ queueId: later.id, expectedGeneration: 1 });
+  internal.onSlotEvent(slot, {
+    type: "session.event",
+    payload: { type: "message_start", clientMessageId: "command-accepted", message: { role: "user" } },
+  });
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+
+  behavior = "reject";
+  await coordinator.queuePrompt({ message: "restore me", commandId: "command-restore", expectedGeneration: 1 });
+  queued = internal.queueReadModel(slot).items[0];
+  await assert.rejects(coordinator.steerQueuedPrompt({ queueId: queued.id, expectedGeneration: 1 }), /steer failed/);
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => [item.commandId, item.state]), [["command-restore", "queued"]]);
+  assert.equal(slot.displayPendingPrompts.length, 0);
+
+  await coordinator.restoreQueuedPrompt({ queueId: queued.id, expectedGeneration: 1 });
+  await coordinator.queuePrompt({ message: "already shown", commandId: "command-shown", expectedGeneration: 1 });
+  queued = internal.queueReadModel(slot).items[0];
+  behavior = "materialize-reject";
+  await assert.rejects(coordinator.steerQueuedPrompt({ queueId: queued.id, expectedGeneration: 1 }), /steer failed/);
+  assert.deepEqual(internal.queueReadModel(slot).items, []);
+  assert.equal(slot.displayPendingPrompts.length, 0);
+});
+
+test("runtime replacement requeues an in-flight delivery and ignores its stale resolution", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let resolveSteer!: (value: any) => void;
+  const slot = {
+    id: "session",
+    innerGeneration: 4,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    lastState: "running",
+    lastWorkStartedAt: "turn",
+    receivedInput: false,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [] as any[],
+    displayPendingPrompts: [] as any[],
+    suppressEvents: true,
+    driver: {
+      runtimeState: () => "running",
+      runtimeDetails: () => ({ workStartedAt: "turn" }),
+      steer: () => new Promise((resolve) => { resolveSteer = resolve; }),
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = slot.id;
+  internal.slots.set(slot.id, slot);
+
+  await coordinator.queuePrompt({ message: "retry after replacement", commandId: "command-replaced", expectedGeneration: 1 });
+  const queued = internal.queueReadModel(slot).items[0];
+  const steering = coordinator.steerQueuedPrompt({ queueId: queued.id, expectedGeneration: 1 });
+  assert.equal(internal.queueReadModel(slot).items[0].state, "delivering");
+
+  internal.onSlotEvent(slot, {
+    type: "session.replaced",
+    sessionId: slot.id,
+    sessionGeneration: 5,
+    runtime: {},
+  });
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => [item.commandId, item.state]), [["command-replaced", "queued"]]);
+  assert.equal(slot.displayPendingPrompts.length, 0);
+
+  resolveSteer({ commandId: "command-replaced", sessionGeneration: 4, accepted: true });
+  await steering;
+  assert.deepEqual(internal.queueReadModel(slot).items.map((item: any) => [item.commandId, item.state]), [["command-replaced", "queued"]]);
+  if ((slot as any).queueFlushTimer) clearTimeout((slot as any).queueFlushTimer);
 });
 
 test("queued follow-up remains visible while a turn timer is active", async () => {
@@ -804,7 +1038,11 @@ test("queued follow-up remains visible while a turn timer is active", async () =
     driver: {
       runtimeState: () => "idle",
       runtimeDetails: () => ({ workStartedAt }),
-      prompt: async (input: any) => { prompted.push(input.message); return { commandId: input.commandId, sessionGeneration: 4, accepted: true }; },
+      prompt: async (input: any) => {
+        prompted.push(input.message);
+        internal.onSlotEvent(slot, { type: "session.event", payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } } });
+        return { commandId: input.commandId, sessionGeneration: 4, accepted: true };
+      },
     },
   };
   internal.generation = 1;

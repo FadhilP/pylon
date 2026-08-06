@@ -6,5 +6,6 @@ test("tails bounded", () => {
   const tail = new TailBuffer(10);
   tail.append("abcdefghijklmnop");
   assert.ok(Buffer.byteLength(tail.toString()) <= 10);
+  assert.equal(tail.truncated, true);
   assert.equal(bounded("a\nb\nc", 100, 2).truncated, true);
 });

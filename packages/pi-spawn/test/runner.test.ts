@@ -62,6 +62,64 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
   assert.equal(run.error, undefined);
 });
 
+test("runner waits for a Continuity turn triggered after asynchronous compaction", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'toolUse',usage:{}}});
+    emit({type:'compaction_start',reason:'manual'});
+    emit({type:'agent_settled'});
+    setTimeout(()=>{
+      emit({type:'compaction_end',reason:'manual',result:{},aborted:false,willRetry:false});
+      emit({type:'agent_start'});
+      emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continued'}],stopReason:'stop',usage:{}}});
+      emit({type:'agent_settled'});
+    },25);
+    setInterval(()=>{},1000);
+  }`);
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+  assert.equal(run.error, undefined);
+  assert.equal(run.text, "continued");
+  assert.equal(run.turns, 2);
+});
+
+test("runner recognizes continuation across alternate compaction event ordering and retries", async () => {
+  for (const sequence of [
+    `emit({type:'compaction_start',reason:'manual'});
+     emit({type:'compaction_end',reason:'manual',result:{},aborted:false,willRetry:false});
+     emit({type:'agent_settled'});`,
+    `emit({type:'compaction_start',reason:'manual'});
+     emit({type:'agent_settled'});
+     emit({type:'compaction_end',reason:'manual',aborted:false,willRetry:true,errorMessage:'retrying'});`,
+  ]) {
+    const child = await fake(`if(command.type==='prompt'){
+      emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'toolUse',usage:{}}});
+      ${sequence}
+      setTimeout(()=>{
+        emit({type:'agent_start'});
+        emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continued'}],stopReason:'stop',usage:{}}});
+        emit({type:'agent_settled'});
+      },25);
+      setInterval(()=>{},1000);
+    }`);
+    const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+    assert.equal(run.error, undefined);
+    assert.equal(run.text, "continued");
+  }
+});
+
+test("runner eventually settles when successful compaction produces no continuation", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'toolUse',usage:{}}});
+    emit({type:'compaction_start',reason:'manual'});
+    emit({type:'agent_settled'});
+    emit({type:'compaction_end',reason:'manual',result:{},aborted:false,willRetry:false});
+    setInterval(()=>{},1000);
+  }`);
+  const started = Date.now();
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation, timeoutMs: 3_000 });
+  assert.equal(run.error, "Spawned thread returned no assistant text.");
+  assert.ok(Date.now() - started >= 900);
+});
+
 test("runner preserves every correlated tool event in one invocation", async () => {
   const child = await fake(`if(command.type==='prompt'){
     for(let index=0;index<125;index++){
@@ -115,8 +173,117 @@ test("runner reports rejected commands and accepts protocol lines larger than 1 
   assert.ok(Buffer.byteLength(run.text) <= 50 * 1024);
 });
 
-test("timeout configuration is bounded", () => {
-  assert.equal(spawnTimeoutMs(undefined), 15 * 60 * 1000);
+test("runner forwards correlated RPC UI dialogs to its host", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({id:command.id,type:'response',command:'prompt',success:true});
+    emit({type:'extension_ui_request',id:'dialog-1',method:'select',title:'Choose',options:['A','B'],timeout:5000});
+  }
+  if(command.type==='extension_ui_response'){
+    const text=command.id+':'+command.value;
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  let aborted = false;
+  const run = await runSpawn([], {
+    cwd: child.dir,
+    prompt: "x",
+    invocation: child.invocation,
+    onUiRequest: async (request, signal) => {
+      assert.deepEqual(request, { id: "dialog-1", method: "select", title: "Choose", options: ["A", "B"], timeout: 5000 });
+      signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      return { value: "B" };
+    },
+  });
+  assert.equal(run.error, undefined);
+  assert.equal(run.text, "dialog-1:B");
+  assert.equal(aborted, true);
+});
+
+test("runner fails unhandled and malformed RPC UI dialogs closed", async () => {
+  for (const request of [
+    `{type:'extension_ui_request',id:'confirm-1',method:'confirm',title:'Guard',message:'Proceed?'}`,
+    `{type:'extension_ui_request',id:'select-1',method:'select',title:'Choose',options:'invalid'}`,
+  ]) {
+    const child = await fake(`if(command.type==='prompt'){
+      emit({id:command.id,type:'response',command:'prompt',success:true});emit(${request});
+    }
+    if(command.type==='extension_ui_response'){
+      const text=JSON.stringify(command);
+      emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],stopReason:'stop',usage:{}}});
+      emit({type:'agent_settled'});setInterval(()=>{},1000);
+    }`);
+    const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+    assert.equal(run.error, undefined);
+    const response = JSON.parse(run.text);
+    assert.equal(response.type, "extension_ui_response");
+    if (response.id === "confirm-1") assert.equal(response.confirmed, false);
+    else assert.equal(response.cancelled, true);
+  }
+});
+
+test("runner denies failed UI handlers once and ignores duplicate request IDs", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({id:command.id,type:'response',command:'prompt',success:true});
+    const request={type:'extension_ui_request',id:'guard-1',method:'confirm',title:'Guard',message:'Proceed?'};
+    emit(request);emit(request);
+  }
+  if(command.type==='extension_ui_response'){
+    const text=JSON.stringify(command);
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  let calls = 0;
+  const run = await runSpawn([], {
+    cwd: child.dir,
+    prompt: "x",
+    invocation: child.invocation,
+    onUiRequest: (() => { calls++; throw new Error("UI unavailable"); }) as any,
+  });
+  assert.equal(calls, 1);
+  assert.equal(JSON.parse(run.text).confirmed, false);
+  assert.equal(run.error, undefined);
+});
+
+test("runner aborts pending UI handlers when the child turn times out", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({id:command.id,type:'response',command:'prompt',success:true});
+    emit({type:'extension_ui_request',id:'dialog-1',method:'input',title:'Answer'});
+  }`);
+  let uiAborted = false;
+  const run = await runSpawn([], {
+    cwd: child.dir,
+    prompt: "x",
+    invocation: child.invocation,
+    timeoutMs: 50,
+    onUiRequest: (_request, signal) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => { uiAborted = true; resolve({ cancelled: true }); }, { once: true });
+    }),
+  });
+  assert.equal(run.error, "Spawned thread turn timed out.");
+  assert.equal(uiAborted, true);
+});
+
+test("runner ignores fire-and-forget RPC UI events", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({id:command.id,type:'response',command:'prompt',success:true});
+    emit({type:'extension_ui_request',id:'notice-1',method:'notify',message:'working'});
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  let calls = 0;
+  const run = await runSpawn([], {
+    cwd: child.dir,
+    prompt: "x",
+    invocation: child.invocation,
+    onUiRequest: async () => { calls++; return { cancelled: true }; },
+  });
+  assert.equal(run.error, undefined);
+  assert.equal(run.text, "done");
+  assert.equal(calls, 0);
+});
+
+test("turns have no timeout by default and configured timeouts are bounded", () => {
+  assert.equal(spawnTimeoutMs(undefined), undefined);
   assert.equal(spawnTimeoutMs("250"), 250);
   assert.throws(() => spawnTimeoutMs("0"), /between 1 and 7200000/);
 });

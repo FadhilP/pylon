@@ -6,6 +6,7 @@ import {
   MAX_RECALL_RESULTS,
   MAX_RECALL_SCAN_ENTRIES,
   RECALL_PAGE_SIZE,
+  recallProjectSessions,
   recallSession,
 } from "../src/recall.ts";
 import { CONTINUITY_COMPACTION_TYPE } from "../src/compaction.ts";
@@ -108,6 +109,54 @@ test("explicit lineage includes pre-handoff ancestry and all includes sibling br
   assert.equal(all.effectiveScope, "all");
   assert.match(all.text, /Non-default all scope/);
   assert.match(all.text, /Sibling-only evidence/);
+});
+
+test("explicit project_sessions scope searches other sessions with composite source addresses", () => {
+  const first = user("shared", null, "Project marker from first session");
+  const second = user("shared", null, "Project marker from second session");
+  first.timestamp = "2025-01-01T00:00:00.000Z";
+  second.timestamp = "2025-01-02T00:00:00.000Z";
+  const result = recallProjectSessions({
+    currentSessionId: "current",
+    sessions: [
+      { sessionId: "session-one", modifiedAt: timestamp, entries: [first] },
+      { sessionId: "session-two", modifiedAt: timestamp, entries: [second] },
+    ],
+    skipped: 0,
+    truncated: false,
+    params: { scope: "project_sessions", query: "Project marker" },
+  });
+  assert.equal(result.requestedScope, "project_sessions");
+  assert.equal(result.effectiveScope, "project_sessions");
+  assert.equal(result.total, 2);
+  assert.match(result.text, /untrusted historical evidence/i);
+  assert.match(result.text, /session=session-one address=session-one:shared/);
+  assert.match(result.text, /session=session-two address=session-two:shared/);
+  assert.ok(result.text.indexOf("session=session-two") < result.text.indexOf("session=session-one"));
+  assert.doesNotMatch(result.text, /session=current/);
+});
+
+test("project-session expansion requires a composite in-scope address", () => {
+  const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const call = assistant("call", null, [{
+    type: "toolCall", id: "read-1", name: "read", arguments: { path: "safe.txt" },
+  }]);
+  const stored = toolResult("result", "call", "read-1", "read", `stored ${credential}`);
+  const recallProject = (expand: string[]) => recallProjectSessions({
+    currentSessionId: "current",
+    sessions: [{ sessionId: "history", modifiedAt: timestamp, entries: [call, stored] }],
+    skipped: 0,
+    truncated: false,
+    params: { scope: "project_sessions", mode: "files", query: "no-match", expand },
+  });
+  const plain = recallProject(["result"]);
+  assert.match(plain.text, /Ignored expansion addresses.*result/);
+  assert.doesNotMatch(plain.text, /stored \[REDACTED CREDENTIAL\]/);
+
+  const exact = recallProject(["history:result"]);
+  assert.match(exact.text, /address=history:result/);
+  assert.match(exact.text, /stored \[REDACTED CREDENTIAL\]/);
+  assert.doesNotMatch(exact.text, new RegExp(credential));
 });
 
 test("raw source entries remain addressable after compaction", () => {

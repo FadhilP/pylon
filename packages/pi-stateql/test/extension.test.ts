@@ -200,13 +200,15 @@ test("Pylon Web password-brokers username-only server targets without leaking th
   const envSentinel = "postgresql://postgres:wrong@evil.example.com/app";
   let confirmations = 0;
   let passwordRequests = 0;
+  let passwordOptions: unknown;
   let internalReference = "";
   const ui = {
     async confirm() { confirmations++; return true; },
     setStatus() {},
     async requestStateQLCredential() { throw new Error("full source prompt should not run"); },
-    async requestStateQLPassword(request: CredentialRequest, metadata: Record<string, unknown>) {
+    async requestStateQLPassword(request: CredentialRequest, metadata: Record<string, unknown>, options: unknown) {
       passwordRequests++;
+      passwordOptions = options;
       internalReference = request.reference;
       assert.match(request.reference, /^PYLON_STATEQL_BROKERED_[A-F0-9]{48}$/);
       assert.deepEqual(metadata, { driver: "postgres", username: "postgres", hostname: "db.example.com", port: 5432, database: "app" });
@@ -236,8 +238,12 @@ test("Pylon Web password-brokers username-only server targets without leaking th
     return { ok: true, command_id: "cmd_password", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
   };
   try {
+    value.events.get("pylon:runtime-policy")![0]({
+      version: 2, sessionId: "pi-session", guardEnabled: true, dialogTimeouts: { guard: 90, clarify: 60 },
+    });
     const result = await tool.execute("password", { command: "connect", target, read_only: true }, undefined, undefined, context({ ui }));
     assert.equal(passwordRequests, 1);
+    assert.deepEqual(passwordOptions, { timeoutMs: 90_000 });
     assert.equal(confirmations, 0);
     assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(password), false);
     assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(envSentinel), false);
@@ -441,6 +447,46 @@ test("snapshot bridge is bounded, actor-scoped, and single-claim", async () => {
   let foreignResponse = false;
   handler({ ...request, sessionId: "other", claim: () => true, respond: () => { foreignResponse = true; } });
   assert.equal(foreignResponse, false);
+});
+
+test("rows bridge forwards bounded actor-scoped requests and only returns data", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-rows-request")![0];
+  let response: Promise<unknown> | undefined;
+  handler({
+    version: 1,
+    sessionId: "pi-session",
+    handle: "result-1",
+    offset: 2,
+    limit: 10,
+    signal: new AbortController().signal,
+    claim: () => true,
+    respond(result: Promise<unknown>) { response = result; },
+  });
+  assert.ok(response);
+  assert.deepEqual(await response, { command: "rows" });
+  assert.deepEqual(value.instances[0].commands, [{ command: "rows", handle: "result-1", offset: 2, limit: 10 }]);
+  let claimed = false;
+  handler({ version: 1, sessionId: "other", handle: "result-1", offset: 0, limit: 1, claim: () => (claimed = true), respond() {} });
+  handler({ version: 1, sessionId: "pi-session", handle: "", offset: 0, limit: 1, claim: () => (claimed = true), respond() {} });
+  handler({ version: 1, sessionId: "pi-session", handle: "result-1", offset: -1, limit: 1, claim: () => (claimed = true), respond() {} });
+  handler({ version: 1, sessionId: "pi-session", handle: "result-1", offset: 0, limit: 101, claim: () => (claimed = true), respond() {} });
+  handler({ version: 1, sessionId: "pi-session", handle: "result-1", offset: 0, limit: 1, signal: {}, claim: () => (claimed = true), respond() {} });
+  assert.equal(claimed, false);
+  const cancelled = new AbortController();
+  cancelled.abort();
+  let cancelledResponse: Promise<unknown> | undefined;
+  handler({ version: 1, sessionId: "pi-session", handle: "result-1", offset: 0, limit: 1, signal: cancelled.signal, claim: () => true, respond(result: Promise<unknown>) { cancelledResponse = result; } });
+  assert.ok(cancelledResponse);
+  await assert.rejects(cancelledResponse, /rows request cancelled/);
+  assert.equal(value.instances[0].commands.length, 1);
+  value.instances[0].executeImpl = async () => ({ ok: false, error: { code: "ROWS_FAILED", message: "no rows" } });
+  let failed: Promise<unknown> | undefined;
+  handler({ version: 1, sessionId: "pi-session", handle: "result-1", offset: 0, limit: 1, claim: () => true, respond(result: Promise<unknown>) { failed = result; } });
+  assert.ok(failed);
+  await assert.rejects(failed, /StateQL ROWS_FAILED/);
+  await value.handlers.get("session_shutdown")![0]();
+  assert.equal(value.events.get("pylon:stateql-rows-request")?.length, 0);
 });
 
 test("confirmed operations fail closed and declined commands do not execute", async () => {
@@ -689,6 +735,42 @@ test("real StateQL credential resolution resumes one connect call without leakin
     else process.env.STQL_HOME = previousHome;
     if (previousCredential === undefined) delete process.env.APP_DATABASE_URL;
     else process.env.APP_DATABASE_URL = previousCredential;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("rows bridge cannot read a handle outside the actor's linked workspace", async () => {
+  const home = await mkdtemp(join(tmpdir(), "pi-stateql-isolated-"));
+  const previousHome = process.env.STQL_HOME;
+  process.env.STQL_HOME = home;
+  const owner = new StateQL({ home, session: "owner-workspace" });
+  const value = harness(true);
+  const ctx = context();
+  try {
+    await owner.connect(join(home, "owner.sqlite"), { readOnly: false });
+    const result = await owner.query("SELECT 1 AS private_value");
+    if (!result.ok) throw new Error(result.error.message);
+    const handle = String((result.data as { result_id: string }).result_id);
+    owner.close();
+
+    await value.handlers.get("session_start")![0]({}, ctx);
+    let response: Promise<unknown> | undefined;
+    value.events.get("pylon:stateql-rows-request")![0]({
+      version: 1,
+      sessionId: "pi-session",
+      handle,
+      offset: 0,
+      limit: 10,
+      claim: () => true,
+      respond(result: Promise<unknown>) { response = result; },
+    });
+    assert.ok(response);
+    await assert.rejects(response, /RESULT_NOT_FOUND/);
+  } finally {
+    await value.handlers.get("session_shutdown")![0]({}, ctx);
+    owner.close();
+    if (previousHome === undefined) delete process.env.STQL_HOME;
+    else process.env.STQL_HOME = previousHome;
     await rm(home, { recursive: true, force: true });
   }
 });

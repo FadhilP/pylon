@@ -29,6 +29,8 @@ import {
   RECENT_WINDOW_POLICY,
   SIEVE_THRESHOLD,
   addTransformStats,
+  continuityProjectionBoundary,
+  continuitySieveMessages,
   createProjectionEpoch,
   emptyTransformStats,
   projectionSourceHash,
@@ -318,9 +320,12 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   let recallsByTool: Record<string, { recalls: number; recalledChars: number }> = {};
   let recoverableActiveResults = new Map<string, RecoverableActiveResult>();
   let rawRecoverableResults = new Map<string, RawRecoverableResult>();
+  let continuityRecoverableIds = new Set<string>();
+  let continuityRecoverableSourceHashes = new Map<string, string>();
   let epoch: ProjectionEpoch | undefined;
   let pendingEpochReason: EpochReason | undefined = "session-start";
   let contextUsagePercent: number | undefined;
+  let continuityRecallActive = false;
   let stability: StabilityStats = {
     newProjections: 0,
     projectionCacheHits: 0,
@@ -367,6 +372,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     pendingEpochReason = undefined;
     recoverableActiveResults.clear();
     rawRecoverableResults.clear();
+    continuityRecoverableIds.clear();
+    continuityRecoverableSourceHashes.clear();
     previousStandardProjection = undefined;
     softBudgetExceededInEpoch = false;
   };
@@ -374,6 +381,8 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     pendingEpochReason = reason;
     recoverableActiveResults.clear();
     rawRecoverableResults.clear();
+    continuityRecoverableIds.clear();
+    continuityRecoverableSourceHashes.clear();
     previousStandardProjection = undefined;
   };
   const epochSnapshot = () => {
@@ -507,7 +516,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   };
 
   const refreshRecallTool = () => {
-    const recallEnabled = activePruning && mode === "enabled";
+    const recallEnabled = mode === "enabled" && (activePruning || continuityRecallActive);
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -522,6 +531,14 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     if (recallEnabled) active.push(RECALL_TOOL_NAME);
     pi.setActiveTools(active);
   };
+  const syncContinuityBoundary = (ctx: any) => {
+    let boundary: ReturnType<typeof continuityProjectionBoundary>;
+    try { boundary = continuityProjectionBoundary(ctx?.sessionManager?.getBranch?.() ?? []); }
+    catch { boundary = undefined; }
+    const changed = continuityRecallActive !== !!boundary;
+    continuityRecallActive = !!boundary;
+    return { boundary, changed };
+  };
 
   pi.registerTool({
     name: RECALL_TOOL_NAME,
@@ -531,13 +548,17 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
     async execute(_toolCallId, params) {
-      const registered = activePruning ? recoverableActiveResults.get(params.toolCallId) : undefined;
+      const registered = mode === "enabled" && (activePruning || continuityRecallActive)
+        ? recoverableActiveResults.get(params.toolCallId)
+        : undefined;
       const source = registered ? rawRecoverableResults.get(params.toolCallId) : undefined;
+      const continuityRegistered = continuityRecoverableIds.has(params.toolCallId);
       const frozen = projectionMode === "stable" ? epoch?.entries.get(params.toolCallId) : undefined;
       if (!registered || !source
         || source.toolName !== registered.toolName
         || source.isError !== registered.isError
-        || (projectionMode === "stable" && frozen?.sourceHash !== source.sourceHash)) {
+        || continuityRegistered && continuityRecoverableSourceHashes.get(params.toolCallId) !== source.sourceHash
+        || (projectionMode === "stable" && !continuityRegistered && frozen?.sourceHash !== source.sourceHash)) {
         return {
           content: [{ type: "text" as const, text: `No recoverable result for toolCallId ${JSON.stringify(params.toolCallId)}.` }],
           details: { found: false, sourceToolCallId: params.toolCallId, sourceToolName: "", sourceIsError: false },
@@ -567,15 +588,22 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     await configQueue;
     restoreTelemetry(ctx);
     requestEpoch(event?.reason === "reload" ? "reload" : event?.reason === "startup" ? "session-start" : "session-replacement");
+    syncContinuityBoundary(ctx);
     refreshRecallTool();
     publishState();
     if (configLoadError)
       ctx.ui.notify(`Could not load pi-sieve settings: ${(configLoadError as any)?.message ?? String(configLoadError)}`, "error");
   });
-  pi.on("session_compact", () => requestEpoch("compaction"));
+  pi.on("session_compact", (_event, ctx) => {
+    requestEpoch("compaction");
+    syncContinuityBoundary(ctx);
+    refreshRecallTool();
+  });
   pi.on("session_tree", (_event, ctx) => {
     restoreTelemetry(ctx);
     requestEpoch("branch-navigation");
+    syncContinuityBoundary(ctx);
+    refreshRecallTool();
     publishState();
   });
   pi.on("model_select", () => requestEpoch("model-change"));
@@ -650,6 +678,33 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         result = rerun;
         diagnostics = rerun.diagnostics;
       }
+    }
+
+    // Continuity owns the compaction boundary. Sieve merely projects its retained suffix.
+    const { boundary: continuity, changed: continuityBoundaryChanged } = syncContinuityBoundary(ctx);
+    if (continuityBoundaryChanged) refreshRecallTool();
+    const continuityResult = continuity
+      ? continuitySieveMessages(event.messages, continuity.frozenToolCallIds, result.messages)
+      : undefined;
+    continuityRecoverableIds = new Set(continuityResult?.recoverableActiveResults.map((item) => item.toolCallId) ?? []);
+    continuityRecoverableSourceHashes = new Map();
+    for (let index = 0; index < event.messages.length; index++) {
+      const message: any = event.messages[index];
+      if (message?.role === "toolResult" && continuityRecoverableIds.has(message.toolCallId))
+        continuityRecoverableSourceHashes.set(message.toolCallId, projectionSourceHash(event.messages, index, ctx?.cwd));
+    }
+    if (continuityResult && (continuityResult.stats.transformed || continuityResult.preservedToolCallIds.size)) {
+      addTransformStats(result.stats, continuityResult.stats);
+      result = {
+        ...result,
+        messages: continuityResult.messages,
+        recoverableActiveResults: [...new Map([
+          ...result.recoverableActiveResults
+            .filter((item) => !continuityResult.preservedToolCallIds.has(item.toolCallId))
+            .map((item) => [item.toolCallId, item] as const),
+          ...continuityResult.recoverableActiveResults.map((item) => [item.toolCallId, item] as const),
+        ]).values()],
+      };
     }
 
     latestMode = mode;
@@ -767,7 +822,10 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         if (mode !== "enabled") {
           recoverableActiveResults.clear();
           rawRecoverableResults.clear();
-        }
+          continuityRecoverableIds.clear();
+          continuityRecoverableSourceHashes.clear();
+          continuityRecallActive = false;
+        } else syncContinuityBoundary(ctx);
         refreshRecallTool();
         publishState();
         ctx.ui.notify(mode === "observe"

@@ -110,7 +110,7 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
     }
 
     assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "compact", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "papercut", "papercuts", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
+      "advisor", "compact", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "papercut", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
     ]);
     assert.deepEqual([...tools.keys()].sort(), [
       "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_android", "helios_browser", "helios_capture", "index_status", "memory", "papercut", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",

@@ -64,6 +64,7 @@ export interface SessionIndexOptions {
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
   workStartedAtFor?: (sessionId: string) => string | undefined;
+  runningUnderParentSessionIdFor?: (sessionId: string) => string | undefined;
 }
 
 export class SessionIndex {
@@ -312,6 +313,7 @@ export class SessionIndex {
     const owner = metadata.owner;
     const project = projectFor(session);
     const workStartedAt = options.workStartedAtFor?.(session.id);
+    const runningUnderParentSessionId = options.runningUnderParentSessionIdFor?.(session.id);
     const parent = owner
       ? sessionLookup.get(this.sessionKey(owner.id, session.cwd, owner.file))
       : undefined;
@@ -321,6 +323,7 @@ export class SessionIndex {
       projectId: projectIdFor(session),
       ...(session.name ? { name: session.name.slice(0, 200) } : {}),
       ...(parent && parentTitle ? { parentSession: { id: parent.id.slice(0, 128), title: parentTitle } } : {}),
+      ...(runningUnderParentSessionId ? { runningUnderParentSessionId: runningUnderParentSessionId.slice(0, 128) } : {}),
       cwdLabel: project?.label ?? (basename(session.cwd) || "Workspace"),
       createdAt: session.created.toISOString(),
       modifiedAt: session.modified.toISOString(),

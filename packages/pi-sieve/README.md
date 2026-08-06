@@ -58,6 +58,10 @@ New results append context without changing older projections inside the epoch. 
 
 Raw session messages are never transformed or persisted by Pi Sieve.
 
+### Continuity retained-suffix projection
+
+When the active branch's latest compaction is Continuity v3, Sieve also projects its retained historical suffix after the selected baseline policy. It freezes that compaction's tool-call IDs (from `firstKeptEntryId` through the compaction parent), leaves all assistant blocks unchanged, and keeps the newest completed historical tool-call batch complete. Older, unique, successful text-only pairs for normal Sieve-eligible tools and `read` may become smaller `sieve_recall` markers. Errors, mixed/image content, mutations, unsupported tools, duplicate or uncertain IDs, and post-compaction calls remain unchanged. A later non-Continuity compaction disables this projection. The boundary is reconstructed from the active branch after reload; no Sieve summary or digest is persisted.
+
 ### Epochs
 
 A new epoch deliberately resets the provider prefix after:

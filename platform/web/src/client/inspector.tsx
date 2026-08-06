@@ -23,11 +23,12 @@ import {
   IconThinkingMedium
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
+import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS, mergeGuardRules, resolveGuardRule, type GuardAction, type GuardRuleOverrides } from "../shared/guard-policy";
 import { highlightSource } from "../shared/markdown";
 import type { ContinuityMemoryNoteReadModel, JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
-import type { DialogTimeoutSeconds, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type { DialogTimeoutSeconds, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
 import { ActionDialog } from "./action-dialog";
@@ -185,6 +186,10 @@ function togglePolicyLabel(value: boolean): string {
   return value ? "Enabled" : "Disabled";
 }
 
+function guardActionLabel(value: GuardAction): string {
+  return value === "allow" ? "Allow" : value === "confirm" ? "Confirm" : "Block";
+}
+
 function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapshot; onOpenGlobalPolicy: () => void }) {
   const runtime = live.runtime!;
   const policy = runtime.runtimePolicy;
@@ -192,11 +197,14 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
   const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<TogglePolicyDraft>("inherit");
   const [guard, setGuard] = useState<TogglePolicyDraft>("inherit");
+  const [guardRules, setGuardRules] = useState<GuardRuleOverrides>({});
   const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("inherit");
   const [guardTimeout, setGuardTimeout] = useState<TimeoutPolicyDraft>("inherit");
   const [clarifyTimeout, setClarifyTimeout] = useState<TimeoutPolicyDraft>("inherit");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const saveInFlight = useRef(false);
+  const saveRequest = useRef(0);
 
   const resetDraft = () => {
     setVerify(scope === "project" ? policy.project.verify : policy.session.verify ?? "inherit");
@@ -206,6 +214,7 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
     setGuard(scope === "project"
       ? policy.project.guardEnabled === undefined ? "inherit" : policy.project.guardEnabled ? "enabled" : "disabled"
       : policy.session.guardEnabled === undefined ? "inherit" : policy.session.guardEnabled ? "enabled" : "disabled");
+    setGuardRules({ ...(scope === "project" ? policy.project.guardRules : policy.session.guardRules) });
     setWorkspace(scope === "project" ? policy.project.workspace ?? "inherit" : policy.session.workspace ?? "inherit");
     setGuardTimeout(scope === "project"
       ? policy.project.guardTimeoutSeconds === undefined ? "inherit" : policy.project.guardTimeoutSeconds
@@ -228,6 +237,11 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
   const inheritedFrom = scope === "project" ? "Global" : "Project";
   const inheritedTimeline = scope === "project" ? policy.global.timelineEnabled : policy.project.timelineEnabled ?? policy.global.timelineEnabled;
   const inheritedGuard = scope === "project" ? policy.global.guardEnabled : policy.project.guardEnabled ?? policy.global.guardEnabled;
+  const draftGuardEnabled = guard === "inherit" ? inheritedGuard : guard === "enabled";
+  const globalGuardRules = policy.global.guardRules ?? DEFAULT_GUARD_RULES;
+  const inheritedGuardRules = scope === "project"
+    ? mergeGuardRules(globalGuardRules)
+    : mergeGuardRules(globalGuardRules, policy.project.guardRules ?? {});
   const inheritedWorkspace = scope === "project" ? policy.global.workspace : policy.project.workspace ?? policy.global.workspace;
   const inheritedGuardTimeout = scope === "project" ? policy.global.guardTimeoutSeconds : policy.project.guardTimeoutSeconds ?? policy.global.guardTimeoutSeconds;
   const inheritedClarifyTimeout = scope === "project" ? policy.global.clarifyTimeoutSeconds : policy.project.clarifyTimeoutSeconds ?? policy.global.clarifyTimeoutSeconds;
@@ -241,10 +255,15 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
     nextGuardTimeout: TimeoutPolicyDraft = guardTimeout,
     nextClarifyTimeout: TimeoutPolicyDraft = clarifyTimeout,
     nextGuard: TogglePolicyDraft = guard,
+    nextGuardRules: GuardRuleOverrides = guardRules,
   ) => {
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
+    const request = ++saveRequest.current;
     setVerify(nextVerify);
     setTimeline(nextTimeline);
     setGuard(nextGuard);
+    setGuardRules(nextGuardRules);
     setWorkspace(nextWorkspace);
     setGuardTimeout(nextGuardTimeout);
     setClarifyTimeout(nextClarifyTimeout);
@@ -260,13 +279,19 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
         nextGuardTimeout,
         nextClarifyTimeout,
         policy.revision,
+        nextGuardRules,
       );
     } catch (cause) {
-      resetDraft();
-      setError(cause instanceof Error ? cause.message : "Policy could not be saved");
+      if (request === saveRequest.current) {
+        resetDraft();
+        setError(cause instanceof Error ? cause.message : "Policy could not be saved");
+      }
       throw cause;
     } finally {
-      setBusy(false);
+      if (request === saveRequest.current) {
+        saveInFlight.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -350,11 +375,44 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
         options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]}
         onChange={(value) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(() => undefined)}
       />
+      <details className="policy-disclosure">
+        <summary>
+          <span><strong>Guard categories</strong><small>Choose which risks inherit, allow, confirm, or block.</small></span>
+          <small>{Object.keys(guardRules).length} override{Object.keys(guardRules).length === 1 ? "" : "s"}</small>
+        </summary>
+        <div className="policy-disclosure-body">
+          {!draftGuardEnabled && <p className="policy-guard-disabled" role="status">Guard is disabled by {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}. Saved category rules apply when Guard is enabled.</p>}
+          {GUARD_RISK_CATEGORIES.map((category) => {
+            const effective = resolveGuardRule(
+              category,
+              globalGuardRules,
+              scope === "project" ? guardRules : policy.project.guardRules,
+              scope === "session" ? guardRules : policy.session.guardRules,
+            );
+            return <PolicySelectField
+              key={category}
+              label={GUARD_RULE_LABELS[category]}
+              description={GUARD_RULE_DESCRIPTIONS[category]}
+              value={guardRules[category] ?? "inherit"}
+              inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`}
+              stateLabel={`Effective this session · ${guardActionLabel(effective.value)} · ${effective.source}`}
+              disabled={!idle || !draftGuardEnabled}
+              options={GUARD_ACTIONS.map((action) => ({ value: action, label: guardActionLabel(action) }))}
+              onChange={(value) => {
+                const next = { ...guardRules };
+                if (value === "inherit") delete next[category];
+                else next[category] = value as GuardAction;
+                void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, guard, next).catch(() => undefined);
+              }}
+            />;
+          })}
+        </div>
+      </details>
       <RuntimePolicyTimeoutControl
         label="Guard timeout"
         value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout}
         inheritedFrom={guardTimeout === "inherit" ? inheritedFrom : undefined}
-        disabled={!idle}
+        disabled={!idle || !draftGuardEnabled}
         onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
         onReset={guardTimeout !== "inherit" ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined) : undefined}
       />
@@ -395,23 +453,26 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
   </InspectorSection>;
 }
 
-function PolicySelectField({ label, description, value, inheritedLabel, disabled, options, onChange }: {
+function PolicySelectField({ label, description, value, inheritedLabel, stateLabel, disabled, options, onChange }: {
   label: string;
   description: string;
   value: string;
   inheritedLabel: string;
+  stateLabel?: string;
   disabled: boolean;
   options: Array<{ value: string; label: string }>;
   onChange: (value: string) => void;
 }) {
+  const descriptionId = useId();
+  const stateId = useId();
   return <div className="policy-field">
-    <div><strong>{label}</strong><small>{description}</small></div>
+    <div><strong>{label}</strong><small id={descriptionId}>{description}</small></div>
     <div className="policy-field-control">
-      <select value={value} disabled={disabled} aria-label={`${label} policy`} onChange={(event) => onChange(event.target.value)}>
+      <select value={value} disabled={disabled} aria-label={`${label} policy`} aria-describedby={`${descriptionId} ${stateId}`} onChange={(event) => onChange(event.target.value)}>
         <option value="inherit">{inheritedLabel}</option>
         {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
       </select>
-      <small>{value === "inherit" ? inheritedLabel.replace("Inherit from ", "From ") : "Override"}</small>
+      <small id={stateId}>{stateLabel ?? (value === "inherit" ? inheritedLabel.replace("Inherit from ", "From ") : "Override")}</small>
     </div>
   </div>;
 }
@@ -544,8 +605,10 @@ function Memory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: Ru
   </div>;
 }
 
-export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
-  const [snapshot, setSnapshot] = useState<StateQLSnapshot>();
+export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
+  const snapshotScope = `${live.connection}:${live.runtime?.ready ?? false}:${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
+  const [snapshotState, setSnapshotState] = useState<{ scope: string; value: StateQLSnapshot }>();
+  const snapshot = snapshotState?.scope === snapshotScope ? snapshotState.value : undefined;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -559,13 +622,16 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
   useEffect(() => {
     setLoading(true);
     setError("");
-    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    if (live.connection !== "connected" || !live.runtime?.ready) {
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     let active = true;
     void runtimeStore.stateqlSnapshot(50, controller.signal)
       .then((value) => {
         if (!active) return;
-        setSnapshot(value);
+        setSnapshotState({ scope: snapshotScope, value });
         const first = buildStateQLActivity(value)[0];
         setExpandedActivity(first ? new Set([first.id]) : new Set());
       })
@@ -580,104 +646,213 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
   const visibleActivity = useMemo(() => filterStateQLActivity(activity, activityFilter), [activity, activityFilter]);
   const visibleHistory = visibleActivity.filter((item) => item.source === "history");
   const visibleMetadata = visibleActivity.filter((item) => item.source === "metadata");
+  const historyCount = activity.filter((item) => item.source === "history").length;
+  const metadataCount = activity.length - historyCount;
   const allVisibleExpanded = visibleActivity.length > 0 && visibleActivity.every((item) => expandedActivity.has(item.id));
+  const rowsScope = `${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
+  const header = <header className="stateql-ledger-header">
+    <div><h1 id="database-panel-title">Database</h1><span>{snapshot?.session.name ?? "Command ledger"}</span></div>
+    <span className="stateql-ledger-header-spacer" />
+    <button className="text-button" type="button" disabled={loading || !snapshot} aria-live="polite" onClick={() => setRefresh((value) => value + 1)}>
+      {loading ? <IconLoader2 className="spin" size={14} /> : <IconRefresh size={14} />}{loading ? "Refreshing" : "Refresh"}
+    </button>
+    <button className="icon-button" type="button" onClick={onClose} aria-label="Close database"><IconX size={17} /></button>
+  </header>;
 
-  if (!snapshot && loading) return <div className="empty-state"><IconLoader2 className="spin" size={20} /><strong>Loading StateQL</strong><span>Reading bounded local status and history.</span></div>;
-  if (!snapshot) return <div className="empty-state"><IconDatabase size={20} /><strong>StateQL unavailable</strong><span>{error || "No StateQL snapshot is available for this actor."}</span></div>;
+  if (!snapshot) return <div className="stateql-workspace">
+    {header}
+    <div className="stateql-ledger-empty">
+      {loading ? <IconLoader2 className="spin" size={20} /> : <IconDatabase size={20} />}
+      <strong>{loading ? "Loading StateQL" : "StateQL unavailable"}</strong>
+      <span>{loading ? "Reading bounded local status and history." : error || "No StateQL snapshot is available for this actor."}</span>
+    </div>
+  </div>;
+
   const connection = snapshot.connection;
-  return <div className="page-grid">
-    <InspectorSection title="Database status" meta={snapshot.session.status}>
-      <div className="table-toolbar">
-        <div><p className="mono">{snapshot.session.name}</p><small className="mono">Actor {oneLine(snapshot.actor_id, 24)}</small></div>
-        <button className="text-button" type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>
-          {loading ? <IconLoader2 className="spin" size={13} /> : <IconRefresh size={13} />}Refresh
-        </button>
-      </div>
-      <div className="usage-strip" aria-label="StateQL database status">
-        <div><small>Connection</small><strong>{connection?.driver ?? "None"}</strong><span>{connection ? connection.read_only ? "read-only" : "read-write" : "disconnected"}</span></div>
-        <div><small>Database</small><strong title={connection?.database}>{connection ? oneLine(connection.database, 24) : "—"}</strong><span>{connection?.name ?? "No active connection"}</span></div>
-        <div><small>Transaction</small><strong>{snapshot.transaction?.state ?? "None"}</strong><span>{snapshot.transaction ? `owner ${oneLine(snapshot.transaction.owner_actor_id, 18)}` : "no staged writes"}</span></div>
-        <div><small>State</small><strong>{snapshot.state_version ?? "—"}</strong><span>{snapshot.state_confidence ?? "unavailable"}</span></div>
-      </div>
-      {error && <p className="ui-request-error" role="alert">{error}</p>}
-    </InspectorSection>
+  const mode = connection ? `${connection.driver} / ${connection.read_only ? "read-only" : "read-write"}` : "disconnected";
+  const toggleAll = () => setExpandedActivity((current) => {
+    if (allVisibleExpanded) return new Set([...current].filter((id) => !visibleActivity.some((item) => item.id === id)));
+    return new Set([...current, ...visibleActivity.map((item) => item.id)]);
+  });
+  const setExpanded = (item: StateQLActivityItem, open: boolean) => setExpandedActivity((current) => {
+    const next = new Set(current);
+    if (open) next.add(item.id); else next.delete(item.id);
+    return next;
+  });
 
-    <section className="stateql-notebook" aria-labelledby="stateql-activity-title">
-      <header className="stateql-notebook-header">
-        <div><h2 id="stateql-activity-title">Session activity</h2><p>Bounded session history and recent metadata · {activity.length} items</p></div>
-        <button className="text-button" type="button" disabled={visibleActivity.length === 0} onClick={() => setExpandedActivity((current) => {
-          if (allVisibleExpanded) return new Set([...current].filter((id) => !visibleActivity.some((item) => item.id === id)));
-          return new Set([...current, ...visibleActivity.map((item) => item.id)]);
-        })}>{allVisibleExpanded ? "Collapse all" : "Expand all"}</button>
+  return <div className="stateql-workspace">
+    {header}
+    <section className="stateql-connection-strip" aria-label="Database context">
+      <div className="stateql-connection-primary">
+        <strong className="mono" title={connection?.name}>{connection?.name ?? "No active connection"}</strong>
+        <span className={connection ? "is-connected" : ""}>{mode}</span>
+      </div>
+      <dl>
+        <div><dt>Database</dt><dd className="mono" title={connection?.database}>{connection?.database ?? "Unavailable"}</dd></div>
+        <div><dt>Transaction</dt><dd>{snapshot.transaction?.state ?? "None"}</dd></div>
+        <div><dt>State</dt><dd className="mono">{snapshot.state_version ?? "Unavailable"}</dd></div>
+        <div><dt>Confidence</dt><dd>{snapshot.state_confidence ?? "Unavailable"}</dd></div>
+      </dl>
+      <span className="stateql-ledger-actor mono" title={snapshot.actor_id}>Actor {snapshot.actor_id}</span>
+    </section>
+    {error && <p className="stateql-ledger-error" role="alert">Refresh failed. Showing the last available snapshot. {error}</p>}
+    <section className="stateql-ledger-body" aria-labelledby="stateql-activity-title">
+      <header className="stateql-ledger-toolbar">
+        <h2 id="stateql-activity-title">Session activity</h2>
+        <span className="mono">{historyCount} / {metadataCount} history / retained</span>
+        <div className="stateql-ledger-filters" role="group" aria-label="Filter database activity">
+          {(["all", "read", "write", "error"] as const).map((filter) => {
+            const count = filterStateQLActivity(activity, filter).length;
+            return <button type="button" aria-pressed={activityFilter === filter} key={filter} onClick={() => setActivityFilter(filter)}>
+              {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}<span>{count}</span>
+            </button>;
+          })}
+        </div>
+        <button className="text-button stateql-expand-all" type="button" disabled={visibleActivity.length === 0} onClick={toggleAll}>{allVisibleExpanded ? "Collapse all" : "Expand all"}</button>
       </header>
-      <div className="stateql-filters" role="group" aria-label="Filter database activity">
-        {(["all", "read", "write", "error"] as const).map((filter) => {
-          const count = filterStateQLActivity(activity, filter).length;
-          return <button type="button" aria-pressed={activityFilter === filter} key={filter} onClick={() => setActivityFilter(filter)}>
-            {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}<span>{count}</span>
-          </button>;
-        })}
-      </div>
-      <p className="stateql-notebook-note">SQL may contain inline literals or comments. Parameters and row previews are not included.</p>
-      <div className="stateql-card-list">
-        {visibleHistory.map((item) => <StateQLActivityCard item={item} expanded={expandedActivity.has(item.id)} key={item.id} onExpandedChange={(open) => setExpandedActivity((current) => {
-          const next = new Set(current);
-          if (open) next.add(item.id); else next.delete(item.id);
-          return next;
-        })} />)}
-        {visibleMetadata.length > 0 && <div className="stateql-metadata-label"><strong>Recent metadata without history</strong><span>No timestamp is available for these retained handles.</span></div>}
-        {visibleMetadata.map((item) => <StateQLActivityCard item={item} expanded={expandedActivity.has(item.id)} key={item.id} onExpandedChange={(open) => setExpandedActivity((current) => {
-          const next = new Set(current);
-          if (open) next.add(item.id); else next.delete(item.id);
-          return next;
-        })} />)}
-        {visibleActivity.length === 0 && <div className="empty-state"><IconClock size={20} /><strong>No matching activity</strong><span>{activity.length === 0 ? "Commands run in this shared workspace will appear here." : `No ${activityFilter} activity is available in the bounded snapshot.`}</span></div>}
-      </div>
+      {visibleActivity.length > 0 ? <div className="stateql-ledger-scroll" role="region" aria-label="Scrollable database activity ledger" tabIndex={0}>
+        <table className="stateql-ledger-table">
+          <caption className="sr-only">Bounded StateQL session history and retained metadata</caption>
+          <colgroup><col className="toggle" /><col className="command" /><col className="handle" /><col className="actor" /><col className="status" /><col className="time" /></colgroup>
+          <thead><tr><th aria-label="Expand activity" /><th>Command</th><th>Handle</th><th>Actor</th><th>Status</th><th>Time</th></tr></thead>
+          <tbody>
+            {visibleHistory.map((item) => <StateQLLedgerItem item={item} expanded={expandedActivity.has(item.id)} key={item.id} rowsScope={rowsScope} onExpandedChange={(open) => setExpanded(item, open)} />)}
+            {visibleMetadata.length > 0 && <tr className="stateql-ledger-metadata"><td colSpan={6}>Recent metadata without timestamp</td></tr>}
+            {visibleMetadata.map((item) => <StateQLLedgerItem item={item} expanded={expandedActivity.has(item.id)} key={item.id} rowsScope={rowsScope} onExpandedChange={(open) => setExpanded(item, open)} />)}
+          </tbody>
+        </table>
+      </div> : <div className="stateql-ledger-empty">
+        <IconClock size={20} /><strong>No matching activity</strong><span>{activity.length === 0 ? "Commands run in this shared workspace will appear here." : `No ${activityFilter} activity is available in the bounded snapshot.`}</span>
+      </div>}
     </section>
   </div>;
 }
 
-function StateQLActivityCard({ item, expanded, onExpandedChange }: { item: StateQLActivityItem; expanded: boolean; onExpandedChange: (open: boolean) => void }) {
+function stateqlExecution(item: StateQLActivityItem): string {
+  return item.source === "metadata" ? "History unavailable" : item.cached ? "cache hit" : item.executed ? "database executed" : item.success ? "completed" : "failed";
+}
+
+function StateQLLedgerItem({ item, expanded, rowsScope, onExpandedChange }: { item: StateQLActivityItem; expanded: boolean; rowsScope: string; onExpandedChange: (open: boolean) => void }) {
   const status = stateqlActivityStatus(item);
   const kind = item.tags.includes("error") ? "error" : item.tags.includes("write") ? "write" : item.tags.includes("read") ? "read" : "other";
-  const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "·";
-  const title = item.source === "history"
-    ? item.command
-    : item.result && item.operation
-      ? "Result and operation metadata"
-      : item.operation
-        ? `${item.operation.type} operation`
-        : "Materialized result";
-  return <details className={`stateql-card is-${kind}`} open={expanded} onToggle={(event) => {
-    if (event.currentTarget.open !== expanded) onExpandedChange(event.currentTarget.open);
-  }}>
+  const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "M";
+  const detailId = `stateql-detail-${encodeURIComponent(item.id)}`;
+  return <>
+    <tr className={`stateql-ledger-row is-${kind} ${expanded ? "is-expanded" : ""}`} onClick={() => onExpandedChange(!expanded)}>
+      <td><button type="button" aria-expanded={expanded} aria-controls={detailId} aria-label={`${expanded ? "Collapse" : "Expand"} ${item.command}`} onClick={(event) => { event.stopPropagation(); onExpandedChange(!expanded); }}><IconChevronDown size={15} /></button></td>
+      <th scope="row"><span className="stateql-ledger-command"><span className="stateql-ledger-marker" aria-hidden="true">{marker}</span><span>{item.command}</span></span></th>
+      <td className="mono" title={item.handle}>{item.handle ?? "N/A"}</td>
+      <td className="mono" title={item.actorId}>{item.actorId ?? "N/A"}</td>
+      <td><Status tone={status.tone}>{status.label}</Status></td>
+      <td className="mono">{item.timestamp ? <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time> : "No time"}</td>
+    </tr>
+    {expanded && <tr className="stateql-ledger-detail" id={detailId}><td colSpan={6}><StateQLLedgerDetail item={item} rowsScope={rowsScope} /></td></tr>}
+  </>;
+}
+
+function StateQLLedgerDetail({ item, rowsScope }: { item: StateQLActivityItem; rowsScope: string }) {
+  return <div className="stateql-ledger-detail-grid">
+    <section className="stateql-ledger-sql" aria-label="SQL statement">
+      <header><strong>SQL statement</strong><span>{stateqlExecution(item)}</span></header>
+      <p>SQL may contain inline literals or comments. Parameters are not included in activity history.</p>
+      {item.sql !== undefined ? <pre dir="ltr"><code>{item.sql}</code></pre> : <span className="stateql-ledger-unavailable">SQL was not retained for this activity.</span>}
+    </section>
+    <section className="stateql-ledger-receipts" aria-label="Database receipt">
+      <header><strong>{item.result ? "Result receipt" : item.operation ? "Operation receipt" : "Activity receipt"}</strong><span>{item.source === "metadata" ? "retained metadata" : "session history"}</span></header>
+      {item.result && <div className="stateql-ledger-receipt">
+        <div><small>Result handle</small><strong className="mono" title={item.result.handle}>{item.result.handle}</strong></div>
+        <div><small>Alias</small><strong>{item.result.alias ?? "No alias"}</strong></div>
+        <div><small>Rows</small><strong className="mono">{item.result.rows}</strong></div>
+      </div>}
+      {item.operation && <div className="stateql-ledger-receipt">
+        <div><small>Operation handle</small><strong className="mono" title={item.operation.handle}>{item.operation.handle}</strong></div>
+        <div><small>Affected</small><strong>{item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}</strong></div>
+        <div><small>State</small><strong>{item.operation.status}</strong></div>
+      </div>}
+      {!item.result && !item.operation && <span className="stateql-ledger-unavailable">No retained receipt is available.</span>}
+      {item.handle && <p className="mono" title={item.handle}>{item.handle}</p>}
+      {item.result && item.operation && <p className="stateql-ledger-warning">This handle matches both result and operation metadata.</p>}
+    </section>
+    {item.result && <StateQLMaterializedRows active handle={item.result.handle} key={`${rowsScope}:${item.result.handle}`} total={item.result.rows} />}
+  </div>;
+}
+
+const STATEQL_ROWS_PAGE_SIZE = 25;
+
+function stateqlCellText(value: unknown): string {
+  if (value === null) return "NULL";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function stateqlColumns(page: StateQLRowsPage | undefined): string[] {
+  const columns = new Set<string>();
+  for (const row of page?.rows ?? []) for (const key of Object.keys(row)) columns.add(key);
+  return [...columns];
+}
+
+function StateQLMaterializedRows({ active, handle, total }: { active: boolean; handle: string; total: number }) {
+  const [open, setOpen] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState<StateQLRowsPage>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const columns = useMemo(() => stateqlColumns(page), [page]);
+
+  useEffect(() => {
+    if (!active || !open) return;
+    const controller = new AbortController();
+    let current = true;
+    setLoading(true);
+    setError("");
+    void runtimeStore.stateqlRows(handle, offset, STATEQL_ROWS_PAGE_SIZE, controller.signal)
+      .then((value) => { if (current) setPage(value); })
+      .catch((cause) => {
+        if (current && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Materialized rows failed to load");
+      })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; controller.abort(); };
+  }, [active, handle, offset, open, retry]);
+
+  const move = (nextOffset: number) => {
+    if (loading) return;
+    setPage(undefined);
+    setOffset(nextOffset);
+  };
+  const start = page && page.returned > 0 ? page.offset + 1 : 0;
+  const end = page && page.returned > 0 ? page.offset + page.returned : 0;
+
+  return <details className="stateql-rows" onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>
-      <span className="stateql-card-marker" aria-hidden="true">{marker}</span>
-      <span className="stateql-card-title"><strong>{title}</strong><small className="mono">{item.command}{item.handle ? ` · ${oneLine(item.handle, 24)}` : ""}</small></span>
-      <span className="stateql-card-meta"><Status tone={status.tone}>{status.label}</Status>{item.timestamp && <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time>}</span>
+      <span><strong>Materialized rows</strong><small>Loaded on demand from this result handle.</small></span>
+      <span className="mono">{total.toLocaleString()} rows</span>
       <IconChevronDown size={15} aria-hidden="true" />
     </summary>
-    <div className="stateql-card-content">
-      <dl className="stateql-card-facts">
-        <div><dt>Command</dt><dd className="mono">{item.command}</dd></div>
-        <div><dt>Actor</dt><dd className="mono">{item.actorId ? oneLine(item.actorId, 20) : "—"}</dd></div>
-        <div><dt>Handle</dt><dd className="mono" title={item.handle}>{item.handle ? oneLine(item.handle, 24) : "—"}</dd></div>
-        <div><dt>Execution</dt><dd>{item.source === "metadata" ? "History unavailable" : item.cached ? "cache hit" : item.executed ? "database executed" : item.success ? "completed" : "failed"}</dd></div>
-      </dl>
-      {expanded && item.sql !== undefined && <section className="stateql-sql" aria-label="SQL statement">
-        <span>SQL</span><pre dir="ltr"><code>{item.sql}</code></pre>
-      </section>}
-      {item.result && <section className="stateql-result-receipt" aria-label="Materialized result">
-        <div><span>Materialized result</span><strong className="mono" title={item.result.handle}>{oneLine(item.result.handle, 26)}</strong></div>
-        <div><span>Alias</span><strong>{item.result.alias ?? "No alias"}</strong></div>
-        <div><span>Rows</span><strong className="mono">{item.result.rows}</strong></div>
-      </section>}
-      {item.operation && <section className="stateql-operation-receipt" aria-label="Database operation">
-        <div><span>Operation</span><strong className="mono" title={item.operation.handle}>{oneLine(item.operation.handle, 26)}</strong></div>
-        <div><span>Affected</span><strong>{item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}</strong></div>
-        <div><span>State</span><strong>{item.operation.status}</strong></div>
-      </section>}
-      {item.result && item.operation && <p className="stateql-card-warning">This handle matches both result and operation metadata.</p>}
+    <div className="stateql-rows-content">
+      <p className="stateql-rows-note">Rows can contain sensitive database content. Only this bounded page is loaded.</p>
+      {loading && !page && <div className="stateql-rows-state" role="status"><IconLoader2 className="spin" size={15} />Loading rows</div>}
+      {error && <div className="stateql-rows-state is-error" role="alert"><span>{error}</span><button className="text-button" type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
+      {page && page.rows.length === 0 && <div className="stateql-rows-state"><span>No rows are available on this page.</span></div>}
+      {page && page.rows.length > 0 && <div className="stateql-rows-scroll" role="region" aria-label={`Rows for ${handle}`} tabIndex={0}>
+        <table>
+          <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
+          <tbody>{page.rows.map((row, rowIndex) => <tr key={`${page.offset}:${rowIndex}`}>
+            {columns.map((column) => {
+              const text = Object.hasOwn(row, column) ? stateqlCellText(row[column]) : "N/A";
+              return <td className="mono" title={text} key={column}>{text}</td>;
+            })}
+          </tr>)}</tbody>
+        </table>
+      </div>}
+      {page && <footer className="stateql-rows-footer">
+        <span className="mono">{start}-{end} of {page.total.toLocaleString()}</span>
+        <div>
+          <button className="text-button" type="button" disabled={loading || page.offset === 0} onClick={() => move(Math.max(0, page.offset - page.limit))}>Previous</button>
+          <button className="text-button" type="button" disabled={loading || page.next_offset === null} onClick={() => page.next_offset !== null && move(page.next_offset)}>Next</button>
+        </div>
+      </footer>}
     </div>
   </details>;
 }

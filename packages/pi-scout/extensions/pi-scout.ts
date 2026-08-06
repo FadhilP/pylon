@@ -167,7 +167,7 @@ export function repoScoutOrientationGuidance(selectedTools?: readonly string[]):
     selected.has("read") && "`read` for narrow source ranges",
   ].filter((value): value is string => Boolean(value));
   if (!uses.length) return undefined;
-  return `Repo Scout orientation tools currently visible: ${uses.join("; ")}. Unless exact anchors already exist, use 1–3 targeted searches, then prompt repo_scout with concrete anchors; leave non-local tracing to Scout.`;
+  return `Repo Scout orientation tools currently visible: ${uses.join("; ")}. Unless exact anchors already exist, use only enough orientation to frame a concrete repo_scout task—usually 3–6 repository-inspection operations, never more than 10; count nested or parallel operations separately. Then call repo_scout before further exploration and leave non-local tracing to Scout.`;
 }
 
 export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retryWait = waitForDelegateRetry) {
@@ -279,7 +279,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
     promptSnippet:
       "Gather cited repository evidence about paths, symbols, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty without making decisions",
     promptGuidelines: [
-      "Default to repo_scout for non-local, architecture-mapping, data-flow, cross-file, or unfamiliar-code work. Before calling, use 1–3 visible orientation searches to find exact anchors and sharpen the task. Skip orientation with exact anchors. Leave non-local tracing to repo_scout; skip it only for known-file self-contained work.",
+      "Use repo_scout for non-local, cross-file, or unfamiliar-code work, including architecture/data flow. Orient just enough to frame a task: usually 3–6 inspections, never over 10; nested/parallel operations count separately. Then call it. Skip orientation with exact anchors, and Scout only for known-file self-contained work.",
       "Ask repo_scout only to search, map, or trace observable evidence. Convert normative or mixed questions into factual tasks covering contracts, callers, transformations, divergences, constraints, and tests; never ask repo_scout to design, recommend, prioritize, choose architecture, or decide whether something should be canonical. Include an observable action, concrete scope anchors, required evidence, and a finite stopping boundary. Main model evaluates and decides.",
       "Treat repo_scout citations as working set. Reread only for exact edit, evidence gap/conflict, or changed state. Follow-ups include prior facts and unresolved gap; each repo_scout child starts fresh.",
     ],

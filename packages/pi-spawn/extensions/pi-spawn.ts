@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { configPath, loadConfig, thinkingLevels } from "../src/config.ts";
-import { runSpawn, spawnTimeoutMs, type SpawnActivity, type SpawnRun } from "../src/runner.ts";
+import { runSpawn, type SpawnActivity, type SpawnRun, type SpawnUiRequest, type SpawnUiResponse } from "../src/runner.ts";
 import {
   agentPolicy,
   branchSpawnIds,
@@ -212,6 +212,19 @@ function requestSpawnHooks(pi: ExtensionAPI): SpawnHooks | undefined {
   return hooks;
 }
 
+function requestSpawnRuntimePolicy(pi: ExtensionAPI, cwd: string, sessionId: string): string | undefined {
+  let policy: unknown;
+  pi.events.emit("pylon:spawn-runtime-policy-request", {
+    version: 1,
+    cwd,
+    sessionId,
+    provide: (value: unknown) => { if (policy === undefined) policy = value; },
+  });
+  if (policy === undefined) return JSON.stringify({ version: 1, invalid: true });
+  const serialized = JSON.stringify(policy);
+  return Buffer.byteLength(serialized) <= 16 * 1024 ? serialized : JSON.stringify({ version: 1, invalid: true });
+}
+
 export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChild = runSpawn, agentDir = getAgentDir()) {
   const config = await loadConfig(configPath(agentDir));
   const { agentAvailability, sessionAvailability } = config;
@@ -226,6 +239,23 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     if (!sessionStart || ctx.sessionManager.getBranch()
       .some((entry) => entry.type === "custom_message" && entry.customType === sessionStart.customType)) return;
     pi.sendMessage({ customType: sessionStart.customType, content: sessionStart.content, display: false });
+  });
+  pi.on("session_compact", (event, ctx) => {
+    if (process.env.PI_SPAWN_CHILD !== "session") return;
+    const hook = spawnedHooks(ctx.sessionManager)?.sessionCompact;
+    const compactionEntryId = event.compactionEntry?.id;
+    if (!hook || !compactionEntryId || ctx.sessionManager.getBranch().some((entry) => {
+      if (entry.type !== "custom_message") return false;
+      const value = entry as any;
+      return (value.customType === hook.customType || value.message?.customType === hook.customType)
+        && (value.details?.compactionEntryId === compactionEntryId || value.message?.details?.compactionEntryId === compactionEntryId);
+    })) return;
+    pi.sendMessage({
+      customType: hook.customType,
+      content: hook.content,
+      display: false,
+      details: { version: 1, compactionEntryId },
+    });
   });
   pi.on("before_agent_start", (event, ctx) => {
     if (process.env.PI_SPAWN_CHILD !== "session") return;
@@ -242,17 +272,37 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     policy: AgentPolicy | SpawnMarker | undefined,
     signal: AbortSignal | undefined,
     onUpdate: any,
+    ctx: any,
     beforeRun?: () => void | Promise<void>,
   ) => {
     const started = Date.now();
+    const runId = randomUUID();
     const agentName = scientistName(id);
     let model = policy?.model;
     let thinking = kind === "agent" ? (policy as AgentPolicy | undefined)?.thinking : undefined;
     let activity: readonly SpawnActivity[] = [];
     let authorized = beforeRun === undefined;
     const update = (value: unknown) => { try { onUpdate?.(value); } catch { /* UI updates must not control child lifecycle. */ } };
+    const onUiRequest = async (request: SpawnUiRequest, uiSignal: AbortSignal): Promise<SpawnUiResponse> => {
+      if (!ctx.hasUI || request.method === "editor")
+        return request.method === "confirm" ? { confirmed: false } : { cancelled: true };
+      update({
+        content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} ${agentName} is waiting for input…` }],
+        details: { ...runningDetails(), state: "attention", durationMs: Date.now() - started },
+      });
+      const title = `${kind === "agent" ? "Subagent" : "Session"} ${agentName}: ${request.title}`;
+      const dialogOptions = { signal: uiSignal, ...(request.timeout !== undefined ? { timeout: request.timeout } : {}) };
+      if (request.method === "confirm")
+        return { confirmed: await ctx.ui.confirm(title, request.message, dialogOptions) };
+      if (request.method === "select") {
+        const value = await ctx.ui.select(title, request.options, dialogOptions);
+        return value === undefined ? { cancelled: true } : { value };
+      }
+      const value = await ctx.ui.input(title, request.placeholder, dialogOptions);
+      return value === undefined ? { cancelled: true } : { value };
+    };
     const runningDetails = () => ({
-      ...resultDetails(kind, id, path, cwd), agentName, startedAt: new Date(started).toISOString(), state: "running",
+      ...resultDetails(kind, id, path, cwd), runId, agentName, startedAt: new Date(started).toISOString(), state: "running",
       ...(model ? { model } : {}), ...(thinking ? { thinking } : {}),
     });
     update({
@@ -263,12 +313,18 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const run = await withThreadLock(path, async () => {
         await beforeRun?.();
         authorized = true;
+        const runtimePolicy = requestSpawnRuntimePolicy(pi, cwd, id);
         return runChild(childArgs(kind, path, policy), {
           cwd,
           prompt,
           signal,
-          timeoutMs: spawnTimeoutMs(),
-          env: { PI_SPAWN_CHILD: kind, PI_SPAWN_DEPTH: String(Number(process.env.PI_SPAWN_DEPTH ?? 0) + 1) },
+          env: {
+            PI_SPAWN_CHILD: kind,
+            PI_SPAWN_AUTONOMOUS: "1",
+            PI_SPAWN_DEPTH: String(Number(process.env.PI_SPAWN_DEPTH ?? 0) + 1),
+            ...(runtimePolicy ? { PI_SPAWN_GUARD_POLICY: runtimePolicy } : {}),
+          },
+          onUiRequest,
           onUsage: (usage) => update({
             content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} usage updated` }],
             details: { ...runningDetails(), durationMs: Date.now() - started, usage },
@@ -293,7 +349,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       return {
         content: [{ type: "text" as const, text: runText(kind, id, agentName, run) }],
         details: {
-          ...resultDetails(kind, id, path, cwd), agentName, startedAt: new Date(started).toISOString(),
+          ...resultDetails(kind, id, path, cwd), runId, agentName, startedAt: new Date(started).toISOString(),
           status: run.error ? "failed" : "completed", model: run.model ?? model,
           ...(run.thinking ?? thinking ? { thinking: run.thinking ?? thinking } : {}), durationMs: run.durationMs,
           usage: run.usage, ...(run.sessionUsage ? { sessionUsage: run.sessionUsage } : {}),
@@ -310,7 +366,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const message = error instanceof Error ? error.message : String(error);
       return {
         content: [{ type: "text" as const, text: `${kind === "agent" ? "Subagent" : "Session"} ${id} turn failed: ${message}` }],
-        details: { ...(authorized ? resultDetails(kind, id, path, cwd) : {}), agentName, startedAt: new Date(started).toISOString(), status: "failed", failureCode: error instanceof SessionAdoptionError ? error.code : "runner_error", failureMessage: message },
+        details: { ...(authorized ? resultDetails(kind, id, path, cwd) : {}), runId, agentName, startedAt: new Date(started).toISOString(), status: "failed", failureCode: error instanceof SessionAdoptionError ? error.code : "runner_error", failureMessage: message },
       };
     }
   };
@@ -375,7 +431,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
           disableSpecialists: params.disableSpecialists ?? true,
         };
         const created = createPrivateAgent(ctx.cwd, parent, policy, params.name?.trim() || defaultName(params.prompt!), agentDir);
-        return executeTurn("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate);
+        return executeTurn("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate, ctx);
       }
       const matches = await listPrivateAgents(ctx.cwd, parent, allowed, agentDir);
       const selected = matches.find(({ info }) => info.id === params.id);
@@ -394,7 +450,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       }
       const policy = agentPolicy(selected.manager, parent);
       if (!policy) return { content: [{ type: "text" as const, text: "Private subagent policy is invalid." }], details: { ...resultDetails("agent", selected.info.id), failureCode: "invalid_policy" } };
-      return executeTurn("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate);
+      return executeTurn("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate, ctx);
     },
   });
   pi.registerTool(agentTool);
@@ -433,14 +489,14 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
           model: selectedModel,
           hooks: requestSpawnHooks(pi),
         });
-        return executeTurn("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, signal, onUpdate);
+        return executeTurn("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, signal, onUpdate, ctx);
       }
       if (params.action === "adopt") {
         try {
           const cwd = projectCwd(ctx.cwd, params.project);
           const existing = await findSessionForAdoption(cwd, params.id!, parent);
           const hooks = requestSpawnHooks(pi);
-          return executeTurn("session", existing.id, existing.path, cwd, params.prompt!, undefined, signal, onUpdate, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
+          return executeTurn("session", existing.id, existing.path, cwd, params.prompt!, undefined, signal, onUpdate, ctx, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return { content: [{ type: "text" as const, text: message }], details: { failureCode: error instanceof SessionAdoptionError ? error.code : error instanceof ProjectDirectoryError ? "invalid_project" : "adopt_error" } };
@@ -452,7 +508,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const [{ info, manager }] = selected;
       const policy = sessionPolicy(manager, parent);
       if (!policy) return { content: [{ type: "text" as const, text: "Spawned session policy is invalid." }], details: { ...resultDetails("session", info.id), failureCode: "invalid_policy" } };
-      return executeTurn("session", info.id, info.path, info.cwd, params.prompt!, policy, signal, onUpdate);
+      return executeTurn("session", info.id, info.path, info.cwd, params.prompt!, policy, signal, onUpdate, ctx);
     },
   });
   pi.registerTool(sessionTool);

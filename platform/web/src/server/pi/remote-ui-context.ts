@@ -76,9 +76,11 @@ export interface StateQLPasswordTarget {
   database: string;
 }
 
+export interface StateQLPasswordDialogOptions { timeoutMs: number; }
+
 export interface StateQLCredentialHost {
   requestStateQLCredential(request: StateQLCredentialRequest): Promise<string | undefined>;
-  requestStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): Promise<string | undefined>;
+  requestStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget, options?: StateQLPasswordDialogOptions): Promise<string | undefined>;
   invalidateStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): void;
 }
 
@@ -231,6 +233,15 @@ function validateCredentialRequest(
   };
 }
 
+function validatePasswordTimeout(options?: StateQLPasswordDialogOptions): number | undefined {
+  const timeoutMs = options?.timeoutMs;
+  if (timeoutMs === undefined) return undefined;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 24 * 60 * 60_000) {
+    throw new Error("StateQL password dialog timeout is invalid");
+  }
+  return timeoutMs;
+}
+
 function validatePasswordTarget(
   request: StateQLCredentialRequest,
   target: StateQLPasswordTarget,
@@ -319,6 +330,7 @@ class StateQLCredentialBroker {
     generation: number,
     raw: StateQLCredentialRequest,
     rawPasswordTarget?: StateQLPasswordTarget,
+    passwordTimeoutMs?: number,
   ): Promise<string | undefined> {
     if (!this.isCurrent(generation)) return Promise.resolve(undefined);
     const { request, identity } = validateCredentialRequest(sessionId, raw);
@@ -345,7 +357,7 @@ class StateQLCredentialBroker {
       const controller = new AbortController();
       flight = { key: flightKey, generation, controller, promise: Promise.resolve(undefined), waiters: 0, settled: false };
       const activeFlight = flight;
-      activeFlight.promise = this.ask(sessionId, generation, baseKey, request, identity, passwordTarget?.target, controller.signal)
+      activeFlight.promise = this.ask(sessionId, generation, baseKey, request, identity, passwordTarget?.target, passwordTimeoutMs, controller.signal)
         .finally(() => {
           activeFlight.settled = true;
           if (this.flights.get(flightKey) === activeFlight) this.flights.delete(flightKey);
@@ -397,6 +409,7 @@ class StateQLCredentialBroker {
     request: StateQLCredentialRequest,
     identity: CredentialIdentity,
     passwordTarget: StateQLPasswordTarget | undefined,
+    passwordTimeoutMs: number | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     const target = request.connection
@@ -433,7 +446,7 @@ class StateQLCredentialBroker {
         ...(!passwordTarget && request.connection ? { database: safeMetadata(request.connection.database, 500) } : {}),
       },
       neutral: undefined,
-      dialogOptions: { signal },
+      dialogOptions: { signal, ...(passwordTimeoutMs !== undefined ? { timeout: passwordTimeoutMs } : {}) },
     });
     if (!value || !this.isCurrent(generation) || signal.aborted) return undefined;
     if (passwordTarget) {
@@ -559,9 +572,10 @@ export class RemoteUiBridge {
     sessionGeneration: number,
     request: StateQLCredentialRequest,
     target: StateQLPasswordTarget,
+    options?: StateQLPasswordDialogOptions,
   ): Promise<string | undefined> {
     if (this.disposed) return undefined;
-    return this.credentialBroker.request(sessionId, sessionGeneration, request, target);
+    return this.credentialBroker.request(sessionId, sessionGeneration, request, target, validatePasswordTimeout(options));
   }
 
   invalidateStateQLPassword(
@@ -836,8 +850,8 @@ class GenerationUiContext implements ExtensionUIContext {
     return this.bridge.requestStateQLCredential(this.sessionId, this.generation, request);
   }
 
-  requestStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): Promise<string | undefined> {
-    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target);
+  requestStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget, options?: StateQLPasswordDialogOptions): Promise<string | undefined> {
+    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target, options);
   }
 
   invalidateStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): void {

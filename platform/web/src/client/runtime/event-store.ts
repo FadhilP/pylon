@@ -1,12 +1,13 @@
 import { useSyncExternalStore } from "react";
+import type { GuardRuleOverrides } from "../../shared/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, DelegatedAgentRunUpdateReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -320,6 +321,7 @@ export class RuntimeEventStore {
     guardTimeoutSeconds: DialogTimeoutSeconds | "inherit",
     clarifyTimeoutSeconds: DialogTimeoutSeconds | "inherit",
     expectedRevision: number,
+    guardRules: GuardRuleOverrides = {},
   ): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
@@ -328,6 +330,7 @@ export class RuntimeEventStore {
       verify: verify === "inherit" ? { mode: "inherit" } : verify,
       timeline: timeline === "inherit" ? "inherit" : timeline ? "enabled" : "disabled",
       guard: guard === "inherit" ? "inherit" : guard ? "enabled" : "disabled",
+      guardRules,
       workspace,
       guardTimeoutSeconds,
       clarifyTimeoutSeconds,
@@ -335,6 +338,7 @@ export class RuntimeEventStore {
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
+    await this.waitForRuntimePolicyRevision(runtime.sessionId, expectedRevision);
   }
 
   async updateToolPolicy(
@@ -481,6 +485,17 @@ export class RuntimeEventStore {
     const result = await this.api.stateqlSnapshot(runtime.sessionGeneration, historyLimit, signal);
     if (!isStateQLSnapshot(result) || result.sessionGeneration !== runtime.sessionGeneration
       || result.actor_id !== runtime.sessionId) throw new Error("StateQL status is stale or invalid");
+    return result;
+  }
+
+  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.stateqlRows(runtime.sessionGeneration, handle, offset, limit, signal);
+    if (!isStateQLRowsPage(result) || result.sessionGeneration !== runtime.sessionGeneration
+      || result.actor_id !== runtime.sessionId || result.handle !== handle
+      || result.offset !== offset || result.limit !== limit) {
+      throw new Error("StateQL rows are stale or invalid");
+    }
     return result;
   }
 
@@ -893,6 +908,24 @@ export class RuntimeEventStore {
       }
       throw error;
     }
+  }
+
+  private waitForRuntimePolicyRevision(sessionId: string, previousRevision: number): Promise<void> {
+    const ready = () => this.snapshot.runtime?.sessionId === sessionId
+      && this.snapshot.runtime.runtimePolicy.revision > previousRevision;
+    if (ready()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        unsubscribe();
+        reject(new Error("Timed out while refreshing runtime policy"));
+      }, 10_000);
+      const unsubscribe = this.subscribe(() => {
+        if (!ready()) return;
+        window.clearTimeout(timeout);
+        unsubscribe();
+        resolve();
+      });
+    });
   }
 
   private waitForRuntime(sessionId: string, generation: number): Promise<void> {

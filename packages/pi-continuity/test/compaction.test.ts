@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import {
   buildContinuityCompaction,
@@ -382,6 +382,15 @@ test("does not retain a prior compaction when there is no safe suffix", () => {
     preparation: preparation(entries),
     work: work(),
   }), undefined);
+});
+
+test("accepts production UUID boundary identities", () => {
+  const runId = randomUUID(), timelineId = randomUUID();
+  const entries = [handoff(runId, timelineId, "handoff"), user("Task", "request")];
+  const result = build(entries, work({ runId, timelineId }));
+  assert.match(result.summary, new RegExp(`Run: ${runId}`));
+  assert.match(result.summary, new RegExp(`Timeline: ${timelineId}`));
+  assert.doesNotThrow(() => assertSafe(result.summary));
 });
 
 test("sanitizes rendered boundary IDs without changing persisted identity", () => {

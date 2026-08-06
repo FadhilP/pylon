@@ -38,7 +38,7 @@ StateQL safety checks remain authoritative. Connection changes, database writes,
 
 ### Pylon Web
 
-Pylon Web exposes a local, bounded workspace status/history view. It contains actor attribution, connection metadata, transaction ownership, recent handles/operations, and up to 100 command-history entries, but no SQL, parameters, result rows, or credentials.
+Pylon Web exposes a local, bounded workspace status/history view. It contains actor attribution, connection metadata, transaction ownership, recent handles/operations, and up to 100 command-history entries. Parameters and credentials are never included. Materialized result rows stay out of the status snapshot and load in bounded pages only when the user explicitly expands them.
 
 ### Missing Credentials
 

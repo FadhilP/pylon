@@ -45,7 +45,7 @@ Settings apply to new session runtimes. Both tools default to deferred for promp
 
 Activity rows use stable human names selected from a fixed list of scientists; persisted thread titles use the caller's purpose-based name or a normalized prompt preview, never UUID fragments.
 
-Each prompt starts a fresh Pi RPC subprocess, waits for the agent to settle, returns the response and usage to the parent, then exits. The persisted child session is reopened for later prompts. Adoption records ownership before its first prompt, so the claim remains resumable if that prompt fails, is cancelled, or times out.
+Each prompt starts a fresh Pi RPC subprocess, waits for the agent to settle, returns the response and usage to the parent, then exits. The persisted child session is reopened for later prompts. Adoption records ownership before its first prompt, so the claim remains resumable if that prompt fails, is cancelled, or times out. Child select, confirm, and input dialogs are shown through the invoking parent UI and their answers are returned only to that child; unavailable, malformed, and unsupported dialogs cancel rather than hang.
 
 Calls to different threads may run concurrently. pi-spawn rejects overlapping writes to the same thread within the current Pi/Pylon process. Separate Pi processes cannot share that in-memory lock, so do not adopt, open, or prompt a spawned session while it is active in another Pi process.
 
@@ -53,7 +53,7 @@ The parent must be a persisted session. Session IDs are resolved only through na
 
 ## Limits
 
-- `PI_SPAWN_TIMEOUT_MS`: per-turn timeout, default 15 minutes, maximum two hours.
+- Turns have no timeout by default. `PI_SPAWN_TIMEOUT_MS` can set a per-turn timeout up to two hours.
 - Responses: at most 50 KiB or 2,000 lines.
 - Activity: every child tool event from the current create, adopt, or continue invocation; individual event text remains bounded.
 - Nested standard-session spawning: maximum process-chain depth 4.

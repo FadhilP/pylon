@@ -146,24 +146,17 @@ export default function papercutExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("papercuts", {
-    description: "List project papercuts: /papercuts [open|resolved|dismissed|all]",
-    handler: async (args, ctx) => {
-      try {
-        const status = (args.trim() || "open") as PapercutStatus | "all";
-        if (!["open", "resolved", "dismissed", "all"].includes(status))
-          throw new Error("usage: /papercuts [open|resolved|dismissed|all]");
-        ctx.ui.notify(formatList(await list(ctx, status), status), "info");
-      } catch (error: any) { ctx.ui.notify(error?.message ?? String(error), "error"); }
-    },
-  });
-
   pi.registerCommand("papercut", {
-    description: "Capture or update a papercut: /papercut <message>|resolve <id> <resolution>|dismiss <id> [reason]|reopen <id>",
+    description: "List, capture, or update project papercuts",
     handler: async (args, ctx) => {
       try {
         const text = args.trim();
-        if (!text) throw new Error("usage: /papercut <message>|resolve <id> <resolution>|dismiss <id> [reason]|reopen <id>");
+        const status = text.toLowerCase() as PapercutStatus | "all";
+        if (!text || ["open", "resolved", "dismissed", "all"].includes(status)) {
+          const selected = text ? status : "open";
+          ctx.ui.notify(formatList(await list(ctx, selected), selected), "info");
+          return;
+        }
         const match = text.match(/^(resolve|dismiss|reopen)\s+(\S+)(?:\s+([\s\S]+))?$/i);
         if (!match) {
           if (/^(?:resolve|dismiss|reopen)\b/i.test(text))

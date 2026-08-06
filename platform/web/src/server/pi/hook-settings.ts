@@ -28,17 +28,20 @@ export function defaultHookSettings(): HookSettingsReadModel {
   return {
     sessionStart: {
       enabled: true,
-      sources: [{ id: "ponytail-skill", name: "ponytail/SKILL.md", kind: "file", content: PONYTAIL_SKILL }],
+      sources: [{ id: "ponytail-skill", name: "ponytail/SKILL.md", kind: "file", content: PONYTAIL_SKILL, reinjectOnCompaction: true }],
     },
     beforeAgentStart: {
       enabled: true,
-      sources: [{ id: "ponytail-always-on", name: "Always-on skills", kind: "text", content: PONYTAIL_INSTRUCTIONS }],
+      sources: [{ id: "ponytail-always-on", name: "Always-on skills", kind: "text", content: PONYTAIL_INSTRUCTIONS, reinjectOnCompaction: false }],
     },
   };
 }
 
 export function cloneHookSettings(settings: HookSettingsReadModel): HookSettingsReadModel {
-  return structuredClone(settings);
+  const cloned = structuredClone(settings);
+  for (const hook of [cloned.sessionStart, cloned.beforeAgentStart])
+    for (const source of hook.sources) source.reinjectOnCompaction = source.reinjectOnCompaction === true;
+  return cloned;
 }
 
 function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
@@ -55,8 +58,12 @@ export function validPersistedHookSettings(value: unknown): value is HookSetting
   if (!exactKeys(settings, ["sessionStart", "beforeAgentStart"])) return false;
   return [settings.sessionStart, settings.beforeAgentStart].every((hook) => {
     if (!hook || typeof hook !== "object" || Array.isArray(hook) || !exactKeys(hook as Record<string, unknown>, ["enabled", "sources"])) return false;
-    return (hook as { sources: unknown[] }).sources.every((source) => source && typeof source === "object"
-      && !Array.isArray(source) && exactKeys(source as Record<string, unknown>, ["id", "name", "kind", "content"]));
+    return (hook as { sources: unknown[] }).sources.every((source) => {
+      if (!source || typeof source !== "object" || Array.isArray(source)) return false;
+      const value = source as Record<string, unknown>;
+      return exactKeys(value, ["id", "name", "kind", "content"])
+        || exactKeys(value, ["id", "name", "kind", "content", "reinjectOnCompaction"]);
+    });
   });
 }
 

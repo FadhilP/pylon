@@ -1,6 +1,7 @@
+import { validGuardRules } from "../guard-policy.ts";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -104,8 +105,10 @@ export function validHookSettings(value: unknown): value is HookSettingsReadMode
       || !Array.isArray(item.sources) || item.sources.length > 20) return false;
     const ids = new Set<string>();
     for (const source of item.sources) {
-      if (!record(source) || Object.keys(source).length !== 4 || !identifier(source.id) || !boundedString(source.name, 200)
-        || (source.kind !== "file" && source.kind !== "text") || typeof source.content !== "string") return false;
+      if (!record(source) || ![4, 5].includes(Object.keys(source).length) || !identifier(source.id) || !boundedString(source.name, 200)
+        || (source.kind !== "file" && source.kind !== "text") || typeof source.content !== "string"
+        || (source.reinjectOnCompaction !== undefined && typeof source.reinjectOnCompaction !== "boolean")
+        || Object.keys(source).some((key) => !["id", "name", "kind", "content", "reinjectOnCompaction"].includes(key))) return false;
       const bytes = new TextEncoder().encode(source.content).byteLength;
       if (bytes > 64 * 1024 || ids.has(source.id)) return false;
       ids.add(source.id);
@@ -134,7 +137,11 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && validThinkingList(value.thinkingLevels);
   }
   if (value.kind === "continuity") {
-    return typeof value.memoryEnabled === "boolean" && ["planner", "executor", "memoryReviewer", "compactionReviewer"].every((key) => {
+    return typeof value.memoryEnabled === "boolean"
+      && Number.isSafeInteger(value.keepRecentTokens)
+      && (value.keepRecentTokens as number) >= 1_000
+      && (value.keepRecentTokens as number) <= 50_000
+      && ["planner", "executor", "memoryReviewer", "compactionReviewer"].every((key) => {
       const profile = value[key];
       return profile === undefined || record(profile)
         && boundedString(profile.model, 400)
@@ -280,7 +287,8 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
       return { ok: false, error: "invalid Timeline policy" };
     }
     if (!["inherit", "enabled", "disabled"].includes(String(value.guard))
-      || value.scope === "global" && value.guard === "inherit") {
+      || value.scope === "global" && value.guard === "inherit"
+      || !validGuardRules(value.guardRules, value.scope === "global")) {
       return { ok: false, error: "invalid Guard policy" };
     }
     if (!["inherit", "checkout", "worktree", "local"].includes(String(value.workspace))
@@ -438,6 +446,38 @@ export function isWorkspaceFileContent(value: unknown): value is WorkspaceFileCo
     && (value.truncated === undefined || typeof value.truncated === "boolean");
 }
 
+function validJsonCell(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.length <= 64 * 1024;
+  if (depth >= 6) return false;
+  if (Array.isArray(value)) return value.length <= 100 && value.every((item) => validJsonCell(item, depth + 1));
+  if (!record(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return false;
+  const entries = Object.entries(value);
+  return entries.length <= 100 && entries.every(([key, item]) => key.length <= 500 && validJsonCell(item, depth + 1));
+}
+
+export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !identifier(value.actor_id) || !boundedString(value.handle, 200)
+    || !Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 10_000
+    || !Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 100
+    || !Array.isArray(value.rows) || value.rows.length > (value.limit as number)
+    || !Number.isSafeInteger(value.returned) || value.returned !== value.rows.length
+    || !Number.isSafeInteger(value.total) || (value.total as number) < 0 || (value.total as number) > 10_000
+    || (value.returned as number) > Math.max(0, (value.total as number) - (value.offset as number))
+    || typeof value.truncated !== "boolean") return false;
+  if (!value.rows.every((row) => record(row)
+    && (Object.getPrototypeOf(row) === Object.prototype || Object.getPrototypeOf(row) === null)
+    && validJsonCell(row))) return false;
+  const truncated = (value.offset as number) + (value.returned as number) < (value.total as number);
+  return value.truncated === truncated
+    && (truncated
+      ? (value.returned as number) > 0 && Number.isSafeInteger(value.next_offset)
+        && value.next_offset === (value.offset as number) + (value.returned as number)
+      : value.next_offset === null);
+}
+
 export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
     || !record(value.session) || !identifier(value.session.session_id) || !identifier(value.session.name)
@@ -495,6 +535,7 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     && (value.parentSession === undefined || record(value.parentSession)
       && identifier(value.parentSession.id)
       && boundedString(value.parentSession.title, 200))
+    && (value.runningUnderParentSessionId === undefined || identifier(value.runningUnderParentSessionId))
     && typeof value.cwdLabel === "string" && value.cwdLabel.length <= 500
     && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
     && typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt))

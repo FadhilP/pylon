@@ -67,7 +67,9 @@ test("Repo Scout orientation guidance follows currently selected tools", async (
     }, context());
     assert.match(result.systemPrompt, /^BASE\n\nRepo Scout orientation tools currently visible:/);
     assert.match(result.systemPrompt, /code_search.*concepts/);
-    assert.match(result.systemPrompt, /Unless exact anchors already exist, use 1–3 targeted searches/);
+    assert.match(result.systemPrompt, /usually 3–6 repository-inspection operations, never more than 10/);
+    assert.match(result.systemPrompt, /count nested or parallel operations separately/i);
+    assert.match(result.systemPrompt, /call repo_scout before further exploration/i);
     assert.doesNotMatch(result.systemPrompt, /`(?:symbol_search|relationship_graph|fd|rg|grep|find)`/);
     assert.equal(runtime.handlers.get("before_agent_start")![0]({
       systemPrompt: "BASE",
@@ -328,13 +330,14 @@ test("Scout registers separate repo and web tools", async () => {
     assert.equal(repoGuidelines.length, 3);
     assert.ok(repoGuidance.length < 1_000);
     assert.ok(repoGuidelines.every((guideline) => /repo_scout/i.test(guideline)));
-    assert.match(repoGuidance, /Default to repo_scout for non-local, architecture-mapping, data-flow, cross-file, or unfamiliar-code work/i);
-    assert.match(repoGuidance, /visible orientation searches/i);
-    assert.match(repoGuidance, /find exact anchors and sharpen the task/i);
+    assert.match(repoGuidance, /repo_scout for non-local, cross-file, or unfamiliar-code work, including architecture\/data flow/i);
+    assert.match(repoGuidance, /Orient just enough to frame a task/i);
+    assert.match(repoGuidance, /usually 3–6 inspections, never over 10/i);
+    assert.match(repoGuidance, /nested\/parallel operations count separately/i);
+    assert.match(repoGuidance, /Then call it/i);
     assert.doesNotMatch(repoGuidance, /symbol_search|code_search|relationship_graph|fd\/rg/i);
     assert.match(repoGuidance, /Skip orientation with exact anchors/i);
-    assert.match(repoGuidance, /Leave non-local tracing to repo_scout/i);
-    assert.match(repoGuidance, /skip it only for known-file self-contained work/i);
+    assert.match(repoGuidance, /Scout only for known-file self-contained work/i);
     assert.match(repoGuidance, /Convert normative or mixed questions into factual tasks/i);
     assert.match(repoGuidance, /never ask repo_scout to design, recommend, prioritize, choose architecture/i);
     assert.match(repoGuidance, /decide whether something should be canonical/i);

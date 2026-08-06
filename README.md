@@ -110,7 +110,7 @@ Raw verification and Heartbeat logs never cross package events.
 
 ## Development
 
-Install workspace dependencies and start the local web app from the repository root:
+Install workspace dependencies and start the local web app from the repository root. The root `package-lock.json` is the only workspace lockfile; do not generate package-level locks.
 
 ```sh
 npm run install:packages

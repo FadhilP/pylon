@@ -28,7 +28,7 @@ import {
 } from "pylon-core/src/worktree.ts";
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -112,6 +112,16 @@ class InvalidRuntimeSnapshotError extends Error {
   }
 }
 
+interface ExternalSpawnRun {
+  runId: string;
+  sessionId: string;
+  parentSessionId: string;
+  path: string;
+  cwd: string;
+  state: "running" | "attention";
+  startedAt: string;
+}
+
 interface CachedWorkspaceInventory {
   cwd: string;
   baselineTree?: string;
@@ -154,6 +164,17 @@ export interface RuntimeCoordinatorOptions extends SessionRuntimeOptions {
   pickDirectory?: (signal?: AbortSignal) => Promise<string | undefined>;
 }
 
+interface RuntimeQueuedPrompt {
+  id: string;
+  commandId: string;
+  message: string;
+  images?: PromptImage[];
+  files?: PromptTextFile[];
+  planMode: boolean;
+  state: "queued" | "delivering";
+  sequence: number;
+}
+
 interface RuntimeSlot {
   id: string;
   driver: SessionRuntime;
@@ -167,15 +188,8 @@ interface RuntimeSlot {
   lastWorkStartedAt?: string;
   pendingUi?: UiRequest;
   nativeQueue: { steering: number; followUp: number };
-  queuedPrompts: Array<{
-    id: string;
-    commandId: string;
-    message: string;
-    images?: PromptImage[];
-    files?: PromptTextFile[];
-    planMode: boolean;
-    state: "queued" | "delivering";
-  }>;
+  queuedPrompts: RuntimeQueuedPrompt[];
+  displayPendingPrompts: RuntimeQueuedPrompt[];
   queueFlushTimer?: NodeJS.Timeout;
   pendingControls?: {
     input: SetSessionControlsInput;
@@ -212,7 +226,9 @@ interface RuntimeSlot {
 /** Keeps visited SDK sessions alive while preserving one server-wide selection. */
 export class RuntimeCoordinator implements PiDriver {
   private readonly slots = new Map<string, RuntimeSlot>();
+  private readonly externalSpawnRuns = new Map<string, ExternalSpawnRun>();
   private readonly listeners = new Set<DriverEventListener>();
+  private queueSequence = 0;
   private readonly sessionIndex = new SessionIndex();
   private projectRegistry?: ProjectRegistry;
   private selectedId = "";
@@ -296,11 +312,12 @@ export class RuntimeCoordinator implements PiDriver {
       result = await this.sessionIndex.list(input, {
         activeId: selectedId,
         generation,
-        stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
-        activeFor: (sessionId) => this.slots.has(sessionId) && activeIds.has(sessionId),
+        stateFor: (sessionId) => this.externalSpawnRuns.get(sessionId)?.state ?? this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
+        activeFor: (sessionId) => this.externalSpawnRuns.has(sessionId) || this.slots.has(sessionId) && activeIds.has(sessionId),
         pinnedFor: (sessionId) => pinnedIds.has(sessionId),
         userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
-        workStartedAtFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt,
+        workStartedAtFor: (sessionId) => this.externalSpawnRuns.get(sessionId)?.startedAt ?? this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt,
+        runningUnderParentSessionIdFor: (sessionId) => this.externalSpawnRuns.get(sessionId)?.parentSessionId,
         fallbacks: [...this.slots.values()].map((slot) => {
           const details = slot.driver.runtimeDetails();
           return {
@@ -463,6 +480,15 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: generation };
   }
 
+  async stateqlRows(handle: string, offset: number, limit: number): Promise<StateQLRowsPage> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
+    const result = await slot.driver.stateqlRows(handle, offset, limit);
+    this.assertSelected(slot, generation, "loading StateQL rows");
+    return { ...result, sessionGeneration: generation };
+  }
+
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
     return this.withLifecycle(() => this.messageCommand("prompt", input));
   }
@@ -470,6 +496,11 @@ export class RuntimeCoordinator implements PiDriver {
   async queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
+    slot.displayPendingPrompts ??= [];
+    if (slot.queuedPrompts.some((item) => item.commandId === input.commandId)
+      || slot.displayPendingPrompts.some((item) => item.commandId === input.commandId)) {
+      throw new Error("the prompt command is already queued");
+    }
     if (slot.queuedPrompts.length >= 100) throw new Error("the prompt queue is full");
     slot.queuedPrompts.push({
       id: randomUUID(),
@@ -479,6 +510,7 @@ export class RuntimeCoordinator implements PiDriver {
       ...(input.files?.length ? { files: structuredClone(input.files) } : {}),
       planMode: input.planMode === true,
       state: "queued",
+      sequence: ++this.queueSequence,
     });
     slot.receivedInput = true;
     slot.lastActivityAt = Date.now();
@@ -516,25 +548,30 @@ export class RuntimeCoordinator implements PiDriver {
     const queued = this.selectedQueuedPrompt(input.queueId);
     if (queued.state !== "queued") throw new Error("queued prompt is already being delivered");
     queued.state = "delivering";
+    const deliveryGeneration = slot.innerGeneration;
+    this.addDisplayPendingPrompt(slot, queued);
     this.publishQueue(slot);
     try {
       const accepted = await slot.driver.steer({
         commandId: queued.commandId,
-        expectedGeneration: slot.innerGeneration,
+        expectedGeneration: deliveryGeneration,
         message: queued.message,
         images: queued.images,
         files: queued.files,
       });
-      slot.queuedPrompts.splice(slot.queuedPrompts.indexOf(queued), 1);
-      this.publishQueue(slot);
+      if (slot.innerGeneration === deliveryGeneration && this.removeQueuedPrompt(slot, queued)) this.publishQueue(slot);
       return {
         ...accepted,
         commandId: input.commandId ?? accepted.commandId,
         sessionGeneration: this.generation,
       };
     } catch (error) {
-      queued.state = "queued";
-      this.publishQueue(slot);
+      if (slot.innerGeneration === deliveryGeneration
+        && slot.queuedPrompts.includes(queued) && slot.displayPendingPrompts?.includes(queued)) {
+        slot.displayPendingPrompts.splice(slot.displayPendingPrompts.indexOf(queued), 1);
+        queued.state = "queued";
+        this.publishQueue(slot);
+      }
       throw error;
     }
   }
@@ -1001,6 +1038,8 @@ export class RuntimeCoordinator implements PiDriver {
   async switchSession(input: SwitchSessionInput): Promise<ReplacementResult> {
     return this.withLifecycle(async () => {
       if (this.registry().isSessionArchived(input.sessionId)) throw new Error("session is archived");
+      const external = this.externalSpawnRuns.get(input.sessionId);
+      if (external) throw new Error(`session is currently running under its parent session (${external.parentSessionId}); open it after the spawned turn finishes`);
       if (input.sessionId === this.selectedId) return this.replacement(false);
       const awake = this.slots.get(input.sessionId);
       if (awake) {
@@ -1259,6 +1298,7 @@ export class RuntimeCoordinator implements PiDriver {
       verify: input.verify,
       timeline: input.timeline,
       guard: input.guard,
+      guardRules: input.guardRules,
       workspace: input.workspace,
       guardTimeoutSeconds: input.guardTimeoutSeconds,
       clarifyTimeoutSeconds: input.clarifyTimeoutSeconds,
@@ -1280,6 +1320,7 @@ export class RuntimeCoordinator implements PiDriver {
         guard: previous.session.guardEnabled === undefined
           ? "inherit"
           : previous.session.guardEnabled ? "enabled" : "disabled",
+        guardRules: previous.session.guardRules ?? {},
         workspace: previous.session.workspace ?? "inherit",
         guardTimeoutSeconds: previous.session.guardTimeoutSeconds === undefined ? "inherit" : previous.session.guardTimeoutSeconds,
         clarifyTimeoutSeconds: previous.session.clarifyTimeoutSeconds === undefined ? "inherit" : previous.session.clarifyTimeoutSeconds,
@@ -1495,6 +1536,7 @@ export class RuntimeCoordinator implements PiDriver {
       lastWorkStartedAt: driver.runtimeDetails().workStartedAt,
       nativeQueue: { steering: 0, followUp: 0 },
       queuedPrompts: [],
+      displayPendingPrompts: [],
       unsubscribe: () => undefined,
     };
     driver.setWorkspaceApplyHandler((request) => this.handleWorkspaceApplyTool(slot, request));
@@ -2142,11 +2184,23 @@ export class RuntimeCoordinator implements PiDriver {
   private onSlotEvent(slot: RuntimeSlot, event: DriverEvent): void {
     slot.eventRevision++;
     slot.lastActivityAt = Date.now();
+    if (event.type === "session.event" && event.payload && typeof event.payload === "object" && !Array.isArray(event.payload))
+      this.captureExternalSpawnRun(slot, event.payload as Record<string, unknown>);
     if (event.type === "session.event") {
       const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
         ? event.payload as Record<string, unknown>
         : {};
       const kind = String(payload.type ?? "").replace(/-/g, "_");
+      const message = payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
+        ? payload.message as Record<string, unknown>
+        : {};
+      if ((kind === "message_start" || kind === "message_starting")
+        && (!Number.isSafeInteger(event.sessionGeneration) || event.sessionGeneration === slot.innerGeneration)
+        && String(payload.role ?? message.role) === "user"
+        && typeof payload.clientMessageId === "string"
+        && this.consumeDisplayPendingPrompt(slot, payload.clientMessageId)) {
+        this.publishQueue(slot);
+      }
       if (kind === "session_info_changed" || kind === "agent_start" || kind === "agent_end") {
         const details = slot.driver.runtimeDetails();
         if (details.sessionPath)
@@ -2154,6 +2208,10 @@ export class RuntimeCoordinator implements PiDriver {
       }
     }
     if (event.type === "session.replaced" || event.type === "session.unavailable") {
+      for (const pending of slot.displayPendingPrompts ?? []) {
+        if (slot.queuedPrompts.includes(pending)) pending.state = "queued";
+      }
+      slot.displayPendingPrompts = [];
       const oldId = slot.id;
       const wasSelected = this.selectedId === oldId;
       slot.innerGeneration = event.sessionGeneration;
@@ -2166,6 +2224,7 @@ export class RuntimeCoordinator implements PiDriver {
       this.slots.delete(oldId);
       this.slots.set(slot.id, slot);
       if (wasSelected) this.selectedId = slot.id;
+      if (slot.queuedPrompts[0]?.state === "queued") this.scheduleQueuedPrompt(slot);
       if (slot.suppressEvents) return;
       if (wasSelected) {
         this.generation++;
@@ -2226,6 +2285,47 @@ export class RuntimeCoordinator implements PiDriver {
       }
     }
     this.publishStatus(slot.id, false, statusCue);
+  }
+
+  private captureExternalSpawnRun(slot: RuntimeSlot, payload: Record<string, unknown>): void {
+    const kind = String(payload.type ?? "").replace(/-/g, "_");
+    if (kind !== "tool_execution_update" && kind !== "tool_execution_end") return;
+    const result = kind === "tool_execution_update" ? payload.partialResult : payload.result;
+    if (!result || typeof result !== "object" || Array.isArray(result)) return;
+    const details = (result as Record<string, unknown>).details;
+    if (!details || typeof details !== "object" || Array.isArray(details)) return;
+    const record = details as Record<string, unknown>;
+    const marker = record.piSpawn;
+    if (!marker || typeof marker !== "object" || Array.isArray(marker)) return;
+    const spawn = marker as Record<string, unknown>;
+    if (spawn.version !== 1 || spawn.kind !== "session" || typeof spawn.id !== "string"
+      || typeof spawn.path !== "string" || typeof spawn.cwd !== "string" || typeof record.runId !== "string") return;
+    const sessionId = spawn.id;
+    const runId = record.runId;
+    if (kind === "tool_execution_end") {
+      if (this.externalSpawnRuns.get(sessionId)?.runId !== runId) return;
+      this.externalSpawnRuns.delete(sessionId);
+      this.emitStatus(sessionId, this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping", true);
+      this.emitProjectsChanged();
+      return;
+    }
+    if (record.state !== "running" && record.state !== "attention") return;
+    const current = this.externalSpawnRuns.get(sessionId);
+    if (current && current.runId !== runId) return;
+    const startedAt = typeof record.startedAt === "string" && !Number.isNaN(Date.parse(record.startedAt))
+      ? record.startedAt
+      : current?.startedAt ?? new Date().toISOString();
+    this.externalSpawnRuns.set(sessionId, {
+      runId, sessionId, parentSessionId: slot.id, path: spawn.path, cwd: spawn.cwd,
+      state: record.state, startedAt,
+    });
+    this.sessionIndex.invalidateSession(sessionId, spawn.path, spawn.cwd);
+    this.emit({
+      type: "session.status", sessionId, sessionGeneration: this.generation,
+      state: record.state, workStartedAt: startedAt,
+      ...(record.state === "attention" ? { cue: "attention" as const } : {}),
+    });
+    this.emitProjectsChanged();
   }
 
   private publishStatus(sessionId: string, completed = false, cue?: "turn-complete" | "attention"): void {
@@ -2432,17 +2532,42 @@ export class RuntimeCoordinator implements PiDriver {
     return slot;
   }
 
-  private selectedQueuedPrompt(queueId: string): RuntimeSlot["queuedPrompts"][number] {
+  private selectedQueuedPrompt(queueId: string): RuntimeQueuedPrompt {
     const queued = this.selected().queuedPrompts.find((item) => item.id === queueId);
     if (!queued) throw new Error("queued prompt is unavailable");
     return queued;
   }
 
+  private addDisplayPendingPrompt(slot: RuntimeSlot, queued: RuntimeQueuedPrompt): void {
+    slot.displayPendingPrompts ??= [];
+    if (!slot.displayPendingPrompts.includes(queued)) slot.displayPendingPrompts.push(queued);
+  }
+
+  private removeQueuedPrompt(slot: RuntimeSlot, queued: RuntimeQueuedPrompt): boolean {
+    const index = slot.queuedPrompts.indexOf(queued);
+    if (index < 0) return false;
+    slot.queuedPrompts.splice(index, 1);
+    return true;
+  }
+
+  private consumeDisplayPendingPrompt(slot: RuntimeSlot, commandId: string): boolean {
+    const pending = slot.displayPendingPrompts?.find((item) => item.commandId === commandId);
+    if (!pending) return false;
+    slot.displayPendingPrompts.splice(slot.displayPendingPrompts.indexOf(pending), 1);
+    this.removeQueuedPrompt(slot, pending);
+    return true;
+  }
+
   private queueReadModel(slot: RuntimeSlot): QueueReadModel {
+    const queuedIds = new Set(slot.queuedPrompts.map((item) => item.id));
+    const visiblePrompts = [
+      ...slot.queuedPrompts,
+      ...(slot.displayPendingPrompts ?? []).filter((item) => !queuedIds.has(item.id)),
+    ].sort((left, right) => left.sequence - right.sequence);
     return {
       steering: slot.nativeQueue.steering,
       followUp: slot.nativeQueue.followUp + slot.queuedPrompts.length,
-      items: slot.queuedPrompts.map((queued) => ({
+      items: visiblePrompts.map((queued) => ({
         id: queued.id,
         commandId: queued.commandId,
         preview: queued.message.replace(/\s+/g, " ").trim().slice(0, 2_000),
@@ -2485,23 +2610,26 @@ export class RuntimeCoordinator implements PiDriver {
       return;
     }
     queued.state = "delivering";
+    const deliveryGeneration = slot.innerGeneration;
+    this.addDisplayPendingPrompt(slot, queued);
     this.publishQueue(slot);
     try {
       await slot.driver.prompt({
         commandId: queued.commandId,
-        expectedGeneration: slot.innerGeneration,
+        expectedGeneration: deliveryGeneration,
         message: queued.message,
         images: queued.images,
         files: queued.files,
         planMode: queued.planMode,
       });
-      if (this.slots.get(slot.id) !== slot) return;
-      if (slot.queuedPrompts[0] === queued) slot.queuedPrompts.shift();
+      if (this.slots.get(slot.id) !== slot || slot.innerGeneration !== deliveryGeneration) return;
+      const removed = this.removeQueuedPrompt(slot, queued);
       slot.lastActivityAt = Date.now();
-      this.publishQueue(slot);
+      if (removed) this.publishQueue(slot);
     } catch (error) {
-      if (this.slots.get(slot.id) !== slot) return;
-      if (slot.queuedPrompts.includes(queued)) {
+      if (this.slots.get(slot.id) !== slot || slot.innerGeneration !== deliveryGeneration) return;
+      if (slot.queuedPrompts.includes(queued) && slot.displayPendingPrompts?.includes(queued)) {
+        slot.displayPendingPrompts.splice(slot.displayPendingPrompts.indexOf(queued), 1);
         queued.state = "queued";
         this.publishQueue(slot);
         const transientBusy = error instanceof Error && /already processing|streamingBehavior/.test(error.message);
@@ -2567,7 +2695,8 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private slotCanSleep(slot: RuntimeSlot): boolean {
-    return !slot.queuedPrompts?.length && !slot.pendingControls && !slot.pendingApply && slot.driver.canSleep();
+    return !slot.queuedPrompts?.length && !slot.displayPendingPrompts?.length
+      && !slot.pendingControls && !slot.pendingApply && slot.driver.canSleep();
   }
 
   private emitControlsChanged(slot: RuntimeSlot): void {

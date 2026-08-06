@@ -512,7 +512,8 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
   const metadata = [
     "[Compaction Metadata]",
     "Mode: deterministic active Work",
-    `Boundary: ${inline(details.runId, 200)}/${inline(details.timelineId, 200)}`,
+    `Run: ${inline(details.runId, 200)}`,
+    `Timeline: ${inline(details.timelineId, 200)}`,
     `Source entries: ${details.sourceEntryCount}`,
     "Budget: deterministic whole-record eviction",
   ].join("\n");

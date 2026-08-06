@@ -1,15 +1,18 @@
 export class TailBuffer {
   private value = "";
   readonly maxBytes: number;
+  truncated = false;
   constructor(maxBytes = 16384) {
     this.maxBytes = maxBytes;
   }
   append(text: string) {
     this.value += text;
-    while (Buffer.byteLength(this.value) > this.maxBytes)
+    while (Buffer.byteLength(this.value) > this.maxBytes) {
+      this.truncated = true;
       this.value = this.value.slice(
         Math.max(1, this.value.length - Math.floor(this.maxBytes * 0.9)),
       );
+    }
   }
   toString() {
     return this.value;

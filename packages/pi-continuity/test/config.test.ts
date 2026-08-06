@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { defaultConfig, loadConfig, parseModelRef, saveConfig, updateConfig } from "../src/config.ts";
+import { DEFAULT_KEEP_RECENT_TOKENS, defaultConfig, loadConfig, parseModelRef, saveConfig, updateConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
 test("model profiles parse, persist, and reset to defaults", async () => {
@@ -22,6 +22,7 @@ test("model profiles parse, persist, and reset to defaults", async () => {
     {
       version: 2,
       memoryEnabled: false,
+      keepRecentTokens: 31_000,
       planner: { model: "provider/planner", thinking: "high" },
       executor: { model: "provider/executor" },
       compactionReviewer: { model: "provider/compaction", thinking: "low" },
@@ -31,11 +32,40 @@ test("model profiles parse, persist, and reset to defaults", async () => {
   assert.deepEqual(await loadConfig(path), {
     version: 2,
     memoryEnabled: false,
+    keepRecentTokens: 31_000,
     planner: { model: "provider/planner", thinking: "high" },
     executor: { model: "provider/executor" },
     compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
-  assert.deepEqual(defaultConfig(), { version: 2, memoryEnabled: true });
+  assert.deepEqual(defaultConfig(), { version: 2, memoryEnabled: true, keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS });
+});
+
+test("legacy configs gain the retained-token default without losing profiles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-config-migration-"));
+  for (const version of [1, 2]) {
+    const path = join(root, `v${version}.json`);
+    await writeFile(path, JSON.stringify({
+      version, memoryEnabled: false, planner: { model: "provider/planner", thinking: "high" },
+    }));
+    assert.deepEqual(await loadConfig(path), {
+      version: 2,
+      memoryEnabled: false,
+      keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
+      planner: { model: "provider/planner", thinking: "high" },
+    });
+  }
+});
+
+test("retained-token bounds are strict and inclusive", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-config-budget-"));
+  for (const keepRecentTokens of [1_000, 50_000]) {
+    const path = join(root, `${keepRecentTokens}.json`);
+    await saveConfig({ version: 2, keepRecentTokens }, path);
+    assert.equal((await loadConfig(path)).keepRecentTokens, keepRecentTokens);
+  }
+  for (const keepRecentTokens of [999, 50_001, 25_000.5]) {
+    await assert.rejects(saveConfig({ version: 2, keepRecentTokens }, join(root, `invalid-${keepRecentTokens}.json`)), /invalid Continuity config/);
+  }
 });
 
 test("concurrent role updates retain independent Continuity settings", async () => {
@@ -50,13 +80,17 @@ test("concurrent role updates retain independent Continuity settings", async () 
 
 test("web settings toggle durable memory without changing model profiles", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "continuity-settings-"));
-  assert.deepEqual(await readSettings({ agentDir }), { kind: "continuity", memoryEnabled: true });
-  await updateSettings({ kind: "continuity", memoryEnabled: false, planner: { model: "provider/planner" }, compactionReviewer: { model: "provider/compaction", thinking: "low" } }, { agentDir });
+  assert.deepEqual(await readSettings({ agentDir }), {
+    kind: "continuity", memoryEnabled: true, keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
+  });
+  await updateSettings({ kind: "continuity", memoryEnabled: false, keepRecentTokens: 32_000, planner: { model: "provider/planner" }, compactionReviewer: { model: "provider/compaction", thinking: "low" } }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
     kind: "continuity",
     memoryEnabled: false,
+    keepRecentTokens: 32_000,
     planner: { model: "provider/planner" },
     compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
-  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: "no" }, { agentDir }), /invalid Continuity settings/);
+  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: "no", keepRecentTokens: 25_000 }, { agentDir }), /invalid Continuity settings/);
+  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: true, keepRecentTokens: 999 }, { agentDir }), /invalid Continuity settings/);
 });

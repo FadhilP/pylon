@@ -13,6 +13,8 @@ export type TerminalClientMessage =
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number };
 
+export type TerminalSpawn = typeof pty.spawn;
+
 export function terminalShell(platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   return platform === "win32" ? "powershell.exe" : env.SHELL?.trim() || "/bin/sh";
 }
@@ -43,7 +45,12 @@ export class TerminalServer {
   private readonly owners = new Map<string, symbol>();
   private readonly unsubscribe: () => void;
 
-  constructor(private readonly driver: PiDriver, private readonly sessions: SessionStore, private readonly options: SecurityOptions) {
+  constructor(
+    private readonly driver: PiDriver,
+    private readonly sessions: SessionStore,
+    private readonly options: SecurityOptions,
+    private readonly spawnTerminal: TerminalSpawn = pty.spawn,
+  ) {
     this.unsubscribe = driver.subscribe((event) => {
       if (event.type === "session.status" && event.state === "sleeping") {
         this.closeSession(event.sessionId, "Session deactivated");
@@ -96,7 +103,7 @@ export class TerminalServer {
   private connect(socket: WebSocket, owner: symbol, sessionId: string, generation: number, cwd: string): void {
     let terminal: pty.IPty;
     try {
-      terminal = pty.spawn(terminalShell(), [], {
+      terminal = this.spawnTerminal(terminalShell(), [], {
         name: "xterm-256color",
         cols: 80,
         rows: 24,

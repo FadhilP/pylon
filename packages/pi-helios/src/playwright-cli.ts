@@ -246,11 +246,18 @@ function boundedSnapshot(lines: string[], start: number, limits: { lines: number
   };
 }
 
+function commandFailureMessage(stderr: string): string {
+  if (/\bBrowser "(chrome|chromium|firefox|webkit|msedge)" is not installed\. Run `playwright-cli install-browser \1` to install\b/.test(stderr)) {
+    return "Playwright browser is not installed; run the matching `playwright-cli install-browser` setup command";
+  }
+  return "Playwright CLI command failed";
+}
+
 function parseJson(result: ExecResult, privateDirectory: string, sessionName: string): Record<string, unknown> {
   if (Buffer.byteLength(result.stdout) > MAX_STDOUT_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI output exceeded 256KB limit");
   if (Buffer.byteLength(result.stderr) > MAX_STDERR_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI error output exceeded 16KB limit");
   if (result.killed) throw new HeliosCliError("timeout", "Playwright CLI command timed out");
-  if (result.code !== 0 && !result.stdout.trim()) throw new HeliosCliError("command-failed", "Playwright CLI command failed");
+  if (result.code !== 0 && !result.stdout.trim()) throw new HeliosCliError("command-failed", commandFailureMessage(result.stderr));
   let value: unknown;
   try { value = JSON.parse(result.stdout); } catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned malformed JSON"); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new HeliosCliError("invalid-output", "Playwright CLI returned an unexpected result");

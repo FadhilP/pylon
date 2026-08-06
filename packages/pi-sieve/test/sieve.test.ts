@@ -8,6 +8,9 @@ import { loadConfig } from "../src/config.ts";
 import {
   SIEVE_THRESHOLD,
   activeOmissionMarker,
+  continuityOmissionMarker,
+  continuityProjectionBoundary,
+  continuitySieveMessages,
   giantErrorMarker,
   omissionMarker,
   partialOmissionMarker,
@@ -89,6 +92,192 @@ function assertPartialOutput(output: string, source: string, toolName: string, r
   assert.equal(tail, source.slice(-tail.length));
   return omittedChars;
 }
+
+test("projects only frozen Continuity v3 pairs without rewriting raw history", () => {
+  const call = (id: string, name: string, extra: any[] = []) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "keep this" }, { type: "text", text: "keep this too" }, ...extra, { type: "toolCall", id, name, arguments: {} }],
+  });
+  const result = (id: string, name: string, text: string, extra: Record<string, unknown> = {}) =>
+    textResult(name, text, { toolCallId: id, isError: false, ...extra });
+  const oldBash = "bash output\n".repeat(200);
+  const oldRead = "read output\n".repeat(200);
+  const retained = [
+    { id: "old-bash", type: "message", message: call("old-bash", "bash") },
+    { id: "old-bash-result", type: "message", message: result("old-bash", "bash", oldBash) },
+    { id: "old-read", type: "message", message: call("old-read", "read") },
+    { id: "old-read-result", type: "message", message: result("old-read", "read", oldRead) },
+    { id: "newest", type: "message", message: call("newest", "bash") },
+    { id: "newest-result", type: "message", message: result("newest", "bash", "newest output\n".repeat(200)) },
+  ];
+  const compaction = {
+    id: "continuity-compaction", type: "compaction", firstKeptEntryId: "old-bash",
+    details: { type: "pi-continuity-compaction", version: 3 },
+  };
+  const post = { id: "post", type: "message", message: call("post", "bash") };
+  const boundary = continuityProjectionBoundary([...retained, compaction, post])!;
+  assert.deepEqual([...boundary.frozenToolCallIds], ["old-bash", "old-read", "newest"]);
+  const messages = [
+    { role: "compactionSummary", summary: "Continuity owns this" },
+    ...retained.map((entry) => entry.message), post.message, result("post", "bash", "post output\n".repeat(200)),
+  ];
+  const baseline = structuredClone(messages);
+  (baseline[1] as any).content = [
+    { type: "text", text: "baseline changed assistant reasoning" },
+    (baseline[1] as any).content.at(-1),
+  ];
+  (baseline[6] as any).content = [{ type: "text", text: "baseline would have pruned this" }];
+  const first = continuitySieveMessages(messages, boundary.frozenToolCallIds, baseline);
+  const second = continuitySieveMessages(first.messages, boundary.frozenToolCallIds);
+  assert.deepEqual(second.messages, first.messages, "projection is idempotent");
+  assert.deepEqual(first.messages[1], messages[1], "assistant thinking/text/tool-call blocks are untouched");
+  assert.equal((first.messages[2] as any).content[0].text, continuityOmissionMarker("bash", "old-bash", oldBash.length));
+  assert.equal((first.messages[4] as any).content[0].text, continuityOmissionMarker("read", "old-read", oldRead.length));
+  assert.deepEqual(first.messages[6], messages[6], "newest completed historical batch remains complete");
+  assert.deepEqual(first.messages[8], messages[8], "post-compaction batches cannot rewrite the frozen prefix");
+  assert.deepEqual(first.recoverableActiveResults.map((item) => item.toolCallId), ["old-bash", "old-read"]);
+  assert.equal((messages[2] as any).content[0].text, oldBash, "raw input stays unchanged");
+
+  const misaligned = structuredClone(baseline);
+  (misaligned[2] as any).toolCallId = "different";
+  const misalignedProjection = continuitySieveMessages(messages, boundary.frozenToolCallIds, misaligned);
+  assert.deepEqual(misalignedProjection.messages, messages, "misaligned baselines fail open to raw context");
+  assert.equal(misalignedProjection.stats.transformed, 0);
+  assert.deepEqual(continuitySieveMessages(messages, boundary.frozenToolCallIds, baseline.slice(1)).messages, messages);
+
+  const reloaded = continuityProjectionBoundary(structuredClone([...retained, compaction, post]));
+  assert.deepEqual([...reloaded!.frozenToolCallIds], [...boundary.frozenToolCallIds], "reload rebuilds the same boundary");
+  assert.equal(continuityProjectionBoundary([...retained, compaction, { id: "native", type: "compaction", firstKeptEntryId: "post", details: {} }]), undefined);
+
+  const incomplete = { id: "incomplete-call", type: "message", message: call("incomplete", "bash") };
+  const incompleteCompaction = { id: "incomplete-compaction", type: "compaction", firstKeptEntryId: "incomplete-call", details: { type: "pi-continuity-compaction", version: 3 } };
+  const postResult = { id: "post-result", type: "message", message: result("incomplete", "bash", oldBash) };
+  assert.equal(continuityProjectionBoundary([incomplete, incompleteCompaction, postResult])!.frozenToolCallIds.has("incomplete"), false);
+});
+
+test("fails open for uncertain Continuity pairs", () => {
+  const call = (id: string, name: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name, arguments: {} }] });
+  const source = "x".repeat(500);
+  const cases: Array<{ messages: any[]; ids: string[] }> = [
+    { messages: [call("error", "bash"), textResult("bash", source, { toolCallId: "error", isError: true })], ids: ["error"] },
+    { messages: [call("image", "bash"), textResult("bash", source, { toolCallId: "image", isError: false, content: [{ type: "text", text: source }, { type: "image", data: "x" }] })], ids: ["image"] },
+    { messages: [call("edit", "edit"), textResult("edit", source, { toolCallId: "edit", isError: false })], ids: ["edit"] },
+    { messages: [call("duplicate", "bash"), textResult("bash", source, { toolCallId: "duplicate", isError: false }), textResult("bash", source, { toolCallId: "duplicate", isError: false })], ids: ["duplicate"] },
+    { messages: [textResult("bash", source, { toolCallId: "out-of-order", isError: false }), call("out-of-order", "bash")], ids: ["out-of-order"] },
+  ];
+  for (const { messages, ids } of cases) {
+    const withNewest = [...messages, call("latest", "bash"), textResult("bash", source, { toolCallId: "latest", isError: false })];
+    const projected = continuitySieveMessages(withNewest, new Set([...ids, "latest"]));
+    assert.deepEqual(projected.messages, withNewest);
+    assert.equal(projected.stats.transformed, 0);
+  }
+});
+
+test("restores protected historical results after baseline projection", () => {
+  const source = "x".repeat(1_000);
+  const call = (id: string, name: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name, arguments: {} }] });
+  const image = { type: "image", source: { type: "base64", mediaType: "image/png", data: "abc" } };
+  const messages = [
+    call("error", "bash"), textResult("bash", source, { toolCallId: "error", isError: true }),
+    call("mixed", "bash"), { ...textResult("bash", source, { toolCallId: "mixed", isError: false }), content: [{ type: "text", text: source }, image] },
+    call("unsupported", "edit"), textResult("edit", source, { toolCallId: "unsupported", isError: false }),
+    call("newest", "bash"), textResult("bash", source, { toolCallId: "newest", isError: false }),
+  ];
+  const baseline = structuredClone(messages);
+  for (const index of [1, 3, 5, 7]) (baseline[index] as any).content = [{ type: "text", text: "baseline marker" }];
+  const projected = continuitySieveMessages(messages, new Set(["error", "mixed", "unsupported", "newest"]), baseline);
+  assert.deepEqual(projected.messages, messages);
+  assert.deepEqual([...projected.preservedToolCallIds], ["newest", "error", "mixed", "unsupported"]);
+  assert.equal(projected.stats.transformed, 0);
+});
+
+test("preserves malformed and partially frozen historical batches", () => {
+  const source = "x".repeat(1_000);
+  const malformed = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "valid", name: "bash", arguments: {} },
+      { type: "toolCall", id: 1, name: "bash", arguments: {} },
+      { type: "toolCall", id: "unfrozen", name: "bash", arguments: {} },
+    ],
+  };
+  const newest = { role: "assistant", content: [{ type: "toolCall", id: "newest", name: "bash", arguments: {} }] };
+  const messages = [
+    malformed,
+    textResult("bash", source, { toolCallId: "valid", isError: false }),
+    textResult("bash", source, { toolCallId: "unfrozen", isError: false }),
+    newest,
+    textResult("bash", source, { toolCallId: "newest", isError: false }),
+  ];
+  const baseline = structuredClone(messages);
+  (baseline[1] as any).content = [{ type: "text", text: "baseline marker" }];
+  (baseline[2] as any).content = [{ type: "text", text: "baseline marker" }];
+  const projected = continuitySieveMessages(messages, new Set(["valid", "newest"]), baseline);
+  assert.deepEqual(projected.messages.slice(1, 3), messages.slice(1, 3));
+  assert.equal(projected.stats.transformed, 0);
+});
+
+test("counts Continuity savings from baseline output only", () => {
+  const source = "x".repeat(2_000);
+  const messages = [
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "bash", arguments: {} }] },
+    textResult("bash", source, { toolCallId: "old", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "newest", name: "bash", arguments: {} }] },
+    textResult("bash", source, { toolCallId: "newest", isError: false }),
+  ];
+  const baseline = structuredClone(messages);
+  const baselineText = activeOmissionMarker("bash", "old", source.length, source.length - 100);
+  (baseline[1] as any).content = [{ type: "text", text: baselineText }];
+  const projected = continuitySieveMessages(messages, new Set(["old", "newest"]), baseline);
+  const marker = continuityOmissionMarker("bash", "old", source.length);
+  assert.equal(projected.stats.omittedChars, baselineText.length - marker.length);
+  assert.equal(projected.stats.netCharsSaved, baselineText.length - marker.length);
+  assert.equal(projected.stats.byTool.bash.sourceChars, baselineText.length);
+  assert.equal(projected.stats.byTool.bash.retainedChars, marker.length);
+  assert.equal(projected.stats.byTool.bash.netCharsSaved, baselineText.length - marker.length);
+});
+
+test("keeps recall available from a Continuity boundary before context with active pruning disabled", async () => {
+  const settingsPath = join(await mkdtemp(join(tmpdir(), "pi-sieve-continuity-recall-")), "config.json");
+  const handlers = new Map<string, Function[]>();
+  const commands = new Map<string, any>();
+  let activeTools = ["bash", "read"];
+  const branch = [
+    { id: "old-call", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "old", name: "bash", arguments: {} }] } },
+    { id: "old-result", type: "message", message: textResult("bash", "old", { toolCallId: "old", isError: false }) },
+    { id: "new-call", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "new", name: "bash", arguments: {} }] } },
+    { id: "new-result", type: "message", message: textResult("bash", "new", { toolCallId: "new", isError: false }) },
+    { id: "continuity", type: "compaction", firstKeptEntryId: "old-call", details: { type: "pi-continuity-compaction", version: 3 } },
+  ];
+  const ctx = { sessionManager: { getBranch: () => branch }, ui: { notify: () => {} } };
+  extension({
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerTool: () => {},
+    getActiveTools: () => [...activeTools],
+    setActiveTools: (names: string[]) => { activeTools = [...names]; },
+    appendEntry: () => {},
+    events: { on: () => () => {}, emit: () => {} },
+  } as any, { configPath: settingsPath });
+  const invoke = async (name: string, event: any = {}) => {
+    for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+  };
+  await invoke("session_start", { reason: "reload" });
+  await commands.get("sieve").handler("active disable", ctx);
+  assert.equal(activeTools.includes("sieve_recall"), true);
+  branch.push({ id: "native", type: "compaction", firstKeptEntryId: "old-call", details: { type: "native", version: 1 } });
+  await invoke("session_tree");
+  assert.equal(activeTools.includes("sieve_recall"), false);
+  branch.pop();
+  await invoke("session_start", { reason: "reload" });
+  assert.equal(activeTools.includes("sieve_recall"), true);
+  branch.push({ id: "native", type: "compaction", firstKeptEntryId: "old-call", details: { type: "native", version: 1 } });
+  await invoke("session_tree");
+  assert.equal(activeTools.includes("sieve_recall"), false);
+  branch.pop();
+  await invoke("session_compact");
+  assert.equal(activeTools.includes("sieve_recall"), true);
+});
 
 test("partially retains old output and treats all text blocks as one source", () => {
   const source = "x".repeat(4_000) + "y".repeat(SIEVE_THRESHOLD + 1 - 4_000);
@@ -1454,6 +1643,27 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((await loadConfig(settingsPath)).projectionMode, "stable");
   assert.match(notification, /projection mode set to stable \(experimental\)/);
   await command.handler("active enable", ctx);
+  await command.handler("enable", ctx);
+  const continuityCall = (id: string) => ({
+    role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: {} }],
+  });
+  const continuitySource = textResult("bash", "continuity source\n".repeat(200), {
+    toolCallId: "continuity-old", isError: false,
+  });
+  const continuityNewest = textResult("bash", "newest continuity source\n".repeat(200), {
+    toolCallId: "continuity-newest", isError: false,
+  });
+  branch.splice(0, branch.length,
+    { id: "continuity-old-call", type: "message", message: continuityCall("continuity-old") },
+    { id: "continuity-old-result", type: "message", message: continuitySource },
+    { id: "continuity-newest-call", type: "message", message: continuityCall("continuity-newest") },
+    { id: "continuity-newest-result", type: "message", message: continuityNewest },
+    { id: "continuity-v3", type: "compaction", firstKeptEntryId: "continuity-old-call", details: { type: "pi-continuity-compaction", version: 3 } },
+  );
+  const continuityOutbound = hook({ messages: branch.slice(0, 4).map((entry) => entry.message) }, ctx);
+  assert.equal(continuityOutbound.messages[1].content[0].text, continuityOmissionMarker("bash", "continuity-old", "continuity source\n".repeat(200).length));
+  const continuityRecall = await tools.get("sieve_recall").execute("continuity-recall", { toolCallId: "continuity-old" });
+  assert.deepEqual(continuityRecall.content, continuitySource.content, "recall restores the raw Continuity result");
   const resumedHandlers = new Map<string, Function[]>();
   const resumedCommands = new Map<string, any>();
   let resumedActiveTools = ["bash"];

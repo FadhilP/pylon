@@ -5,16 +5,23 @@ import { readVersionedJson, updateJson, writeJson } from "./storage.ts";
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type ModelProfile = { model: string; thinking?: ThinkingLevel };
-export type ContinuityConfig = { version: 2; memoryEnabled?: boolean; planner?: ModelProfile; executor?: ModelProfile; memoryReviewer?: ModelProfile; compactionReviewer?: ModelProfile };
-export const defaultConfig = (): ContinuityConfig => ({ version: 2, memoryEnabled: true });
+export const DEFAULT_KEEP_RECENT_TOKENS = 25_000;
+export const MIN_KEEP_RECENT_TOKENS = 1_000;
+export const MAX_KEEP_RECENT_TOKENS = 50_000;
+export const validKeepRecentTokens = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= MIN_KEEP_RECENT_TOKENS && (value as number) <= MAX_KEEP_RECENT_TOKENS;
+export type ContinuityConfig = { version: 2; memoryEnabled?: boolean; keepRecentTokens?: number; planner?: ModelProfile; executor?: ModelProfile; memoryReviewer?: ModelProfile; compactionReviewer?: ModelProfile };
+export const defaultConfig = (): ContinuityConfig => ({ version: 2, memoryEnabled: true, keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-continuity", "config.json");
 const isProfile = (value: any): value is ModelProfile => Boolean(value && typeof value.model === "string" && value.model.trim() && Object.keys(value).every((key) => key === "model" || key === "thinking") && (value.thinking === undefined || thinkingLevels.includes(value.thinking)));
 const normalizeConfig = (value: any): ContinuityConfig | undefined => {
-  if (![1, 2].includes(value?.version) || Object.keys(value).some((key) => !["version", "memoryEnabled", "planner", "executor", "memoryReviewer", "compactionReviewer"].includes(key))
-    || (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") || (value.planner !== undefined && !isProfile(value.planner))
+  if (![1, 2].includes(value?.version) || Object.keys(value).some((key) => !["version", "memoryEnabled", "keepRecentTokens", "planner", "executor", "memoryReviewer", "compactionReviewer"].includes(key))
+    || (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean")
+    || (value.keepRecentTokens !== undefined && !validKeepRecentTokens(value.keepRecentTokens))
+    || (value.planner !== undefined && !isProfile(value.planner))
     || (value.executor !== undefined && !isProfile(value.executor)) || (value.memoryReviewer !== undefined && !isProfile(value.memoryReviewer))
     || (value.compactionReviewer !== undefined && !isProfile(value.compactionReviewer))) return;
-  return { version: 2, memoryEnabled: value.memoryEnabled ?? true, ...(value.planner ? { planner: value.planner } : {}), ...(value.executor ? { executor: value.executor } : {}), ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}), ...(value.compactionReviewer ? { compactionReviewer: value.compactionReviewer } : {}) };
+  return { version: 2, memoryEnabled: value.memoryEnabled ?? true, keepRecentTokens: value.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS, ...(value.planner ? { planner: value.planner } : {}), ...(value.executor ? { executor: value.executor } : {}), ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}), ...(value.compactionReviewer ? { compactionReviewer: value.compactionReviewer } : {}) };
 };
 export const isContinuityConfig = (value: any) => normalizeConfig(value) !== undefined;
 export async function loadConfig(path = configPath()): Promise<ContinuityConfig> {

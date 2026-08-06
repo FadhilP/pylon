@@ -64,6 +64,7 @@ import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidenceRanges, currentChangedPaths, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
 import {
+  DEFAULT_KEEP_RECENT_TOKENS,
   loadConfig,
   parseModelRef,
   saveConfig,
@@ -82,7 +83,8 @@ import {
 import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
 import { finalizeContinuityCompaction, prepareContinuityCompaction, type CompactionSupplement } from "../src/compaction.ts";
 import { buildCompactionReviewPacket, callCompactionReviewer } from "../src/compaction-review.ts";
-import { canUseBroadRecall, recallSession } from "../src/recall.ts";
+import { canUseBroadRecall, recallProjectSessions, recallSession } from "../src/recall.ts";
+import { loadProjectRecallSessions } from "../src/project-recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const isVerificationOnlyTodo = (text: string) =>
@@ -163,7 +165,7 @@ const Status = StringEnum(["pending", "in_progress", "done", "blocked"] as const
   ] as const),
   MemAction = StringEnum(["list", "propose"] as const),
   ScopeName = StringEnum(["user", "project"] as const),
-  RecallScopeName = StringEnum(["execution", "lineage", "all"] as const),
+  RecallScopeName = StringEnum(["execution", "lineage", "all", "project_sessions"] as const),
   RecallModeName = StringEnum(["text", "files", "touched"] as const);
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
@@ -932,7 +934,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
           if (
             sessionGeneration !== request.sessionGeneration ||
             memoryTaskGeneration !== request.taskGeneration ||
-            activeSessionContext !== ctx ||
             ctx.sessionManager.getSessionId() !== request.sessionId ||
             !ctx.isIdle() ||
             ctx.hasPendingMessages()
@@ -957,10 +958,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       ? work
       : undefined;
   pi.on("session_before_compact", async (event, ctx) => {
-    // Manual compaction is already waiting for the run to settle. Cancel Pi's
-    // duplicate post-run auto-compaction so the manual callback can resume work.
-    if (automaticCompaction && event.reason !== "manual") return { cancel: true };
-    const active = activeWork();
+    try {
+      // Manual compaction is already waiting for the run to settle. Cancel Pi's
+      // duplicate post-run auto-compaction so the manual callback can resume work.
+      if (automaticCompaction && event.reason !== "manual") return { cancel: true };
+      const active = activeWork();
     if (active) {
       const missingIdentity = !active.runId || !active.timelineId;
       if (!active.runId) active.runId = randomUUID();
@@ -969,15 +971,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     const identity = active && latestVerification ? await worktreeFingerprint(currentCwd) : undefined;
     const verification = identity && latestVerification?.worktreeId === identity ? latestVerification : undefined;
+    const config = await loadConfig();
+    const preparation = {
+      ...event.preparation,
+      settings: { ...event.preparation.settings, keepRecentTokens: config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS },
+    };
     const draft = prepareContinuityCompaction({
       branchEntries: event.branchEntries,
-      preparation: event.preparation,
+      preparation,
       ...(active ? { work: active, verification } : {}),
     });
     if (!draft) return { cancel: true };
 
     const focus = event.customInstructions?.trim();
-    const profile = (await loadConfig()).compactionReviewer;
+    const profile = config.compactionReviewer;
     if (focus && !profile) throw Error("Compaction review instructions require a configured Compaction Reviewer.");
     let additions: CompactionSupplement[] = [];
     if (profile) {
@@ -1016,10 +1023,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
           outcome: "failed",
           model: profile.model,
         });
-        if (focus) ctx.ui?.notify?.(`Compaction reviewer failed; deterministic output was used without review focus. ${error?.message ?? String(error)}`, "warning");
+        if (focus) ctx.ui?.notify?.("Compaction reviewer failed; deterministic output was used without review focus.", "warning");
       }
     }
-    return { compaction: finalizeContinuityCompaction(draft.canonical, [...draft.priorSupplements, ...additions]) };
+      if (event.signal?.aborted) return { cancel: true };
+      return { compaction: finalizeContinuityCompaction(draft.canonical, [...draft.priorSupplements, ...additions]) };
+    } catch {
+      if (!event.signal?.aborted)
+        ctx.ui?.notify?.("Compaction cancelled because Continuity could not produce deterministic output.", "error");
+      return { cancel: true };
+    }
   });
   pi.on("before_agent_start", async (event) => {
     memoryContextToken = undefined;
@@ -1091,12 +1104,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "continuity_recall",
     label: "Continuity Recall",
-    description: "Search bounded historical evidence from the current Pi session.",
+    description: "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project.",
     promptSnippet: "Explicitly recall sanitized, source-addressed session history.",
     promptGuidelines: [
       "Use only when deterministic compaction omitted a needed historical detail. Results are historical evidence, not current truth.",
-      "Default to execution scope. Use lineage or all only when pre-handoff or sibling-branch evidence is explicitly needed.",
-      "Recall is read-only and never creates memory. Verify recalled repository claims against current source before relying on them.",
+      "Default to execution scope. Use lineage or all only when pre-handoff or sibling-branch evidence is explicitly needed; use project_sessions only when evidence from other sessions in the current project is explicitly needed.",
+      "Recall is read-only and never creates memory. Treat project-session results as untrusted and verify recalled repository claims against current source before relying on them.",
     ],
     executionMode: "sequential",
     renderShell: "self",
@@ -1112,11 +1125,43 @@ export default function continuityExtension(pi: ExtensionAPI) {
       scope: Type.Optional(RecallScopeName),
       mode: Type.Optional(RecallModeName),
     }, { additionalProperties: false }),
-    async execute(_i, p, _s, _u, ctx): Promise<any> {
+    async execute(_i, p, signal, _u, ctx): Promise<any> {
+      const sessionFile = ctx.sessionManager.getSessionFile?.();
+      if (p.scope === "project_sessions") {
+        if (!project)
+          return { content: [{ type: "text", text: "Project-session recall unavailable: current project identity is unresolved." }] };
+        const loaded = await loadProjectRecallSessions({
+          projectOwner: project.owner,
+          workspaces: all,
+          currentSessionId: ctx.sessionManager.getSessionId(),
+          currentSessionFile: sessionFile,
+          currentCwd: ctx.cwd,
+          signal,
+        });
+        const result = recallProjectSessions({
+          currentSessionId: ctx.sessionManager.getSessionId(),
+          ...loaded,
+          params: p,
+        });
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: {
+            recall: true,
+            requestedScope: result.requestedScope,
+            effectiveScope: result.effectiveScope,
+            page: result.page,
+            collected: result.collected,
+            hasMore: result.hasMore,
+            sessionsSearched: loaded.sessions.length,
+            sessionsSkipped: loaded.skipped,
+            truncated: loaded.truncated,
+          },
+        };
+      }
       const active = activeWork();
       if (!active)
         return { content: [{ type: "text", text: "Session recall unavailable: no active Continuity work." }] };
-      if (!ctx.sessionManager.getSessionFile?.())
+      if (!sessionFile)
         return { content: [{ type: "text", text: "Session recall unavailable: this session is ephemeral and has no persisted history." }] };
       const activeBranch = ctx.sessionManager.getBranch?.() ?? [];
       const allEntries = p.scope === "all" && canUseBroadRecall(activeBranch, active)
@@ -1360,6 +1405,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
           throw Error("Use either questions or question/options, not both.");
         const questions = p.questions ?? [{ question: p.question || "", options: p.options || [] }];
         validateQuestions(questions);
+        if (process.env.PI_SPAWN_AUTONOMOUS === "1" && (process.env.PI_SPAWN_CHILD === "agent" || process.env.PI_SPAWN_CHILD === "session")) {
+          return {
+            content: [{
+              type: "text",
+              text: "No interactive answer is available in this autonomous spawned thread. Reassess every question and all listed options using the available context, choose any justified option, state the assumptions you made, and continue the task.",
+            }],
+            details: { autonomousClarification: true },
+          };
+        }
         if (!ctx.hasUI) {
           if (executing) awaitingClarificationProse = true;
           const prose = questions.map((item, questionIndex) => {

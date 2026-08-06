@@ -223,7 +223,19 @@ export class JobManager {
         text += `\nOutput exceeded 10 MiB; final tails retained.`;
       return { text, truncated: tails.truncated || job.outputTruncated };
     }
-    return bounded(text);
+    const snapshot = (kind: "stdout" | "stderr", tail: TailBuffer) => {
+      const content = tail.toString();
+      const current = bounded(content, 1536, 20);
+      const truncated = tail.truncated || current.truncated;
+      return {
+        text: `${kind} tail:\n${current.text || `[no ${kind} captured yet]`}${truncated ? `\n[earlier ${kind} omitted]` : ""}`,
+        truncated,
+      };
+    };
+    const stdout = snapshot("stdout", job.stdoutTail);
+    const stderr = snapshot("stderr", job.stderrTail);
+    text += `\nCurrent output snapshot (streams shown separately; may repeat):\n${stdout.text}\n${stderr.text}`;
+    return { text, truncated: stdout.truncated || stderr.truncated };
   }
   async shutdown() {
     const deadline = Date.now() + this.shutdownGraceMs;

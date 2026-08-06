@@ -407,6 +407,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       disabled={unavailable}
+      title={session.runningUnderParentSessionId ? "View this running session through its parent" : undefined}
       aria-current={session.active ? "page" : undefined}
       aria-keyshortcuts={reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
     >

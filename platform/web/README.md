@@ -30,6 +30,14 @@ npm run verify --workspace @pylon/web
 npm run start --workspace @pylon/web
 ```
 
+For focused tests and direct TypeScript diagnostics, run Node from `platform/web` so runner options stay before the test path and the repository's native TypeScript transform is used:
+
+```sh
+cd platform/web
+node --experimental-transform-types --test-concurrency=2 --test --test-name-pattern="terminals stay attached per session until that session deactivates" test/server-transport.test.ts
+node --experimental-transform-types --input-type=module --eval "import { SessionIndex } from './src/server/pi/session-index.ts'; console.log(SessionIndex.name)"
+```
+
 ## Session workspaces
 
 New sessions use the project's explicit workspace policy. Local works directly in the registered folder without changing branches, Project folder uses a Pylon session branch in that checkout, and Session worktree creates a linked worktree under the agent directory. Project setup commands run only inside newly created worktrees.

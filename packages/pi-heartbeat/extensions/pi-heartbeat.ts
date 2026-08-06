@@ -9,12 +9,29 @@ import { JobManager, pruneStaleSessionDirs } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
 export default function heartbeatExtension(pi: ExtensionAPI) {
-  let manager: JobManager | undefined, lastCtx: any;
+  let manager: JobManager | undefined, lastCtx: any, lastToolPolicy = "";
   const announced = new Map<string, string>();
   const jobMeta = new Map<string, { todoId?: string; purpose?: string }>();
   const refresh = () => {
     if (!manager || !lastCtx) return;
     const running = manager.running();
+    const statusNeeded = running.length > 0 || [...manager.jobs.values()].some((job) => !job.completionAnnounced);
+    const enabledTools = [
+      "heartbeat_start",
+      ...(statusNeeded ? ["heartbeat_status"] : []),
+      ...(running.length ? ["heartbeat_cancel"] : []),
+    ];
+    const toolPolicy = enabledTools.join(",");
+    if (toolPolicy !== lastToolPolicy) {
+      lastToolPolicy = toolPolicy;
+      pi.events.emit("pylon:tool-policy", {
+        version: 1,
+        kind: "register",
+        owner: "pi-heartbeat",
+        managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
+        enabledTools,
+      });
+    }
     for (const job of manager.jobs.values()) {
       if (announced.get(job.id) === job.state) continue;
       announced.set(job.id, job.state);
@@ -54,19 +71,15 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       // A failed old-directory removal must not prevent a new session.
     }
     manager = undefined;
+    announced.clear();
+    jobMeta.clear();
     lastCtx = ctx;
+    lastToolPolicy = "";
     const root = join(getAgentDir(), "pi-heartbeat", "tmp");
     const dir = join(root, ctx.sessionManager.getSessionId());
     await pruneStaleSessionDirs(root, dir);
     manager = new JobManager(dir, refresh);
     await manager.init();
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
-      owner: "pi-heartbeat",
-      managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
-      enabledTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
-    });
     refresh();
   });
   pi.on("session_shutdown", async () => {
@@ -74,6 +87,9 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       await manager?.shutdown();
     } finally {
       manager = undefined;
+      announced.clear();
+      jobMeta.clear();
+      lastToolPolicy = "";
       pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-heartbeat" });
     }
   });
@@ -185,8 +201,10 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
             details: { id: j.id, state: j.state, retryAfterMs: wait },
           };
         j.lastCheckedAt = Date.now();
-        if (!["running", "cancelling"].includes(j.state))
+        if (!["running", "cancelling"].includes(j.state)) {
           j.completionAnnounced = true;
+          refresh();
+        }
         return {
           content: [{ type: "text", text: manager.format(j).text }],
           details: {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
 import { ProjectRegistry, projectIdForCwd, projectPickerCommand } from "../src/server/pi/project-registry.ts";
 
 test("project registry seeds, deduplicates, persists, and removes canonical directories", async () => {
@@ -22,7 +23,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.renameProject(projectIdForCwd(second), "Renamed project");
     await assert.rejects(registry.renameProject(projectIdForCwd(second), " "), /invalid project name/);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 12);
+    assert.equal(stored.version, 13);
     assert.equal(stored.projects.length, 2);
     assert.equal(stored.projects[1].label, "Renamed project");
     assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
@@ -232,13 +233,13 @@ test("version 9 active sessions migrate without becoming pinned", async () => {
     assert.deepEqual(migrated.listActiveSessionOrder(), ["legacy-active"]);
     assert.deepEqual(migrated.listPinnedSessionIds(), []);
     assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "legacy-active").effective.guardEnabled, true);
-    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 12);
+    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 13);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("version 10 registries migrate to version 12", async () => {
+test("version 10 registries migrate to version 13", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-project-v10-migration-"));
   const project = join(root, "project");
   const config = join(root, "agent", "pylon-web", "projects.json");
@@ -254,7 +255,7 @@ test("version 10 registries migrate to version 12", async () => {
     const migrated = new ProjectRegistry(config);
     await migrated.load();
     assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "session").effective.guardEnabled, true);
-    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 12);
+    assert.equal(JSON.parse(await readFile(config, "utf8")).version, 13);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -328,7 +329,7 @@ test("version 7 Automatic policies migrate to Local without moving session works
     assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").session.workspace, "local");
     assert.deepEqual(registry.workspaceForSession("session-one"), workspace);
     const stored = JSON.parse(await readFile(config, "utf8"));
-    assert.equal(stored.version, 12);
+    assert.equal(stored.version, 13);
     assert.deepEqual(stored.pinnedSessionIds, []);
     assert.equal(stored.projects[0].workspacePolicy, undefined);
     assert.equal(stored.sessionPolicies[0].workspace, "local");
@@ -353,6 +354,7 @@ test("runtime policy persists project defaults and session overrides", async () 
       sessionId: "session-one",
       verify: { mode: "selected", checks: ["npm:test"] },
       timeline: "disabled", guard: "disabled",
+      guardRules: { "command.recursive-deletion": "allow" },
       workspace: "worktree",
       guardTimeoutSeconds: null,
       clarifyTimeoutSeconds: 90,
@@ -364,6 +366,7 @@ test("runtime policy persists project defaults and session overrides", async () 
       sessionId: "session-one",
       verify: { mode: "auto" },
       timeline: "enabled", guard: "enabled",
+      guardRules: { "command.recursive-deletion": "block" },
       workspace: "local",
       guardTimeoutSeconds: 120,
       clarifyTimeoutSeconds: "inherit",
@@ -374,6 +377,7 @@ test("runtime policy persists project defaults and session overrides", async () 
       toolOverrides: {},
       timelineEnabled: true,
       guardEnabled: true,
+      guardRules: { ...DEFAULT_GUARD_RULES, "command.recursive-deletion": "block" },
       workspace: "local",
       guardTimeoutSeconds: 120,
       clarifyTimeoutSeconds: 90,
@@ -383,6 +387,7 @@ test("runtime policy persists project defaults and session overrides", async () 
       toolOverrides: {},
       timelineEnabled: false,
       guardEnabled: false,
+      guardRules: { ...DEFAULT_GUARD_RULES, "command.recursive-deletion": "allow" },
       workspace: "worktree",
       guardTimeoutSeconds: null,
       clarifyTimeoutSeconds: 90,
@@ -393,6 +398,8 @@ test("runtime policy persists project defaults and session overrides", async () 
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").revision, 2);
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.timelineEnabled, true);
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.guardEnabled, true);
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").project.guardRules?.["command.recursive-deletion"], "allow");
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.guardRules?.["command.recursive-deletion"], "block");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -448,6 +455,7 @@ test("global runtime policy is inherited independently by projects and sessions"
       toolOverrides: {},
       timelineEnabled: false,
       guardEnabled: false,
+      guardRules: DEFAULT_GUARD_RULES,
       workspace: "worktree",
       guardTimeoutSeconds: null,
       clarifyTimeoutSeconds: 300,

@@ -69,11 +69,13 @@ test("web session index attributes only pi-spawn marked sessions to their owner"
       activeId: parent.id,
       generation: 1,
       stateFor: () => "sleeping" as const,
+      runningUnderParentSessionIdFor: (sessionId) => sessionId === spawned.getSessionId() ? parent.id : undefined,
     });
     const snapshot = await list();
     const sessions = snapshot.projects.flatMap((project) => project.sessions);
     assert.equal(sessions.find((session) => session.id === ordinary.getSessionId())?.parentSession, undefined);
     assert.deepEqual(sessions.find((session) => session.id === spawned.getSessionId())?.parentSession, { id: parent.id, title: "Parent work" });
+    assert.equal(sessions.find((session) => session.id === spawned.getSessionId())?.runningUnderParentSessionId, parent.id);
     assert.deepEqual(sessions.find((session) => session.id === adopted.getSessionId())?.parentSession, { id: parent.id, title: "Parent work" });
     assert.equal(sessions.find((session) => session.id === malformed.getSessionId())?.parentSession, undefined);
     assert.equal(sessions.find((session) => session.id === crossProjectChild.getSessionId())?.parentSession, undefined);

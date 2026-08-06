@@ -1,9 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ACTIVE_FRAME_INTERVAL_MS, IDLE_FRAME_INTERVAL_MS, framePollingDelay } from "../src/shared/browser-polling.ts";
+import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+
+test("StateQL rows pages require coherent bounded JSON-safe data", () => {
+  const page = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    actor_id: "session-1",
+    handle: "result-1",
+    offset: 0,
+    limit: 2,
+    rows: [{ id: 1, nested: [true, null, { text: "ok" }] }],
+    returned: 1,
+    total: 2,
+    truncated: true,
+    next_offset: 1,
+  };
+  assert.equal(isStateQLRowsPage(page), true);
+  assert.equal(isStateQLRowsPage({ ...page, next_offset: null }), false);
+  assert.equal(isStateQLRowsPage({ ...page, offset: 1, rows: [{ id: 1 }, { id: 2 }], returned: 2, total: 2, truncated: false, next_offset: null }), false);
+  assert.equal(isStateQLRowsPage({ ...page, rows: [{ unsupported: undefined }] }), false);
+  assert.equal(isStateQLRowsPage({ ...page, rows: [{ deep: [[[[[[[1]]]]]]] }] }), false);
+  assert.equal(isStateQLRowsPage({ ...page, rows: [{ text: "x".repeat(64 * 1024 + 1) }] }), false);
+});
 
 test("hook settings protocol accepts bounded exact settings", () => {
   const settings = {
@@ -11,6 +34,7 @@ test("hook settings protocol accepts bounded exact settings", () => {
     beforeAgentStart: { enabled: false, sources: [] },
   };
   assert.equal(validateCommand({ type: "updateHookSettings", settings, commandId: "hooks", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateHookSettings", settings: { ...settings, sessionStart: { ...settings.sessionStart, sources: [{ ...settings.sessionStart.sources[0], reinjectOnCompaction: true }] } }, commandId: "hooks", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateHookSettings", settings: { ...settings, extra: true }, commandId: "hooks", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateHookSettings", settings: { ...settings, sessionStart: { ...settings.sessionStart, sources: [{ ...settings.sessionStart.sources[0], content: "x".repeat(64 * 1024 + 1) }] } }, commandId: "hooks", expectedGeneration: 1 }).ok, false);
   assert.equal(isHookSettingsSnapshot({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, settings }), true);
@@ -102,7 +126,12 @@ test("command and memory validation allowlists bounded v28 commands and attachme
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1, scope: "user" }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings",  packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { kind: "continuity", memoryEnabled: true, memoryReviewer: { model: "provider/reviewer", thinking: "high" }, compactionReviewer: { model: "provider/compact", thinking: "low" } }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
+  const continuitySettings = { kind: "continuity", memoryEnabled: true, keepRecentTokens: 25_000, memoryReviewer: { model: "provider/reviewer", thinking: "high" }, compactionReviewer: { model: "provider/compact", thinking: "low" } };
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: continuitySettings, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
+  for (const keepRecentTokens of [1_000, 50_000])
+    assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, keepRecentTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
+  for (const keepRecentTokens of [999, 50_001, 25_000.5])
+    assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, keepRecentTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", models: ["provider/worker"], agentThinkingLevels: ["low", "high"] }, commandId: "spawn-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: [] }, commandId: "spawn-settings-invalid", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "handoffSession", destination: "checkout", commandId: "handoff", expectedGeneration: 1 }).ok, true);
@@ -110,15 +139,17 @@ test("command and memory validation allowlists bounded v28 commands and attachme
   assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "npm install", commandId: "setup", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateProjectWorktreeSettings", projectId: "project-one", setupCommand: "x".repeat(2_001), commandId: "setup", expectedGeneration: 1 }).ok, false);
   const dialogTimeouts = { guardTimeoutSeconds: 60, clarifyTimeoutSeconds: null };
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "inherit" }, timeline: "enabled", guard: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "global-policy", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "bad-global-policy", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "automatic", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: ["npm:test"] }, timeline: "inherit", guard: "inherit", workspace: "local", guardTimeoutSeconds: "inherit", clarifyTimeoutSeconds: 15, expectedRevision: 1, commandId: "policy", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "inherit" }, timeline: "inherit", guard: "inherit", workspace: "inherit", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: Array(7).fill("check") }, timeline: "enabled", guard: "enabled", workspace: "worktree", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", guardTimeoutSeconds: 14, clarifyTimeoutSeconds: 60, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
-  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 86_401, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  const projectGuardRules = { guardRules: {} };
+  const globalGuardRules = { guardRules: DEFAULT_GUARD_RULES };
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", ...projectGuardRules, workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "inherit" }, timeline: "enabled", guard: "enabled", ...globalGuardRules, workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "global-policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "global", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", ...globalGuardRules, workspace: "local", ...dialogTimeouts, expectedRevision: 0, commandId: "bad-global-policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", ...projectGuardRules, workspace: "automatic", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: ["npm:test"] }, timeline: "inherit", guard: "inherit", ...projectGuardRules, workspace: "local", guardTimeoutSeconds: "inherit", clarifyTimeoutSeconds: 15, expectedRevision: 1, commandId: "policy", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "inherit" }, timeline: "inherit", guard: "inherit", ...projectGuardRules, workspace: "inherit", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "session", verify: { mode: "selected", checks: Array(7).fill("check") }, timeline: "enabled", guard: "enabled", ...projectGuardRules, workspace: "worktree", ...dialogTimeouts, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", ...projectGuardRules, workspace: "local", guardTimeoutSeconds: 14, clarifyTimeoutSeconds: 60, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "updateRuntimePolicy", scope: "project", verify: { mode: "auto" }, timeline: "enabled", guard: "enabled", ...projectGuardRules, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 86_401, expectedRevision: 0, commandId: "policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "repo_scout", mode: "deferred", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateToolPolicy", scope: "session", tool: "repo_scout", mode: "inherit", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "", mode: "active", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, false);
@@ -392,6 +423,8 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "parent-1", title: "Parent work" } }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "", title: "Parent work" } }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, parentSession: { id: "parent-1", title: "x".repeat(201) } }] }), false);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, runningUnderParentSessionId: "parent-1" }] }), true);
+  assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, runningUnderParentSessionId: "" }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: new Date(1).toISOString() }] }), true);
   assert.equal(isSessionListSnapshot({ ...sessions, activeSessions: [{ ...session, workStartedAt: "invalid" }] }), false);
   assert.equal(isSessionListSnapshot({ ...sessions, projects: [{ id: "project-empty", label: "empty", cwd: "/projects/empty", totalCount: 0, sessions: [] }] }), true);
