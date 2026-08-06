@@ -280,6 +280,28 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   };
   const disposeMemoryReviewTelemetry = pi.events.on("pi-continuity:memory-review-telemetry", (value: any) => memoryTelemetry("review", value));
   const disposeMemoryMigrationTelemetry = pi.events.on("pi-continuity:memory-migration-telemetry", (value: any) => memoryTelemetry("migration", value));
+  const disposeCompactionReviewTelemetry = pi.events.on("pi-continuity:compaction-review-telemetry", (value: any) => {
+    if (value?.version !== 1 || !["reviewed", "failed"].includes(value.outcome) || typeof value.model !== "string" || !value.model || value.model.length > 200) return;
+    const reviewed = value.outcome === "reviewed" && Number.isSafeInteger(value.durationMs) && value.durationMs >= 0
+      && Number.isSafeInteger(value.candidateCount) && value.candidateCount >= 0 && value.candidateCount <= 6
+      && Number.isSafeInteger(value.acceptedCount) && value.acceptedCount >= 0 && value.acceptedCount <= value.candidateCount
+      && value.usage && ["input", "output", "cacheRead", "cacheWrite", "cost"].every((key) => typeof value.usage[key] === "number" && Number.isFinite(value.usage[key]) && value.usage[key] >= 0);
+    if (value.outcome === "reviewed" && !reviewed) return;
+    try {
+      pi.appendEntry?.("pi-continuity-compaction-review-telemetry", {
+        version: 1,
+        outcome: value.outcome,
+        model: value.model,
+        ...(value.outcome === "reviewed" ? {
+          thinking: typeof value.thinking === "string" ? value.thinking.slice(0, 20) : undefined,
+          durationMs: value.durationMs,
+          candidateCount: value.candidateCount,
+          acceptedCount: value.acceptedCount,
+          usage: value.usage,
+        } : {}),
+      });
+    } catch { /* Compaction telemetry must never disrupt the task. */ }
+  });
 
   const collectHealth = async (): Promise<{ lines: string[]; warning: boolean }> => {
     const pending: Promise<unknown>[] = [];
@@ -413,6 +435,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     disposeVerifyTelemetry();
     disposeMemoryReviewTelemetry();
     disposeMemoryMigrationTelemetry();
+    disposeCompactionReviewTelemetry();
     disposeDelegateNames();
     shellBaseline = undefined;
     shellCwd = "";
@@ -489,7 +512,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       ["Advisor", join(agentDir, "pi-advisor", "config.json"), (value: any) => [["Advisor", value.advisorModel]]],
       ["Grunt", join(agentDir, "pi-grunt", "config.json"), (value: any) => [["Grunt", value.model]]],
       ["Scout", join(agentDir, "pi-scout", "config.json"), (value: any) => [["Scout", value.model]]],
-      ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model], ["Memory Reviewer", value.memoryReviewer?.model]]],
+      ["Continuity", join(agentDir, "pi-continuity", "config.json"), (value: any) => [["Continuity planner", value.planner?.model], ["Continuity executor", value.executor?.model], ["Memory Reviewer", value.memoryReviewer?.model], ["Compaction Reviewer", value.compactionReviewer?.model]]],
     ] as const) {
       try {
         const value = JSON.parse(await readFile(file, "utf8"));
@@ -602,7 +625,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("compact", {
-    description: "Compact conversation context, optionally guided by instructions",
+    description: "Compact deterministically; optional instructions guide the configured reviewer",
     handler: async (args, ctx) => {
       await new Promise<void>((resolve) => {
         let settled = false;

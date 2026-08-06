@@ -30,7 +30,6 @@ export { default as IconGitBranch } from "@tabler/icons-react/dist/esm/icons/Ico
 export { default as IconGitCompare } from "@tabler/icons-react/dist/esm/icons/IconGitCompare.mjs";
 export { default as IconGitFork } from "@tabler/icons-react/dist/esm/icons/IconGitFork.mjs";
 export { default as IconGitMerge } from "@tabler/icons-react/dist/esm/icons/IconGitMerge.mjs";
-export { default as IconHistory } from "@tabler/icons-react/dist/esm/icons/IconHistory.mjs";
 export { default as IconKey } from "@tabler/icons-react/dist/esm/icons/IconKey.mjs";
 export { default as IconLayoutDashboard } from "@tabler/icons-react/dist/esm/icons/IconLayoutDashboard.mjs";
 export { default as IconLibrary } from "@tabler/icons-react/dist/esm/icons/IconLibrary.mjs";

@@ -507,13 +507,28 @@ export class ProjectRegistry {
     return record;
   }
 
-  async rekeySession(previousId: string, sessionId: string): Promise<void> {
+  async rekeySession(previousId: string, sessionId: string, reason: "replace" | "fork" = "replace"): Promise<void> {
     this.assertLoaded();
     if (previousId === sessionId) return;
     const workspace = this.sessionWorkspaces.find((item) => item.sessionId === previousId);
-    if (workspace) workspace.sessionId = sessionId;
+    if (workspace) {
+      if (reason === "fork" && workspace.mode === "local") {
+        this.sessionWorkspaces = this.sessionWorkspaces.filter((item) => item.sessionId !== sessionId);
+        this.sessionWorkspaces.push({ ...workspace, sessionId });
+      } else workspace.sessionId = sessionId;
+    }
     const policy = this.sessionPolicies.find((item) => item.sessionId === previousId);
-    if (policy) policy.sessionId = sessionId;
+    if (policy) {
+      if (reason === "fork") {
+        this.sessionPolicies = this.sessionPolicies.filter((item) => item.sessionId !== sessionId);
+        this.sessionPolicies.push({
+          ...policy,
+          sessionId,
+          ...(policy.verify ? { verify: cloneVerifyPolicy(policy.verify) } : {}),
+          ...(policy.toolOverrides ? { toolOverrides: cloneToolOverrides(policy.toolOverrides) } : {}),
+        });
+      } else policy.sessionId = sessionId;
+    }
     const archived = this.archivedSessions.find((item) => item.id === previousId);
     if (archived) archived.id = sessionId;
     this.activeSessionOrder = this.activeSessionOrder.map((id) => id === previousId ? sessionId : id);

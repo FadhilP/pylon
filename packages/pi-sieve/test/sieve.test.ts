@@ -6,7 +6,6 @@ import { join, resolve } from "node:path";
 import extension from "../extensions/pi-sieve.ts";
 import { loadConfig } from "../src/config.ts";
 import {
-  GIANT_ERROR_TAIL_CHARS,
   SIEVE_THRESHOLD,
   activeOmissionMarker,
   giantErrorMarker,

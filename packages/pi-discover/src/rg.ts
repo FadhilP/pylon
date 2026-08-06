@@ -43,27 +43,42 @@ export function registerRg(pi: ExtensionAPI, maxBytes = DEFAULT_MAX_BYTES) {
           return { content: [{ type: "text" as const, text: bounded(result.stdout, maxBytes) || "No matches found" }], details: { code: 0 } };
         }
 
-        const fileResult = await pi.exec("rg", withQuery([...base, "--files-with-matches", "--null", "--sort", "path"], [path]), { signal, timeout: SEARCH_TIMEOUT_MS });
-        if (fileResult.code === 1) return { content: [{ type: "text" as const, text: "No matches found" }], details: { code: 1 } };
-        if (fileResult.code !== 0) {
-          if (unavailable(fileResult.stderr)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
-          throw new Error(`ripgrep failed (${fileResult.code}): ${boundedError(fileResult.stderr)}`);
-        }
-        const matchingFiles = fileResult.stdout.split("\0").filter(Boolean);
-        const files = matchingFiles.slice(0, MAX_MATCHING_FILES);
-        if (!files.length) return { content: [{ type: "text" as const, text: "No matches found" }], details: { code: 1 } };
         const args = withQuery([
-          ...base, "--line-number", "--max-columns=500", "--max-columns-preview",
+          ...base, "--json", "--max-columns=500", "--max-columns-preview",
           "--max-count", String(MAX_MATCHES_PER_FILE), "--sort", "path",
-        ], files);
+        ], [path]);
         const result = await pi.exec("rg", args, { signal, timeout: SEARCH_TIMEOUT_MS });
-        if (result.code !== 0 && result.code !== 1) throw new Error(`ripgrep failed (${result.code}): ${boundedError(result.stderr)}`);
-        const fileNotice = matchingFiles.length > files.length
-          ? `\n[Search limited to first ${files.length} of ${matchingFiles.length} matching files.]`
+        if (result.code !== 0 && result.code !== 1) {
+          if (unavailable(result.stderr)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };
+          throw new Error(`ripgrep failed (${result.code}): ${boundedError(result.stderr)}`);
+        }
+        const matchingFiles = new Set<string>();
+        const selectedFiles = new Set<string>();
+        const lines: string[] = [];
+        for (const line of result.stdout.split(/\r?\n/)) {
+          if (!line) continue;
+          let event: any;
+          try { event = JSON.parse(line); } catch { continue; }
+          if (event?.type !== "match" || typeof event.data?.path?.text !== "string") continue;
+          const file = event.data.path.text;
+          matchingFiles.add(file);
+          if (!selectedFiles.has(file) && selectedFiles.size < MAX_MATCHING_FILES) selectedFiles.add(file);
+          if (!selectedFiles.has(file)) continue;
+          const lineNumber = Number(event.data.line_number) || 0;
+          const text = String(event.data.lines?.text ?? "").replace(/\r?\n$/, "");
+          lines.push(`${file}:${lineNumber}:${text}`);
+        }
+        if (!matchingFiles.size && result.stdout.trim()) {
+          return { content: [{ type: "text" as const, text: bounded(result.stdout, maxBytes) }], details: { code: result.code, matchingFiles: 0, searchedFiles: 0, truncatedFiles: false } };
+        }
+        const searchedFiles = selectedFiles.size;
+        const truncatedFiles = matchingFiles.size > MAX_MATCHING_FILES;
+        const fileNotice = truncatedFiles
+          ? `\n[Search limited to first ${searchedFiles} of ${matchingFiles.size} matching files.]`
           : "";
         return {
-          content: [{ type: "text" as const, text: bounded(`${result.stdout}${fileNotice}`, maxBytes) || "No matches found" }],
-          details: { code: result.code, matchingFiles: matchingFiles.length, searchedFiles: files.length, truncatedFiles: matchingFiles.length > files.length },
+          content: [{ type: "text" as const, text: bounded(`${lines.join("\n")}${fileNotice}`, maxBytes) || "No matches found" }],
+          details: { code: result.code, matchingFiles: matchingFiles.size, searchedFiles, truncatedFiles },
         };
       } catch (error) {
         if (unavailable(error)) return { content: [{ type: "text" as const, text: "ripgrep unavailable; use grep instead." }], details: { unavailable: true } };

@@ -1,6 +1,13 @@
+import { truncateUtf8 } from "pylon-core/utf8";
+
 export const MAX_BYTES = 16 * 1024;
 /** Repo Scout's final child report budget; other callers retain the general default. */
 export const SCOUT_REPORT_MAX_BYTES = 12 * 1024;
+
+export function repoResult(finalText: string, error?: string): string {
+  return error ? `Repo scout failed nonfatally: ${error}` : finalText;
+}
+
 export type EvidenceAnchor = { path: string; start: number; end: number };
 export type StructuredClaim = {
   section: "findings" | "data_flow" | "affected_files" | "gaps" | "other";
@@ -28,9 +35,7 @@ export function mergeEvidenceAnchors(anchors: readonly EvidenceAnchor[]): Eviden
 }
 
 function trimToBytes(text: string, maxBytes: number): string {
-  let output = text;
-  while (Buffer.byteLength(output, "utf8") > maxBytes) output = output.slice(0, -1);
-  return output;
+  return truncateUtf8(text, maxBytes);
 }
 
 function markdownBlocks(text: string): string[] {

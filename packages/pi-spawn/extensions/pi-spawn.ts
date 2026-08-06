@@ -9,12 +9,15 @@ import { runSpawn, spawnTimeoutMs, type SpawnActivity, type SpawnRun } from "../
 import {
   agentPolicy,
   branchSpawnIds,
+  branchSpawnReferences,
   claimSpawnedSession,
   createPrivateAgent,
   createSpawnedSession,
   findSessionForAdoption,
   listPrivateAgents,
   listSpawnedSessions,
+  RECENT_THREAD_MAX_TOTAL_CHARS,
+  recentThreadTranscript,
   requireParent,
   resultDetails,
   sessionPolicy,
@@ -28,7 +31,7 @@ import {
   type SpawnMarker,
 } from "../src/sessions.ts";
 
-const agentActions = ["create", "continue", "list"] as const;
+const agentActions = ["create", "continue", "recent", "list"] as const;
 const sessionActions = ["create", "adopt", "continue", "list"] as const;
 const SPECIALIST_TOOLS = ["advisor", "grunt", "repo_scout", "web_scout"];
 const SPAWN_TOOLS = ["spawn_agent", "spawn_session"];
@@ -36,7 +39,8 @@ const MAX_DEPTH = 4;
 const AGENT_PROMPT_GUIDELINES = [
   "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
   "When using spawn_agent, create one thread with a self-contained prompt and the narrowest useful policy, then continue that thread by ID for follow-ups because its model, system prompt, thinking level, and tools are immutable.",
-  "Use spawn_agent list only to recover private thread IDs available from the current parent branch; review the child response and any workspace changes before relying on them.",
+  "Use spawn_agent recent to inspect bounded recent transcript messages without prompting the child; use list only to recover private thread IDs available from the current parent branch.",
+  "Review child responses and workspace changes before relying on them.",
 ];
 const SESSION_PROMPT_GUIDELINES = [
   "Use spawn_session only when the child conversation must be an ordinary Pi session the user can inspect, open, or continue separately; do not use spawn_session as the default delegation tool when a private spawn_agent thread or focused specialist tool is sufficient.",
@@ -49,13 +53,15 @@ const SESSION_PROMPT_GUIDELINES = [
 type RunChild = typeof runSpawn;
 
 const threadParameters = {
-  id: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Opaque thread ID; required for adopt or continue" })),
+  id: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Opaque thread ID" })),
   prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000, description: "Prompt for create, adopt, or continue" })),
 };
 
 const createAgentParameters = (allowedThinking: readonly string[] = thinkingLevels) => Type.Object({
-  action: StringEnum(agentActions, { description: "Create a thread, continue one, or list threads available from the current parent branch" }),
+  action: StringEnum(agentActions, { description: "Create, continue, inspect recent messages from, or list private threads available from the current parent branch" }),
   ...threadParameters,
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Recent transcript messages to return; default 8" })),
+  maxChars: Type.Optional(Type.Integer({ minimum: 80, maximum: 2_000, description: "Maximum text characters per recent message; default 800" })),
   name: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Concise purpose-based display name fixed when the private thread is created" })),
   model: Type.Optional(Type.String({ minLength: 3, maxLength: 300, description: "Optional provider/model fixed when the private thread is created" })),
   thinking: Type.Optional(StringEnum(allowedThinking, { description: "Thinking level fixed when the private thread is created" })),
@@ -133,6 +139,7 @@ function invalidInput(kind: SpawnKind, params: any): string | undefined {
   if (params.action === "create") {
     if (params.id !== undefined) return `${kind} create does not accept id.`;
     if (!params.prompt?.trim()) return `${kind} create requires prompt.`;
+    if (params.limit !== undefined || params.maxChars !== undefined) return `${kind} create does not accept recent limits.`;
     if (kind === "session" && params.project !== undefined && !params.project.trim()) return "session project must not be empty.";
     if (kind === "agent" && params.tools !== undefined) {
       const excluded = new Set([...SPAWN_TOOLS, ...(params.disableSpecialists === false ? [] : SPECIALIST_TOOLS)]);
@@ -152,14 +159,23 @@ function invalidInput(kind: SpawnKind, params: any): string | undefined {
   if (params.action === "continue") {
     if (!params.id) return `${kind} continue requires id.`;
     if (!params.prompt?.trim()) return `${kind} continue requires prompt.`;
+    if (params.limit !== undefined || params.maxChars !== undefined) return `${kind} continue does not accept recent limits.`;
     if (kind === "agent" && creationOnlyAgentFields(params)) return "Agent creation policy cannot change on continue.";
     if (kind === "session" && (creationOnlySessionFields(params) || params.project !== undefined)) return "Session name, model, and project can only be set on create or adopt.";
     return;
   }
+  if (params.action === "recent") {
+    if (kind !== "agent") return "Only private agents support recent transcript inspection.";
+    if (!params.id) return "agent recent requires id.";
+    if (params.prompt !== undefined || creationOnlyAgentFields(params)) return "agent recent does not accept prompts or creation fields.";
+    if (params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 50)) return "agent recent limit must be an integer between 1 and 50.";
+    if (params.maxChars !== undefined && (!Number.isInteger(params.maxChars) || params.maxChars < 80 || params.maxChars > 2_000)) return "agent recent maxChars must be an integer between 80 and 2000.";
+    return;
+  }
   if (params.action !== "list") return `Unknown ${kind} action.`;
-  if (params.id !== undefined || params.prompt !== undefined
+  if (params.id !== undefined || params.prompt !== undefined || params.limit !== undefined || params.maxChars !== undefined
     || (kind === "agent" ? creationOnlyAgentFields(params) : creationOnlySessionFields(params) || params.project !== undefined))
-    return `${kind} list does not accept thread or creation fields.`;
+    return `${kind} list does not accept thread, recent, or creation fields.`;
 }
 
 function childArgs(kind: SpawnKind, path: string, policy?: AgentPolicy | SpawnMarker): string[] {
@@ -230,13 +246,18 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
   ) => {
     const started = Date.now();
     const agentName = scientistName(id);
-    const model = policy?.model;
+    let model = policy?.model;
+    let thinking = kind === "agent" ? (policy as AgentPolicy | undefined)?.thinking : undefined;
     let activity: readonly SpawnActivity[] = [];
     let authorized = beforeRun === undefined;
     const update = (value: unknown) => { try { onUpdate?.(value); } catch { /* UI updates must not control child lifecycle. */ } };
+    const runningDetails = () => ({
+      ...resultDetails(kind, id, path, cwd), agentName, startedAt: new Date(started).toISOString(), state: "running",
+      ...(model ? { model } : {}), ...(thinking ? { thinking } : {}),
+    });
     update({
       content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} ${agentName} is working…` }],
-      details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), activity },
+      details: { ...runningDetails(), activity },
     });
     try {
       const run = await withThreadLock(path, async () => {
@@ -250,13 +271,21 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
           env: { PI_SPAWN_CHILD: kind, PI_SPAWN_DEPTH: String(Number(process.env.PI_SPAWN_DEPTH ?? 0) + 1) },
           onUsage: (usage) => update({
             content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} usage updated` }],
-            details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), durationMs: Date.now() - started, usage, activity },
+            details: { ...runningDetails(), durationMs: Date.now() - started, usage },
           }),
-          onActivity: (_item, all) => {
+          onState: (state) => {
+            model = state.model ?? model;
+            thinking = state.thinking ?? thinking;
+            update({
+              content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} runtime ready` }],
+              details: { ...runningDetails(), durationMs: Date.now() - started },
+            });
+          },
+          onActivity: (item, all) => {
             activity = all;
             update({
-              content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} activity: ${all.at(-1)?.tool ?? "working"}` }],
-              details: { ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(), state: "running", ...(model ? { model } : {}), durationMs: Date.now() - started, activity: all },
+              content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} activity: ${item.tool}` }],
+              details: { ...runningDetails(), durationMs: Date.now() - started, activityDelta: [item] },
             });
           },
         });
@@ -264,9 +293,11 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       return {
         content: [{ type: "text" as const, text: runText(kind, id, agentName, run) }],
         details: {
-          ...resultDetails(kind, id), agentName, startedAt: new Date(started).toISOString(),
-          status: run.error ? "failed" : "completed", model: run.model, durationMs: run.durationMs,
-          usage: run.usage, turns: run.turns, activity: run.activity, stopReason: run.stopReason,
+          ...resultDetails(kind, id, path, cwd), agentName, startedAt: new Date(started).toISOString(),
+          status: run.error ? "failed" : "completed", model: run.model ?? model,
+          ...(run.thinking ?? thinking ? { thinking: run.thinking ?? thinking } : {}), durationMs: run.durationMs,
+          usage: run.usage, ...(run.sessionUsage ? { sessionUsage: run.sessionUsage } : {}),
+          turns: run.turns, activity: run.activity, stopReason: run.stopReason,
           truncated: run.truncated, ...(run.error ? { failureCode: "child_error", failureMessage: run.error } : {}),
         },
         usage: {
@@ -279,7 +310,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const message = error instanceof Error ? error.message : String(error);
       return {
         content: [{ type: "text" as const, text: `${kind === "agent" ? "Subagent" : "Session"} ${id} turn failed: ${message}` }],
-        details: { ...(authorized ? resultDetails(kind, id) : {}), agentName, startedAt: new Date(started).toISOString(), status: "failed", failureCode: error instanceof SessionAdoptionError ? error.code : "runner_error", failureMessage: message },
+        details: { ...(authorized ? resultDetails(kind, id, path, cwd) : {}), agentName, startedAt: new Date(started).toISOString(), status: "failed", failureCode: error instanceof SessionAdoptionError ? error.code : "runner_error", failureMessage: message },
       };
     }
   };
@@ -298,7 +329,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       ...(deferredTools.length ? {
         deferredTools,
         deferredToolUsage: Object.fromEntries(deferredTools.map((tool) => [tool, tool === "spawn_agent"
-          ? "create or continue private customized subagent conversations"
+          ? "create, continue, or inspect private customized subagent conversations"
           : "create, adopt, or continue inspectable Pi sessions"])),
       } : {}),
     });
@@ -310,7 +341,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
   const agentTool = defineTool({
     name: "spawn_agent",
     label: "Spawn Agent",
-    description: "Create, continue, or list private persistent subagent threads owned by the current parent-session branch. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups and use list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
+    description: "Create, continue, inspect, or list private persistent subagent threads owned by the current parent-session branch. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups. Use recent for bounded read-only transcript inspection without prompting the child, and list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
     ...(agentAvailability === "active" ? { promptGuidelines: AGENT_PROMPT_GUIDELINES } : {}),
     parameters: AgentParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -349,6 +380,18 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const matches = await listPrivateAgents(ctx.cwd, parent, allowed, agentDir);
       const selected = matches.find(({ info }) => info.id === params.id);
       if (!selected) return { content: [{ type: "text" as const, text: "Private subagent thread is unavailable from this parent branch." }], details: { failureCode: "not_found" } };
+      if (params.action === "recent") {
+        const recent = recentThreadTranscript(selected.manager, { limit: params.limit, maxChars: params.maxChars });
+        const name = selected.info.name ?? "Subagent";
+        const summary = `Private subagent ${name} (${selected.info.id}) recent transcript: ${recent.returned} of ${recent.available} messages.`;
+        const output = `${summary}${recent.text ? `\n\n${recent.text}` : "\n\nNo transcript messages."}${recent.truncated ? "\n\n[Transcript truncated.]" : ""}`;
+        const outputTruncated = output.length > RECENT_THREAD_MAX_TOTAL_CHARS;
+        const text = outputTruncated ? `${output.slice(0, RECENT_THREAD_MAX_TOTAL_CHARS - 1)}…` : output;
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { ...resultDetails("agent", selected.info.id), action: "recent", returned: recent.returned, available: recent.available, truncated: recent.truncated || outputTruncated },
+        };
+      }
       const policy = agentPolicy(selected.manager, parent);
       if (!policy) return { content: [{ type: "text" as const, text: "Private subagent policy is invalid." }], details: { ...resultDetails("agent", selected.info.id), failureCode: "invalid_policy" } };
       return executeTurn("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate);
@@ -371,7 +414,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
         : selectedModel ? undefined : "No configured spawn models are currently available.");
       if (unavailable) return { content: [{ type: "text" as const, text: unavailable }], details: { failureCode: "model_unavailable" } };
       const parent = requireParent(ctx.sessionManager);
-      const allowed = branchSpawnIds(ctx.sessionManager, "session");
+      const allowed = branchSpawnReferences(ctx.sessionManager, "session");
       if (params.action === "list") {
         const entries = await listSpawnedSessions(parent, allowed);
         const threads = entries.map(({ info }) => threadInfo("session", info));

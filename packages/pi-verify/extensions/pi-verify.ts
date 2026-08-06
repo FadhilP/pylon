@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
+import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   truncateTail,
@@ -90,14 +92,30 @@ export default function verifyExtension(pi: ExtensionAPI) {
   });
   const worktreeState = async (cwd: string, signal?: AbortSignal) => {
     try {
-      const [head, status] = await Promise.all([
-        pi.exec("git", ["rev-parse", "HEAD"], { cwd, signal, timeout: 15_000 }),
-        pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, signal, timeout: 15_000 }),
+      const options = { cwd, signal, timeout: 15_000 };
+      const [head, status, index, paths] = await Promise.all([
+        pi.exec("git", ["rev-parse", "HEAD"], options),
+        pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], options),
+        pi.exec("git", ["diff", "--cached", "--raw", "-z", "HEAD", "--"], options),
+        pi.exec("git", ["ls-files", "--modified", "--deleted", "--others", "--exclude-standard", "-z"], options),
       ]);
-      if (head.code !== 0 || status.code !== 0) return undefined;
-      const value = `${head.stdout.trim()}\n${status.stdout}`;
+      if ([head, status, index, paths].some((result) => result.code !== 0)) return undefined;
+      const changedPaths = [...new Set(paths.stdout.split("\0").filter(Boolean))].sort();
+      const content = createHash("sha256")
+        .update(head.stdout.trim()).update("\0")
+        .update(status.stdout).update("\0")
+        .update(index.stdout).update("\0");
+      for (let offset = 0; offset < changedPaths.length; offset += 64) {
+        const existing = (await Promise.all(changedPaths.slice(offset, offset + 64).map(async (path) =>
+          await lstat(join(cwd, path)).then(() => path, () => undefined),
+        ))).filter((path): path is string => path !== undefined);
+        if (!existing.length) continue;
+        const hashes = await pi.exec("git", ["hash-object", "--no-filters", "--", ...existing], options);
+        if (hashes.code !== 0) return undefined;
+        content.update(existing.map((path, index) => `${path}\0${hashes.stdout.split(/\r?\n/)[index] ?? ""}\0`).join(""));
+      }
       return {
-        id: createHash("sha256").update(value).digest("hex").slice(0, 16),
+        id: content.digest("hex").slice(0, 16),
         dirty: Boolean(status.stdout.trim()),
         status: status.stdout,
       };

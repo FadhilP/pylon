@@ -18,7 +18,7 @@ import {
   thinkingLevels,
   type ThinkingLevel,
 } from "../src/config.ts";
-import { repoResult } from "../src/checkpoint.ts";
+import { repoResult } from "../src/result.ts";
 import { buildParentContext } from "../src/parent-context.ts";
 import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
 import { capReport, capText, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClaims } from "../src/result.ts";
@@ -287,7 +287,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       {
         task: Type.String({
           minLength: 1,
-          maxLength: 1000,
+          maxLength: 1500,
           description:
             "Evidence-only repository search, mapping, or tracing task with observable scope, paths, symbols, boundaries, inputs, sinks, or flows; exclude design, recommendation, prioritization, and architecture-choice requests",
         }),

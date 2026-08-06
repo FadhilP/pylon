@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   getAgentDir,
   SessionManager,
@@ -46,6 +46,16 @@ export type SpawnThreadInfo = {
   modifiedAt: string;
   messageCount: number;
 };
+export type RecentThreadTranscript = {
+  text: string;
+  returned: number;
+  available: number;
+  truncated: boolean;
+};
+
+export const RECENT_THREAD_DEFAULT_LIMIT = 8;
+export const RECENT_THREAD_DEFAULT_MAX_CHARS = 800;
+export const RECENT_THREAD_MAX_TOTAL_CHARS = 12_000;
 
 const canonical = (path: string) => {
   const value = resolve(path);
@@ -62,18 +72,27 @@ export function privateAgentDir(parentSessionId: string, agentDir = getAgentDir(
   return join(agentDir, "pi-spawn", "agents", encodeURIComponent(parentSessionId));
 }
 
-export function resultDetails(kind: SpawnKind, id: string) {
-  return { piSpawn: { version: 1, kind, id } };
+export function resultDetails(kind: SpawnKind, id: string, path?: string, cwd?: string) {
+  return { piSpawn: { version: 1, kind, id, ...(path && cwd ? { path, cwd } : {}) } };
 }
 
-export function branchSpawnIds(manager: ParentSessionManager, kind: SpawnKind): Set<string> {
-  const ids = new Set<string>();
+export type SpawnReference = { path: string; cwd: string };
+
+export function branchSpawnReferences(manager: ParentSessionManager, kind: SpawnKind): Map<string, SpawnReference | undefined> {
+  const references = new Map<string, SpawnReference | undefined>();
   for (const entry of manager.getBranch()) {
     if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
     const value = (entry.message.details as any)?.piSpawn;
-    if (value?.version === 1 && value.kind === kind && typeof value.id === "string") ids.add(value.id);
+    if (value?.version !== 1 || value.kind !== kind || typeof value.id !== "string") continue;
+    references.set(value.id, typeof value.path === "string" && typeof value.cwd === "string"
+      ? { path: value.path, cwd: value.cwd }
+      : undefined);
   }
-  return ids;
+  return references;
+}
+
+export function branchSpawnIds(manager: ParentSessionManager, kind: SpawnKind): Set<string> {
+  return new Set(branchSpawnReferences(manager, kind).keys());
 }
 
 function materialize(manager: SessionManager): void {
@@ -272,9 +291,25 @@ export async function listPrivateAgents(
 
 export async function listSpawnedSessions(
   parent: { id: string; file: string },
-  allowedIds: Set<string>,
+  references: Map<string, SpawnReference | undefined>,
 ) {
-  return authorized(await SessionManager.listAll(), allowedIds, parent, SESSION_MARKER);
+  const located: SessionInfo[] = [];
+  const legacyIds = new Set<string>();
+  const locations = new Map<string, { cwd: string; directory: string; ids: Set<string> }>();
+  for (const [id, reference] of references) {
+    if (!reference) { legacyIds.add(id); continue; }
+    const directory = dirname(reference.path);
+    const key = `${canonical(reference.cwd)}\0${canonical(directory)}`;
+    const location = locations.get(key) ?? { cwd: reference.cwd, directory, ids: new Set<string>() };
+    location.ids.add(id);
+    locations.set(key, location);
+  }
+  for (const location of locations.values()) {
+    const sessions = await SessionManager.list(location.cwd, location.directory);
+    located.push(...sessions.filter((session) => location.ids.has(session.id)));
+  }
+  if (legacyIds.size) located.push(...(await SessionManager.listAll()).filter((session) => legacyIds.has(session.id)));
+  return authorized(located, new Set(references.keys()), parent, SESSION_MARKER);
 }
 
 export function agentPolicy(manager: SessionManager, parent: { id: string; file: string }): AgentPolicy | undefined {
@@ -303,6 +338,98 @@ export function threadInfo(kind: SpawnKind, info: SessionInfo): SpawnThreadInfo 
     createdAt: info.created.toISOString(),
     modifiedAt: info.modified.toISOString(),
     messageCount: info.messageCount,
+  };
+}
+
+type RecentMessage = { label: string; text: string; toolCalls?: string[] };
+
+const clipped = (value: string, max: number) => value.length <= max
+  ? { text: value, truncated: false }
+  : { text: max <= 1 ? "…" : `${value.slice(0, max - 1)}…`, truncated: true };
+
+const contentText = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.flatMap((part: any) => {
+    if (part?.type === "text" && typeof part.text === "string") return [part.text];
+    if (part?.type === "image") return ["[image]"];
+    return [];
+  }).join("\n");
+};
+
+function recentMessage(entry: any): RecentMessage | undefined {
+  try {
+    if (entry?.type === "custom_message") {
+      const text = contentText(entry.content);
+      return text ? { label: `custom:${String(entry.customType ?? "message").slice(0, 80)}`, text } : undefined;
+    }
+    if (entry?.type === "compaction" && typeof entry.summary === "string")
+      return { label: "compaction", text: entry.summary };
+    if (entry?.type === "branch_summary" && typeof entry.summary === "string")
+      return { label: "branch-summary", text: entry.summary };
+    if (entry?.type !== "message" || !entry.message || typeof entry.message !== "object") return;
+    const message = entry.message;
+    if (message.role === "user") {
+      const text = contentText(message.content);
+      return text ? { label: "user", text } : undefined;
+    }
+    if (message.role === "assistant") {
+      const text = contentText(message.content);
+      const toolCalls = Array.isArray(message.content)
+        ? message.content
+          .filter((part: any) => part?.type === "toolCall" && typeof part.name === "string")
+          .slice(0, 12)
+          .map((part: any) => part.name.slice(0, 80))
+        : [];
+      return text || toolCalls.length ? { label: "assistant", text, ...(toolCalls.length ? { toolCalls } : {}) } : undefined;
+    }
+    if (message.role === "toolResult") {
+      const text = contentText(message.content);
+      return text ? { label: `tool:${String(message.toolName ?? "result").slice(0, 80)}`, text } : undefined;
+    }
+    if (message.role === "bashExecution")
+      return { label: "bash", text: [message.command, message.output].filter((value) => typeof value === "string" && value).join("\n") };
+    if (message.role === "custom") {
+      const text = contentText(message.content);
+      return text ? { label: `custom:${String(message.customType ?? "message").slice(0, 80)}`, text } : undefined;
+    }
+    if ((message.role === "branchSummary" || message.role === "compactionSummary") && typeof message.summary === "string")
+      return { label: message.role === "branchSummary" ? "branch-summary" : "compaction", text: message.summary };
+  } catch { /* Malformed transcript entries are omitted from read-only inspection. */ }
+}
+
+export function recentThreadTranscript(
+  manager: Pick<SessionManager, "getBranch">,
+  options: { limit?: number; maxChars?: number } = {},
+): RecentThreadTranscript {
+  const limit = options.limit ?? RECENT_THREAD_DEFAULT_LIMIT;
+  const maxChars = options.maxChars ?? RECENT_THREAD_DEFAULT_MAX_CHARS;
+  const available = manager.getBranch().flatMap((entry) => {
+    const message = recentMessage(entry);
+    return message ? [message] : [];
+  });
+  const selected = available.slice(-limit);
+  const blocks: string[] = [];
+  let remaining = RECENT_THREAD_MAX_TOTAL_CHARS;
+  let truncated = selected.length < available.length;
+  for (const message of selected) {
+    if (remaining <= 0) { truncated = true; break; }
+    const body = clipped(message.text, maxChars);
+    const rendered = [
+      `[${message.label}]`,
+      message.toolCalls?.length ? `tool calls: ${message.toolCalls.join(", ")}` : "",
+      body.text,
+    ].filter(Boolean).join("\n");
+    const bounded = clipped(rendered, remaining);
+    blocks.push(bounded.text);
+    remaining -= bounded.text.length + 2;
+    truncated ||= body.truncated || bounded.truncated;
+  }
+  return {
+    text: blocks.join("\n\n"),
+    returned: blocks.length,
+    available: available.length,
+    truncated,
   };
 }
 

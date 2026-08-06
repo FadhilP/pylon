@@ -226,28 +226,29 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
       }
 
       const callIsolation = isolated;
-      const contextChars = gruntParentContextChars();
-      const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
-      const suggested = params.suggestedPaths ?? [];
-      const targetedContext = params.targetedContext?.trim() ?? "";
-      const checkCommands = params.checkCommands ?? [];
-      const parentContext = contextChars
-        ? buildWorkerContext(entries, contextChars, 10, [task, targetedContext, ...suggested, ...checkCommands])
-        : "";
-      const runningText = mode === "isolated" ? "implementing in isolation" : "DIRECT — editing current working directory";
-      if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
-      onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
-      let activity: readonly WorkerActivity[] = [];
-      let lastUpdateAt = started;
-      const heartbeat = setInterval(() => {
-        const now = Date.now();
-        if (now - lastUpdateAt < HEARTBEAT_MS) return;
-        onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
-      }, HEARTBEAT_MS);
-      heartbeat.unref();
+      let heartbeat: NodeJS.Timeout | undefined;
       const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
       let attemptUsage = { ...usage };
       try {
+        const contextChars = gruntParentContextChars();
+        const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
+        const suggested = params.suggestedPaths ?? [];
+        const targetedContext = params.targetedContext?.trim() ?? "";
+        const checkCommands = params.checkCommands ?? [];
+        const parentContext = contextChars
+          ? buildWorkerContext(entries, contextChars, 10, [task, targetedContext, ...suggested, ...checkCommands])
+          : "";
+        const runningText = mode === "isolated" ? "implementing in isolation" : "DIRECT — editing current working directory";
+        if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
+        onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
+        let activity: readonly WorkerActivity[] = [];
+        let lastUpdateAt = started;
+        heartbeat = setInterval(() => {
+          const now = Date.now();
+          if (now - lastUpdateAt < HEARTBEAT_MS) return;
+          onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
+        }, HEARTBEAT_MS);
+        heartbeat.unref();
         const timeoutMs = gruntTimeoutMs();
         const maxCostUsd = gruntMaxCostUsd();
         const maxTurns = gruntMaxTurns();
@@ -428,7 +429,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           details: { ...agent, status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking, usage: liveUsage },
         };
       } finally {
-        clearInterval(heartbeat);
+        if (heartbeat) clearInterval(heartbeat);
         const cleanupWarnings: string[] = [];
         for (const worktree of isolatedAttempts)
           cleanupWarnings.push(...await removeIsolatedWorktree(exec, worktree));

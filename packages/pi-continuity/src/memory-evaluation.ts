@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { REQUIRED_ZERO_COUNTS, validEnabledGate, type MemoryOperationClass, type MemoryRolloutGate } from "./memory-rollout.ts";
+
+export type MemoryOperationClass = "user_instruction_add" | "project_contract_write" | "merge_replace" | "reviewer_remove" | "v4_migration";
+export const REQUIRED_ZERO_COUNTS = ["unsupportedCitations", "secretWrites", "staleApplies", "crossOwnerMutations", "duplicateApplies", "prohibitedUserNoteChanges"] as const;
+export type MemoryEvaluationResult = { passed: boolean; corpusSize: number; precision?: number; noOpAgreement?: number; corpusSha256?: string; zeroCounts?: Record<string, number> };
 
 export type MemoryEvaluationCase = {
   id: string;
@@ -12,11 +15,17 @@ export type MemoryEvaluationCase = {
 export type MemoryEvaluationReport = {
   version: 1;
   caseCount: number;
-  gates: Record<MemoryOperationClass, MemoryRolloutGate>;
+  results: Record<MemoryOperationClass, MemoryEvaluationResult>;
   usefulnessAgreement: Record<MemoryOperationClass, number>;
 };
 const operations: MemoryOperationClass[] = ["user_instruction_add", "project_contract_write", "merge_replace", "reviewer_remove", "v4_migration"];
 const exactKeys = (value: any, allowed: readonly string[]) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key));
+const meetsEvaluationThreshold = (value: MemoryEvaluationResult) => {
+  const counts = value.zeroCounts, keys = counts ? Object.keys(counts).sort() : [];
+  return value.passed && value.corpusSize >= 500 && (value.precision ?? 0) >= 0.99 && (value.noOpAgreement ?? 0) >= 0.95
+    && /^[0-9a-f]{64}$/.test(value.corpusSha256 ?? "") && JSON.stringify(keys) === JSON.stringify([...REQUIRED_ZERO_COUNTS].sort())
+    && REQUIRED_ZERO_COUNTS.every((key) => Number.isSafeInteger(counts![key]) && counts![key] === 0);
+};
 
 export function parseMemoryEvaluationCorpus(value: unknown): MemoryEvaluationCase[] {
   if (!Array.isArray(value)) throw Error("Memory V5 evaluation corpus must be a JSON array");
@@ -31,7 +40,7 @@ export function parseMemoryEvaluationCorpus(value: unknown): MemoryEvaluationCas
 }
 
 export function scoreMemoryEvaluation(corpus: MemoryEvaluationCase[]): MemoryEvaluationReport {
-  const parsed = parseMemoryEvaluationCorpus(corpus), gates = {} as Record<MemoryOperationClass, MemoryRolloutGate>, usefulnessAgreement = {} as Record<MemoryOperationClass, number>;
+  const parsed = parseMemoryEvaluationCorpus(corpus), results = {} as Record<MemoryOperationClass, MemoryEvaluationResult>, usefulnessAgreement = {} as Record<MemoryOperationClass, number>;
   for (const operation of operations) {
     const cases = parsed.filter((item) => item.operationClass === operation).sort((a, b) => a.id.localeCompare(b.id));
     const approvals = cases.filter((item) => item.actual === "approve"), expectedRejects = cases.filter((item) => item.expected === "reject");
@@ -40,8 +49,8 @@ export function scoreMemoryEvaluation(corpus: MemoryEvaluationCase[]): MemoryEva
     const useful = approvals.filter((item) => item.expected === "approve");
     usefulnessAgreement[operation] = useful.length ? useful.filter((item) => item.useful).length / useful.length : 0;
     const zeroCounts = Object.fromEntries(REQUIRED_ZERO_COUNTS.map((key) => [key, cases.filter((item) => item.zeroCounts[key]).length])) as Record<(typeof REQUIRED_ZERO_COUNTS)[number], number>;
-    const candidate: MemoryRolloutGate = { enabled: true, corpusSize: cases.length, precision, noOpAgreement, corpusSha256: createHash("sha256").update(JSON.stringify(cases)).digest("hex"), zeroCounts };
-    gates[operation] = { ...candidate, enabled: validEnabledGate(candidate) && usefulnessAgreement[operation] === 1 };
+    const candidate: MemoryEvaluationResult = { passed: true, corpusSize: cases.length, precision, noOpAgreement, corpusSha256: createHash("sha256").update(JSON.stringify(cases)).digest("hex"), zeroCounts };
+    results[operation] = { ...candidate, passed: meetsEvaluationThreshold(candidate) && usefulnessAgreement[operation] === 1 };
   }
-  return { version: 1, caseCount: parsed.length, gates, usefulnessAgreement };
+  return { version: 1, caseCount: parsed.length, results, usefulnessAgreement };
 }

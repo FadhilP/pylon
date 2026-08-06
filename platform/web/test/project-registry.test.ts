@@ -131,6 +131,87 @@ test("project and active-session ordering persists and rejects stale members", a
   }
 });
 
+test("fork rekey copies shareable metadata without duplicating exclusive workspaces", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-fork-rekey-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load([project]);
+    const projectId = projectIdForCwd(project);
+    await registry.setSessionWorkspace({ sessionId: "local-source", projectId, mode: "local" });
+    await registry.updateRuntimePolicy({
+      scope: "session",
+      projectId,
+      sessionId: "local-source",
+      verify: { mode: "auto" },
+      timeline: "enabled",
+      guard: "enabled",
+      workspace: "local",
+      guardTimeoutSeconds: 120,
+      clarifyTimeoutSeconds: "inherit",
+      expectedRevision: 0,
+    });
+    await registry.updateToolPolicy({
+      scope: "session",
+      projectId,
+      sessionId: "local-source",
+      tool: "spawn_agent",
+      mode: "disabled",
+      expectedRevision: 1,
+    });
+    await registry.activateSession("local-source");
+    await registry.pinSession("local-source");
+
+    await registry.rekeySession("local-source", "local-fork", "fork");
+
+    assert.equal(registry.workspaceForSession("local-source")?.mode, "local");
+    assert.equal(registry.workspaceForSession("local-fork")?.mode, "local");
+    assert.equal(registry.runtimePolicy(projectId, "local-source").session.guardTimeoutSeconds, 120);
+    assert.equal(registry.runtimePolicy(projectId, "local-fork").session.guardTimeoutSeconds, 120);
+    assert.deepEqual(registry.listActiveSessionOrder(), ["local-fork"]);
+    assert.equal(registry.isSessionPinned("local-source"), false);
+    assert.equal(registry.isSessionPinned("local-fork"), true);
+    await registry.updateToolPolicy({
+      scope: "session",
+      projectId,
+      sessionId: "local-source",
+      tool: "spawn_agent",
+      mode: "active",
+      expectedRevision: 2,
+    });
+    assert.equal(registry.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
+    assert.equal(registry.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
+
+    const worktree = {
+      sessionId: "worktree-source",
+      projectId,
+      mode: "worktree" as const,
+      worktreePath: join(root, "worktree"),
+      commonDir: join(project, ".git"),
+      branch: "refs/heads/pylon-session-test",
+      baseline: "a".repeat(40),
+      baselineTree: "b".repeat(40),
+    };
+    await registry.setSessionWorkspace(worktree);
+    await registry.rekeySession("worktree-source", "worktree-fork", "fork");
+    assert.equal(registry.workspaceForSession("worktree-source"), undefined);
+    assert.deepEqual(registry.workspaceForSession("worktree-fork"), { ...worktree, sessionId: "worktree-fork" });
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load();
+    assert.equal(reloaded.workspaceForSession("local-source")?.mode, "local");
+    assert.equal(reloaded.workspaceForSession("local-fork")?.mode, "local");
+    assert.equal(reloaded.workspaceForSession("worktree-source"), undefined);
+    assert.equal(reloaded.workspaceForSession("worktree-fork")?.mode, "worktree");
+    assert.equal(reloaded.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
+    assert.equal(reloaded.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("version 9 active sessions migrate without becoming pinned", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-project-pin-migration-"));
   const project = join(root, "project");

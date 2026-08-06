@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ModelProfile } from "./config.ts";
 import { enforceMemoryLimits, isNotebookNote, normalizeRuleText, strongDuplicate, type MemoryStateFile, type NotebookNote } from "./memory.ts";
-import { assertRolloutEnabled, type MemoryRolloutPolicy } from "./memory-rollout.ts";
 import { assertSafe, sanitizeAndClip } from "./secrets.ts";
 import { readJson, serializedJson, withFileLock, writeBytesAtomic } from "./storage.ts";
 import { captureEvidence } from "./worktree.ts";
@@ -131,7 +130,6 @@ type MigrateV4Input = {
   sessionId: string;
   commitAll(notes: NotebookNote[], sourceHashes: MigrationJournal["sourceHashes"]): Promise<number>;
   completeReview?: typeof complete;
-  rolloutPolicy?: MemoryRolloutPolicy;
   onTelemetry?(value: { durationMs: number; proposalCount: number; verdicts: string[]; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } }): void;
 };
 async function migrateV4Unlocked(input: MigrateV4Input): Promise<{ migrated: boolean; rejected: number }> {
@@ -215,6 +213,5 @@ export async function recordPendingV4Migration(root: string, reason: string): Pr
 }
 
 export async function migrateV4(input: MigrateV4Input): Promise<{ migrated: boolean; rejected: number }> {
-  assertRolloutEnabled("v4_migration", input.rolloutPolicy);
   return withFileLock(join(input.root, "memory-v5", "migration-operation"), () => migrateV4Unlocked(input));
 }

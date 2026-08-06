@@ -141,7 +141,7 @@ function safeVisibleEntries(entries: SessionEntry[], work: Work) {
     const details = entry.type === "compaction" ? entry.details as any : undefined;
     if (
       details?.type === CONTINUITY_COMPACTION_TYPE && isContinuityCompactionDetails(details) &&
-      details.runId === work.runId && details.timelineId === work.timelineId
+      "runId" in details && details.runId === work.runId && details.timelineId === work.timelineId
     ) return entries.slice(index);
   }
   return entries;

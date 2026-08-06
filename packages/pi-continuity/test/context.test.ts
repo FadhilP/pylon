@@ -14,6 +14,23 @@ test("retrieval matches trigger, guidance, paths, and identifiers", () => {
   assert.equal(shortlistNotes(notes, "unrelated").length, 0);
 });
 
+test("retrieval corpus keeps deterministic aliases, matches, and precision threshold", () => {
+  const notes = [
+    note("changing package settings", "Restart the runtime after updates."),
+    note("publishing releases", "Tag only verified commits."),
+    note("designing category filters", "Prefer a dropdown over free text."),
+  ];
+  const cases = [
+    ["validate package configuration", notes[0]?.id],
+    ["ship verified build", notes[1]?.id],
+    ["category dropdown filters", notes[2]?.id],
+    ["database migration", undefined],
+    ["settings", undefined],
+  ] as const;
+  for (const [query, expected] of cases)
+    assert.equal(shortlistResolvedNotes(notes, query)[0]?.id, expected, query);
+});
+
 test("promptQuery uses active work only for content-free continuation", () => {
   const work: any = { goal: "Implement package configuration", currentTodoId: "todo_1", todos: [{ id: "todo_1", text: "Update runtime settings" }] };
   assert.equal(promptQuery("continue", work), "Implement package configuration Update runtime settings");
@@ -25,6 +42,30 @@ test("context injects at most two complete notebook rules within budget", () => 
   const context = buildContext(undefined, notes, "package settings runtime tests", 150);
   assert.match(context, /Continuity state/);
   assert.ok((context.match(/^Memory:/gm) ?? []).length <= 2);
+  assert.equal(shortlistResolvedNotes(notes, "package settings runtime tests").length, 2);
   assert.doesNotMatch(context, /sourceReviewId|excerptSha256|confidence/);
   for (const line of context.split("\n").filter((value) => value.startsWith("Memory:"))) assert.match(line, /\.$/);
+});
+
+test("context backfills shorter ranked candidates when stronger rules exceed the budget", () => {
+  const notes = [
+    note("package runtime configuration settings", `Oversized ${"guidance ".repeat(50)}`),
+    note("package runtime settings", "Restart services."),
+    note("package configuration tests", "Run focused checks."),
+  ];
+  const context = buildContext(undefined, notes, "package runtime configuration settings tests", 100);
+  assert.doesNotMatch(context, /Oversized/);
+  assert.match(context, /Restart services/);
+  assert.match(context, /Run focused checks/);
+  assert.equal((context.match(/^Memory:/gm) ?? []).length, 2);
+});
+
+test("parent candidates backfill oversized child rules and rendered rules stay single-line", () => {
+  const children = Array.from({ length: 8 }, (_, index) =>
+    note(`package runtime configuration settings child${index}`, `Oversized ${"guidance ".repeat(50)}`));
+  const parent = note("package runtime settings", "Restart\nruntime services.");
+  const context = buildContext(undefined, children, "package runtime configuration settings", 100, [parent]);
+  assert.doesNotMatch(context, /Oversized/);
+  assert.match(context, /Restart runtime services/);
+  assert.equal((context.match(/^Memory:/gm) ?? []).length, 1);
 });

@@ -10,6 +10,7 @@ export interface StateQLActivityItem {
   id: string;
   source: "history" | "metadata";
   command: string;
+  sql?: string;
   actorId?: string;
   handle?: string;
   timestamp?: string;
@@ -47,6 +48,7 @@ export function buildStateQLActivity(snapshot: StateQLSnapshot): StateQLActivity
       id: `history:${entry.command_id}`,
       source: "history",
       command: entry.command,
+      sql: entry.sql ?? undefined,
       actorId: entry.actor_id,
       handle,
       timestamp: entry.timestamp,

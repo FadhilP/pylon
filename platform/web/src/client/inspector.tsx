@@ -618,7 +618,7 @@ export function StateQLWorkspace({ live }: { live: RuntimeStoreSnapshot }) {
           </button>;
         })}
       </div>
-      <p className="stateql-notebook-note">Snapshot metadata only. SQL text and row previews are not available in this view.</p>
+      <p className="stateql-notebook-note">SQL may contain inline literals or comments. Parameters and row previews are not included.</p>
       <div className="stateql-card-list">
         {visibleHistory.map((item) => <StateQLActivityCard item={item} expanded={expandedActivity.has(item.id)} key={item.id} onExpandedChange={(open) => setExpandedActivity((current) => {
           const next = new Set(current);
@@ -664,6 +664,9 @@ function StateQLActivityCard({ item, expanded, onExpandedChange }: { item: State
         <div><dt>Handle</dt><dd className="mono" title={item.handle}>{item.handle ? oneLine(item.handle, 24) : "—"}</dd></div>
         <div><dt>Execution</dt><dd>{item.source === "metadata" ? "History unavailable" : item.cached ? "cache hit" : item.executed ? "database executed" : item.success ? "completed" : "failed"}</dd></div>
       </dl>
+      {expanded && item.sql !== undefined && <section className="stateql-sql" aria-label="SQL statement">
+        <span>SQL</span><pre dir="ltr"><code>{item.sql}</code></pre>
+      </section>}
       {item.result && <section className="stateql-result-receipt" aria-label="Materialized result">
         <div><span>Materialized result</span><strong className="mono" title={item.result.handle}>{oneLine(item.result.handle, 26)}</strong></div>
         <div><span>Alias</span><strong>{item.result.alias ?? "No alias"}</strong></div>

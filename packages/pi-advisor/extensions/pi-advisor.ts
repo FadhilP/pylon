@@ -224,6 +224,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     ),
     async execute(id, params, signal, onUpdate, ctx) {
       return serializeAdvisor(async () => {
+      if (signal?.aborted) throw new DOMException("Advisor call was aborted.", "AbortError");
       const callNumber = Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"];
       const cacheRetention: "short" | "long" =
         process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";

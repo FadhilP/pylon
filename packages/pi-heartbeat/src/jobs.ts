@@ -81,9 +81,11 @@ export class JobManager {
   jobs = new Map<string, Job>();
   readonly dir: string;
   readonly onChange: () => void;
-  constructor(dir: string, onChange: () => void = () => {}) {
+  private readonly shutdownGraceMs: number;
+  constructor(dir: string, onChange: () => void = () => {}, shutdownGraceMs = 5_000) {
     this.dir = dir;
     this.onChange = onChange;
+    this.shutdownGraceMs = shutdownGraceMs;
   }
   async init() {
     await mkdir(this.dir, { recursive: true });
@@ -224,22 +226,20 @@ export class JobManager {
     return bounded(text);
   }
   async shutdown() {
+    const deadline = Date.now() + this.shutdownGraceMs;
     for (const j of this.running()) await this.stop(j);
-    await Promise.all(
-      this.running().map((j) =>
-        j.child.exitCode !== null
-          ? Promise.resolve()
-          : Promise.race([
-              new Promise<void>((resolve) =>
-                j.child.once("close", () => resolve()),
-              ),
-              delay(5000).then(() => undefined),
-            ]),
-      ),
-    );
-    await Promise.all(
+    const withinDeadline = (promise: Promise<unknown>) => {
+      const remaining = Math.max(0, deadline - Date.now());
+      return remaining ? Promise.race([promise, delay(remaining)]) : Promise.resolve();
+    };
+    await Promise.all(this.running().map((job) =>
+      job.child.exitCode !== null
+        ? Promise.resolve()
+        : withinDeadline(new Promise<void>((resolve) => job.child.once("close", resolve))),
+    ));
+    await withinDeadline(Promise.all(
       [...this.jobs.values()].map((job) => job.finalizing ?? Promise.resolve()),
-    );
+    ));
     for (const job of this.jobs.values())
       if (!job.file.closed) job.file.destroy();
     await rm(this.dir, { recursive: true, force: true });

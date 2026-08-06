@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const execFileAsync = promisify(execFile);
@@ -838,6 +838,24 @@ test("rg uses argument arrays and supports files mode", async () => {
   assert.ok(calls[0].args.includes("--files-with-matches"));
   assert.ok(!calls[0].args.includes("--line-number"));
   assert.deepEqual(result.content[0].text.trimEnd().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
+});
+
+test("fd resolves paths without restricting them to the workspace", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const { tools } = setup(async (command, args) => {
+    calls.push({ command, args });
+    return { stdout: "", stderr: "", code: 0, killed: false };
+  });
+  const cwd = process.cwd();
+  const outside = resolve(cwd, "..");
+  await tools.get("fd").execute("id", { pattern: "-private*", path: `@${outside}` }, undefined, undefined, { cwd });
+  await tools.get("fd").execute("id", { path: "../elsewhere" }, undefined, undefined, { cwd });
+  await tools.get("fd").execute("id", {}, undefined, undefined, { cwd });
+  assert.deepEqual(calls.map(({ args }) => args.slice(-3)), [
+    ["--", "-private*", outside],
+    ["--", ".", resolve(cwd, "../elsewhere")],
+    ["--", ".", cwd],
+  ]);
 });
 
 test("fd tries fdfind then directs models to built-in find", async () => {

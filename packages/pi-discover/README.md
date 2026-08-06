@@ -36,7 +36,7 @@ Results separate main-assistant and child-package model usage, include their com
 
 ### Live Workspace Search
 
-`rg` and `fd` are read-only workspace searches. They use bounded output and direct models to built-in `grep` or `find` when their optional executables are unavailable. `rg` also limits matches per file and skips files over 512 KiB before collecting output. Their implementations, plus `relationship_graph`, live in separate `src` modules shared by the host extension and pi-discover's child entrypoint. The host advertises that entrypoint through a versioned capability so Repo Scout can load these tools only when pi-discover is present.
+`rg` is a read-only workspace search. `fd` is read-only but can search any directory accessible to the Pi process, including paths outside the workspace; this can expose external filenames and directory structure to the model. Both use bounded output and direct models to built-in `grep` or `find` when their optional executables are unavailable. `rg` also limits matches per file and skips files over 512 KiB before collecting output. Their implementations, plus `relationship_graph`, live in separate `src` modules shared by the host extension and pi-discover's child entrypoint. The host advertises that entrypoint through a versioned capability so Repo Scout can load these tools only when pi-discover is present.
 
 ### Relationship Graph
 

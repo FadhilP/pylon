@@ -1,4 +1,4 @@
-import type { DelegatedAgentRunReadModel, MessageReadModel, ToolActivityReadModel } from "./protocol/events.ts";
+import type { ConversationReadModel, DelegatedAgentRunReadModel, MessageReadModel, ToolActivityReadModel } from "./protocol/events.ts";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "./protocol/snapshots.ts";
 
 export type ConversationBlock = MessageReadModel | { id: string; tools: MessageReadModel[] };
@@ -23,6 +23,27 @@ export function groupConversationMessages(messages: MessageReadModel[]): Convers
   }
   flushTools();
   return blocks;
+}
+
+export function terminalActivityStatus(
+  kind: "end" | "error",
+  info: { stopped?: boolean; willRetry?: boolean },
+): "completed" | "failed" {
+  if (info.stopped === true) return "completed";
+  return kind === "error" || info.willRetry === true ? "failed" : "completed";
+}
+
+export function settleRunningActivities(
+  conversation: Pick<ConversationReadModel, "messages" | "tools" | "delegatedRuns">,
+  status: "completed" | "failed",
+): Pick<ConversationReadModel, "messages" | "tools" | "delegatedRuns"> {
+  return {
+    messages: conversation.messages.map((message) => message.tool?.status === "running"
+      ? { ...message, streaming: false, tool: { ...message.tool, status } }
+      : message),
+    tools: conversation.tools.map((tool) => tool.status === "running" ? { ...tool, status } : tool),
+    delegatedRuns: conversation.delegatedRuns.map((run) => run.status === "running" ? { ...run, status } : run),
+  };
 }
 
 export function liveToolMessage(tool: ToolActivityReadModel): MessageReadModel {

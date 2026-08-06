@@ -38,9 +38,30 @@ test("proposal schema enforces batch, scope, fields, and exact target shape", ()
 test("reviewer output is strict and complete", () => {
   const output = parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 0, verdict: "accept", operation: "add", trigger: "using filters", guidance: "Prefer a dropdown for finite categories.", authority: "user_instruction", reasonCode: "durable_rule" }] }), 1);
   assert.equal(output.decisions[0]?.verdict, "accept");
-  assert.throws(() => parseReviewerOutput('{"version":1,"decisions":[]}', 1), /incomplete/);
+  assert.throws(() => parseReviewerOutput('{"version":1,"decisions":[]}', 1), /invalid envelope/);
   assert.throws(() => parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local", extra: true }] }), 1), /invalid/);
   assert.throws(() => parseReviewerOutput(JSON.stringify({ version: 1, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "task_local" }] }), 1), /unknown/);
+});
+
+test("every documented reviewer decision branch parses", () => {
+  const targetId = randomUUID();
+  const decisions = [
+    { proposalIndex: 0, verdict: "reject", reasonCode: "not_durable" },
+    { proposalIndex: 0, verdict: "accept", operation: "replace", trigger: "changing settings", guidance: "Keep the existing rule.", authority: "project_contract", reasonCode: "durable_rule" },
+    { proposalIndex: 0, verdict: "rewrite", operation: "add", trigger: "when replying", guidance: "Keep replies concise.", authority: "user_instruction", reasonCode: "normalized_rule" },
+    { proposalIndex: 0, verdict: "merge", operation: "add", targetId, expectedRevision: 1, trigger: "when replying", guidance: "Keep replies concise.", authority: "user_instruction", reasonCode: "existing_rule" },
+    { proposalIndex: 0, verdict: "accept", operation: "remove", targetId, expectedRevision: 1, reasonCode: "revoked_rule" },
+  ];
+  for (const decision of decisions) assert.equal(parseReviewerOutput(JSON.stringify({ version: 1, decisions: [decision] }), 1).decisions.length, 1);
+});
+
+test("invalid decision diagnostics are bounded and do not echo model fields", () => {
+  const decisions = Array.from({ length: 20 }, (_, index) => ({ proposalIndex: index, decision: "accept", guidance: `private-${index}` }));
+  assert.throws(() => parseReviewerOutput(JSON.stringify({ version: 1, decisions }), 20), (error: Error) => {
+    assert.equal(error.message, "memory reviewer returned invalid decisions (count:20; first-output-indexes:0,1,2,3,4,5,6,7,8,9)");
+    assert.doesNotMatch(error.message, /private|guidance/);
+    return true;
+  });
 });
 
 test("review staging and settlement are atomic and idempotent", () => {

@@ -101,6 +101,20 @@ test("successful status keeps only a small output tail", async () => {
   await manager.shutdown();
 });
 
+test("shutdown does not wait forever for stuck finalization", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-stuck-finalize-"));
+  const manager = new JobManager(dir, () => {}, 20);
+  await manager.init();
+  const job = await manager.start(`node -e ""`, process.cwd());
+  await closed(job);
+  await logClosed(job);
+  job.finalizing = new Promise<void>(() => {});
+  const started = Date.now();
+  await manager.shutdown();
+  assert.ok(Date.now() - started < 500);
+  await assert.rejects(access(dir));
+});
+
 test("timeout terminates process and shutdown is idempotent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);

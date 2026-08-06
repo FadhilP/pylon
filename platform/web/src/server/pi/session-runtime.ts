@@ -14,23 +14,27 @@ import {
 } from "pylon-core/src/worktree.ts";
 import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts";
 import {
+  buildSessionContext,
   createAgentSessionRuntime,
   createEventBus,
+  estimateTokens,
   ModelRuntime,
   SessionManager,
   sessionEntryToContextMessages,
   type AgentSession,
+  type CompactionEntry,
   type SessionInfo,
   type EventBusController,
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type ExtensionError,
   type InlineExtension,
+  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
-import type { ChangedFileReadModel, DelegatedAgentRunReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
@@ -147,6 +151,43 @@ function agentWasAborted(value: Record<string, unknown>): boolean {
   return false;
 }
 
+const PYLON_COMPACTION_SOURCE = "pylon-compaction";
+
+function compactionSourceEntryCount(details: unknown): number | undefined {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const raw = details as Record<string, unknown>;
+  return raw.type === "pi-continuity-compaction" && (raw.version === 1 || raw.version === 2 || raw.version === 3)
+    && Number.isSafeInteger(raw.sourceEntryCount) && Number(raw.sourceEntryCount) >= 0
+    ? Number(raw.sourceEntryCount)
+    : undefined;
+}
+
+function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEntry): Record<string, unknown> {
+  const estimatedContextAfter = buildSessionContext(branch, entry.id).messages
+    .reduce((total, message) => total + estimateTokens(message), 0);
+  const contextAfterTokens = Number.isFinite(estimatedContextAfter)
+    ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, estimatedContextAfter))
+    : 0;
+  const sourceEntryCount = compactionSourceEntryCount(entry.details);
+  return {
+    role: "custom",
+    customType: PYLON_COMPACTION_SOURCE,
+    display: true,
+    content: entry.summary,
+    entryId: entry.id,
+    timestamp: entry.timestamp,
+    compaction: {
+      contextAfterTokens,
+      ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
+    },
+  };
+}
+
+function projectedCompactionMessage(branch: SessionEntry[], entry: CompactionEntry): MessageReadModel | undefined {
+  const message = projectConversation([compactionTranscriptMessage(branch, entry)], { limitMessages: false }).messages[0];
+  return message ? { ...message, id: `compaction-${entry.id}` } : undefined;
+}
+
 const MAX_HELIOS_FRAME_BYTES = 5 * 1024 * 1024;
 const MAX_HELIOS_FRAME_BASE64 = Math.ceil(MAX_HELIOS_FRAME_BYTES / 3) * 4;
 
@@ -209,6 +250,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
       session_id: item.session_id,
       actor_id: item.actor_id,
       command: item.command,
+      sql: item.sql,
       handle: item.handle,
       executed: item.executed,
       cached: item.cached,
@@ -216,7 +258,8 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
       error_code: item.error_code,
     })),
   };
-  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 96 * 1024) throw new Error("StateQL returned an oversized snapshot");
+  // ponytail: reject escape-heavy aggregate payloads instead of budgeting for the protocol's theoretical JSON worst case.
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 512 * 1024) throw new Error("StateQL returned an oversized snapshot");
   return result;
 }
 
@@ -266,6 +309,20 @@ export function terminalAgentError(messages: unknown): string | undefined {
     return item.errorMessage.trim().slice(0, 1_000) || undefined;
   }
   return undefined;
+}
+
+export function correlatePendingUserMessageStart(
+  payload: Record<string, unknown>,
+  pendingIds: string[],
+): Record<string, unknown> {
+  const message = payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
+    ? payload.message as Record<string, unknown>
+    : {};
+  const kind = String(payload.type ?? "");
+  if ((kind !== "message_start" && kind !== "message_starting")
+    || String(payload.role ?? message.role) !== "user") return payload;
+  const clientMessageId = pendingIds.shift();
+  return clientMessageId ? { ...payload, clientMessageId } : payload;
 }
 
 export function deferUserMessageEndEntryId(
@@ -403,12 +460,14 @@ export class SessionRuntime implements PiDriver {
   private gitBranch?: string;
   private runtimePolicy: RuntimePolicyReadModel = defaultRuntimePolicy();
   private transcriptCache?: { sessionId: string; leafId: string | null; messages: unknown[] };
+  private conversationProjectionCache?: { sessionId: string; leafId: string | null; historyStart: number; value: ReturnType<typeof projectConversation> };
   private toolUsageCache?: { sessionId: string; leafId: string | null; items: ToolUsageReadModel[] };
   private undoPromptEntryIds = new Set<string>();
   private forkPromptEntryIds = new Set<string>();
   private forkPromptCheckpoints = new Map<string, string>();
   private commandResult?: SlashCommandResultReadModel;
   private commandCapture?: { id: string; name: string; notifications: UiRequest[] };
+  private readonly pendingUserMessageIds: string[] = [];
   private disposed = false;
 
   constructor(private readonly options: SessionRuntimeOptions = {}) {
@@ -422,6 +481,7 @@ export class SessionRuntime implements PiDriver {
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.runtime || this.disposed) throw new Error("driver cannot be started twice");
     this.target = target;
+    this.sessionIndex.setAgentDir(target.agentDir);
     this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
     if (!this.options.projectRegistry) {
       await this.projectRegistry.load(async () => {
@@ -674,6 +734,7 @@ export class SessionRuntime implements PiDriver {
     const turnAtStart = this.nextTurnId;
     if (capture) this.commandCapture = capture;
     if (files.length) this.promptAttachments.stage(input.commandId, files);
+    if (!knownCommand) this.pendingUserMessageIds.push(input.commandId);
     return new Promise<AcceptedCommand>((resolve, reject) => {
       let decided = false;
       let commandPending = false;
@@ -708,6 +769,7 @@ export class SessionRuntime implements PiDriver {
             };
           this.emitCommandResult();
         }
+        if (!accepted) this.removePendingUserMessage(input.commandId);
         if (!accepted && knownCommand && !files.length && !input.images?.length) resolve(this.accepted(input.commandId));
         else if (!accepted && knownCommand) reject(new Error("files and images require a command that starts a model turn"));
         else if (!accepted) reject(new Error("prompt was rejected before acceptance"));
@@ -728,6 +790,7 @@ export class SessionRuntime implements PiDriver {
       }).then(() => {
         if (commandPending) complete(this.nextTurnId > turnAtStart);
       }).catch((error) => {
+        this.removePendingUserMessage(input.commandId);
         this.promptAttachments.clear(input.commandId);
         if (this.commandCapture === capture) this.commandCapture = undefined;
         for (const notification of capture?.notifications ?? []) this.emitUi(notification);
@@ -755,7 +818,13 @@ export class SessionRuntime implements PiDriver {
 
   async steer(input: PromptInput): Promise<AcceptedCommand> {
     const session = this.sessionFor(input.expectedGeneration);
-    await session.steer(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    this.pendingUserMessageIds.push(input.commandId);
+    try {
+      await session.steer(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    } catch (error) {
+      this.removePendingUserMessage(input.commandId);
+      throw error;
+    }
     if (input.files?.length) {
       await session.sendCustomMessage(promptFilesMessage(input.files), { deliverAs: "steer" });
     }
@@ -764,7 +833,13 @@ export class SessionRuntime implements PiDriver {
 
   async followUp(input: PromptInput): Promise<AcceptedCommand> {
     const session = this.sessionFor(input.expectedGeneration);
-    await session.followUp(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    this.pendingUserMessageIds.push(input.commandId);
+    try {
+      await session.followUp(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+    } catch (error) {
+      this.removePendingUserMessage(input.commandId);
+      throw error;
+    }
     if (input.files?.length) {
       await session.sendCustomMessage(promptFilesMessage(input.files), { deliverAs: "followUp" });
     }
@@ -1067,10 +1142,12 @@ export class SessionRuntime implements PiDriver {
 
   deleteSession(input: DeleteSessionInput): Promise<void> {
     return this.withSessionMutation("delete", async () => {
+      this.gate.assert(input.expectedGeneration);
       if (!this.gate.ready) throw new Error("runtime is not ready");
       const runtime = this.requireRuntime();
       if (input.sessionId === runtime.session.sessionId) throw new Error("cannot delete the currently active session");
       const session = await this.resolveSession(input.sessionId);
+      this.gate.assert(input.expectedGeneration);
       const activeFile = runtime.session.sessionManager.getSessionFile();
       if (activeFile && resolve(session.path) === resolve(activeFile)) throw new Error("cannot delete the currently active session");
       await deleteSessionFile(session.path);
@@ -1312,6 +1389,7 @@ export class SessionRuntime implements PiDriver {
       if (settings.planner) assertProfile(settings.planner.model, settings.planner.thinking);
       if (settings.executor) assertProfile(settings.executor.model, settings.executor.thinking);
       if (settings.memoryReviewer) assertProfile(settings.memoryReviewer.model, settings.memoryReviewer.thinking);
+      if (settings.compactionReviewer) assertProfile(settings.compactionReviewer.model, settings.compactionReviewer.thinking);
       return;
     }
     if (settings.kind === "advisor" || settings.kind === "scout") {
@@ -1762,6 +1840,7 @@ export class SessionRuntime implements PiDriver {
       this.workThinkingLevel = undefined;
       this.commandResult = undefined;
       this.commandCapture = undefined;
+      this.pendingUserMessageIds.length = 0;
       this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
     }
     await session.bindExtensions({
@@ -1788,6 +1867,20 @@ export class SessionRuntime implements PiDriver {
         ? payload as Record<string, unknown>
         : {};
       const kind = String(raw.type ?? "");
+      if (kind === "message_end" || kind === "message_complete") {
+        queueMicrotask(() => {
+          if (!this.gate.accepts(generation) || this.runtime?.session !== session) return;
+          this.refreshSnapshot();
+          const metrics = this.lastSnapshot?.metrics;
+          if (!metrics) return;
+          this.emit({
+            type: "session.event",
+            sessionId: session.sessionId,
+            sessionGeneration: generation,
+            payload: { type: "usage", metrics },
+          });
+        });
+      }
       const phase = kind === "tool_execution_start" ? "start"
         : kind === "tool_execution_update" ? "update"
         : kind === "tool_execution_end" ? "end"
@@ -1818,7 +1911,7 @@ export class SessionRuntime implements PiDriver {
           payload: forwarded,
         });
       })) return;
-      let forwarded: unknown = payload;
+      let forwarded: unknown = correlatePendingUserMessageStart(raw, this.pendingUserMessageIds);
       if (kind === "agent_start") {
         if (this.workStartedAtMs === undefined) {
           this.workTurnId = `turn-${++this.nextTurnId}`;
@@ -1949,6 +2042,21 @@ export class SessionRuntime implements PiDriver {
           assistantMessage: assistantMessage ?? null,
           errorMessage: this.agentError,
         };
+      } else if (kind === "compaction_end" && raw.aborted !== true) {
+        const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result)
+          ? raw.result as Record<string, unknown>
+          : undefined;
+        const branch = session.sessionManager.getBranch();
+        const entry = typeof result?.summary === "string" && typeof result.firstKeptEntryId === "string"
+          ? [...branch].reverse().find((candidate): candidate is CompactionEntry => candidate.type === "compaction"
+            && candidate.summary === result.summary && candidate.firstKeptEntryId === result.firstKeptEntryId)
+          : undefined;
+        const completedMessage = entry ? projectedCompactionMessage(branch, entry) : undefined;
+        if (completedMessage) {
+          this.transcriptCache = undefined;
+          this.conversationProjectionCache = undefined;
+          forwarded = { ...raw, completedMessage };
+        }
       } else if (kind === "session_info_changed") {
         if (session.sessionFile)
           this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
@@ -2168,9 +2276,18 @@ export class SessionRuntime implements PiDriver {
     const stats = session.getSessionStats();
     const context = session.getContextUsage();
     const messages = this.transcriptMessages(session);
+    const leafId = session.sessionManager.getLeafId();
     const tailStart = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
     const historyStart = Math.min(tailStart, latestVisibleUserIndex(messages) ?? tailStart);
-    const projectedConversation = projectConversation(messages, { start: historyStart, limitMessages: false });
+    const cachedProjection = this.conversationProjectionCache;
+    const projectedConversation = cachedProjection?.sessionId === session.sessionId
+      && cachedProjection.leafId === leafId
+      && cachedProjection.historyStart === historyStart
+      ? cachedProjection.value
+      : projectConversation(messages, { start: historyStart, limitMessages: false });
+    if (projectedConversation !== cachedProjection?.value) {
+      this.conversationProjectionCache = { sessionId: session.sessionId, leafId, historyStart, value: projectedConversation };
+    }
     const delegatedRuns = mergeDelegatedRuns(projectedConversation.delegatedRuns, [...this.liveDelegatedRuns.values()]);
     const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = message.entryId ? this.workDurations.get(message.entryId) : undefined;
@@ -2477,17 +2594,19 @@ export class SessionRuntime implements PiDriver {
     const leafId = session.sessionManager.getLeafId();
     const cached = this.transcriptCache;
     if (cached?.sessionId === sessionId && cached.leafId === leafId) return cached.messages;
-    const messages = session.sessionManager.getBranch()
-      .filter((entry) => entry.type === "message" || entry.type === "custom_message")
-      .flatMap((entry) => sessionEntryToContextMessages(entry)
-        .map((message) => ({
-          ...message,
-          entryId: entry.id,
-          timestamp: (message as { timestamp?: unknown }).timestamp
-            ?? (entry as { timestamp?: unknown }).timestamp,
-          ...(this.undoPromptEntryIds.has(entry.id) ? { canUndo: true } : {}),
-          ...(this.forkPromptEntryIds.has(entry.id) ? { canForkWithTimeline: true } : {}),
-        })));
+    const branch = session.sessionManager.getBranch();
+    const messages = branch.flatMap((entry) => {
+      if (entry.type === "compaction") return [compactionTranscriptMessage(branch, entry)];
+      if (entry.type !== "message" && entry.type !== "custom_message") return [];
+      return sessionEntryToContextMessages(entry).map((message) => ({
+        ...message,
+        entryId: entry.id,
+        timestamp: (message as { timestamp?: unknown }).timestamp
+          ?? (entry as { timestamp?: unknown }).timestamp,
+        ...(this.undoPromptEntryIds.has(entry.id) ? { canUndo: true } : {}),
+        ...(this.forkPromptEntryIds.has(entry.id) ? { canForkWithTimeline: true } : {}),
+      }));
+    });
     this.transcriptCache = { sessionId, leafId, messages };
     return messages;
   }
@@ -2508,6 +2627,11 @@ export class SessionRuntime implements PiDriver {
       .slice(0, 200);
     this.toolUsageCache = { sessionId, leafId, items };
     return items;
+  }
+
+  private removePendingUserMessage(commandId: string): void {
+    const index = this.pendingUserMessageIds.indexOf(commandId);
+    if (index >= 0) this.pendingUserMessageIds.splice(index, 1);
   }
 
   private latestAssistantEntryId(session: AgentSession): string | undefined {

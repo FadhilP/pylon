@@ -17,7 +17,6 @@ export const READ_TOOL_NAME = "read";
 export const RECALL_TOOL_NAME = "sieve_recall";
 export const RECENT_WINDOW_POLICY =
   "Age 0 uses independent per-result caps with active pruning; age 1 uses the threshold with active pruning or three times the threshold without it.";
-export const GIANT_ERROR_TAIL_CHARS = 2_048;
 export const DEFAULT_ROLLOVER_HIGH_MULTIPLIER = 8;
 export const DEFAULT_ROLLOVER_LOW_MULTIPLIER = 4;
 export const PROJECTION_POLICY_VERSION = 2;
@@ -868,28 +867,38 @@ function exactDuplicateReplacements<T extends ContextMessage>(
   const replacements: DuplicateReplacement<T>[] = [];
   const replaced = new Set<number>();
 
-  // Read duplicates use source identity, not only equal display text.
-  const earlierReads: typeof candidates = [];
+  // Read duplicates use source identity and the path's mutation generation.
+  const mutationIndexes = new Map<string, number[]>();
+  for (const call of calls) {
+    if (call.name !== "edit" && call.name !== "write") continue;
+    const path = normalizedToolPath(call.arguments, cwd);
+    if (!path) continue;
+    const indexes = mutationIndexes.get(path) ?? [];
+    indexes.push(call.messageIndex);
+    mutationIndexes.set(path, indexes);
+  }
+  const mutationGeneration = (path: string, messageIndex: number) => {
+    const indexes = mutationIndexes.get(path) ?? [];
+    let low = 0, high = indexes.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (indexes[middle]! <= messageIndex) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  const earlierReads = new Map<string, (typeof candidates)[number]>();
   for (const candidate of candidates.filter(({ call }) => call.name === READ_TOOL_NAME)) {
     const path = normalizedToolPath(candidate.call.arguments, cwd);
     const blocks = textOnlyBlocks(candidate.result.fields.content);
     const coverage = blocks && readCoverage(candidate.call.arguments, candidate.result.fields.details, blocks);
     if (!path || !coverage || !blocks) continue;
-    const original = earlierReads.find(({ call, result }) => {
-      const originalPath = normalizedToolPath(call.arguments, cwd);
-      const originalBlocks = textOnlyBlocks(result.fields.content);
-      const originalCoverage = originalBlocks && readCoverage(call.arguments, result.fields.details, originalBlocks);
-      if (originalPath !== path || !originalCoverage || originalCoverage.start !== coverage.start || originalCoverage.end !== coverage.end
-        || !isDeepStrictEqual(result.fields.content, candidate.result.fields.content)) return false;
-      return !calls.some((mutation) =>
-        (mutation.name === "edit" || mutation.name === "write")
-        && mutation.messageIndex > result.messageIndex
-        && mutation.messageIndex <= candidate.call.messageIndex
-        && normalizedToolPath(mutation.arguments, cwd) === path,
-      );
-    });
-    if (!original) {
-      earlierReads.push(candidate);
+    const fingerprint = projectionHash(candidate.result.fields.content);
+    const originalKey = `${path}\0${coverage.start}\0${coverage.end}\0${fingerprint}\0${mutationGeneration(path, candidate.result.messageIndex)}`;
+    const lookupKey = `${path}\0${coverage.start}\0${coverage.end}\0${fingerprint}\0${mutationGeneration(path, candidate.call.messageIndex)}`;
+    const original = earlierReads.get(lookupKey);
+    if (!original || !isDeepStrictEqual(original.result.fields.content, candidate.result.fields.content)) {
+      earlierReads.set(originalKey, candidate);
       continue;
     }
     const sourceChars = blocks.reduce((sum, block) => sum + block.text.length, 0);
@@ -908,14 +917,11 @@ function exactDuplicateReplacements<T extends ContextMessage>(
 
   const earlierGeneric: typeof candidates = [];
   const fingerprintBuckets = new Map<string, typeof candidates>();
-  let hasUnsupportedFingerprint = false;
   for (const candidate of candidates) {
     if (candidate.call.name === READ_TOOL_NAME || duplicateExcludedTools.has(candidate.call.name) || replaced.has(candidate.result.messageIndex)) continue;
     const fingerprint = genericDuplicateFingerprint(candidate.call, candidate.result);
     const bucketKey = fingerprint ? `${candidate.call.name}\0${fingerprint}` : undefined;
-    const pool = bucketKey && !hasUnsupportedFingerprint
-      ? fingerprintBuckets.get(bucketKey) ?? []
-      : earlierGeneric;
+    const pool = bucketKey ? fingerprintBuckets.get(bucketKey) ?? [] : earlierGeneric;
     const original = pool.find(({ call, result }) =>
       call.name === candidate.call.name
       && isDeepStrictEqual(call.arguments, candidate.call.arguments)
@@ -928,8 +934,6 @@ function exactDuplicateReplacements<T extends ContextMessage>(
         const bucket = fingerprintBuckets.get(bucketKey) ?? [];
         bucket.push(candidate);
         fingerprintBuckets.set(bucketKey, bucket);
-      } else {
-        hasUnsupportedFingerprint = true;
       }
       continue;
     }
@@ -1026,18 +1030,20 @@ function staleReadReplacements<T extends ContextMessage>(messages: readonly T[],
     });
   }
 
+  const readsByPath = new Map<string, TrackedRead[]>();
+  for (const read of reads) readsByPath.set(read.path, [...(readsByPath.get(read.path) ?? []), read]);
+  const mutationsByPath = new Map<string, TrackedMutation[]>();
+  for (const mutation of mutations) mutationsByPath.set(mutation.path, [...(mutationsByPath.get(mutation.path) ?? []), mutation]);
   const replacements = new Map<number, T>();
   let omittedChars = 0;
   let netCharsSaved = 0;
   for (const oldRead of reads) {
-    const superseded = reads.some((newRead) => {
+    const superseded = (readsByPath.get(oldRead.path) ?? []).some((newRead) => {
       if (
-        newRead.path !== oldRead.path ||
         newRead.assistantOrdinal <= oldRead.assistantOrdinal ||
         newRead.messageIndex <= oldRead.messageIndex
       ) return false;
-      const interveningMutations = mutations.filter((mutation) =>
-        mutation.path === oldRead.path &&
+      const interveningMutations = (mutationsByPath.get(oldRead.path) ?? []).filter((mutation) =>
         mutation.assistantOrdinal > oldRead.assistantOrdinal &&
         mutation.assistantOrdinal < newRead.assistantOrdinal &&
         mutation.callMessageIndex > oldRead.messageIndex &&
@@ -1581,17 +1587,17 @@ function projectNewResultPrepared<T extends ContextMessage>(
   const fields = message as Record<string, unknown>;
   if (fields?.role !== "toolResult") return unchanged();
   const cwd = options.cwd ?? process.cwd();
-  const prefix = messages.slice(0, resultIndex + 1);
   const toolCallId = fields.toolCallId;
   if (typeof toolCallId !== "string" || !toolCallId) return unchanged();
-  const resultCount = prepared?.resultCount ?? prefix.reduce((count, candidate) => {
+  const prefix = prepared ? undefined : messages.slice(0, resultIndex + 1);
+  const resultCount = prepared?.resultCount ?? prefix!.reduce((count, candidate) => {
     const value = candidate as Record<string, unknown>;
     return count + (value.role === "toolResult" && value.toolCallId === toolCallId ? 1 : 0);
   }, 0);
   if (resultCount !== 1) return unchanged();
   const duplicate = prepared
     ? prepared.duplicate
-    : exactDuplicateReplacements(prefix, cwd, new Map(), options.pruneActive === true)
+    : exactDuplicateReplacements(prefix!, cwd, new Map(), options.pruneActive === true)
         .find((replacement) => replacement.messageIndex === resultIndex);
   if (duplicate) {
     return {

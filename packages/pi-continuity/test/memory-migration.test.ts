@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { hasPendingV4Migration, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
 import type { NotebookNote } from "../src/memory.ts";
 
-const enabled = () => true;
 const fact = (key: string, scope: "user" | "project" = "project", owner = "owner") => ({ key, text: `When ${key}, preserve the documented boundary.`, source: "README", scope, owner, evidencePaths: [] });
 const fakeReviewer = (failAt = -1) => {
   let calls = 0;
@@ -42,7 +41,7 @@ test("migration availability hides absent, activated, and rolled-back V4 sources
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("pending migration backs up V4 and records reviewer/rollout unavailability", async () => {
+test("pending migration backs up V4 and records reviewer unavailability", async () => {
   const root = await mkdtemp(join(tmpdir(), "memory-migration-pending-"));
   try {
     await writeV4(root, [fact("contract")]);
@@ -59,13 +58,13 @@ test("migration reviews all owners and activates once after every batch", async 
     const ownerA = "a".repeat(64);
     await writeV4(root, [fact("global", "user", "legacy-user"), { ...fact("one", "project", ownerA), captureCommit: "a".repeat(40) }, fact("two", "project", "owner-b")]);
     let commits = 0, committed: NotebookNote[] = [];
-    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async (notes) => { commits++; committed = notes; return 7; } });
+    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async (notes) => { commits++; committed = notes; return 7; } });
     assert.equal(result.migrated, true); assert.equal(commits, 1); assert.equal(committed.length, 3);
     assert.equal(committed.find((note) => note.scope === "user")?.owner, "default");
     assert.equal(committed.find((note) => note.owner === ownerA)?.sourceRefs.find((ref) => ref.type === "migration")?.captureCommit, "a".repeat(40));
     const journal = JSON.parse(await readFile(join(root, "memory-v5", "migration.json"), "utf8")) as MigrationJournal;
     assert.equal(journal.status, "activated"); assert.equal(journal.activatedStateRevision, 7);
-    const repeated = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async () => { commits++; return 8; } });
+    const repeated = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async () => { commits++; return 8; } });
     assert.equal(repeated.migrated, false); assert.equal(commits, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -75,11 +74,11 @@ test("reviewer failure never activates a partial owner set and restart uses prep
   try {
     await writeV4(root, [fact("one"), fact("two"), fact("three")]);
     let commits = 0;
-    await assert.rejects(migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(2), rolloutPolicy: enabled, commitAll: async () => { commits++; return 1; } }), /reviewer/);
+    await assert.rejects(migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(2), commitAll: async () => { commits++; return 1; } }), /reviewer/);
     assert.equal(commits, 0);
     const failed = JSON.parse(await readFile(join(root, "memory-v5", "migration.json"), "utf8")) as MigrationJournal;
     assert.equal(failed.status, "failed");
-    const resumed = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async (notes) => { commits++; assert.equal(notes.length, 3); return 2; } });
+    const resumed = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async (notes) => { commits++; assert.equal(notes.length, 3); return 2; } });
     assert.equal(resumed.migrated, true); assert.equal(commits, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -88,7 +87,7 @@ test("malformed V4 is backed up and journaled without activation", async () => {
   const root = await mkdtemp(join(tmpdir(), "memory-migration-malformed-"));
   try {
     const directory = join(root, "memory-v4"); await mkdir(directory, { recursive: true }); await writeFile(join(directory, "memory.json"), "{bad json");
-    await assert.rejects(migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async () => 1 }), /malformed/);
+    await assert.rejects(migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async () => 1 }), /malformed/);
     const backups = await readdir(join(root, "memory-v5", "backups")); assert.ok(backups.some((name) => name.startsWith("memory-v4-")));
     const journal = JSON.parse(await readFile(join(root, "memory-v5", "migration.json"), "utf8")) as MigrationJournal; assert.equal(journal.status, "failed");
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -99,7 +98,7 @@ test("credential-like legacy records are rejected individually without blocking 
   try {
     await writeV4(root, [fact("safe", "user", "default"), { ...fact("unsafe", "project", "owner"), text: "When configuring access, password=actual-secret-value" }]);
     let committed: NotebookNote[] = [];
-    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async (notes) => { committed = notes; return 1; } });
+    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async (notes) => { committed = notes; return 1; } });
     assert.equal(result.migrated, true); assert.equal(committed.length, 1); assert.equal(committed[0]?.scope, "user"); assert.ok(result.rejected >= 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -109,7 +108,7 @@ test("unsafe pending candidates are reported and never imported", async () => {
   try {
     await writeV4(root, [fact("safe", "user", "default")], [{ ...fact("candidate"), id: "c", action: "add", evidencePaths: [{ path: "../secret", sha256: "a".repeat(64) }] }]);
     let committed: NotebookNote[] = [];
-    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), rolloutPolicy: enabled, commitAll: async (notes) => { committed = notes; return 1; } });
+    const result = await migrateV4({ root, ownerRoots: new Map(), model: {}, auth: { apiKey: "safe" }, profile: { model: "p/m" }, sessionId: "s", completeReview: fakeReviewer(), commitAll: async (notes) => { committed = notes; return 1; } });
     assert.equal(committed.length, 1); assert.ok(result.rejected >= 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

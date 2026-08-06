@@ -24,6 +24,7 @@ test("model profiles parse, persist, and reset to defaults", async () => {
       memoryEnabled: false,
       planner: { model: "provider/planner", thinking: "high" },
       executor: { model: "provider/executor" },
+      compactionReviewer: { model: "provider/compaction", thinking: "low" },
     },
     path,
   );
@@ -32,6 +33,7 @@ test("model profiles parse, persist, and reset to defaults", async () => {
     memoryEnabled: false,
     planner: { model: "provider/planner", thinking: "high" },
     executor: { model: "provider/executor" },
+    compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
   assert.deepEqual(defaultConfig(), { version: 2, memoryEnabled: true });
 });
@@ -49,11 +51,12 @@ test("concurrent role updates retain independent Continuity settings", async () 
 test("web settings toggle durable memory without changing model profiles", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "continuity-settings-"));
   assert.deepEqual(await readSettings({ agentDir }), { kind: "continuity", memoryEnabled: true });
-  await updateSettings({ kind: "continuity", memoryEnabled: false, planner: { model: "provider/planner" } }, { agentDir });
+  await updateSettings({ kind: "continuity", memoryEnabled: false, planner: { model: "provider/planner" }, compactionReviewer: { model: "provider/compaction", thinking: "low" } }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
     kind: "continuity",
     memoryEnabled: false,
     planner: { model: "provider/planner" },
+    compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
   await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: "no" }, { agentDir }), /invalid Continuity settings/);
 });

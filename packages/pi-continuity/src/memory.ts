@@ -234,10 +234,17 @@ function parseDecision(value: any): ReviewerDecision | undefined {
 export function parseReviewerOutput(raw: string, proposalCount: number): ReviewerOutput {
   let value: any;
   try { value = JSON.parse(raw); } catch { throw Error("memory reviewer returned malformed JSON"); }
-  if (!exactKeys(value, ["version", "decisions"]) || value.version !== 1 || !Array.isArray(value.decisions) || value.decisions.length !== proposalCount) throw Error("memory reviewer returned an incomplete batch");
+  if (!exactKeys(value, ["version", "decisions"]) || value.version !== 1 || !Array.isArray(value.decisions) || value.decisions.length !== proposalCount) {
+    const object = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    const version = !object || !("version" in object) ? "missing" : object.version === 1 ? "ok" : "invalid";
+    const decisions = !object || !("decisions" in object) ? "missing" : Array.isArray(object.decisions) ? `count:${object.decisions.length}` : "not-array";
+    const unexpectedFields = object ? Object.keys(object).filter((key) => key !== "version" && key !== "decisions").length : 0;
+    throw Error(`memory reviewer returned an invalid envelope (version:${version}; decisions:${decisions}; unexpected-fields:${unexpectedFields})`);
+  }
   const decisions = value.decisions.map(parseDecision);
-  if (decisions.some((item: any) => !item)) throw Error("memory reviewer returned an invalid decision");
-  const indexes = new Set<number>(decisions.map((item: any) => item.proposalIndex));
+  const invalidIndexes = decisions.flatMap((item: ReviewerDecision | undefined, index: number) => item ? [] : [index]);
+  if (invalidIndexes.length) throw Error(`memory reviewer returned invalid decisions (count:${invalidIndexes.length}; first-output-indexes:${invalidIndexes.slice(0, 10).join(",")})`);
+  const indexes = new Set<number>(decisions.map((item: ReviewerDecision) => item.proposalIndex));
   if (indexes.size !== proposalCount || [...indexes].some((index) => index < 0 || index >= proposalCount)) throw Error("memory reviewer returned duplicate or unknown proposal indexes");
   return { version: 1, decisions: decisions as ReviewerDecision[] };
 }
@@ -268,7 +275,7 @@ export function enforceMemoryLimits(state: MemoryStateFile): void {
   }
   if (Buffer.byteLength(serializedJson(state), "utf8") > MEMORY_MAX_FILE_BYTES) throw Error("memory notebook exceeds 2 MiB safety ceiling");
 }
-export const renderNote = (note: Pick<NotebookNote, "trigger" | "guidance">) => `Memory: When ${note.trigger.replace(/[.!?]+$/, "")}, ${note.guidance}`;
+export const renderNote = (note: Pick<NotebookNote, "trigger" | "guidance">) => `Memory: When ${normalizeRuleText(note.trigger).replace(/[.!?]+$/, "")}, ${normalizeRuleText(note.guidance)}`;
 
 function boundedReviews(reviews: ReviewRecord[]) {
   const pending = reviews.filter((item) => item.status === "approved_pending");

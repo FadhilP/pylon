@@ -31,7 +31,6 @@ import {
 } from "../src/session-gc.ts";
 import {
   findRunEntry,
-  hasTimeline,
   isRunEntry,
   runTimelineId,
   RUN_ENTRY_TYPE,
@@ -573,9 +572,7 @@ export default function timelineExtension(
     for (const session of sessions) {
       try {
         const manager = SessionManager.open(session.path);
-        const entries = manager.getEntries();
-        if (hasTimeline(entries, timelineId))
-          loadEntries(entries, session.id, session.path, timelineId);
+        loadEntries(manager.getEntries(), session.id, session.path, timelineId);
       } catch {}
     }
     if (!sessions.some((session) => session.id === ctx.sessionManager.getSessionId()))
@@ -921,8 +918,15 @@ export default function timelineExtension(
           ([, bound]) =>
             bound.record.ownerSessionId === ctx.sessionManager.getSessionId(),
         );
-        for (const [, bound] of owned)
-          await deleteRefs(bound.record).catch(() => {});
+        const deletionFailures: string[] = [];
+        for (const [, bound] of owned) {
+          try { await deleteRefs(bound.record); }
+          catch (error) { deletionFailures.push(error instanceof Error ? error.message : String(error)); }
+        }
+        if (deletionFailures.length) {
+          ctx.ui.notify(`Timeline clear failed; checkpoints remain available for retry. ${deletionFailures[0]}`, "error");
+          return;
+        }
         const cleared: ClearV1 = {
           version: 1,
           ownerSessionId: ctx.sessionManager.getSessionId(),

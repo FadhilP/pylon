@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cacheReadTokensFromUsage, contextTokensFromUsage, getPiInvocation, runPi } from "../src/runner.ts";
@@ -74,6 +74,22 @@ test("context and cache-read sizes remain independent", () => {
   assert.equal(cacheReadTokensFromUsage({ totalTokens: 210_000, cacheRead: 80_000 }), 80_000);
   assert.equal(contextTokensFromUsage({ input: 100_000, output: 10_000, cacheRead: 90_000, cacheWrite: 1 }), 110_001);
   assert.equal(contextTokensFromUsage({ input: -1, output: 2, cacheRead: 3, cacheWrite: 4 }), 0);
+});
+
+test("queued runner does not spawn after cancellation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scout-cancelled-"));
+  const marker = join(dir, "spawned");
+  const script = join(dir, "should-not-run.mjs");
+  await writeFile(script, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'spawned');`);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(runPi([], {
+    cwd: dir,
+    prompt: "cancelled",
+    signal: controller.signal,
+    invocation: { command: process.execPath, args: [script] },
+  }), /aborted/i);
+  await assert.rejects(access(marker));
 });
 
 test("runner serializes parallel Scout child processes by default", async () => {

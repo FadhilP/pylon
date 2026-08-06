@@ -2,7 +2,7 @@ import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, Ico
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport } from "../shared/transcript";
-import { formatWorkDuration } from "../shared/format";
+import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, isNearTranscriptBottom, loginCommandProvider, replaceFileMention } from "../shared/composer-input";
@@ -39,6 +39,17 @@ interface PromptFork {
   canUseTimeline: boolean;
   timelineReason?: string;
 }
+interface PendingSessionView {
+  phase: "preparing" | "failed";
+  projectLabel: string;
+  error?: string;
+  onRetry: () => void;
+}
+export interface ComposerSelection {
+  start: number;
+  end: number;
+  direction: "forward" | "backward" | "none";
+}
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.nodeName !== "A") return;
@@ -46,18 +57,26 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   (node as HTMLAnchorElement).rel = "noopener noreferrer";
 });
 
-function scrollTranscriptToBottom(stream: HTMLElement): void {
+function setTranscriptScrollTop(stream: HTMLElement, scrollTop: number): void {
   const scrollBehavior = stream.style.scrollBehavior;
   stream.style.scrollBehavior = "auto";
-  stream.scrollTop = stream.scrollHeight;
+  stream.scrollTop = scrollTop;
   stream.style.scrollBehavior = scrollBehavior;
+}
+
+function scrollTranscriptToBottom(stream: HTMLElement): void {
+  setTranscriptScrollTop(stream, stream.scrollHeight);
 }
 
 export function ConversationPanel({
   live,
   projectAvailable = true,
   initialDraft = "",
+  restoreComposerFocus = false,
+  restoreComposerSelection,
+  onComposerFocusRestored,
   onDraftChange,
+  pendingSession,
   onSelectAgent,
   agentColors,
   onOpenLogin,
@@ -65,7 +84,11 @@ export function ConversationPanel({
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
   initialDraft?: string;
+  restoreComposerFocus?: boolean;
+  restoreComposerSelection?: ComposerSelection;
+  onComposerFocusRestored?: () => void;
   onDraftChange?: (draft: string) => void;
+  pendingSession?: PendingSessionView;
   onSelectAgent?: (id: string) => void;
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
@@ -96,7 +119,8 @@ export function ConversationPanel({
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const followBottomRef = useRef(true);
   const turnRefs = useRef(new Map<string, HTMLElement>());
-  const runtime = live.runtime;
+  const draftingOnly = Boolean(pendingSession);
+  const runtime = draftingOnly ? undefined : live.runtime;
   const controls = runtime?.sessionControls;
   const updateMessage = (value: string) => {
     setMessage(value);
@@ -117,6 +141,18 @@ export function ConversationPanel({
     const frame = requestAnimationFrame(forceTranscriptBottom);
     return () => cancelAnimationFrame(frame);
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
+  useLayoutEffect(() => {
+    if (!restoreComposerFocus) return;
+    const prompt = promptRef.current;
+    if (!prompt) return;
+    prompt.focus();
+    if (restoreComposerSelection) {
+      const start = Math.min(restoreComposerSelection.start, prompt.value.length);
+      const end = Math.min(restoreComposerSelection.end, prompt.value.length);
+      prompt.setSelectionRange(start, end, restoreComposerSelection.direction);
+    }
+    onComposerFocusRestored?.();
+  }, [restoreComposerFocus, restoreComposerSelection, onComposerFocusRestored]);
   useEffect(() => {
     if (!live.treeChanging) return;
     setRailPage(undefined);
@@ -141,12 +177,12 @@ export function ConversationPanel({
     setVisibleTurnIds(new Set());
     turnRefs.current.clear();
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
-  const connected = live.connection === "connected" && runtime?.ready === true && projectAvailable;
+  const connected = !draftingOnly && live.connection === "connected" && runtime?.ready === true && projectAvailable;
   const streaming = runtime?.conversation.streaming === true;
   const running = Boolean(runtime?.conversation.workStartedAt);
   const stopping = runtime?.conversation.stopping === true;
   const queuedItems = runtime?.conversation.queue.items ?? [];
-  const composerBlocked = Boolean(live.pendingUi);
+  const composerBlocked = !draftingOnly && Boolean(live.pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const sending = submitting && !edit && !undo && !fork;
   const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
@@ -156,7 +192,12 @@ export function ConversationPanel({
     && activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
     ? activeHistoryWindow.messages
     : runtime?.conversation.messages ?? [];
+  const pendingMessages = (live.pendingMessages ?? []).filter((item) =>
+    item.sessionId === runtime?.sessionId && item.sessionGeneration === runtime?.sessionGeneration);
+  const pendingById = new Map(pendingMessages.map((item) => [item.id, item]));
+  const queuedByCommand = new Map(queuedItems.map((item) => [item.commandId, item]));
   const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
+  const transcriptMessageIds = new Set(transcriptMessages.map((item) => item.id));
   const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
   const liveToolMessages: MessageReadModel[] = runningTools
     .filter((tool) => !transcriptToolIds.has(tool.id))
@@ -167,13 +208,23 @@ export function ConversationPanel({
       streaming: true,
       tool: { id: tool.id, name: tool.name || "Tool", input: tool.input, status: tool.status },
     }));
-  const visibleMessages = [...transcriptMessages, ...liveToolMessages].filter((item) => {
+  const pendingTranscriptMessages: MessageReadModel[] = pendingMessages
+    .filter((item) => !transcriptMessageIds.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      role: "user",
+      text: item.text,
+      streaming: false,
+      attachmentCount: item.attachmentCount,
+      fileAttachmentCount: item.fileAttachmentCount,
+    }));
+  const visibleMessages = [...transcriptMessages, ...liveToolMessages, ...pendingTranscriptMessages].filter((item) => {
     const text = item.text.trim();
     return item.role !== "assistant" || !["", "...", "…"].includes(text);
   }) ?? [];
   const conversationBlocks = useMemo(
     () => groupConversationMessages(visibleMessages),
-    [transcriptMessages, runtime?.conversation.tools],
+    [transcriptMessages, runtime?.conversation.tools, live.pendingMessages],
   );
   const toolBlocksBeforeLaterPrompt = useMemo(() => {
     const ids = new Set<string>();
@@ -186,6 +237,9 @@ export function ConversationPanel({
     }
     return ids;
   }, [conversationBlocks]);
+  const activeToolGroupId = running
+    ? [...conversationBlocks].reverse().find((block) => "tools" in block && !toolBlocksBeforeLaterPrompt.has(block.id))?.id
+    : undefined;
   const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
   const userTurns = useMemo(
     () => visibleMessages.filter((item) => item.role === "user" && item.entryId),
@@ -260,7 +314,7 @@ export function ConversationPanel({
     () => runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [],
     [runtime?.conversation.delegatedRuns],
   );
-  const slashMatch = /^\/([^\s]*)$/.exec(message);
+  const slashMatch = draftingOnly ? null : /^\/([^\s]*)$/.exec(message);
   const suggestions = slashMatch && !suggestionsDismissed
     ? [{ name: "login", description: "Connect an AI provider", source: "extension" as const }, ...(controls?.commands ?? [])]
         .filter((command, index, commands) => commands.findIndex((candidate) => candidate.name === command.name) === index)
@@ -316,7 +370,7 @@ export function ConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
-    if ((!value && images.length === 0 && files.length === 0) || !connected || composerBlocked) return;
+    if (draftingOnly || (!value && images.length === 0 && files.length === 0) || !connected || composerBlocked) return;
     const loginProvider = !images.length && !files.length ? loginCommandProvider(value) : null;
     if (loginProvider !== null) {
       onOpenLogin?.(loginProvider);
@@ -414,19 +468,22 @@ export function ConversationPanel({
     try {
       await runtimeStore.loadEarlierMessages(all);
       requestAnimationFrame(() => {
-        if (!stream) return;
-        if (preserveAnchor) {
-          if (anchor?.isConnected && anchorTop !== undefined) {
-            stream.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+        try {
+          if (!stream) return;
+          if (preserveAnchor) {
+            if (anchor?.isConnected && anchorTop !== undefined) {
+              setTranscriptScrollTop(stream, stream.scrollTop + anchor.getBoundingClientRect().top - anchorTop);
+            }
+            return;
           }
-          return;
+          setTranscriptScrollTop(stream, 0);
+        } finally {
+          setHistoryLoading(undefined);
         }
-        stream.scrollTop = 0;
       });
     } catch {
-      // Store routes the failure through the application toast.
-    } finally {
       setHistoryLoading(undefined);
+      // Store routes the failure through the application toast.
     }
   };
   const loadNewerHistory = async () => {
@@ -554,6 +611,7 @@ export function ConversationPanel({
     }
   };
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (draftingOnly) return;
     const activeSuggestions = suggestions.length ? suggestions : fileSuggestions;
     if (activeSuggestions.length) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -579,9 +637,10 @@ export function ConversationPanel({
   };
   return (
     <section className="conversation-panel" aria-label="Live conversation">
-      {live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
-      {live.connection === "error" && <div className="conversation-state error">{live.error || "Unable to load runtime."}</div>}
-      <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />
+      {pendingSession
+        ? <PendingSessionShell pending={pendingSession} />
+        : live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
+      {!draftingOnly && <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />}
       {runtime && <div
         ref={streamRef}
         className="message-stream"
@@ -612,22 +671,27 @@ export function ConversationPanel({
         {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
         {conversationBlocks.map((block) => {
           if ("tools" in block) {
-            return <ToolTurnGroup key={block.id} tools={block.tools} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
+            return <ToolTurnGroup key={block.id} tools={block.tools} running={block.id === activeToolGroupId} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
           }
           if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
+          if (block.compaction) return <CompactionDisclosure key={block.id} message={block} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
           const editing = edit?.messageId === block.id;
-          return <div className={`message-block role-${block.role}`} key={block.id}>
+          const pending = pendingById.get(block.id);
+          const queued = pending ? queuedByCommand.get(pending.commandId) : undefined;
+          const queueIndex = queued ? queuedItems.indexOf(queued) : -1;
+          const busy = queued && queueBusy?.id === queued.id ? queueBusy.action : undefined;
+          return <div className={`message-block role-${block.role}${pending ? ` is-pending is-${pending.state}` : ""}`} key={block.id}>
             <article
-              className={`conversation-message role-${block.role}${editing ? " is-editing" : ""}`}
-              data-turn-id={block.role === "user" ? block.id : undefined}
-              ref={block.role === "user" ? (element) => {
+              className={`conversation-message role-${block.role}${editing ? " is-editing" : ""}${pending ? " is-pending" : ""}`}
+              data-turn-id={block.role === "user" && !pending ? block.id : undefined}
+              ref={block.role === "user" && !pending ? (element) => {
                 const turnId = block.entryId ?? block.id;
                 if (element) turnRefs.current.set(turnId, element);
                 else turnRefs.current.delete(turnId);
               } : undefined}
             >
-              <small>{block.role}{block.streaming ? " · streaming" : ""}</small>
+              <small>{block.role}{pending?.state === "queued" ? " - pending" : block.streaming ? " · streaming" : ""}</small>
               {editing && edit
                 ? <PromptEditor edit={edit} disabled={submitting} onChange={setEdit} onCancel={() => setEdit(undefined)} onSubmit={() => void submitEdit()} />
                 : <>
@@ -637,7 +701,18 @@ export function ConversationPanel({
                 </>}
             </article>
             {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
-            {!editing && (block.role === "user" || copyableAssistants.has(block.id) || (block.role === "assistant" && block.workDurationMs !== undefined)) && <MessageFooter
+            {pending ? <div className="pending-message-footer" role="status">
+              <span><IconLoader2 className="pending-message-spinner" size={12} />{pending.state === "queued" ? "Waiting to send" : "Sending"}</span>
+              {pending.planMode && <span>Plan mode</span>}
+              {queued?.state === "queued" && <span className="pending-message-actions">
+                <button type="button" disabled={Boolean(queueBusy) || hasDraft} title={hasDraft ? "Finish or clear the current draft before editing this message" : "Edit in composer"} onClick={() => void restoreQueued(queued)} aria-label={`Edit queued message ${queueIndex + 1}`}>
+                  {busy === "edit" ? <IconLoader2 className="prompt-send-spinner" size={13} /> : <IconPencil size={13} />}Edit
+                </button>
+                <button type="button" disabled={Boolean(queueBusy)} onClick={() => void steerQueued(queued)} aria-label={`Steer with queued message ${queueIndex + 1}`}>
+                  {busy === "steer" ? <IconLoader2 className="prompt-send-spinner" size={13} /> : <IconArrowBackUp size={13} />}Steer
+                </button>
+              </span>}
+            </div> : !editing && (block.role === "user" || copyableAssistants.has(block.id) || (block.role === "assistant" && block.workDurationMs !== undefined)) && <MessageFooter
               message={block}
               canCopy={Boolean(block.text) && (block.role === "user" || copyableAssistants.has(block.id))}
               disabled={!connected || streaming || submitting || Boolean(edit)}
@@ -651,8 +726,12 @@ export function ConversationPanel({
             />}
           </div>;
         })}
-        {runtime.conversation.retry.active && <p className="conversation-note transcript-note" role="status">Retrying{runtime.conversation.retry.attempt ? ` (${runtime.conversation.retry.attempt})` : ""}…</p>}
-        {runtime.conversation.compaction.active && <p className="conversation-note transcript-note" role="status">Compacting context…</p>}
+        {runtime.conversation.retry.active && <TranscriptActivity
+          kind="retry"
+          attempt={runtime.conversation.retry.attempt}
+          maxAttempts={runtime.conversation.retry.maxAttempts}
+        />}
+        {runtime.conversation.compaction.active && <TranscriptActivity kind="compaction" />}
         {runtime.conversation.workStartedAt ? <WorkTimer
           startedAt={runtime.conversation.workStartedAt}
           modelName={runtime.conversation.workModelName}
@@ -730,46 +809,20 @@ export function ConversationPanel({
           ><strong><IconFileText size={13} />{name}</strong>{directory && <span>{directory}</span>}</button>;
         })}
       </div>}
-      <RetainedUiDialog request={live.pendingUi} />
-      {queuedItems.length > 0 && <section className="composer-surface queue-surface" aria-label="Queued messages">
-        <header><strong>Queued</strong><span>{queuedItems.length}</span></header>
-        <ol>
-          {queuedItems.map((queued, index) => {
-            const busy = queueBusy?.id === queued.id ? queueBusy.action : undefined;
-            const attachments = queued.attachmentCount + queued.fileAttachmentCount;
-            return <li className={queued.state === "delivering" ? "is-delivering" : ""} key={queued.id}>
-              <span className="queue-position" aria-hidden="true">{index + 1}</span>
-              <div>
-                <strong>{queued.state === "delivering" ? "Sending next" : queued.preview || `${attachments} attached file${attachments === 1 ? "" : "s"}`}</strong>
-                {(attachments > 0 || queued.planMode) && <small>
-                  {queued.attachmentCount > 0 && `${queued.attachmentCount} image${queued.attachmentCount === 1 ? "" : "s"}`}
-                  {queued.attachmentCount > 0 && queued.fileAttachmentCount > 0 && " · "}
-                  {queued.fileAttachmentCount > 0 && `${queued.fileAttachmentCount} file${queued.fileAttachmentCount === 1 ? "" : "s"}`}
-                  {attachments > 0 && queued.planMode && " · "}
-                  {queued.planMode && "Plan mode"}
-                </small>}
-              </div>
-              <div className="queue-actions">
-                <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy) || hasDraft} title={hasDraft ? "Finish or clear the current draft before editing a queued message" : "Edit in composer"} onClick={() => void restoreQueued(queued)} aria-label={`Edit queued message ${index + 1}`}>
-                  {busy === "edit" ? <IconLoader2 className="prompt-send-spinner" size={14} /> : <IconPencil size={14} />}<span>Edit</span>
-                </button>
-                <button type="button" disabled={queued.state !== "queued" || Boolean(queueBusy)} onClick={() => void steerQueued(queued)} aria-label={`Steer with queued message ${index + 1}`}>
-                  {busy === "steer" ? <IconLoader2 className="prompt-send-spinner" size={14} /> : <IconArrowBackUp size={14} />}<span>Steer</span>
-                </button>
-              </div>
-            </li>;
-          })}
-        </ol>
-      </section>}
+      <RetainedUiDialog request={draftingOnly ? undefined : live.pendingUi} />
+      {pendingSession && <div className={`pending-session-draft-note is-${pendingSession.phase}`} role="status">
+        <strong>{pendingSession.phase === "failed" ? "Setup failed. Your draft is safe" : "You can write while setup finishes"}</strong>
+        <span>{pendingSession.phase === "failed" ? "Retry without losing your text" : "Draft stays in this tab"}</span>
+      </div>}
       <form
-        className={`prompt-form${dropActive ? " is-drop-active" : ""}${live.pendingUi || runtime?.commandResult || queuedItems.length > 0 || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
+        className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${(!draftingOnly && live.pendingUi) || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
-        onDragEnter={(event) => { event.preventDefault(); setDropActive(true); }}
+        onDragEnter={(event) => { event.preventDefault(); if (!draftingOnly) setDropActive(true); }}
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropActive(false);
         }}
-        onDrop={(event) => void onDrop(event)}
+        onDrop={(event) => { if (draftingOnly) event.preventDefault(); else void onDrop(event); }}
       >
         {dropActive && <div className="composer-drop-overlay"><IconFileText size={18} />Drop images, text, or code files</div>}
         {images.length > 0 && <ImageStrip
@@ -791,10 +844,10 @@ export function ConversationPanel({
               setSuggestionsDismissed(false);
             }}
             onSelect={(event) => setCaretPosition(event.currentTarget.selectionStart)}
-            onPaste={(event) => void onPaste(event)}
+            onPaste={draftingOnly ? undefined : (event) => void onPaste(event)}
             onKeyDown={onPromptKeyDown}
-            placeholder={!projectAvailable ? "Add a project to start" : connected ? (running || queuedItems.length > 0 ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
-            disabled={!connected || submitting || composerBlocked}
+            placeholder={draftingOnly ? "Write your first prompt" : !projectAvailable ? "Add a project to start" : connected ? (running || queuedItems.length > 0 ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
+            disabled={(!connected && !draftingOnly) || submitting || composerBlocked}
             aria-autocomplete="list"
             aria-controls={suggestions.length ? "slash-command-suggestions" : fileSuggestions.length ? "file-mention-suggestions" : undefined}
             aria-expanded={suggestions.length > 0 || fileSuggestions.length > 0}
@@ -854,6 +907,23 @@ export function ConversationPanel({
       </form>
     </section>
   );
+}
+
+function PendingSessionShell({ pending }: { pending: PendingSessionView }) {
+  if (pending.phase === "failed") return <div className="pending-session-shell is-failed" role="alert">
+    <span className="pending-session-symbol" aria-hidden="true"><IconX size={18} /></span>
+    <h2>Workspace setup failed</h2>
+    <p>{pending.error || "Pylon could not prepare this session. Your draft is still available below."}</p>
+    <button type="button" onClick={pending.onRetry}>Retry setup</button>
+  </div>;
+
+  return <div className="pending-session-shell is-preparing" role="status" aria-live="polite">
+    <span className="pending-session-symbol" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></span>
+    <h2>Preparing your workspace</h2>
+    <p>This session is open now. Start writing while Pylon creates the workspace and loads the runtime.</p>
+    <div className="pending-session-progress" aria-hidden="true"><span /></div>
+    <div className="pending-session-progress-copy"><strong>Preparing {pending.projectLabel}</strong><span>Usually a few seconds</span></div>
+  </div>;
 }
 
 function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingUi"] }) {
@@ -1667,7 +1737,7 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
   </section>;
 }
 
-function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; stopped?: boolean }) {
+export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; stopped?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!startedAt) return;
@@ -1679,8 +1749,8 @@ function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = 
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
   return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
     {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
-    {startedAt && modelName && <> · {modelName}</>}
-    {startedAt && thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+    {modelName && <> · {modelName}</>}
+    {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
   </span>;
 }
 
@@ -1731,10 +1801,10 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 
-function ToolTurnGroup({ tools, onExpand }: { tools: MessageReadModel[]; onExpand?: () => void }) {
+function ToolTurnGroup({ tools, running, onExpand }: { tools: MessageReadModel[]; running: boolean; onExpand?: () => void }) {
   const names = [...new Set(tools.map((tool) => tool.tool?.name || "Tool"))];
   return <AnimatedDetails
-    className="tool-turn-group"
+    className={`tool-turn-group${running ? " is-running" : ""}`}
     summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(-3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
     onExpand={onExpand}
   >
@@ -1742,6 +1812,55 @@ function ToolTurnGroup({ tools, onExpand }: { tools: MessageReadModel[]; onExpan
       {tools.map((tool) => <ToolDisclosure key={tool.id} name={tool.tool?.name || "Tool"} status={tool.tool?.status || "completed"} input={tool.tool?.input} output={tool.text} />)}
     </div>
   </AnimatedDetails>;
+}
+
+function TranscriptActivity({
+  kind,
+  attempt,
+  maxAttempts,
+}: {
+  kind: "compaction" | "retry";
+  attempt?: number;
+  maxAttempts?: number;
+}) {
+  const retry = kind === "retry";
+  const attemptLabel = attempt
+    ? `Attempt ${attempt}${maxAttempts ? ` of ${maxAttempts}` : ""}`
+    : "Retrying";
+  return <section className={`transcript-activity is-${kind}`} role="status" aria-live="polite">
+    <span className="transcript-activity-glyph" aria-hidden="true"><IconLoader2 size={16} /></span>
+    <span className="transcript-activity-copy">
+      <strong>{retry ? "Retrying model request" : "Compacting context"}</strong>
+      <span>{retry
+        ? `${attempt ? `${attemptLabel}. ` : ""}The previous request failed temporarily.`
+        : "Summarizing earlier messages. The conversation will continue automatically."}</span>
+    </span>
+    <span className="transcript-activity-meta">{retry ? attemptLabel : "Working"}</span>
+    <span className="transcript-activity-progress" aria-hidden="true" />
+  </section>;
+}
+
+function CompactionDisclosure({ message }: { message: MessageReadModel }) {
+  const compaction = message.compaction!;
+  const timestamp = formatMessageTime(message.createdAt);
+  return <details className="compaction-disclosure">
+    <summary>
+      <span className="compaction-disclosure-chevron" aria-hidden="true"><IconChevronDown size={14} /></span>
+      <span className="compaction-disclosure-title">
+        <strong>Context compacted</strong>
+        <span className="when-closed">View compaction summary</span>
+        <span className="when-open">Hide compaction summary</span>
+      </span>
+      {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
+    </summary>
+    <div className="compaction-disclosure-body">
+      <dl>
+        <div><dt>Context after</dt><dd>~{formatCompactNumber(compaction.contextAfterTokens)} tokens</dd></div>
+        {compaction.sourceEntryCount !== undefined && <div><dt>Source entries</dt><dd>{compaction.sourceEntryCount.toLocaleString()}</dd></div>}
+      </dl>
+      <MarkdownContent text={message.text} />
+    </div>
+  </details>;
 }
 
 function SystemDisclosure({ message }: { message: MessageReadModel }) {

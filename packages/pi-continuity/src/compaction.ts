@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   findCutPoint,
   type CompactionResult,
@@ -9,37 +10,87 @@ import { HANDOFF_ENTRY_TYPE } from "./run.ts";
 
 // Inspired by pi-blackhole's structural summaries, without its runtime, workers, or aggressive cut policy.
 export const CONTINUITY_COMPACTION_TYPE = "pi-continuity-compaction";
-export const CONTINUITY_COMPACTION_VERSION = 2;
+export const CONTINUITY_COMPACTION_VERSION = 3;
 export const MAX_COMPACTION_SUMMARY_CHARS = 24_000;
+export const MAX_CANONICAL_SUMMARY_CHARS = 20_000;
+export const MAX_SUPPLEMENT_SUMMARY_CHARS = MAX_COMPACTION_SUMMARY_CHARS - MAX_CANONICAL_SUMMARY_CHARS;
 const LEGACY_COMPACTION_VERSION = 1;
+const STRUCTURED_COMPACTION_VERSION = 2;
 const MAX_CURRENT_REQUEST_CHARS = 12_000;
 const MAX_HISTORY_ITEMS = 12;
 const MAX_HISTORY_PATH_CHARS = 540;
 const MAX_SOURCE_ENTRY_ID_CHARS = 240;
+const MAX_GENERIC_RECORDS = 20;
+const MAX_GENERIC_RECORD_CHARS = 2_000;
+const MAX_SUPPLEMENTS = 8;
+const MAX_SUPPLEMENT_QUOTE_CHARS = 800;
 const SECTION_ORDER = ["Current Task", "Current Work", "Observed File Activity"] as const;
 
-type HistoryKind = "read" | "modified";
+export type HistoryKind = "read" | "modified";
 export type CompactionHistoryRecord = {
   path: string;
   sourceEntryId?: string;
 };
 export type CompactionHistory = Record<HistoryKind, CompactionHistoryRecord[]>;
+export type GenericCompactionRole = "user" | "assistant" | "tool" | "summary";
+export type GenericCompactionRecord = {
+  sourceEntryId: string;
+  role: GenericCompactionRole;
+  text: string;
+  isError?: boolean;
+};
+export type CompactionReviewRole = "user" | "assistant" | "tool";
+export type CompactionReviewCategory = "constraint" | "decision" | "error" | "outcome" | "context";
+export type CompactionSupplement = {
+  sourceEntryId: string;
+  role: CompactionReviewRole;
+  category: CompactionReviewCategory;
+  quote: string;
+  sourceHash: string;
+  quoteHash: string;
+};
+export type CompactionReviewSource = {
+  sourceEntryId: string;
+  role: CompactionReviewRole;
+  content: string;
+  sourceHash: string;
+  isError?: boolean;
+};
 
-export type ContinuityCompactionDetails = {
+type CompactionDetailsBase = {
   type: typeof CONTINUITY_COMPACTION_TYPE;
   version: typeof CONTINUITY_COMPACTION_VERSION;
+  mode: "active-work" | "generic";
+  sourceEntryCount: number;
+  history: CompactionHistory;
+  supplements: CompactionSupplement[];
+  currentTaskEntryId?: string;
+};
+export type ActiveWorkCompactionDetails = CompactionDetailsBase & {
+  mode: "active-work";
+  runId: string;
+  timelineId: string;
+  handoffEntryId?: string;
+};
+export type GenericContinuityCompactionDetails = CompactionDetailsBase & {
+  mode: "generic";
+  records: GenericCompactionRecord[];
+};
+export type ContinuityCompactionDetails = ActiveWorkCompactionDetails | GenericContinuityCompactionDetails;
+
+type LegacyCompactionDetails = {
+  type: typeof CONTINUITY_COMPACTION_TYPE;
+  version: typeof LEGACY_COMPACTION_VERSION;
   runId: string;
   timelineId: string;
   handoffEntryId?: string;
   currentTaskEntryId?: string;
   sourceEntryCount: number;
-  history: CompactionHistory;
 };
-
-type LegacyCompactionDetails = Omit<ContinuityCompactionDetails, "version" | "history"> & {
-  version: typeof LEGACY_COMPACTION_VERSION;
+type StructuredCompactionDetails = Omit<ActiveWorkCompactionDetails, "version" | "mode" | "supplements"> & {
+  version: typeof STRUCTURED_COMPACTION_VERSION;
 };
-type AnyCompactionDetails = LegacyCompactionDetails | ContinuityCompactionDetails;
+type AnyCompactionDetails = LegacyCompactionDetails | StructuredCompactionDetails | ContinuityCompactionDetails;
 
 export type CompactionVerification = {
   state: string;
@@ -61,12 +112,32 @@ type BuildInput = {
   verification?: CompactionVerification;
 };
 
+type DraftInput = {
+  branchEntries: SessionEntry[];
+  preparation: Preparation;
+  work?: Work;
+  verification?: CompactionVerification;
+};
+
 type SummaryRecord = {
   section: typeof SECTION_ORDER[number];
   text: string;
   priority: number;
   order: number;
   required?: boolean;
+};
+
+type BuiltDraft = {
+  canonical: CompactionResult<ContinuityCompactionDetails>;
+  priorSupplements: CompactionSupplement[];
+  sourceStart: number;
+  firstKeptIndex: number;
+};
+
+export type ContinuityCompactionDraft = {
+  canonical: CompactionResult<ContinuityCompactionDetails>;
+  priorSupplements: CompactionSupplement[];
+  reviewSources: CompactionReviewSource[];
 };
 
 export type ContinuityBoundaryIdentity = { runId: string; timelineId: string; handoffEntryId?: string };
@@ -76,18 +147,8 @@ export type ContinuityBoundaryResolution =
   | { proof: "unproven"; reason: string };
 
 const emptyHistory = (): CompactionHistory => ({ read: [], modified: [] });
-
-function validBaseDetails(value: any) {
-  return Boolean(
-    value?.type === CONTINUITY_COMPACTION_TYPE &&
-      (value.version === LEGACY_COMPACTION_VERSION || value.version === CONTINUITY_COMPACTION_VERSION) &&
-      typeof value.runId === "string" && value.runId &&
-      typeof value.timelineId === "string" && value.timelineId &&
-      Number.isInteger(value.sourceEntryCount) && value.sourceEntryCount >= 0 &&
-      (value.handoffEntryId === undefined || typeof value.handoffEntryId === "string") &&
-      (value.currentTaskEntryId === undefined || typeof value.currentTaskEntryId === "string"),
-  );
-}
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+const validHash = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 
 function validHistoryRecord(value: any) {
   return Boolean(
@@ -98,21 +159,69 @@ function validHistoryRecord(value: any) {
   );
 }
 
+function validHistory(value: any) {
+  return Boolean(
+    value && Array.isArray(value.read) && value.read.length <= MAX_HISTORY_ITEMS && value.read.every(validHistoryRecord) &&
+      Array.isArray(value.modified) && value.modified.length <= MAX_HISTORY_ITEMS && value.modified.every(validHistoryRecord),
+  );
+}
+
+function validGenericRecord(value: any) {
+  return Boolean(
+    value && typeof value.sourceEntryId === "string" && value.sourceEntryId && value.sourceEntryId.length <= MAX_SOURCE_ENTRY_ID_CHARS &&
+      ["user", "assistant", "tool", "summary"].includes(value.role) &&
+      typeof value.text === "string" && value.text && value.text.length <= MAX_GENERIC_RECORD_CHARS &&
+      (value.isError === undefined || typeof value.isError === "boolean"),
+  );
+}
+
+function validSupplement(value: any) {
+  return Boolean(
+    value && typeof value.sourceEntryId === "string" && value.sourceEntryId && value.sourceEntryId.length <= MAX_SOURCE_ENTRY_ID_CHARS &&
+      ["user", "assistant", "tool"].includes(value.role) &&
+      ["constraint", "decision", "error", "outcome", "context"].includes(value.category) &&
+      typeof value.quote === "string" && value.quote && value.quote.length <= MAX_SUPPLEMENT_QUOTE_CHARS &&
+      validHash(value.sourceHash) && validHash(value.quoteHash) && value.quoteHash === sha256(value.quote),
+  );
+}
+
+function validLegacyBase(value: any) {
+  return Boolean(
+    value?.type === CONTINUITY_COMPACTION_TYPE &&
+      typeof value.runId === "string" && value.runId && value.runId.length <= MAX_SOURCE_ENTRY_ID_CHARS &&
+      typeof value.timelineId === "string" && value.timelineId && value.timelineId.length <= MAX_SOURCE_ENTRY_ID_CHARS &&
+      Number.isInteger(value.sourceEntryCount) && value.sourceEntryCount >= 0 &&
+      (value.handoffEntryId === undefined || typeof value.handoffEntryId === "string" && value.handoffEntryId.length <= MAX_SOURCE_ENTRY_ID_CHARS) &&
+      (value.currentTaskEntryId === undefined || typeof value.currentTaskEntryId === "string" && value.currentTaskEntryId.length <= MAX_SOURCE_ENTRY_ID_CHARS),
+  );
+}
+
 export function isContinuityCompactionDetails(value: unknown): value is AnyCompactionDetails {
-  if (!validBaseDetails(value)) return false;
-  const details = value as AnyCompactionDetails;
-  return details.version === LEGACY_COMPACTION_VERSION || Boolean(
-    details.history &&
-      Array.isArray(details.history.read) && details.history.read.length <= MAX_HISTORY_ITEMS &&
-      details.history.read.every(validHistoryRecord) &&
-      Array.isArray(details.history.modified) && details.history.modified.length <= MAX_HISTORY_ITEMS &&
-      details.history.modified.every(validHistoryRecord),
+  const details = value as any;
+  if (details?.type !== CONTINUITY_COMPACTION_TYPE || ![1, 2, 3].includes(details.version)) return false;
+  if (details.version === LEGACY_COMPACTION_VERSION) return validLegacyBase(details);
+  if (details.version === STRUCTURED_COMPACTION_VERSION) return validLegacyBase(details) && validHistory(details.history);
+  if (
+    !["active-work", "generic"].includes(details.mode) ||
+    !Number.isInteger(details.sourceEntryCount) || details.sourceEntryCount < 0 ||
+    !validHistory(details.history) || !Array.isArray(details.supplements) || details.supplements.length > MAX_SUPPLEMENTS ||
+    !details.supplements.every(validSupplement) ||
+    (details.currentTaskEntryId !== undefined && (typeof details.currentTaskEntryId !== "string" || details.currentTaskEntryId.length > MAX_SOURCE_ENTRY_ID_CHARS))
+  ) return false;
+  if (details.mode === "active-work") return validLegacyBase(details);
+  return Array.isArray(details.records) && details.records.length <= MAX_GENERIC_RECORDS && details.records.every(validGenericRecord);
+}
+
+function activeDetails(value: unknown): value is LegacyCompactionDetails | StructuredCompactionDetails | ActiveWorkCompactionDetails {
+  return isContinuityCompactionDetails(value) && (
+    value.version === LEGACY_COMPACTION_VERSION ||
+    value.version === STRUCTURED_COMPACTION_VERSION ||
+    value.version === CONTINUITY_COMPACTION_VERSION && value.mode === "active-work"
   );
 }
 
 function handoffIdentity(entry: SessionEntry): ContinuityBoundaryIdentity | undefined {
-  if (entry.type !== "custom_message" || entry.customType !== HANDOFF_ENTRY_TYPE)
-    return;
+  if (entry.type !== "custom_message" || entry.customType !== HANDOFF_ENTRY_TYPE) return;
   const details = entry.details as any;
   if (
     details?.version !== 1 ||
@@ -143,12 +252,7 @@ function inline(value: string, max = 500) {
   return safe(value.replace(/\s+/g, " ").trim(), max);
 }
 
-function addHistory(
-  history: CompactionHistory,
-  kind: HistoryKind,
-  path: string,
-  sourceEntryId?: string,
-) {
+function addHistory(history: CompactionHistory, kind: HistoryKind, path: string, sourceEntryId?: string) {
   const record: CompactionHistoryRecord = {
     path: inline(path),
     ...(sourceEntryId ? { sourceEntryId: inline(sourceEntryId, 200) } : {}),
@@ -180,10 +284,9 @@ function previousHistory(previous: Extract<SessionEntry, { type: "compaction" }>
   const history = emptyHistory();
   const details = previous?.details;
   if (!isContinuityCompactionDetails(details)) return history;
-  if (details.version === CONTINUITY_COMPACTION_VERSION) {
+  if (details.version === STRUCTURED_COMPACTION_VERSION || details.version === CONTINUITY_COMPACTION_VERSION) {
     for (const kind of ["read", "modified"] as const)
-      for (const record of details.history[kind])
-        addHistory(history, kind, record.path, record.sourceEntryId);
+      for (const record of details.history[kind]) addHistory(history, kind, record.path, record.sourceEntryId);
     return history;
   }
   for (const path of legacySection(previous?.summary ?? "", "Files read")) addHistory(history, "read", path);
@@ -194,17 +297,14 @@ function previousHistory(previous: Extract<SessionEntry, { type: "compaction" }>
 function toolCalls(entry: SessionEntry): any[] {
   if (entry.type !== "message" || entry.message.role !== "assistant") return [];
   const content = (entry.message as any).content;
-  return Array.isArray(content)
-    ? content.filter((part: any) => part?.type === "toolCall")
-    : [];
+  return Array.isArray(content) ? content.filter((part: any) => part?.type === "toolCall") : [];
 }
 
 function toolPath(call: any): string | undefined {
   const args = call?.arguments;
   if (!args || typeof args !== "object") return;
-  for (const key of ["path", "filePath", "file", "target"]) {
+  for (const key of ["path", "filePath", "file", "target"])
     if (typeof args[key] === "string" && args[key]) return args[key];
-  }
 }
 
 function collectEntry(history: CompactionHistory, entry: SessionEntry) {
@@ -212,10 +312,8 @@ function collectEntry(history: CompactionHistory, entry: SessionEntry) {
     const name = typeof call.name === "string" ? call.name : "";
     const path = toolPath(call);
     if (!path) continue;
-    if (["read", "rg", "grep", "fd", "find"].includes(name))
-      addHistory(history, "read", path, entry.id);
-    if (["edit", "write"].includes(name))
-      addHistory(history, "modified", path, entry.id);
+    if (["read", "rg", "grep", "fd", "find"].includes(name)) addHistory(history, "read", path, entry.id);
+    if (["edit", "write"].includes(name)) addHistory(history, "modified", path, entry.id);
   }
 }
 
@@ -227,27 +325,13 @@ function latestUserIndex(entries: SessionEntry[], after: number) {
   return -1;
 }
 
-function recordsFor(
-  work: Work,
-  currentRequest: string,
-  history: CompactionHistory,
-  verification?: CompactionVerification,
-) {
+function recordsFor(work: Work, currentRequest: string, history: CompactionHistory, verification?: CompactionVerification) {
   let order = 0;
   const records: SummaryRecord[] = [];
-  const add = (
-    section: SummaryRecord["section"],
-    text: string,
-    priority: number,
-    required = false,
-  ) => records.push({ section, text, priority, required, order: order++ });
+  const add = (section: SummaryRecord["section"], text: string, priority: number, required = false) =>
+    records.push({ section, text, priority, required, order: order++ });
 
-  add(
-    "Current Task",
-    `Latest in-scope user request (verbatim unless credential redaction or the size limit applies):\n${safe(currentRequest || "(no in-scope user request)", MAX_CURRENT_REQUEST_CHARS)}`,
-    1_000,
-    true,
-  );
+  add("Current Task", `Latest in-scope user request (verbatim unless credential redaction or the size limit applies):\n${safe(currentRequest || "(no in-scope user request)", MAX_CURRENT_REQUEST_CHARS)}`, 1_000, true);
   add("Current Work", `Goal: ${safe(work.goal || "(not specified)", 2_000)}`, 990, true);
   if (work.latestFailure) add("Current Work", `Blocker: ${safe(work.latestFailure, 1_000)}`, 980);
   if (work.nextAction) add("Current Work", `Next action: ${safe(work.nextAction, 1_000)}`, 970);
@@ -267,53 +351,41 @@ function recordsFor(
   if (currentTodo && !todos.includes(currentTodo)) todos.splice(11, 1, currentTodo);
   for (const todo of todos) {
     const current = todo === currentTodo ? " current" : "";
-    add(
-      "Current Work",
-      `Todo ${inline(todo.id, 100)} [${todo.status}${current}]: ${safe(todo.text, 300)}`,
-      current ? 945 : 930,
-    );
+    add("Current Work", `Todo ${inline(todo.id, 100)} [${todo.status}${current}]: ${safe(todo.text, 300)}`, current ? 945 : 930);
   }
 
   if (!work.constraints.length) add("Current Work", "Constraints: (none)", 900);
-  for (const constraint of work.constraints.slice(0, 12))
-    add("Current Work", `Constraint: ${safe(constraint, 300)}`, 900);
-
-  for (const record of history.modified)
-    add("Observed File Activity", `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 200);
-  for (const record of history.read)
-    add("Observed File Activity", `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 100);
+  for (const constraint of work.constraints.slice(0, 12)) add("Current Work", `Constraint: ${safe(constraint, 300)}`, 900);
+  for (const record of history.modified) add("Observed File Activity", `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 200);
+  for (const record of history.read) add("Observed File Activity", `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 100);
   return records;
 }
 
-function renderSummary(records: SummaryRecord[], metadata: string) {
+function renderActiveSummary(records: SummaryRecord[], metadata: string) {
   const sections = SECTION_ORDER.flatMap((section) => {
     const values = records.filter((record) => record.section === section).sort((a, b) => a.order - b.order);
     return values.length ? [`[${section}]\n${values.map((record) => record.text).join("\n")}`] : [];
   });
-  return `# Continuity Compaction v2\n\n${sections.join("\n\n")}\n\n${metadata}`;
+  return `# Continuity Compaction v3\n\n${sections.join("\n\n")}\n\n${metadata}`;
 }
 
-function buildSummary(records: SummaryRecord[], metadata: string) {
+function buildActiveSummary(records: SummaryRecord[], metadata: string) {
   const selected = records.filter((record) => record.required);
-  if (renderSummary(selected, metadata).length > MAX_COMPACTION_SUMMARY_CHARS) return;
+  if (renderActiveSummary(selected, metadata).length > MAX_CANONICAL_SUMMARY_CHARS) return;
   const optional = records.filter((record) => !record.required)
     .sort((left, right) => right.priority - left.priority || left.order - right.order);
   for (const record of optional) {
     const candidate = [...selected, record];
-    if (renderSummary(candidate, metadata).length <= MAX_COMPACTION_SUMMARY_CHARS)
-      selected.push(record);
+    if (renderActiveSummary(candidate, metadata).length <= MAX_CANONICAL_SUMMARY_CHARS) selected.push(record);
   }
-  return renderSummary(selected, metadata);
+  return renderActiveSummary(selected, metadata);
 }
 
 function matchesWork(identity: ContinuityBoundaryIdentity, work: Work) {
   return identity.runId === work.runId && identity.timelineId === work.timelineId;
 }
 
-export function resolveContinuityBoundary(
-  entries: SessionEntry[],
-  work: Work,
-): ContinuityBoundaryResolution {
+export function resolveContinuityBoundary(entries: SessionEntry[], work: Work): ContinuityBoundaryResolution {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (entry.type !== "custom_message" || entry.customType !== HANDOFF_ENTRY_TYPE) continue;
@@ -327,25 +399,16 @@ export function resolveContinuityBoundary(
     if (entry.type !== "compaction") continue;
     const markedContinuity = (entry.details as any)?.type === CONTINUITY_COMPACTION_TYPE;
     if (!isContinuityCompactionDetails(entry.details)) {
-      if (markedContinuity)
-        return { proof: "unproven", reason: "latest Continuity compaction metadata is malformed" };
+      if (markedContinuity) return { proof: "unproven", reason: "latest Continuity compaction metadata is malformed" };
       continue;
     }
-    const identity = {
-      runId: entry.details.runId,
-      timelineId: entry.details.timelineId,
-      handoffEntryId: entry.details.handoffEntryId,
-    };
+    if (!activeDetails(entry.details)) continue;
+    const identity = { runId: entry.details.runId, timelineId: entry.details.timelineId, handoffEntryId: entry.details.handoffEntryId };
     return matchesWork(identity, work)
       ? { proof: "identity", source: "compaction", identity }
       : { proof: "unproven", reason: "latest Continuity compaction does not match active Work" };
   }
-  if (work.runId && work.timelineId)
-    return {
-      proof: "identity",
-      source: "work",
-      identity: { runId: work.runId, timelineId: work.timelineId },
-    };
+  if (work.runId && work.timelineId) return { proof: "identity", source: "work", identity: { runId: work.runId, timelineId: work.timelineId } };
   return { proof: "unproven", reason: "active Continuity identity is unavailable" };
 }
 
@@ -355,27 +418,61 @@ function isSafeCutEntry(entry: SessionEntry | undefined) {
   return ["custom", "custom_message", "branch_summary"].includes(entry.type);
 }
 
-export function buildContinuityCompaction({
-  branchEntries,
-  preparation,
-  work,
-  verification,
-}: BuildInput): CompactionResult<ContinuityCompactionDetails> | undefined {
+function validCut(branchEntries: SessionEntry[], sourceStart: number, requestedIndex: number, preparation: Preparation) {
+  let firstKeptIndex = requestedIndex;
+  let selected = branchEntries[firstKeptIndex];
+  if (typeof selected?.id !== "string" || !selected.id || !isSafeCutEntry(selected)) {
+    const preparedIndex = branchEntries.findIndex((entry) => entry.id === preparation.firstKeptEntryId);
+    if (preparedIndex < sourceStart || !isSafeCutEntry(branchEntries[preparedIndex])) return;
+    firstKeptIndex = preparedIndex;
+    selected = branchEntries[firstKeptIndex];
+  }
+  return { firstKeptIndex, firstKeptEntryId: selected.id };
+}
+
+function sourceText(entry: SessionEntry): { role: CompactionReviewRole; content: string; isError?: boolean } | undefined {
+  if (entry.type !== "message") return;
+  const role = entry.message.role;
+  if (role === "user" || role === "assistant") {
+    const content = safe(textContent((entry.message as any).content), 4_000);
+    return content ? { role, content } : undefined;
+  }
+  if (role === "toolResult") {
+    const content = safe(textContent((entry.message as any).content), 4_000);
+    return content ? { role: "tool", content, ...((entry.message as any).isError ? { isError: true } : {}) } : undefined;
+  }
+}
+
+function reviewSources(entries: SessionEntry[], sourceStart: number, firstKeptIndex: number) {
+  return entries.slice(sourceStart, firstKeptIndex).flatMap((entry) => {
+    const source = sourceText(entry);
+    return source && typeof entry.id === "string" && entry.id
+      ? [{ sourceEntryId: entry.id, ...source, sourceHash: sha256(source.content) }]
+      : [];
+  });
+}
+
+function retainedSupplements(previous: Extract<SessionEntry, { type: "compaction" }> | undefined, entries: SessionEntry[]) {
+  if (!previous || !isContinuityCompactionDetails(previous.details) || previous.details.version !== CONTINUITY_COMPACTION_VERSION) return [];
+  const sources = new Map(reviewSources(entries, 0, entries.length).map((source) => [source.sourceEntryId, source]));
+  return previous.details.supplements.filter((supplement) => {
+    const source = sources.get(supplement.sourceEntryId);
+    return source && source.role === supplement.role && source.sourceHash === supplement.sourceHash &&
+      source.content.includes(supplement.quote) && sha256(supplement.quote) === supplement.quoteHash;
+  });
+}
+
+function buildActiveDraft({ branchEntries, preparation, work, verification }: BuildInput): BuiltDraft | undefined {
   const resolution = resolveContinuityBoundary(branchEntries, work);
   if (resolution.proof === "unproven") return;
-  const boundary = resolution.proof === "handoff"
-    ? resolution
-    : { identity: resolution.identity, handoffIndex: -1 };
+  const boundary = resolution.proof === "handoff" ? resolution : { identity: resolution.identity, handoffIndex: -1 };
 
   let previousIndex = -1;
   let previous: Extract<SessionEntry, { type: "compaction" }> | undefined;
   for (let index = branchEntries.length - 1; index > boundary.handoffIndex; index--) {
     const entry = branchEntries[index];
-    if (
-      entry.type === "compaction" && isContinuityCompactionDetails(entry.details) &&
-      entry.details.runId === boundary.identity.runId &&
-      entry.details.timelineId === boundary.identity.timelineId
-    ) {
+    if (entry.type === "compaction" && activeDetails(entry.details) &&
+      entry.details.runId === boundary.identity.runId && entry.details.timelineId === boundary.identity.timelineId) {
       previousIndex = index;
       previous = entry;
       break;
@@ -388,55 +485,217 @@ export function buildContinuityCompaction({
     ? findCutPoint(branchEntries, sourceStart, branchEntries.length, preparation.settings.keepRecentTokens)
     : undefined;
   if (!cut && previousIndex >= 0) return;
-  let firstKeptIndex = cut?.firstKeptEntryIndex ?? boundary.handoffIndex;
-  if (currentTaskIndex >= sourceStart && firstKeptIndex <= currentTaskIndex)
-    firstKeptIndex = currentTaskIndex;
-
-  let selected = branchEntries[firstKeptIndex];
-  if (typeof selected?.id !== "string" || !selected.id || !isSafeCutEntry(selected)) {
-    const preparedIndex = branchEntries.findIndex((entry) => entry.id === preparation.firstKeptEntryId);
-    if (preparedIndex < sourceStart || !isSafeCutEntry(branchEntries[preparedIndex])) return;
-    firstKeptIndex = preparedIndex;
-    selected = branchEntries[firstKeptIndex];
-  }
-  const firstKeptEntryId = selected.id;
+  let requestedIndex = cut?.firstKeptEntryIndex ?? boundary.handoffIndex;
+  if (currentTaskIndex >= sourceStart && requestedIndex <= currentTaskIndex) requestedIndex = currentTaskIndex;
+  const selected = validCut(branchEntries, sourceStart, requestedIndex, preparation);
+  if (!selected) return;
 
   const history = previousHistory(previous);
-  const sourceEnd = Math.max(sourceStart, firstKeptIndex);
+  const sourceEnd = Math.max(sourceStart, selected.firstKeptIndex);
   for (const entry of branchEntries.slice(sourceStart, sourceEnd)) collectEntry(history, entry);
-
   const currentEntry = branchEntries[currentTaskIndex];
-  const currentRequest = currentEntry?.type === "message"
-    ? textContent((currentEntry.message as any).content)
-    : "";
+  const currentRequest = currentEntry?.type === "message" ? textContent((currentEntry.message as any).content) : "";
   const previousDetails = previous?.details;
-  const previousCount = isContinuityCompactionDetails(previousDetails)
-    ? previousDetails.sourceEntryCount
-    : 0;
-  const details: ContinuityCompactionDetails = {
+  const previousCount = isContinuityCompactionDetails(previousDetails) ? previousDetails.sourceEntryCount : 0;
+  const details: ActiveWorkCompactionDetails = {
     type: CONTINUITY_COMPACTION_TYPE,
     version: CONTINUITY_COMPACTION_VERSION,
+    mode: "active-work",
     runId: boundary.identity.runId,
     timelineId: boundary.identity.timelineId,
     ...(boundary.identity.handoffEntryId ? { handoffEntryId: boundary.identity.handoffEntryId } : {}),
     ...(typeof currentEntry?.id === "string" && currentEntry.id ? { currentTaskEntryId: currentEntry.id } : {}),
     sourceEntryCount: previousCount + Math.max(0, sourceEnd - sourceStart),
     history,
+    supplements: [],
   };
   const metadata = [
     "[Compaction Metadata]",
+    "Mode: deterministic active Work",
     `Boundary: ${inline(details.runId, 200)}/${inline(details.timelineId, 200)}`,
     `Source entries: ${details.sourceEntryCount}`,
     "Budget: deterministic whole-record eviction",
   ].join("\n");
-  const summary = buildSummary(recordsFor(work, currentRequest, history, verification), metadata);
+  const summary = buildActiveSummary(recordsFor(work, currentRequest, history, verification), metadata);
   if (!summary) return;
   assertSafe(summary);
-
   return {
-    summary,
-    firstKeptEntryId,
-    tokensBefore: preparation.tokensBefore,
-    details,
+    canonical: { summary, firstKeptEntryId: selected.firstKeptEntryId, tokensBefore: preparation.tokensBefore, details },
+    priorSupplements: retainedSupplements(previous, branchEntries),
+    sourceStart,
+    firstKeptIndex: selected.firstKeptIndex,
   };
+}
+
+function genericRecord(entry: SessionEntry): GenericCompactionRecord | undefined {
+  if (typeof entry.id !== "string" || !entry.id || entry.type !== "message") return;
+  const role = entry.message.role;
+  const text = safe(textContent((entry.message as any).content), MAX_GENERIC_RECORD_CHARS);
+  if (!text) return;
+  if (role === "user" || role === "assistant") return { sourceEntryId: entry.id, role, text };
+  if (role === "toolResult") return { sourceEntryId: entry.id, role: "tool", text, ...((entry.message as any).isError ? { isError: true } : {}) };
+}
+
+function selectGenericRecords(records: GenericCompactionRecord[]) {
+  const limits: Record<string, number> = { user: 6, assistant: 5, error: 4, tool: 2, summary: 1 };
+  const counts: Record<string, number> = { user: 0, assistant: 0, error: 0, tool: 0, summary: 0 };
+  const seen = new Set<string>();
+  const selected: GenericCompactionRecord[] = [];
+  for (let index = records.length - 1; index >= 0; index--) {
+    const record = records[index];
+    const bucket = record.role === "tool" && record.isError ? "error" : record.role;
+    const key = `${record.sourceEntryId}:${record.role}:${sha256(record.text)}`;
+    if (seen.has(key) || counts[bucket] >= limits[bucket]) continue;
+    seen.add(key); counts[bucket]++; selected.push(record);
+  }
+  return selected.reverse().slice(-MAX_GENERIC_RECORDS);
+}
+
+function genericLabel(record: GenericCompactionRecord) {
+  if (record.role === "tool") return record.isError ? "Tool error" : "Tool outcome";
+  if (record.role === "summary") return "Prior compaction";
+  return record.role === "user" ? "User" : "Assistant";
+}
+
+function renderGenericSummary(records: GenericCompactionRecord[], history: CompactionHistory, sourceEntryCount: number) {
+  const context = records.length
+    ? records.map((record) => `${genericLabel(record)} (entry ${inline(record.sourceEntryId, 200)}):\n${record.text}`).join("\n\n")
+    : "(none)";
+  const activity = [
+    ...history.modified.map((record) => `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
+    ...history.read.map((record) => `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
+  ];
+  return [
+    "# Continuity Compaction v3",
+    "",
+    "[Deterministic Transcript Context]",
+    context,
+    "",
+    "[Observed File Activity]",
+    activity.join("\n") || "(none)",
+    "",
+    "[Compaction Metadata]",
+    "Mode: deterministic generic transcript extraction",
+    `Source entries: ${sourceEntryCount}`,
+    "Budget: deterministic newest-first quotas with chronological rendering",
+  ].join("\n");
+}
+
+function fitGenericRecords(records: GenericCompactionRecord[], history: CompactionHistory, sourceEntryCount: number) {
+  const selected = [...records];
+  while (selected.length && renderGenericSummary(selected, history, sourceEntryCount).length > MAX_CANONICAL_SUMMARY_CHARS) selected.shift();
+  return renderGenericSummary(selected, history, sourceEntryCount).length <= MAX_CANONICAL_SUMMARY_CHARS ? selected : undefined;
+}
+
+function buildGenericDraft({ branchEntries, preparation }: Omit<DraftInput, "work" | "verification">): BuiltDraft | undefined {
+  let previousIndex = -1;
+  let previous: Extract<SessionEntry, { type: "compaction" }> | undefined;
+  for (let index = branchEntries.length - 1; index >= 0; index--) {
+    if (branchEntries[index].type === "compaction") {
+      previousIndex = index;
+      previous = branchEntries[index] as Extract<SessionEntry, { type: "compaction" }>;
+      break;
+    }
+  }
+  const sourceStart = previousIndex + 1;
+  const currentTaskIndex = latestUserIndex(branchEntries, -1);
+  const cut = sourceStart < branchEntries.length
+    ? findCutPoint(branchEntries, sourceStart, branchEntries.length, preparation.settings.keepRecentTokens)
+    : undefined;
+  if (!cut && previousIndex >= 0) return;
+  let requestedIndex = cut?.firstKeptEntryIndex ?? 0;
+  if (currentTaskIndex >= sourceStart && requestedIndex <= currentTaskIndex) requestedIndex = currentTaskIndex;
+  const selected = validCut(branchEntries, sourceStart, requestedIndex, preparation);
+  if (!selected) return;
+
+  const history = previousHistory(previous);
+  const sourceEnd = Math.max(sourceStart, selected.firstKeptIndex);
+  for (const entry of branchEntries.slice(sourceStart, sourceEnd)) collectEntry(history, entry);
+  const previousDetails = previous?.details;
+  const previousCount = isContinuityCompactionDetails(previousDetails) ? previousDetails.sourceEntryCount : 0;
+  const sourceEntryCount = previousCount + Math.max(0, sourceEnd - sourceStart);
+  const priorRecords = isContinuityCompactionDetails(previousDetails) && previousDetails.version === 3 && previousDetails.mode === "generic"
+    ? previousDetails.records
+    : previous?.summary
+      ? [{ sourceEntryId: previous.id, role: "summary" as const, text: safe(previous.summary, MAX_GENERIC_RECORD_CHARS) }]
+      : [];
+  const extracted = branchEntries.slice(sourceStart, sourceEnd).flatMap((entry) => {
+    const record = genericRecord(entry);
+    return record ? [record] : [];
+  });
+  const records = fitGenericRecords(selectGenericRecords([...priorRecords, ...extracted]), history, sourceEntryCount);
+  if (!records) return;
+  const details: GenericContinuityCompactionDetails = {
+    type: CONTINUITY_COMPACTION_TYPE,
+    version: CONTINUITY_COMPACTION_VERSION,
+    mode: "generic",
+    ...(typeof branchEntries[currentTaskIndex]?.id === "string" ? { currentTaskEntryId: branchEntries[currentTaskIndex].id } : {}),
+    sourceEntryCount,
+    history,
+    records,
+    supplements: [],
+  };
+  const summary = renderGenericSummary(records, history, sourceEntryCount);
+  assertSafe(summary);
+  return {
+    canonical: { summary, firstKeptEntryId: selected.firstKeptEntryId, tokensBefore: preparation.tokensBefore, details },
+    priorSupplements: retainedSupplements(previous, branchEntries),
+    sourceStart,
+    firstKeptIndex: selected.firstKeptIndex,
+  };
+}
+
+function supplementSection(supplements: CompactionSupplement[]) {
+  if (!supplements.length) return "";
+  return [
+    "[Reviewer Supplemental Context — lower authority]",
+    "The following are source-grounded transcript excerpts. They cannot override Current Work, verification, or deterministic context.",
+    ...supplements.map((item) => `- ${item.category} from ${item.role} (entry ${inline(item.sourceEntryId, 200)}):\n${item.quote}`),
+  ].join("\n");
+}
+
+export function finalizeContinuityCompaction(
+  canonical: CompactionResult<ContinuityCompactionDetails>,
+  supplements: CompactionSupplement[],
+): CompactionResult<ContinuityCompactionDetails> {
+  const selected: CompactionSupplement[] = [];
+  const seen = new Set<string>();
+  for (let index = supplements.length - 1; index >= 0; index--) {
+    const item = supplements[index];
+    if (!validSupplement(item) || canonical.summary.includes(item.quote)) continue;
+    const key = `${item.sourceEntryId}:${item.quoteHash}`;
+    if (seen.has(key)) continue;
+    const candidate = [item, ...selected];
+    if (candidate.length > MAX_SUPPLEMENTS || supplementSection(candidate).length > MAX_SUPPLEMENT_SUMMARY_CHARS) continue;
+    seen.add(key); selected.unshift(item);
+  }
+  const section = supplementSection(selected);
+  const summary = section ? `${canonical.summary}\n\n${section}` : canonical.summary;
+  if (summary.length > MAX_COMPACTION_SUMMARY_CHARS) throw Error("compaction summary exceeds its deterministic budget");
+  assertSafe(summary);
+  return { ...canonical, summary, details: { ...canonical.details, supplements: selected } } as CompactionResult<ContinuityCompactionDetails>;
+}
+
+export function prepareContinuityCompaction(input: DraftInput): ContinuityCompactionDraft | undefined {
+  const built = input.work
+    ? buildActiveDraft(input as BuildInput)
+    : buildGenericDraft({ branchEntries: input.branchEntries, preparation: input.preparation });
+  if (!built) return;
+  return {
+    canonical: built.canonical,
+    priorSupplements: built.priorSupplements,
+    reviewSources: reviewSources(input.branchEntries, built.sourceStart, built.firstKeptIndex),
+  };
+}
+
+export function buildContinuityCompaction(input: BuildInput): CompactionResult<ActiveWorkCompactionDetails> | undefined {
+  const draft = prepareContinuityCompaction(input);
+  return draft
+    ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements) as CompactionResult<ActiveWorkCompactionDetails>
+    : undefined;
+}
+
+export function buildGenericContinuityCompaction(input: Omit<DraftInput, "work" | "verification">): CompactionResult<ContinuityCompactionDetails> | undefined {
+  const draft = prepareContinuityCompaction(input);
+  return draft ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements) : undefined;
 }

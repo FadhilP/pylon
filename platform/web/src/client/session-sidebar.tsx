@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconHistory, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX, IconLibrary } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX, IconLibrary } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";

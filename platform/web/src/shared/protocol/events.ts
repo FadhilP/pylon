@@ -1,3 +1,8 @@
+export interface CompactionMessageReadModel {
+  contextAfterTokens: number;
+  sourceEntryCount?: number;
+}
+
 export interface MessageReadModel {
   id: string;
   entryId?: string;
@@ -14,6 +19,7 @@ export interface MessageReadModel {
   thinkingLevel?: ThinkingLevelReadModel;
   changedFiles?: ChangedFileReadModel[];
   systemSource?: string;
+  compaction?: CompactionMessageReadModel;
   tool?: {
     id: string;
     name: string;
@@ -43,6 +49,7 @@ export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout
 export type SpawnExecutionActionReadModel = "create" | "continue" | "adopt";
 
 export interface DelegatedAgentActivityReadModel {
+  id?: string;
   kind: "call" | "result";
   tool: string;
   text?: string;
@@ -72,7 +79,13 @@ export interface DelegatedAgentRunReadModel {
   action?: SpawnExecutionActionReadModel;
   durationMs?: number;
   usage?: DelegatedAgentUsageReadModel;
+  sessionUsage?: DelegatedAgentUsageReadModel;
   activity: DelegatedAgentActivityReadModel[];
+}
+
+export interface DelegatedAgentRunUpdateReadModel extends DelegatedAgentRunReadModel {
+  activityMode?: "append";
+  activityBase?: number;
 }
 
 export interface QueueReadModel {
@@ -83,6 +96,7 @@ export interface QueueReadModel {
 
 export interface QueuedPromptReadModel {
   id: string;
+  commandId: string;
   preview: string;
   attachmentCount: number;
   fileAttachmentCount: number;
@@ -461,4 +475,4 @@ export interface OperationalReadModel {
   health: RuntimeHealthReadModel;
 }
 
-export type ConnectionState = "loading" | "connected" | "disconnected" | "error";
+export type ConnectionState = "loading" | "connected" | "disconnected";

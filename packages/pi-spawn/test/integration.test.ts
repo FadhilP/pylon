@@ -71,6 +71,8 @@ export default function (pi) {
     const first = await runSpawn(args, { cwd, prompt: "first", env, timeoutMs: 30_000 });
     assert.equal(first.error, undefined);
     assert.equal(first.text, "users:2");
+    assert.equal(first.model, "pi-spawn-test/model");
+    assert.equal(first.thinking, "off");
     assert.doesNotThrow(() => SessionManager.open(child.info.path));
 
     const second = await runSpawn(args, { cwd, prompt: "second", env, timeoutMs: 30_000 });

@@ -353,20 +353,23 @@ function FileTree({ files, selectedPath, onSelect }: {
   selectedPath?: string;
   onSelect: (path: string) => void;
 }) {
-  const root: FileTreeNode = { files: [], directories: new Map() };
-  for (const file of files) {
-    const parts = file.path.split("/");
-    let node = root;
-    for (const directory of parts.slice(0, -1)) {
-      let child = node.directories.get(directory);
-      if (!child) {
-        child = { files: [], directories: new Map() };
-        node.directories.set(directory, child);
+  const root = useMemo(() => {
+    const value: FileTreeNode = { files: [], directories: new Map() };
+    for (const file of files) {
+      const parts = file.path.split("/");
+      let node = value;
+      for (const directory of parts.slice(0, -1)) {
+        let child = node.directories.get(directory);
+        if (!child) {
+          child = { files: [], directories: new Map() };
+          node.directories.set(directory, child);
+        }
+        node = child;
       }
-      node = child;
+      node.files.push(file);
     }
-    node.files.push(file);
-  }
+    return value;
+  }, [files]);
   return <TreeNode node={root} selectedPath={selectedPath} onSelect={onSelect} />;
 }
 
@@ -408,12 +411,18 @@ function FileContent({ value, view, targetLine }: { value?: WorkspaceFileContent
     const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
     return () => cancelAnimationFrame(frame);
   }, [targetLine, value]);
+  const rendered = useMemo(() => {
+    const text = value?.text ?? "";
+    return {
+      lines: text.split("\n"),
+      highlighted: value ? DOMPurify.sanitize(highlightSource(text, value.path, view === "diff")) : "",
+    };
+  }, [value?.text, value?.path, view]);
   if (!value) return <div className="files-empty large">Loading…</div>;
   if (value.state !== "available" && !value.text) {
     return <div className="files-empty large">{value.state === "deleted" ? "File deleted" : value.state === "binary" ? "Binary file" : "File is too large to display"}</div>;
   }
-  const lines = (value.text ?? "").split("\n");
-  const highlighted = DOMPurify.sanitize(highlightSource(value.text ?? "", value.path, view === "diff"));
+  const { lines, highlighted } = rendered;
   return <pre className={`file-code${view === "diff" ? " is-diff" : ""}`}>
     <span className="file-line-numbers" aria-hidden="true">{lines.map((_, index) => {
       const line = index + 1;

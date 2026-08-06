@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, turnIdsInViewport } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus, turnIdsInViewport } from "../src/shared/transcript.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { DelegatedAgentRunReadModel, MessageReadModel } from "../src/shared/protocol/events.ts";
 
@@ -32,6 +32,54 @@ test("adjacent tools group without crossing message boundaries", () => {
     "user-2",
     ["tool-4"],
   ]);
+});
+
+test("terminal activity status is neutral for stops and failed for errors and retry handoffs", () => {
+  assert.equal(terminalActivityStatus("end", { stopped: true, willRetry: true }), "completed");
+  assert.equal(terminalActivityStatus("error", { stopped: true }), "completed");
+  assert.equal(terminalActivityStatus("end", { willRetry: true }), "failed");
+  assert.equal(terminalActivityStatus("error", {}), "failed");
+  assert.equal(terminalActivityStatus("end", {}), "completed");
+});
+
+test("terminal agent events settle only residual running activity", () => {
+  const runningMessage = {
+    ...message("running-tool", "tool"),
+    streaming: true,
+    tool: { id: "call-running", name: "bash", status: "running" as const },
+  };
+  const completedMessage = {
+    ...message("completed-tool", "tool"),
+    tool: { id: "call-completed", name: "read", status: "completed" as const },
+  };
+  const runningRun: DelegatedAgentRunReadModel = {
+    id: "run-running",
+    kind: "advisor",
+    turn: 1,
+    status: "running",
+    activity: [],
+  };
+  const completedRun: DelegatedAgentRunReadModel = { ...runningRun, id: "run-completed", status: "completed" };
+  const conversation = {
+    messages: [runningMessage, completedMessage],
+    tools: [
+      { id: "call-running", name: "bash", status: "running" as const },
+      { id: "call-failed", name: "write", status: "failed" as const },
+    ],
+    delegatedRuns: [runningRun, completedRun],
+  };
+
+  const stopped = settleRunningActivities(conversation, "completed");
+  assert.equal(stopped.messages[0]?.tool?.status, "completed");
+  assert.equal(stopped.messages[0]?.streaming, false);
+  assert.equal(stopped.messages[1]?.tool?.status, "completed");
+  assert.deepEqual(stopped.tools.map((tool) => tool.status), ["completed", "failed"]);
+  assert.deepEqual(stopped.delegatedRuns.map((run) => run.status), ["completed", "completed"]);
+
+  const errored = settleRunningActivities(conversation, "failed");
+  assert.equal(errored.messages[0]?.tool?.status, "failed");
+  assert.equal(errored.tools[0]?.status, "failed");
+  assert.equal(errored.delegatedRuns[0]?.status, "failed");
 });
 
 test("live tools keep event position and reconcile without flicker", () => {

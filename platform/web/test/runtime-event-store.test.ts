@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { reconcilePendingQueue, type PendingMessageReadModel } from "../src/shared/pending-messages.ts";
 
 test("expected session replacement clears stale runtime while staying loading", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
@@ -19,6 +20,14 @@ test("switching sessions drops history cached for a potentially different branch
   assert.match(source, /async switchSession\(sessionId: string\)[\s\S]*?this\.historyCache\.delete\(sessionId\)[\s\S]*?type: "switchSession"/);
 });
 
+test("delegated activity delta events append without replacing prior invocation history", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /update\.activityMode === "append"[\s\S]*?update\.activityBase !== run\.activity\.length[\s\S]*?this\.reset\(\)/);
+  assert.match(source, /const \{ activityMode, activityBase: _, \.\.\.run \} = update/);
+  assert.match(source, /activityMode === "append" && previous[\s\S]*?\[\.\.\.previous\.activity, \.\.\.run\.activity\]/);
+});
+
 test("terminal agent event restores a dropped final assistant atomically", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
 
@@ -33,14 +42,81 @@ test("history windows remain bounded while rotating through many session generat
   assert.match(source, /jumpToHistory[\s\S]*?this\.setHistorySegments\(historyKey/);
 });
 
-test("queue updates feed the visible composer queue", async () => {
+test("merged history is revision-cached and destructive command failures restore it", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /mergedHistoryWindows\.get\(key\)[\s\S]*?cached\?\.revision === revision/);
+  assert.match(source, /private touchHistoryWindow[\s\S]*?mergedHistoryWindows\.delete\(key\)/);
+  assert.match(source, /async forkPrompt[\s\S]*?const cachedWindow[\s\S]*?catch \(error\)[\s\S]*?setHistorySegments\(key, cachedWindow\)/);
+  assert.match(source, /async timeline[\s\S]*?const cachedWindow[\s\S]*?catch \(error\)[\s\S]*?setHistorySegments\(key, cachedWindow\)/);
+});
+
+test("completed compactions join the live transcript without changing stream state", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  const start = source.indexOf('case "compaction.update"');
+  const reducer = source.slice(start, source.indexOf('case "metrics.update"', start));
+
+  assert.match(source, /HISTORY_MUTATION_EVENTS[\s\S]*?"compaction\.update"/);
+  assert.match(reducer, /completedMessage[\s\S]*?replaceConversationMessage/);
+  assert.doesNotMatch(reducer, /streaming: (?:true|false)/);
+});
+
+test("pending queue reconciliation preserves delivery and removes restored entries", () => {
+  const pending = (commandId: string): PendingMessageReadModel => ({
+    id: `pending-${commandId}`,
+    commandId,
+    sessionId: "session",
+    sessionGeneration: 1,
+    text: "same",
+    attachmentCount: 0,
+    fileAttachmentCount: 0,
+    planMode: false,
+    state: "queued",
+  });
+  const queued = (commandId: string, state: "queued" | "delivering") => ({
+    id: `queue-${commandId}`,
+    commandId,
+    preview: "same",
+    attachmentCount: 0,
+    fileAttachmentCount: 0,
+    planMode: false,
+    state,
+  });
+  const first = reconcilePendingQueue(
+    [pending("one"), pending("two")],
+    [queued("one", "queued"), queued("two", "queued")],
+    [queued("one", "delivering"), queued("two", "queued")],
+    "session",
+    1,
+  );
+  assert.deepEqual(first.map((item) => [item.commandId, item.state]), [["one", "sending"], ["two", "queued"]]);
+  const delivered = reconcilePendingQueue(first, [queued("one", "delivering"), queued("two", "queued")], [queued("two", "queued")], "session", 1);
+  assert.deepEqual(delivered.map((item) => item.commandId), ["one", "two"]);
+  const restored = reconcilePendingQueue(delivered, [queued("two", "queued")], [], "session", 1);
+  assert.deepEqual(restored.map((item) => item.commandId), ["one"]);
+  const rehydrated = reconcilePendingQueue([], [], [queued("three", "queued")], "session", 1);
+  assert.equal(rehydrated[0]?.id, "pending-three");
+});
+
+test("queue updates feed one pending transcript row with queue actions", async () => {
   const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
 
   assert.match(store, /case "queue\.update": return \{ \.\.\.runtime, conversation: \{ \.\.\.conversation, queue: payload/);
-  assert.match(panel, /const queuedItems = runtime\?\.conversation\.queue\.items \?\? \[\]/);
-  assert.match(panel, /queuedItems\.length > 0 && <section className="composer-surface queue-surface"/);
-  assert.match(panel, /queuedItems\.map\(\(queued, index\)/);
+  assert.match(store, /reconcilePendingQueue\([\s\S]*?runtime\.conversation\.queue\.items/);
+  assert.match(panel, /const pendingTranscriptMessages: MessageReadModel\[\]/);
+  assert.match(panel, /className="pending-message-footer"/);
+  assert.match(panel, /restoreQueued\(queued\)[\s\S]*?steerQueued\(queued\)/);
+  assert.doesNotMatch(panel, /className="composer-surface queue-surface"/);
+});
+
+test("message submission creates and atomically reconciles an optimistic pending row", async () => {
+  const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  assert.match(store, /const knownCommand = Boolean\(commandName[\s\S]*?command\.name === commandName\)/);
+  assert.match(store, /const pending: PendingMessageReadModel = \{[\s\S]*?id: pendingMessageId\(id\)/);
+  assert.match(store, /await this\.sendCommand\([\s\S]*?pendingMessages: \(this\.snapshot\.pendingMessages \?\? \[\]\)\.filter/);
+  assert.match(store, /event\.type === "message\.start"[\s\S]*?item\.id !== message\.id/);
+  assert.match(store, /pendingMessages: clearRuntime \? \[\] : this\.snapshot\.pendingMessages/);
 });
 
 test("retryable agent events preserve active work while terminal errors settle it", async () => {
@@ -67,6 +143,12 @@ test("completed background sessions stay unread until selected", async () => {
   assert.match(source, /sessionStatuses: this\.snapshot\.sessionStatuses,[\s\S]*?unseenCompletions: this\.snapshot\.unseenCompletions/);
 });
 
+test("session status retention is bounded", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  assert.match(source, /MAX_SESSION_STATUSES = 200/);
+  assert.match(source, /while \(Object\.keys\(sessionStatuses\)\.length > MAX_SESSION_STATUSES\)/);
+});
+
 test("files wait for replacement runtime to reconnect before loading", async () => {
   const source = await readFile(new URL("../src/client/files-panel.tsx", import.meta.url), "utf8");
 
@@ -89,10 +171,18 @@ test("browser waits for replacement runtime to reconnect before checking status"
   assert.match(app, /<BrowserPanel[\s\S]*?connected=\{live\.connection === "connected" && live\.runtime\?\.ready === true\}[\s\S]*?generation=\{live\.runtime\?\.sessionGeneration\}/);
 });
 
-test("agent completion bypasses frame batching and flushes pending notifications", async () => {
+test("terminal agent events settle stale running activity in the client projection", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
 
-  assert.match(source, /const batchNotification = event\.type !== "agent\.end" && event\.type !== "agent\.error"/);
+  assert.match(source, /case "agent\.end":[\s\S]*?const willRetry = info\.willRetry === true && info\.stopped !== true[\s\S]*?terminalActivityStatus\("end", \{ stopped: info\.stopped === true, willRetry \}\)/);
+  assert.match(source, /case "agent\.error":[\s\S]*?const willRetry = info\.willRetry === true && info\.stopped !== true[\s\S]*?terminalActivityStatus\("error", \{ stopped: info\.stopped === true, willRetry \}\)/);
+  assert.match(source, /conversation: \{\s*\.\.\.conversation,\s*\.\.\.settledActivities,/);
+});
+
+test("agent completion and tool starts bypass frame batching", async () => {
+  const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+
+  assert.match(source, /const batchNotification = event\.type !== "agent\.end" && event\.type !== "agent\.error" && event\.type !== "tool\.start"/);
   assert.match(source, /audioCues,\s*\}, batchNotification\)/);
   assert.match(source, /if \(!batched\) \{\s*if \(this\.frame !== undefined\) cancelAnimationFrame\(this\.frame\);\s*this\.frame = undefined;\s*this\.notify\(\)/);
 });

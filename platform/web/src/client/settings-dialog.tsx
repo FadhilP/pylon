@@ -428,6 +428,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <ProfileFields label="Planner" profile={settings.planner} models={models} disabled={disabled} onChange={(planner) => onUpdate({ ...settings, planner })} />
       <ProfileFields label="Executor" profile={settings.executor} models={models} disabled={disabled} onChange={(executor) => onUpdate({ ...settings, executor })} />
       <ProfileFields label="Memory reviewer" profile={settings.memoryReviewer} models={models} disabled={disabled} onChange={(memoryReviewer) => onUpdate({ ...settings, memoryReviewer })} />
+      <ProfileFields label="Compaction reviewer" profile={settings.compactionReviewer} models={models} disabled={disabled} onChange={(compactionReviewer) => onUpdate({ ...settings, compactionReviewer })} />
     </div>;
   }
   if (settings.kind === "sieve") {

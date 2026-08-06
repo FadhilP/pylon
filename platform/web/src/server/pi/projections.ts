@@ -5,6 +5,7 @@ import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.
 import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
 import { PROMPT_FILES_CUSTOM_TYPE } from "./prompt-attachments.ts";
+import { settleRunningActivities, terminalActivityStatus } from "../../shared/transcript.ts";
 
 const MAX_TEXT = 60 * 1024;
 const MAX_MESSAGES = 100;
@@ -84,6 +85,17 @@ function promptFileCount(value: unknown): number | undefined {
   const files = object(raw.details).files;
   return Array.isArray(files) && files.length > 0 ? Math.min(100, files.length) : undefined;
 }
+function compactionMessage(value: unknown): MessageReadModel["compaction"] {
+  const raw = object(value);
+  if (!Number.isSafeInteger(raw.contextAfterTokens) || Number(raw.contextAfterTokens) < 0) return undefined;
+  const sourceEntryCount = Number.isSafeInteger(raw.sourceEntryCount) && Number(raw.sourceEntryCount) >= 0
+    ? Number(raw.sourceEntryCount)
+    : undefined;
+  return {
+    contextAfterTokens: Number(raw.contextAfterTokens),
+    ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
+  };
+}
 function messageText(value: unknown): string {
   const raw = object(value);
   if (typeof raw.content === "string") return text(raw.content);
@@ -157,11 +169,12 @@ function delegatedUsage(value: unknown): DelegatedAgentUsageReadModel | undefine
 function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result: DelegatedAgentActivityReadModel[] = [];
-  for (const rawValue of value.slice(0, 100)) {
+  for (const rawValue of value) {
     const raw = object(rawValue);
     if (raw.kind !== "call" && raw.kind !== "result") continue;
     const tool = text(raw.tool, 200);
     if (!tool) continue;
+    const activityId = text(raw.id, 128) || undefined;
     let activityText = text(raw.text, MAX_AGENT_ACTIVITY_TEXT);
     if (activityText) {
       try { activityText = browserJson(JSON.parse(activityText))?.slice(0, MAX_AGENT_ACTIVITY_TEXT) ?? activityText; }
@@ -173,6 +186,7 @@ function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | 
         .slice(0, MAX_AGENT_ACTIVITY_TEXT);
     }
     result.push({
+      ...(activityId ? { id: activityId } : {}),
       kind: raw.kind,
       tool,
       ...(activityText ? { text: activityText } : {}),
@@ -225,8 +239,12 @@ function updateDelegatedRun(
 ): DelegatedAgentRunReadModel {
   const raw = object(result);
   const details = object(raw.details);
-  const activity = delegatedActivity(details.activity);
+  const fullActivity = delegatedActivity(details.activity);
+  const activityDelta = delegatedActivity(details.activityDelta);
   const previousActivity = previous?.activity ?? [];
+  const activity = fullActivity && fullActivity.length >= previousActivity.length
+    ? fullActivity
+    : activityDelta?.length ? [...previousActivity, ...activityDelta] : previousActivity;
   const nextStatus = previous && previous.status !== "running" && status === "running" ? previous.status : status;
   const request = delegatedRequest(input);
   const response = status === "running" ? undefined : messageText(raw);
@@ -238,6 +256,7 @@ function updateDelegatedRun(
   const level = thinkingLevel(details.thinking);
   const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
   const usage = delegatedUsage(details.usage);
+  const sessionUsage = delegatedUsage(details.sessionUsage);
   return {
     ...previous,
     id,
@@ -253,7 +272,8 @@ function updateDelegatedRun(
     ...spawnMetadata(kind, input, details),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage } : {}),
-    activity: activity && activity.length >= previousActivity.length ? activity : previousActivity,
+    ...(sessionUsage ? { sessionUsage } : {}),
+    activity,
   };
 }
 
@@ -284,6 +304,7 @@ function mergeDelegatedRun(
   const terminal = transcript.status !== "running" ? transcript : live;
   const activity = live.activity.length >= transcript.activity.length ? live.activity : transcript.activity;
   const usage = terminal.usage ?? live.usage ?? transcript.usage;
+  const sessionUsage = terminal.sessionUsage ?? live.sessionUsage ?? transcript.sessionUsage;
   const durationMs = terminal.durationMs ?? live.durationMs ?? transcript.durationMs;
   return {
     id: transcript.id,
@@ -301,6 +322,7 @@ function mergeDelegatedRun(
     ...(live.action ?? transcript.action ? { action: live.action ?? transcript.action } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage: { ...usage } } : {}),
+    ...(sessionUsage ? { sessionUsage: { ...sessionUsage } } : {}),
   };
 }
 
@@ -343,7 +365,17 @@ export function projectConversation(
   const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
   const includeDelegated = options.includeDelegated !== false;
   const pinnedUserIndex = latestVisibleUserIndex(messages, end) ?? -1;
-  const completedToolIds = new Set(messages.slice(0, end).flatMap((message) => {
+  const completedToolStatuses = new Map<string, "completed" | "failed">();
+  for (const message of messages) {
+    const raw = object(message);
+    if (role(raw.role) === "tool" && typeof raw.toolCallId === "string") {
+      const previous = completedToolStatuses.get(raw.toolCallId);
+      if (raw.isError === true || previous !== "failed") {
+        completedToolStatuses.set(raw.toolCallId, raw.isError === true ? "failed" : "completed");
+      }
+    }
+  }
+  const projectedToolResultIds = new Set(messages.slice(0, end).flatMap((message) => {
     const raw = object(message);
     return role(raw.role) === "tool" && typeof raw.toolCallId === "string" ? [raw.toolCallId] : [];
   }));
@@ -374,7 +406,7 @@ export function projectConversation(
           delegatedRuns.set(item.id, updateDelegatedRun(undefined, kind, item.id, userTurn, item.arguments, undefined, "running"));
           trimMap(delegatedRuns, MAX_DELEGATED_RUNS);
         }
-        if (index >= start && !completedToolIds.has(item.id)) unmatchedCalls.push({
+        if (index >= start && !projectedToolResultIds.has(item.id)) unmatchedCalls.push({
           id: `history-${index}-tool-${partIndex}`,
           role: "tool",
           text: "",
@@ -383,7 +415,7 @@ export function projectConversation(
             id: id(item.id, `history-${index}-tool-${partIndex}`),
             name,
             input: browserJson(item.arguments),
-            status: "running",
+            status: completedToolStatuses.get(item.id) ?? "running",
           },
         });
       }
@@ -428,6 +460,7 @@ export function projectConversation(
     }
     if (index < start && index !== pinnedUserIndex) continue;
     const images = attachmentCount(raw);
+    const compaction = compactionMessage(raw.compaction);
     const result: MessageReadModel = {
       id: `history-${index}`,
       ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, `history-${index}`) } : {}),
@@ -438,6 +471,7 @@ export function projectConversation(
       ...(messageRole === "user" && raw.canUndo === true ? { canUndo: true } : {}),
       ...(images ? { attachmentCount: images } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string" ? { systemSource: text(raw.customType, 200) } : {}),
+      ...(compaction ? { compaction } : {}),
     };
     projectedMessages.push(result, ...unmatchedCalls);
     if (messageRole === "user") latestProjectedUser = result;
@@ -785,8 +819,12 @@ export class RuntimeProjection {
         this.runtime.conversation.workModelName = undefined;
         this.runtime.conversation.workThinkingLevel = undefined;
       }
-      this.runtime.conversation.stopping = false;
       const stopped = raw.stopped === true;
+      this.settleRunningWork(terminalActivityStatus(
+        kind === "agent_error" ? "error" : "end",
+        { stopped, willRetry },
+      ));
+      this.runtime.conversation.stopping = false;
       const agentError = willRetry ? undefined : text(raw.errorMessage, 1_000) || undefined;
       this.runtime.conversation.agentError = agentError;
       this.runtime.conversation.stoppedRun = stopped && durationMs !== undefined
@@ -812,6 +850,20 @@ export class RuntimeProjection {
         userEntryId: this.runtime.conversation.stoppedRun?.userEntryId,
       });
     }
+  }
+
+  private settleRunningWork(status: "completed" | "failed"): void {
+    const settled = settleRunningActivities({
+      messages: [...this.messages.values()],
+      tools: [...this.tools.values()],
+      delegatedRuns: [...this.delegatedRuns.values()],
+    }, status);
+    this.messages.clear();
+    for (const message of settled.messages) this.messages.set(message.id, message);
+    this.tools.clear();
+    for (const tool of settled.tools) this.tools.set(tool.id, tool);
+    this.delegatedRuns.clear();
+    for (const run of settled.delegatedRuns) this.delegatedRuns.set(run.id, run);
   }
 
   private reconcileFinalAssistant(raw: Record<string, unknown>): MessageReadModel | undefined {
@@ -855,7 +907,10 @@ export class RuntimeProjection {
       }
       return;
     }
-    const messageId = id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
+    const correlatedId = typeof raw.clientMessageId === "string"
+      ? id(`pending-${raw.clientMessageId}`, "")
+      : "";
+    const messageId = correlatedId || id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
     this.activeMessageId = messageId;
     const item: MessageReadModel = {
       id: messageId,
@@ -934,7 +989,8 @@ export class RuntimeProjection {
       this.delegatedRuns.set(toolId, next);
       return;
     }
-    this.setDelegatedRun(next);
+    const appendsActivity = Array.isArray(object(object(raw.partialResult).details).activityDelta);
+    this.setDelegatedRun(next, old, appendsActivity);
   }
   private toolEnd(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool"); const old = this.tools.get(toolId);
@@ -942,16 +998,47 @@ export class RuntimeProjection {
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.end", item);
     const previous = this.delegatedRuns.get(toolId);
     const run = projectDelegatedToolEvent("end", toolId, previous, { ...raw, name: item.name }, this.runtime.metrics.userMessages);
-    if (run) this.setDelegatedRun(run);
+    if (run) this.setDelegatedRun(run, previous);
   }
-  private setDelegatedRun(run: DelegatedAgentRunReadModel): void {
+  private setDelegatedRun(run: DelegatedAgentRunReadModel, previous?: DelegatedAgentRunReadModel, appendsActivity = false): void {
     this.delegatedRuns.set(run.id, run);
     trimMap(this.delegatedRuns, MAX_DELEGATED_RUNS);
-    this.publish("delegate.update", structuredClone(run));
+    const publishAppend = previous && (appendsActivity || run.activity === previous.activity
+      || run.activity.length >= previous.activity.length
+        && isDeepStrictEqual(run.activity.slice(0, previous.activity.length), previous.activity));
+    this.publish("delegate.update", structuredClone(publishAppend
+      ? { ...run, activity: run.activity.slice(previous.activity.length), activityMode: "append", activityBase: previous.activity.length }
+      : run));
   }
   private queue(raw: Record<string, unknown>): void { this.runtime.conversation.queue = { steering: Array.isArray(raw.steering) ? raw.steering.length : Number.isSafeInteger(raw.steering) ? Math.max(0, raw.steering as number) : 0, followUp: Array.isArray(raw.followUp) ? raw.followUp.length : Number.isSafeInteger(raw.followUp) ? Math.max(0, raw.followUp as number) : 0 }; this.publish("queue.update", this.runtime.conversation.queue); }
   private retry(raw: Record<string, unknown>, kind: string): void { this.runtime.conversation.retry = { active: kind !== "retry_end" && kind !== "auto_retry_end" && raw.active !== false, attempt: typeof raw.attempt === "number" ? raw.attempt : undefined, maxAttempts: typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined, message: text(raw.message ?? raw.errorMessage ?? raw.finalError, 1_000) || undefined }; this.publish("retry.update", this.runtime.conversation.retry); }
-  private compaction(raw: Record<string, unknown>, kind: string): void { this.runtime.conversation.compaction = { active: kind !== "compaction_end" && raw.active !== false, reason: raw.reason === "manual" || raw.reason === "threshold" || raw.reason === "overflow" ? raw.reason : undefined }; this.publish("compaction.update", this.runtime.conversation.compaction); }
+  private compaction(raw: Record<string, unknown>, kind: string): void {
+    this.runtime.conversation.compaction = {
+      active: kind !== "compaction_end" && raw.active !== false,
+      reason: raw.reason === "manual" || raw.reason === "threshold" || raw.reason === "overflow" ? raw.reason : undefined,
+    };
+    const completed = object(raw.completedMessage);
+    const metadata = compactionMessage(completed.compaction);
+    let item: MessageReadModel | undefined;
+    if (kind === "compaction_end" && metadata && completed.role === "system"
+      && typeof completed.id === "string" && typeof completed.entryId === "string") {
+      const existing = [...this.messages.values()].find((message) => message.entryId === completed.entryId);
+      item = {
+        id: existing?.id ?? id(completed.id, `compaction-${completed.entryId}`),
+        entryId: id(completed.entryId, completed.id),
+        role: "system",
+        text: text(completed.text),
+        streaming: false,
+        ...(createdAt(completed.createdAt) ? { createdAt: createdAt(completed.createdAt) } : {}),
+        systemSource: "pylon-compaction",
+        compaction: metadata,
+      };
+      this.messages.set(item.id, item);
+    }
+    this.publish("compaction.update", item
+      ? { ...this.runtime.conversation.compaction, completedMessage: item }
+      : this.runtime.conversation.compaction);
+  }
   private metrics(raw: Record<string, unknown>): void {
     const current = this.runtime.metrics as unknown as Record<string, unknown>;
     for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "contextTokens", "contextLimit", "contextPercent", "cost", "userMessages", "assistantMessages", "toolCalls"]) {

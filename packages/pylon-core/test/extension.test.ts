@@ -61,6 +61,21 @@ test("Memory reviewer telemetry is persisted without proposal text", () => {
   assert.equal(JSON.stringify(runtime.entries[0]).includes("must not persist"), false);
 });
 
+test("Compaction reviewer telemetry is bounded and excludes transcript content", () => {
+  const runtime = harness();
+  runtime.events.emit("pi-continuity:compaction-review-telemetry", {
+    version: 1, outcome: "reviewed", model: "provider/reviewer", thinking: "low", durationMs: 10,
+    candidateCount: 2, acceptedCount: 1,
+    usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
+    exactQuote: "must not persist",
+  });
+  assert.equal(runtime.entries[0]?.customType, "pi-continuity-compaction-review-telemetry");
+  assert.equal(JSON.stringify(runtime.entries[0]).includes("must not persist"), false);
+  runtime.events.emit("pi-continuity:compaction-review-telemetry", { version: 1, outcome: "failed", model: "provider/reviewer", error: "private transcript" });
+  assert.equal((runtime.entries[1]?.data as any)?.outcome, "failed");
+  assert.equal(JSON.stringify(runtime.entries[1]).includes("private transcript"), false);
+});
+
 test("compact command waits for completion and reports actionable failures", async () => {
   const runtime = harness();
   const notifications: Array<[string, string]> = [];

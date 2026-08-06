@@ -12,6 +12,7 @@ Actions:
 
 - `create` — requires `prompt`; optionally fixes a concise purpose-based `name`, `model`, `thinking`, `systemPrompt`, `tools`, and `disableSpecialists`.
 - `continue` — requires `id` and `prompt`; creation policy cannot change.
+- `recent` — requires `id`; reads bounded recent messages from the authorized active transcript without prompting or waking the child. Optional `limit` defaults to 8 (maximum 50), and `maxChars` defaults to 800 per message (maximum 2,000); total output is capped at 12,000 characters.
 - `list` — lists private threads available from the active parent branch.
 
 Use `spawn_agent` for specialized, resumable conversations that should remain private. `systemPrompt` replaces Pi's default system prompt. `tools` is an allowlist; `[]` disables all tools. `disableSpecialists` defaults to `true` and excludes Advisor, Grunt, and Scout. Creation policy is immutable; continue an existing agent when follow-up context matters. Both pi-spawn tools are always excluded from private agents so private threads cannot escape parent-only access by recursively spawning.
@@ -54,7 +55,7 @@ The parent must be a persisted session. Session IDs are resolved only through na
 
 - `PI_SPAWN_TIMEOUT_MS`: per-turn timeout, default 15 minutes, maximum two hours.
 - Responses: at most 50 KiB or 2,000 lines.
-- Activity: latest 100 child tool events.
+- Activity: every child tool event from the current create, adopt, or continue invocation; individual event text remains bounded.
 - Nested standard-session spawning: maximum process-chain depth 4.
 
 Pi packages and spawned sessions execute with the user's system permissions. A custom subagent system prompt and tool policy are trusted code-execution instructions; review them before use.

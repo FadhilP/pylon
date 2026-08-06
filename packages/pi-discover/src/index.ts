@@ -542,12 +542,23 @@ export class WorkspaceIndex {
         const prior = db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>;
         candidates = new Set([...dirty, ...prior.map((row) => row.path)]);
       }
+      const candidatePaths = [...candidates];
+      const outcomes = new Array<PreparedFile | undefined>(candidatePaths.length);
+      let nextCandidate = 0;
+      const prepareWorker = async () => {
+        for (;;) {
+          const index = nextCandidate++;
+          if (index >= candidatePaths.length) return;
+          outcomes[index] = await this.prepare(identity.root, candidatePaths[index]!, dirty.has(candidatePaths[index]!));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(8, candidatePaths.length) }, prepareWorker));
       const prepared: PreparedFile[] = [];
       const removals: string[] = [];
-      for (const path of candidates) {
-        const file = await this.prepare(identity.root, path, dirty.has(path));
+      for (let index = 0; index < candidatePaths.length; index++) {
+        const file = outcomes[index];
         if (file) prepared.push(file);
-        else removals.push(path.replaceAll("\\", "/"));
+        else removals.push(candidatePaths[index]!.replaceAll("\\", "/"));
       }
       if (inventory) {
         const existing = db.prepare("SELECT path FROM files WHERE repo_id=?").all(repoId) as Array<{ path: string }>;
@@ -612,14 +623,14 @@ export class WorkspaceIndex {
   prune(): Promise<{ removedWorkspaces: number; removedRepositories: number; removedFiles: number }> {
     const next = this.pending.then(async () => {
       const db = this.database();
+      const workspaces = db.prepare("SELECT id,root FROM workspaces").all() as Array<{ id: number; root: string }>;
+      const repositories = db.prepare("SELECT id,root FROM repositories").all() as Array<{ id: number; root: string }>;
+      const missingWorkspaces = (await Promise.all(workspaces.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
+        .filter((id): id is number => id !== undefined);
+      const missingRepositories = (await Promise.all(repositories.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
+        .filter((id): id is number => id !== undefined);
       db.exec("BEGIN IMMEDIATE");
       try {
-        const workspaces = db.prepare("SELECT id,root FROM workspaces").all() as Array<{ id: number; root: string }>;
-        const repositories = db.prepare("SELECT id,root FROM repositories").all() as Array<{ id: number; root: string }>;
-        const missingWorkspaces = (await Promise.all(workspaces.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
-          .filter((id): id is number => id !== undefined);
-        const missingRepositories = (await Promise.all(repositories.map(async (row) => await directoryExists(row.root) ? undefined : row.id)))
-          .filter((id): id is number => id !== undefined);
         let removedWorkspaces = 0;
         let removedRepositories = 0;
         let removedFiles = 0;

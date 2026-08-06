@@ -21,7 +21,7 @@ test("embedded browser polling is fast only during recent activity", () => {
   assert.equal(framePollingDelay(1_000, 1_000), IDLE_FRAME_INTERVAL_MS);
 });
 
-test("command and memory validation allowlists bounded v27 commands and attachments", () => {
+test("command and memory validation allowlists bounded v28 commands and attachments", () => {
   const valid = validateCommand({
     type: "prompt",
     commandId: "command-1",
@@ -102,7 +102,7 @@ test("command and memory validation allowlists bounded v27 commands and attachme
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1, scope: "user" }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings",  packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
-  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { kind: "continuity", memoryEnabled: true, memoryReviewer: { model: "provider/reviewer", thinking: "high" } }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { kind: "continuity", memoryEnabled: true, memoryReviewer: { model: "provider/reviewer", thinking: "high" }, compactionReviewer: { model: "provider/compact", thinking: "low" } }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", models: ["provider/worker"], agentThinkingLevels: ["low", "high"] }, commandId: "spawn-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: [] }, commandId: "spawn-settings-invalid", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "handoffSession", destination: "checkout", commandId: "handoff", expectedGeneration: 1 }).ok, true);
@@ -309,8 +309,8 @@ test("event and snapshot validators reject incompatible versions", () => {
         steering: 0,
         followUp: 2,
         items: [
-          { id: "queue-1", preview: "next", attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" },
-          { id: "queue-2", preview: "after that", attachmentCount: 0, fileAttachmentCount: 0, planMode: false, state: "queued" },
+          { id: "queue-1", commandId: "command-1", preview: "next", attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" },
+          { id: "queue-2", commandId: "command-2", preview: "after that", attachmentCount: 0, fileAttachmentCount: 0, planMode: false, state: "queued" },
         ],
       },
     },
@@ -322,7 +322,7 @@ test("event and snapshot validators reject incompatible versions", () => {
       queue: {
         steering: 0,
         followUp: 1,
-        items: [{ id: "queue-1", preview: "x".repeat(2_001), attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" }],
+        items: [{ id: "queue-1", commandId: "command-1", preview: "x".repeat(2_001), attachmentCount: 1, fileAttachmentCount: 1, planMode: true, state: "queued" }],
       },
     },
   }), false);
@@ -367,6 +367,17 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, messages: [{ ...timedSnapshot.conversation.messages[0], workDurationMs: 8 * 24 * 60 * 60 * 1_000 }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], kind: "unknown" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ kind: "result", tool: "read", text: "x".repeat(2_001) }] }] } }), false);
+  assert.equal(isRuntimeSnapshot({
+    ...timedSnapshot,
+    conversation: {
+      ...timedSnapshot.conversation,
+      delegatedRuns: [{
+        ...timedSnapshot.conversation.delegatedRuns[0],
+        activity: Array.from({ length: 125 }, (_, index) => ({ id: `call-${index}`, kind: "call", tool: "read", text: "{}" })),
+      }],
+    },
+  }), true);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ id: "x".repeat(129), kind: "call", tool: "read" }] }] } }), false);
   const spawnedRun = { ...timedSnapshot.conversation.delegatedRuns[0], kind: "spawn_session", action: "adopt", threadId: "child-session" };
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [spawnedRun] } }), true);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, action: undefined }] } }), false);
@@ -436,6 +447,7 @@ test("StateQL snapshot validation bounds safe session status and history", () =>
     session_id: "s_1",
     actor_id: "pi-session",
     command: "query",
+    sql: "SELECT * FROM users WHERE id = ?",
     handle: "q_1",
     executed: true,
     cached: false,
@@ -456,6 +468,11 @@ test("StateQL snapshot validation bounds safe session status and history", () =>
     history: [entry],
   };
   assert.equal(isStateQLSnapshot(snapshot), true);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, sql: null }] }), true);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, sql: "" }] }), true);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, sql: "é".repeat(2_048) }] }), true);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, sql: "é".repeat(2_049) }] }), false);
+  assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, sql: undefined }] }), false);
   assert.equal(isStateQLSnapshot({ ...snapshot, actor_id: undefined }), false);
   assert.equal(isStateQLSnapshot({ ...snapshot, history: Array(101).fill(entry) }), false);
   assert.equal(isStateQLSnapshot({ ...snapshot, history: [{ ...entry, timestamp: "invalid" }] }), false);

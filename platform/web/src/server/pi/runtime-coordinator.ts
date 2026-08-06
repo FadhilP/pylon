@@ -182,6 +182,7 @@ interface RuntimeSlot {
     model: ModelOptionReadModel;
   };
   pendingApply?: { revision: string };
+  replacementReason?: "fork";
   suppressEvents?: boolean;
   unsubscribe: () => void;
   setupState?: "idle" | "running" | "failed";
@@ -231,6 +232,7 @@ export class RuntimeCoordinator implements PiDriver {
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.target || this.disposed) throw new Error("driver cannot be started twice");
     this.target = target;
+    this.sessionIndex.setAgentDir(target.agentDir);
     this.modelRuntime = this.options.modelRuntime ?? await createPylonModelRuntime(target.agentDir);
     this.projectRegistry = ProjectRegistry.forAgentDir(target.agentDir);
     await this.projectRegistry.load(async () => {
@@ -249,7 +251,7 @@ export class RuntimeCoordinator implements PiDriver {
     this.selectedId = slot.id;
     this.generation = 1;
     await this.wakePinnedSessions(slot.id);
-    this.sleepTimer = setInterval(() => void this.sleepIdleSlots(), this.options.sleepCheckMs ?? SLEEP_CHECK_MS);
+    this.sleepTimer = setInterval(() => void this.sleepIdleSlots().catch(() => undefined), this.options.sleepCheckMs ?? SLEEP_CHECK_MS);
     this.sleepTimer.unref?.();
     return { sessionId: slot.id, sessionGeneration: this.generation };
   }
@@ -290,12 +292,13 @@ export class RuntimeCoordinator implements PiDriver {
       const selectedId = this.selected().id;
       const generation = this.generation;
       const activeIds = new Set(this.registry().listActiveSessionOrder());
+      const pinnedIds = new Set(this.registry().listPinnedSessionIds());
       result = await this.sessionIndex.list(input, {
         activeId: selectedId,
         generation,
         stateFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
         activeFor: (sessionId) => this.slots.has(sessionId) && activeIds.has(sessionId),
-        pinnedFor: (sessionId) => this.registry().isSessionPinned(sessionId),
+        pinnedFor: (sessionId) => pinnedIds.has(sessionId),
         userCountFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().userMessageCount,
         workStartedAtFor: (sessionId) => this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt,
         fallbacks: [...this.slots.values()].map((slot) => {
@@ -373,7 +376,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (!inventory || inventory.expiresAt <= Date.now()
       || inventory.cwd !== cwd || inventory.baselineTree !== record?.baselineTree) {
       await this.refreshWorkspace(slot, true);
-      const collected = await (await inspectGitWorkspace(cwd)
+      const collected = await (slot.workspace?.gitAvailable
         ? collectWorkspaceFiles({ cwd, baselineTree: record?.baselineTree })
         : collectPlainWorkspaceFiles({ cwd }));
       inventory = {
@@ -630,7 +633,7 @@ export class RuntimeCoordinator implements PiDriver {
       let slot = draft;
       try {
         slot = await this.ensureDraftWorkspace(slot);
-        this.sessionIndex.invalidate();
+        this.invalidateSlotSession(slot);
         const result = slot.provisional
           ? await this.commitProvisional(slot).then(() => this.replacement(false))
           : await this.select(slot);
@@ -1043,41 +1046,56 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async deleteSession(input: DeleteSessionInput): Promise<void> {
-    if (this.registry().isSessionArchived(input.sessionId)) throw new Error("restore the session before deleting it");
-    if (input.sessionId === this.selectedId) throw new Error("cannot delete the currently active session");
-    const awake = this.slots.get(input.sessionId);
-    if (awake) {
-      if (!this.slotCanSleep(awake)) throw new Error("cannot delete a running or queued session");
-      await this.disposeSlot(awake);
-    }
-    const selected = this.selected();
-    await selected.driver.deleteSession({ sessionId: input.sessionId });
-    const record = this.registry().workspaceForSession(input.sessionId);
-    const project = record ? this.registry().get(record.projectId) : undefined;
-    if (record?.mode === "checkout" && project && record.commonDir && record.branch
-      && record.parkedRoot && record.parkedCommonDir && record.parkedIndexTree && record.parkedWorktreeTree) {
-      await restoreCheckoutState(project.cwd, {
-        root: record.parkedRoot,
-        commonDir: record.parkedCommonDir,
-        head: record.parkedHead,
-        headRef: record.parkedHeadRef,
-        indexTree: record.parkedIndexTree,
-        worktreeTree: record.parkedWorktreeTree,
-      });
-      await removeSessionBranch(project.cwd, record.branch, record.commonDir);
-    } else if (record?.mode === "worktree" && project && record.worktreePath && record.commonDir && record.branch) {
-      await removeSessionWorktree(project.cwd, {
-        root: record.worktreePath,
-        commonDir: record.commonDir,
-        branch: record.branch,
-      }, this.registry().worktreeRoot(project.id));
-    }
-    await this.registry().removeSessionWorkspace(input.sessionId);
-    await this.registry().removeSessionPolicy(input.sessionId);
-    await this.registry().unpinSession(input.sessionId);
-    await this.registry().deactivateSession(input.sessionId);
-    this.sessionIndex.remove(input.sessionId);
-    this.emitStatus(input.sessionId, "sleeping");
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const registry = this.registry();
+      if (registry.isSessionArchived(input.sessionId)) throw new Error("restore the session before deleting it");
+      if (input.sessionId === this.selectedId) throw new Error("cannot delete the currently active session");
+      const awake = this.slots.get(input.sessionId);
+      if (awake) {
+        if (!this.slotCanSleep(awake)) throw new Error("cannot delete a running or queued session");
+        await this.disposeSlot(awake);
+      }
+      // Lifecycle coordination prevents selection changes; assert again after
+      // disposal before committing the destructive session-file operation.
+      this.assertGeneration(input.expectedGeneration);
+      if (registry.isSessionArchived(input.sessionId) || input.sessionId === this.selectedId) {
+        throw new Error("session changed while deleting");
+      }
+      const selected = this.selected();
+      try {
+        await selected.driver.deleteSession({ sessionId: input.sessionId, expectedGeneration: selected.innerGeneration });
+      } catch (error) {
+        // A previous attempt may have deleted the session file before workspace cleanup failed.
+        if (!(error instanceof Error) || !/session is unavailable/i.test(error.message)) throw error;
+      }
+      const record = registry.workspaceForSession(input.sessionId);
+      const project = record ? registry.get(record.projectId) : undefined;
+      if (record?.mode === "checkout" && project && record.commonDir && record.branch
+        && record.parkedRoot && record.parkedCommonDir && record.parkedIndexTree && record.parkedWorktreeTree) {
+        await restoreCheckoutState(project.cwd, {
+          root: record.parkedRoot,
+          commonDir: record.parkedCommonDir,
+          head: record.parkedHead,
+          headRef: record.parkedHeadRef,
+          indexTree: record.parkedIndexTree,
+          worktreeTree: record.parkedWorktreeTree,
+        });
+        await removeSessionBranch(project.cwd, record.branch, record.commonDir);
+      } else if (record?.mode === "worktree" && project && record.worktreePath && record.commonDir && record.branch) {
+        await removeSessionWorktree(project.cwd, {
+          root: record.worktreePath,
+          commonDir: record.commonDir,
+          branch: record.branch,
+        }, registry.worktreeRoot(project.id));
+      }
+      await registry.removeSessionWorkspace(input.sessionId);
+      await registry.removeSessionPolicy(input.sessionId);
+      await registry.unpinSession(input.sessionId);
+      await registry.deactivateSession(input.sessionId);
+      this.sessionIndex.remove(input.sessionId);
+      this.emitStatus(input.sessionId, "sleeping");
+    });
   }
 
   async renameSession(input: RenameSessionInput): Promise<void> {
@@ -1199,8 +1217,15 @@ export class RuntimeCoordinator implements PiDriver {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
     const previousId = slot.id;
+    if (slot.replacementReason) throw new Error("session replacement is already in progress");
     slot.lastActivityAt = Date.now();
-    const forked = await slot.driver.fork({ ...input, expectedGeneration: slot.innerGeneration });
+    slot.replacementReason = "fork";
+    let forked: ReplacementResult;
+    try {
+      forked = await slot.driver.fork({ ...input, expectedGeneration: slot.innerGeneration });
+    } finally {
+      slot.replacementReason = undefined;
+    }
     if (forked.cancelled) return this.replacement(true);
     slot.lastActivityAt = Date.now();
     slot.receivedInput = true;
@@ -1626,7 +1651,7 @@ export class RuntimeCoordinator implements PiDriver {
       await this.registry().activateSession(slot.id).catch(() => undefined);
       this.emitProjectsChanged();
     }
-    this.sessionIndex.invalidate();
+    this.invalidateSlotSession(slot);
     return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
   }
 
@@ -1637,7 +1662,8 @@ export class RuntimeCoordinator implements PiDriver {
     slot.provisional = undefined;
     await this.disposeSlot(provisional.previous);
     if (provisional.oldSessionPath) await unlink(provisional.oldSessionPath).catch(() => {});
-    this.sessionIndex.invalidate();
+    this.sessionIndex.remove(provisional.previous.id);
+    this.invalidateSlotSession(slot);
     this.emitProjectsChanged();
   }
 
@@ -2134,7 +2160,8 @@ export class RuntimeCoordinator implements PiDriver {
       slot.id = event.sessionId;
       if (oldId !== slot.id && !slot.suppressEvents) {
         if (this.slots.has(slot.id)) throw new Error("session replacement collided with an active runtime");
-        void this.registry().rekeySession(oldId, slot.id).catch(() => undefined);
+        const reason = event.type === "session.replaced" ? slot.replacementReason : undefined;
+        void this.registry().rekeySession(oldId, slot.id, reason).catch(() => undefined);
       }
       this.slots.delete(oldId);
       this.slots.set(slot.id, slot);
@@ -2417,6 +2444,7 @@ export class RuntimeCoordinator implements PiDriver {
       followUp: slot.nativeQueue.followUp + slot.queuedPrompts.length,
       items: slot.queuedPrompts.map((queued) => ({
         id: queued.id,
+        commandId: queued.commandId,
         preview: queued.message.replace(/\s+/g, " ").trim().slice(0, 2_000),
         attachmentCount: queued.images?.length ?? 0,
         fileAttachmentCount: queued.files?.length ?? 0,
@@ -2550,6 +2578,11 @@ export class RuntimeCoordinator implements PiDriver {
       sessionGeneration: this.generation,
       payload: { type: "session_controls_changed" },
     });
+  }
+
+  private invalidateSlotSession(slot: RuntimeSlot): void {
+    const details = slot.driver.runtimeDetails();
+    this.sessionIndex.invalidateSession(details.sessionId, details.sessionPath, details.cwd);
   }
 
   private baseTarget(): RuntimeTarget {
@@ -2754,15 +2787,20 @@ export class RuntimeCoordinator implements PiDriver {
   private async sleepIdleSlots(): Promise<void> {
     const now = Date.now();
     for (const slot of [...this.slots.values()]) {
-      if (!slot.receivedInput && slot.driver.runtimeDetails().userMessageCount === 0) continue;
-      const sleepAfterMs = slot.receivedInput
-        ? this.options.sleepAfterMs ?? SLEEP_AFTER_MS
-        : this.options.viewOnlySleepAfterMs ?? VIEW_ONLY_SLEEP_AFTER_MS;
-      if (slot.id === this.selectedId || slot.pinned || now - slot.lastActivityAt < sleepAfterMs || !this.slotCanSleep(slot)) continue;
-      await this.registry().deactivateSession(slot.id);
-      await this.disposeSlot(slot);
-      this.emitStatus(slot.id, "sleeping");
-      this.emitProjectsChanged();
+      try {
+        if (!slot.receivedInput && slot.driver.runtimeDetails().userMessageCount === 0) continue;
+        const sleepAfterMs = slot.receivedInput
+          ? this.options.sleepAfterMs ?? SLEEP_AFTER_MS
+          : this.options.viewOnlySleepAfterMs ?? VIEW_ONLY_SLEEP_AFTER_MS;
+        if (slot.id === this.selectedId || slot.pinned || now - slot.lastActivityAt < sleepAfterMs || !this.slotCanSleep(slot)) continue;
+        await this.registry().deactivateSession(slot.id);
+        await this.disposeSlot(slot);
+        this.emitStatus(slot.id, "sleeping");
+        this.emitProjectsChanged();
+      } catch {
+        // Timer work is best-effort: one broken slot must not make this
+        // interval reject or prevent later idle slots from being processed.
+      }
     }
   }
 

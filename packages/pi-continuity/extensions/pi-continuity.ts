@@ -5,6 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
   getAgentDir,
+  SettingsManager,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -56,10 +57,9 @@ import {
   userMessageText,
 } from "../src/memory-review.ts";
 import { hasPendingV4Migration, isMigrationJournal, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
-import { reviewerBackedV4MigrationPolicy, MEMORY_V5_ROLLOUT, type MemoryRolloutPolicy } from "../src/memory-rollout.ts";
 import { assertSafe } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
-import { buildContext, promptQuery, shortlistNotes, shortlistResolvedNotes } from "../src/context.ts";
+import { buildContext, promptQuery, shortlistNotes } from "../src/context.ts";
 import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidenceRanges, currentChangedPaths, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
@@ -80,7 +80,8 @@ import {
   type RunEntry,
 } from "../src/run.ts";
 import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
-import { buildContinuityCompaction } from "../src/compaction.ts";
+import { finalizeContinuityCompaction, prepareContinuityCompaction, type CompactionSupplement } from "../src/compaction.ts";
+import { buildCompactionReviewPacket, callCompactionReviewer } from "../src/compaction-review.ts";
 import { canUseBroadRecall, recallSession } from "../src/recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
@@ -194,6 +195,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     lastPrompt = "",
     memoryEnabled = true,
     memoryInjectionEnabled = true,
+    memoryContextToken: string | undefined,
     legacyMigrationAvailable = false,
     activeSessionContext: any,
     tasksVisible = true,
@@ -205,6 +207,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     pendingMutations = new Map<string, string | undefined>(),
     deniedToolCalls = new Set<string>(),
     seenMutationMessages = new Set<string>(),
+    terminatingToolCalls = new Set<string>(),
+    automaticCompaction: { sessionGeneration: number; taskGeneration: number; sessionId: string } | undefined,
     sharedWorktreeObserver = false,
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
@@ -365,7 +369,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     project = await resolveProject(currentCwd);
     const query = promptQuery(latest, active);
     if (!query) return { query, notes: [] as NotebookNote[] };
-    return { query, notes: shortlistResolvedNotes(notesForOwners(memoryNotes, project.owner), query, 2) };
+    return { query, notes: notesForOwners(memoryNotes, project.owner) };
   };
   const projectMemory = () => project
     ? memoryNotes.filter((note) => note.scope === "project" && note.owner === project!.owner)
@@ -408,7 +412,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         const allowed = new Set(["version", "sessionId", "expectedGeneration", "action", "respond"]);
         if (Object.keys(request).some((key) => !allowed.has(key))) throw Error("invalid memory migration fields");
         if (!activeSessionContext || !legacyMigrationAvailable) throw Error("V4 memory migration is unavailable or already changed");
-        const migration = await runV4Migration(activeSessionContext, requestedSession, reviewerBackedV4MigrationPolicy);
+        const migration = await runV4Migration(activeSessionContext, requestedSession);
         if (leasedSessionId !== requestedSession || sessionGeneration !== requestedGeneration || currentCwd !== requestedCwd) throw Error("Continuity memory migration became stale");
         legacyMigrationAvailable = await hasPendingV4Migration(root);
         if (migration.migrated) emitMemoryOutcome("migration_committed");
@@ -521,7 +525,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     });
     publishState();
   });
-  const runV4Migration = async (ctx: any, expectedSession: string, rolloutPolicy?: MemoryRolloutPolicy) => {
+  const runV4Migration = async (ctx: any, expectedSession: string) => {
     const expectedGeneration = sessionGeneration, expectedTaskGeneration = memoryTaskGeneration, expectedCwd = currentCwd;
     const resolved = await resolveProject(expectedCwd), expectedOwner = resolved.owner, expectedWorkspaceId = workspace?.id;
     if (!expectedWorkspaceId) throw Error("migration workspace identity is unavailable");
@@ -535,7 +539,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     for (const item of all) if (item.projectOwner) ownerRoots.set(item.projectOwner, item.canonicalPath);
     ownerRoots.set(expectedOwner, expectedCwd);
     return migrateV4({
-      root, ownerRoots, model, auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env }, profile, sessionId: expectedSession, rolloutPolicy,
+      root, ownerRoots, model, auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env }, profile, sessionId: expectedSession,
       onTelemetry: (value) => pi.events.emit("pi-continuity:memory-migration-telemetry", { version: 1, model: modelName(model), thinking: profile.thinking, ...value }),
       commitAll: async (imported) => withStateLock(memoryDirectory(), async () => {
         if (leasedSessionId !== expectedSession || sessionGeneration !== expectedGeneration || memoryTaskGeneration !== expectedTaskGeneration || currentCwd !== expectedCwd
@@ -692,6 +696,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     pendingMutations.clear();
     deniedToolCalls.clear();
     seenMutationMessages.clear();
+    terminatingToolCalls.clear();
+    automaticCompaction = undefined;
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1 && entry.data.sessionId === sessionId) as any)
@@ -779,7 +785,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       && !(latestVerification?.state === "passed" && latestVerification.sessionId === sessionId && latestVerification.worktreeId === startupIdentity);
     if (memoryEnabled) {
       try {
-        const migration = await runV4Migration(ctx, sessionId, reviewerBackedV4MigrationPolicy);
+        const migration = await runV4Migration(ctx, sessionId);
         if (migration.migrated) emitMemoryOutcome("migration_committed");
       } catch (error: any) {
         emitMemoryOutcome("migration_failed");
@@ -797,6 +803,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => withMemoryLifecycle(async () => {
     sessionGeneration++;
     activeSessionContext = undefined;
+    automaticCompaction = undefined;
+    terminatingToolCalls.clear();
     legacyMigrationAvailable = false;
     pendingApproval = undefined;
     approvalContext = undefined;
@@ -823,6 +831,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   }));
   pi.on("agent_start", (_e, ctx) => {
     awaitingClarificationProse = false;
+    terminatingToolCalls.clear();
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
   pi.on("agent_settled", async (_e, ctx) => {
@@ -868,6 +877,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
       pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
+  pi.on("tool_execution_end", (event) => {
+    if ((event.result as any)?.terminate === true) terminatingToolCalls.add(event.toolCallId);
+    else terminatingToolCalls.delete(event.toolCallId);
+  });
   pi.on("tool_result", async (event, ctx) => {
     if (deniedToolCalls.delete(event.toolCallId)) {
       pendingMutations.delete(event.toolCallId);
@@ -889,41 +902,141 @@ export default function continuityExtension(pi: ExtensionAPI) {
       reviewCalledThisTask = false;
     }
   });
+  pi.on("turn_end", (event, ctx) => {
+    const toolResults = Array.isArray(event.toolResults) ? event.toolResults : [];
+    const hasToolCalls = Array.isArray((event.message as any)?.content) &&
+      (event.message as any).content.some((part: any) => part?.type === "toolCall");
+    if (!toolResults.length || !hasToolCalls) return;
+    const allTerminating = toolResults.every((result: any) => terminatingToolCalls.has(result.toolCallId));
+    for (const result of toolResults as any[]) terminatingToolCalls.delete(result.toolCallId);
+    if (allTerminating || automaticCompaction || ctx.signal?.aborted || ctx.hasPendingMessages()) return;
+
+    const usage = ctx.getContextUsage();
+    if (usage?.tokens == null || !Number.isFinite(usage.tokens) || !Number.isFinite(usage.contextWindow) || usage.contextWindow <= 0) return;
+    const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
+      projectTrusted: ctx.isProjectTrusted?.() ?? false,
+    }).getCompactionSettings();
+    if (!settings.enabled || usage.tokens <= usage.contextWindow - settings.reserveTokens) return;
+
+    const request = {
+      sessionGeneration,
+      taskGeneration: memoryTaskGeneration,
+      sessionId: ctx.sessionManager.getSessionId(),
+    };
+    automaticCompaction = request;
+    try {
+      ctx.compact({
+        onComplete: () => {
+          if (automaticCompaction !== request) return;
+          automaticCompaction = undefined;
+          if (
+            sessionGeneration !== request.sessionGeneration ||
+            memoryTaskGeneration !== request.taskGeneration ||
+            activeSessionContext !== ctx ||
+            ctx.sessionManager.getSessionId() !== request.sessionId ||
+            !ctx.isIdle() ||
+            ctx.hasPendingMessages()
+          ) return;
+          pi.sendMessage({
+            customType: "pi-continuity-resume",
+            content: "Continue the unfinished task from the compaction checkpoint. Do not repeat completed work or wait for another user prompt.",
+            display: false,
+            details: { version: 1, reason: "mid-task-compaction" },
+          }, { triggerTurn: true });
+        },
+        onError: () => {
+          if (automaticCompaction === request) automaticCompaction = undefined;
+        },
+      });
+    } catch {
+      if (automaticCompaction === request) automaticCompaction = undefined;
+    }
+  });
   const activeWork = () =>
     work && !["handed_off", "completed", "cancelled"].includes(work.mode)
       ? work
       : undefined;
-  pi.on("session_before_compact", async (event) => {
+  pi.on("session_before_compact", async (event, ctx) => {
+    // Manual compaction is already waiting for the run to settle. Cancel Pi's
+    // duplicate post-run auto-compaction so the manual callback can resume work.
+    if (automaticCompaction && event.reason !== "manual") return { cancel: true };
     const active = activeWork();
-    if (!active) return;
-    const missingIdentity = !active.runId || !active.timelineId;
-    if (!active.runId) active.runId = randomUUID();
-    if (!active.timelineId) active.timelineId = active.runId;
-    if (missingIdentity) await saveWork();
-    const identity = latestVerification ? await worktreeFingerprint(currentCwd) : undefined;
-    const verification = identity && latestVerification?.worktreeId === identity
-      ? latestVerification
-      : undefined;
-    const compaction = buildContinuityCompaction({
+    if (active) {
+      const missingIdentity = !active.runId || !active.timelineId;
+      if (!active.runId) active.runId = randomUUID();
+      if (!active.timelineId) active.timelineId = active.runId;
+      if (missingIdentity) await saveWork();
+    }
+    const identity = active && latestVerification ? await worktreeFingerprint(currentCwd) : undefined;
+    const verification = identity && latestVerification?.worktreeId === identity ? latestVerification : undefined;
+    const draft = prepareContinuityCompaction({
       branchEntries: event.branchEntries,
       preparation: event.preparation,
-      work: active,
-      verification,
+      ...(active ? { work: active, verification } : {}),
     });
-    return compaction ? { compaction } : { cancel: true };
+    if (!draft) return { cancel: true };
+
+    const focus = event.customInstructions?.trim();
+    const profile = (await loadConfig()).compactionReviewer;
+    if (focus && !profile) throw Error("Compaction review instructions require a configured Compaction Reviewer.");
+    let additions: CompactionSupplement[] = [];
+    if (profile) {
+      try {
+        const packet = buildCompactionReviewPacket({
+          canonicalSummary: draft.canonical.summary,
+          sources: draft.reviewSources,
+          ...(focus ? { focus } : {}),
+        });
+        if (packet) {
+          const model = await configuredModel(ctx, profile);
+          if (!model) throw Error("configured model or credentials are unavailable");
+          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+          if (!auth.ok || !auth.apiKey) throw Error("configured model has no credentials");
+          const reviewed = await callCompactionReviewer({
+            model,
+            auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
+            profile,
+            packet,
+            sessionId: leasedSessionId,
+            signal: event.signal,
+          });
+          additions = reviewed.supplements;
+          pi.events.emit("pi-continuity:compaction-review-telemetry", {
+            version: 1,
+            outcome: "reviewed",
+            ...reviewed.telemetry,
+          });
+        } else if (focus) {
+          ctx.ui?.notify?.("Compaction used deterministic output; no discarded transcript was available for review.", "warning");
+        }
+      } catch (error: any) {
+        if (event.signal?.aborted) throw error;
+        pi.events.emit("pi-continuity:compaction-review-telemetry", {
+          version: 1,
+          outcome: "failed",
+          model: profile.model,
+        });
+        if (focus) ctx.ui?.notify?.(`Compaction reviewer failed; deterministic output was used without review focus. ${error?.message ?? String(error)}`, "warning");
+      }
+    }
+    return { compaction: finalizeContinuityCompaction(draft.canonical, [...draft.priorSupplements, ...additions]) };
   });
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (event) => {
+    memoryContextToken = undefined;
     if (!memoryEnabled || !memoryInjectionEnabled) return;
-    const visible = await visibleNotes(lastPrompt, activeWork());
+    const visible = await visibleNotes(event.prompt, activeWork());
     const text = buildContext(undefined, visible.notes, visible.query, 100, [], { resolvedQuery: true });
-    if (text)
+    if (text) {
+      memoryContextToken = randomUUID();
       return {
         message: {
           customType: "pi-continuity-memory",
           content: text,
           display: false,
+          details: { version: 1, token: memoryContextToken },
         },
       };
+    }
   });
   pi.on("context", (event) => {
     for (const message of event.messages as any[]) {
@@ -942,10 +1055,22 @@ export default function continuityExtension(pi: ExtensionAPI) {
         break;
       }
     }
-    const messages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
+    const boundedMessages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
+    let currentMemory = -1;
+    for (let index = boundedMessages.length - 1; index >= 0; index--) {
+      const message = boundedMessages[index] as any;
+      if (message?.role === "custom" && message.customType === "pi-continuity-memory"
+        && message.details?.version === 1 && message.details.token === memoryContextToken) {
+        currentMemory = index;
+        break;
+      }
+    }
+    const messages = boundedMessages.filter((message: any, index: number) =>
+      message?.role !== "custom" || message.customType !== "pi-continuity-memory" || index === currentMemory);
+    const contextChanged = boundary >= 0 || messages.length !== event.messages.length;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
     const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
-    if (!text) return boundary >= 0 ? { messages } : undefined;
+    if (!text) return contextChanged ? { messages } : undefined;
     return {
       messages: [
         ...messages,
@@ -1673,22 +1798,22 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   pi.registerCommand("plan", planCommand);
   pi.registerCommand("continuity", {
-    description: "Configure planner/executor models or show status",
+    description: "Configure Continuity models or show status",
     handler: async (args, ctx) => {
       const [roleRaw, ...rest] = args.trim().split(/\s+/);
-      const role = roleRaw as "planner" | "executor" | "memoryReviewer";
+      const role = roleRaw as "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
       const value = rest.join(" ");
       const config = await loadConfig();
       if (!roleRaw || roleRaw === "status") {
         ctx.ui.notify(
-          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}`,
+          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${config.compactionReviewer?.model ?? "not configured"} · thinking: ${config.compactionReviewer?.thinking ?? "default"}`,
           "info",
         );
         return;
       }
-      if (!(["planner", "executor", "memoryReviewer"] as string[]).includes(role)) {
+      if (!(["planner", "executor", "memoryReviewer", "compactionReviewer"] as string[]).includes(role)) {
         ctx.ui.notify(
-          "Usage: /continuity [status|planner|executor|memoryReviewer] [provider/model[:thinking]|reset]",
+          "Usage: /continuity [status|planner|executor|memoryReviewer|compactionReviewer] [provider/model[:thinking]|reset]",
           "info",
         );
         return;
@@ -1696,7 +1821,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (value === "reset") {
         await updateConfig((current) => { const next = { ...current }; delete next[role]; return next; });
         ctx.ui.notify(
-          role === "memoryReviewer" ? "Memory Reviewer reset; memory proposals are unavailable." : `${role} reset; uses current session model and thinking.`,
+          role === "memoryReviewer"
+            ? "Memory Reviewer reset; memory proposals are unavailable."
+            : role === "compactionReviewer"
+              ? "Compaction Reviewer reset; compaction remains deterministic without supplemental review."
+              : `${role} reset; uses current session model and thinking.`,
           "info",
         );
         return;
@@ -1765,7 +1894,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for V4 memory migration.", "error");
         if (!(await ctx.ui.confirm("Migrate Memory V4 to V5?", "A configured Memory Reviewer will normalize the preserved V4 facts. Backups are retained and /memory rollback remains available until the next V5 write."))) return;
         try {
-          const migration = await withMemoryLifecycle(() => runV4Migration(ctx, leasedSessionId, reviewerBackedV4MigrationPolicy));
+          const migration = await withMemoryLifecycle(() => runV4Migration(ctx, leasedSessionId));
           legacyMigrationAvailable = await hasPendingV4Migration(root); publishState();
           if (!migration.migrated) return void ctx.ui.notify("No V4 migration was performed; the source is absent, already migrated, or the migration was previously rolled back.", "info");
           emitMemoryOutcome("migration_committed");
@@ -1855,8 +1984,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         } catch (error: any) { ctx.ui.notify(error?.message ?? "Memory delete failed.", "error"); }
         return;
       }
-      const gates = Object.entries(MEMORY_V5_ROLLOUT).map(([name, gate]) => `${name}=${gate.enabled ? "enabled" : "pending"}`).join(", ");
-      ctx.ui.notify(`Injection ${memoryInjectionEnabled ? "on" : "off"}; ${notesForOwners(memoryNotes, project.owner).length} current-owner notes. Rollout: ${gates}. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`, "info");
+      ctx.ui.notify(`Injection ${memoryInjectionEnabled ? "on" : "off"}; ${notesForOwners(memoryNotes, project.owner).length} current-owner notes. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`, "info");
     },
   });
 }

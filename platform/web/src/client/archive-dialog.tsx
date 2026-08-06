@@ -16,9 +16,12 @@ export function ArchiveDialog({ revision, onClose, onError }: ArchiveDialogProps
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
+  const requestRevision = useRef(0);
 
   const load = async (cursor?: string) => {
+    const revision = ++requestRevision.current;
     const result = await runtimeStore.listArchived({ query: query.trim() || undefined, cursor, limit: 20 });
+    if (revision !== requestRevision.current) return;
     setSnapshot((current) => cursor && current ? {
       ...result,
       sessions: [...current.sessions, ...result.sessions.filter((session) => !current.sessions.some((old) => old.id === session.id))],
@@ -33,14 +36,15 @@ export function ArchiveDialog({ revision, onClose, onError }: ArchiveDialogProps
 
   useEffect(() => {
     let active = true;
+    const request = ++requestRevision.current;
     setLoading(true);
     const timer = window.setTimeout(() => {
       void runtimeStore.listArchived({ query: query.trim() || undefined, limit: 20 })
-        .then((result) => { if (active) setSnapshot(result); })
+        .then((result) => { if (active && request === requestRevision.current) setSnapshot(result); })
         .catch((error) => { if (active) onError(error, "Unable to load archived items"); })
         .finally(() => { if (active) setLoading(false); });
     }, query ? 200 : 0);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => { active = false; requestRevision.current++; window.clearTimeout(timer); };
   }, [query, revision]);
 
   const restoreProject = async (projectId: string) => {

@@ -734,7 +734,7 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
   }
 });
 
-test("real StateQL integration persists commands and exposes a non-recording safe snapshot", async () => {
+test("real StateQL integration persists commands and exposes bounded SQL snapshot history", async () => {
   const home = await mkdtemp(join(tmpdir(), "pi-stateql-integration-"));
   const previousHome = process.env.STQL_HOME;
   process.env.STQL_HOME = home;
@@ -762,7 +762,10 @@ test("real StateQL integration persists commands and exposes a non-recording saf
     assert.ok(response);
     const first = await response;
     assert.deepEqual(first.history.map((entry) => entry.command), ["doctor", "query", "exec", "connect"]);
-    assert.equal(JSON.stringify(first).includes("CREATE TABLE"), false);
+    assert.equal(first.history.find((entry) => entry.command === "query")?.sql, "SELECT id, name FROM users ORDER BY id LIMIT 5");
+    assert.equal(first.history.find((entry) => entry.command === "exec")?.sql, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    assert.equal(first.history.find((entry) => entry.command === "doctor")?.sql, null);
+    assert.equal(first.history.find((entry) => entry.command === "connect")?.sql, null);
     const before = JSON.stringify(first);
 
     let repeated: Promise<StateQLSnapshot> | undefined;

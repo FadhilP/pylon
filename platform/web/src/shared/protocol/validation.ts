@@ -134,7 +134,7 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       && validThinkingList(value.thinkingLevels);
   }
   if (value.kind === "continuity") {
-    return typeof value.memoryEnabled === "boolean" && ["planner", "executor", "memoryReviewer"].every((key) => {
+    return typeof value.memoryEnabled === "boolean" && ["planner", "executor", "memoryReviewer", "compactionReviewer"].every((key) => {
       const profile = value[key];
       return profile === undefined || record(profile)
         && boundedString(profile.model, 400)
@@ -465,6 +465,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
   return value.history.every((item) => record(item) && identifier(item.command_id)
     && typeof item.timestamp === "string" && item.timestamp.length <= 64 && !Number.isNaN(Date.parse(item.timestamp))
     && identifier(item.session_id) && identifier(item.actor_id) && boundedString(item.command, 100)
+    && (item.sql === null || typeof item.sql === "string" && new TextEncoder().encode(item.sql).byteLength <= 4_096)
     && (item.handle === null || identifier(item.handle))
     && typeof item.executed === "boolean" && typeof item.cached === "boolean" && typeof item.success === "boolean"
     && (item.error_code === null || boundedString(item.error_code, 100)));
@@ -511,7 +512,7 @@ function validDelegatedRun(value: unknown): boolean {
     || !delegatedAgentKinds.has(String(value.kind))
     || !Number.isSafeInteger(value.turn) || (value.turn as number) < 0
     || !["running", "completed", "failed"].includes(String(value.status))
-    || !Array.isArray(value.activity) || value.activity.length > 100) return false;
+    || !Array.isArray(value.activity)) return false;
   if (value.request !== undefined && (typeof value.request !== "string" || value.request.length > 8 * 1024)) return false;
   if (value.response !== undefined && (typeof value.response !== "string" || value.response.length > MAX_MESSAGE_LENGTH)) return false;
   if (value.agentName !== undefined && !boundedString(value.agentName, 24)) return false;
@@ -531,10 +532,18 @@ function validDelegatedRun(value: unknown): boolean {
         && (usage[key] as number) >= 0)) return false;
   }
   return value.activity.every((item) => record(item)
+    && (item.id === undefined || identifier(item.id))
     && ["call", "result"].includes(String(item.kind))
     && boundedString(item.tool, 200)
     && (item.text === undefined || typeof item.text === "string" && item.text.length <= 2_000)
     && (item.isError === undefined || typeof item.isError === "boolean"));
+}
+
+function validCompactionMessage(value: unknown): boolean {
+  return record(value)
+    && Number.isSafeInteger(value.contextAfterTokens) && (value.contextAfterTokens as number) >= 0
+    && (value.sourceEntryCount === undefined
+      || Number.isSafeInteger(value.sourceEntryCount) && (value.sourceEntryCount as number) >= 0);
 }
 
 function validHistoryMessage(message: unknown): boolean {
@@ -549,6 +558,7 @@ function validHistoryMessage(message: unknown): boolean {
     && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount)
       && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
     && (message.systemSource === undefined || typeof message.systemSource === "string" && message.systemSource.length <= 200)
+    && (message.compaction === undefined || validCompactionMessage(message.compaction))
     && (message.tool === undefined || record(message.tool)
       && identifier(message.tool.id)
       && boundedString(message.tool.name)
@@ -744,6 +754,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
         && (file.binary === true || Number.isSafeInteger(file.additions) && (file.additions as number) >= 0
           && Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0)))
     && (message.systemSource === undefined || typeof message.systemSource === "string" && message.systemSource.length <= 200)
+    && (message.compaction === undefined || validCompactionMessage(message.compaction))
     && (message.tool === undefined || record(message.tool)
       && identifier(message.tool.id)
       && boundedString(message.tool.name)
@@ -758,6 +769,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     || typeof conversation.retry.active !== "boolean" || typeof conversation.compaction.active !== "boolean") return false;
   if (conversation.queue.items !== undefined && (!Array.isArray(conversation.queue.items)
     || conversation.queue.items.length > 100 || !conversation.queue.items.every((item) => record(item) && identifier(item.id)
+      && identifier(item.commandId)
       && typeof item.preview === "string" && item.preview.length <= 2_000
       && Number.isSafeInteger(item.attachmentCount) && (item.attachmentCount as number) >= 0
       && (item.attachmentCount as number) <= MAX_IMAGES

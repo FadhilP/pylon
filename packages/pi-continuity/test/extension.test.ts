@@ -124,6 +124,225 @@ test("package settings disable durable memory while keeping planning and recall"
   }
 });
 
+test("memory retrieval uses the expanded prompt and outgoing context keeps only its newest injection", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-injection-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    const now = new Date().toISOString();
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
+      ...emptyMemoryState(), revision: 1, updatedAt: now,
+      notes: [{
+        id: serverNoteId(), scope: "user", owner: "default",
+        trigger: "package configuration changes", guidance: "Restart runtime services.",
+        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
+        revision: 1, createdAt: now, updatedAt: now,
+      }],
+    });
+    const app = runtime();
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json",
+      sessionManager: {
+        getSessionId: () => "memory-injection", getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "unrelated raw input" });
+
+    const injected = await app.handlers.get("before_agent_start")![0]({ prompt: "package configuration runtime" }, ctx);
+    assert.match(injected.message.content, /Restart runtime services/);
+
+    const oldMemory = { role: "custom", customType: "pi-continuity-memory", content: "old memory", display: false };
+    const currentMemory = { role: "custom", ...injected.message };
+    let result = await app.handlers.get("context")![0]({ messages: [oldMemory, { role: "user", content: "request" }, currentMemory] }, ctx);
+    assert.deepEqual(result.messages, [{ role: "user", content: "request" }, currentMemory]);
+
+    assert.equal(await app.handlers.get("before_agent_start")![0]({ prompt: "unrelated topic" }, ctx), undefined);
+    result = await app.handlers.get("context")![0]({ messages: [currentMemory, { role: "user", content: "unrelated topic" }] }, ctx);
+    assert.deepEqual(result.messages, [{ role: "user", content: "unrelated topic" }]);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("manual and automatic compaction always use deterministic Continuity output", async () => {
+  await saveConfig({ version: 2, memoryEnabled: true });
+  const app = runtime();
+  const compact = app.handlers.get("session_before_compact")![0];
+  const message = (id: string, role: string, text: string, parentId: string | null) => ({
+    id, parentId, type: "message", timestamp: Date.now(),
+    message: { role, content: [{ type: "text", text }], timestamp: Date.now() },
+  });
+  const branch = [
+    message("old-user", "user", "Keep old sessions compatible", null),
+    message("old-assistant", "assistant", "Use deterministic extraction", "old-user"),
+    message("current", "user", "Current request", "old-assistant"),
+    message("suffix", "assistant", "Current response", "current"),
+  ];
+  const event = (reason: string, customInstructions?: string) => ({
+    branchEntries: branch,
+    preparation: { firstKeptEntryId: "suffix", tokensBefore: 42_000, settings: { keepRecentTokens: 1 } },
+    reason, willRetry: false, customInstructions,
+    signal: new AbortController().signal,
+  });
+  const notices: string[] = [];
+  const ctx: any = {
+    modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+    ui: { notify: (text: string) => notices.push(text) },
+  };
+
+  for (const reason of ["manual", "threshold"]) {
+    const result = await compact(event(reason), ctx);
+    assert.equal(result.compaction.details.mode, "generic");
+    assert.match(result.compaction.summary, /Deterministic Transcript Context/);
+  }
+  await assert.rejects(compact(event("manual", "focus on decisions"), ctx), /configured Compaction Reviewer/);
+
+  await saveConfig({ version: 2, memoryEnabled: true, compactionReviewer: { model: "provider/reviewer" } });
+  const fallback = await compact(event("manual"), ctx);
+  assert.equal(fallback.compaction.details.mode, "generic");
+  assert.equal(fallback.compaction.details.supplements.length, 0);
+});
+
+test("over-threshold tool work compacts and resumes through public extension APIs", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-mid-task-compact-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: false });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+      compaction: { enabled: true, reserveTokens: 30_000 },
+    }));
+    const app = runtime();
+    const compactCalls: any[] = [];
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json", signal: new AbortController().signal,
+      isIdle: () => true,
+      isProjectTrusted: () => false,
+      hasPendingMessages: () => false,
+      getContextUsage: () => ({ tokens: 250_000, contextWindow: 272_000, percent: 91.9 }),
+      compact: (options: any) => compactCalls.push(options),
+      sessionManager: {
+        getSessionId: () => "mid-task-session", getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    for (const handler of app.handlers.get("tool_execution_end") ?? [])
+      await handler({ toolCallId: "call-1", result: { terminate: false } }, ctx);
+    for (const handler of app.handlers.get("turn_end") ?? []) await handler({
+      message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }] },
+      toolResults: [{ role: "toolResult", toolCallId: "call-1" }],
+    }, ctx);
+
+    assert.equal(compactCalls.length, 1, "custom reserveTokens threshold should trigger before Pi's default threshold");
+    const duplicateAutoCompact = await app.handlers.get("session_before_compact")![0]({ reason: "threshold" }, ctx);
+    assert.deepEqual(duplicateAutoCompact, { cancel: true });
+    assert.equal(app.customMessages.length, 0);
+    compactCalls[0].onComplete();
+    assert.equal(app.customMessages.length, 1);
+    assert.deepEqual(app.customMessages[0].options, { triggerTurn: true });
+    assert.equal(app.customMessages[0].message.customType, "pi-continuity-resume");
+    assert.equal(app.customMessages[0].message.display, false);
+    assert.match(app.customMessages[0].message.content, /Continue the unfinished task/);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mid-task compaction respects termination, cancellation, pending input, failure, and shutdown", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-mid-task-guards-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: false });
+    const app = runtime();
+    const compactCalls: any[] = [];
+    let pending = false, compactThrows = false;
+    const ctx: any = {
+      cwd, hasUI: false, mode: "json", signal: new AbortController().signal,
+      isIdle: () => true,
+      isProjectTrusted: () => false,
+      hasPendingMessages: () => pending,
+      getContextUsage: () => ({ tokens: 260_000, contextWindow: 272_000, percent: 95.6 }),
+      compact: (options: any) => {
+        if (compactThrows) throw Error("synchronous compact failure");
+        compactCalls.push(options);
+      },
+      sessionManager: {
+        getSessionId: () => "guarded-mid-task-session", getSessionFile: () => undefined,
+        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+      },
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    const finishToolTurn = async (id: string, terminate = false) => {
+      for (const handler of app.handlers.get("tool_execution_end") ?? [])
+        await handler({ toolCallId: id, result: { terminate } }, ctx);
+      for (const handler of app.handlers.get("turn_end") ?? []) await handler({
+        message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id, name: "read", arguments: {} }] },
+        toolResults: [{ role: "toolResult", toolCallId: id }],
+      }, ctx);
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+
+    for (const handler of app.handlers.get("turn_end") ?? []) await handler({
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+      toolResults: [{ role: "toolResult", toolCallId: "not-a-tool-turn" }],
+    }, ctx);
+    await finishToolTurn("terminating", true);
+    pending = true;
+    await finishToolTurn("pending");
+    pending = false;
+    ctx.signal = AbortSignal.abort();
+    await finishToolTurn("cancelled");
+    ctx.signal = new AbortController().signal;
+    assert.equal(compactCalls.length, 0);
+
+    await finishToolTurn("newer-input");
+    assert.equal(compactCalls.length, 1);
+    for (const handler of app.handlers.get("input") ?? [])
+      await handler({ source: "interactive", text: "Stop and reconsider" }, ctx);
+    compactCalls[0].onComplete();
+    assert.equal(app.customMessages.length, 0);
+
+    await finishToolTurn("failed-compaction");
+    assert.equal(compactCalls.length, 2);
+    compactCalls[1].onError(new Error("failed"));
+    assert.equal(app.customMessages.length, 0);
+
+    compactThrows = true;
+    await finishToolTurn("synchronous-failure");
+    compactThrows = false;
+    assert.equal(compactCalls.length, 2);
+
+    await finishToolTurn("shutdown");
+    assert.equal(compactCalls.length, 3);
+    for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+    compactCalls[2].onComplete();
+    assert.equal(app.customMessages.length, 0);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("continuity and memory guidance stay dedicated", () => {
   const app = runtime();
   const continuity = app.tools.get("continuity_update");
@@ -1304,10 +1523,12 @@ test("explicit plan resets model context without replacing the visible session",
         { role: "user", content: "old prompt" },
         { role: "assistant", content: [{ type: "text", text: "old response" }] },
         { role: "custom", ...boundary.message },
+        { role: "custom", customType: "pi-continuity-memory", content: "stale memory", display: false },
         { role: "user", content: "executor prompt" },
       ],
     });
     assert.equal(filtered.messages.some((message: any) => message.content === "old prompt"), false);
+    assert.equal(filtered.messages.some((message: any) => message.content === "stale memory"), false);
     assert.equal(filtered.messages.some((message: any) => message.content === "executor prompt"), true);
     assert.equal(filtered.messages[0].customType, "pi-continuity-handoff");
 

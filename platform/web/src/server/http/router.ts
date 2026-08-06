@@ -18,7 +18,7 @@ function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-interface SseClient { response: ServerResponse; tabId: string; heartbeat: NodeJS.Timeout; }
+interface SseClient { response: ServerResponse; session: BrowserSession; tabId: string; heartbeat: NodeJS.Timeout; }
 interface DialogOwner { requestId: string; sessionGeneration: number; tabId?: string; lossTimer?: NodeJS.Timeout; }
 const MAX_COMMAND_BODY_BYTES = 42 * 1024 * 1024;
 
@@ -38,6 +38,7 @@ export class ServerTransport {
   private readonly terminal: TerminalServer;
   private lastCommandOwner?: string;
   private dialogOwner?: DialogOwner;
+  private readonly tabLossTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(private readonly driver: PiDriver, initial: Awaited<ReturnType<PiDriver["snapshot"]>>, private readonly options: ServerTransportOptions) {
     this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
@@ -58,6 +59,8 @@ export class ServerTransport {
       client.response.end();
     }
     this.clients.clear();
+    for (const timer of this.tabLossTimers.values()) clearTimeout(timer);
+    this.tabLossTimers.clear();
     this.clearDialogOwner();
     this.terminal.dispose();
   }
@@ -158,8 +161,9 @@ export class ServerTransport {
       if (!response.writableEnded) response.write(": keep-alive\n\n");
     }, 15_000);
     heartbeat.unref?.();
-    const client: SseClient = { response, tabId, heartbeat };
+    const client: SseClient = { response, session, tabId, heartbeat };
     this.clients.add(client);
+    this.cancelTabLossGrace(session, tabId);
     this.renew(tabId);
     const close = () => this.removeClient(client);
     request.once("close", close); response.once("close", close);
@@ -516,7 +520,7 @@ export class ServerTransport {
         expectedGeneration: command.expectedGeneration,
       }).then((result) => accepted(result.sessionGeneration));
       case "switchSession": return this.driver.switchSession({ sessionId: command.sessionId }).then((result) => accepted(result.sessionGeneration));
-      case "deleteSession": return this.driver.deleteSession({ sessionId: command.sessionId }).then(() => accepted(command.expectedGeneration));
+      case "deleteSession": return this.driver.deleteSession({ sessionId: command.sessionId, expectedGeneration: command.expectedGeneration }).then(() => accepted(command.expectedGeneration));
       case "archiveSession": return this.driver.archiveSession(command).then((result) => accepted(result.sessionGeneration));
       case "restoreSession": return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
       case "renameSession": return this.driver.renameSession({ sessionId: command.sessionId, name: command.name }).then(() => accepted(command.expectedGeneration));
@@ -625,12 +629,6 @@ export class ServerTransport {
     }
     this.projection.apply(event);
     if (event.type === "ui.closed" && this.dialogOwner?.requestId === event.requestId) this.clearDialogOwner();
-    if (event.type === "session.event") {
-      const payload = event.payload && typeof event.payload === "object" ? event.payload as { type?: unknown } : {};
-      if (["message_end", "tool_execution_end", "agent_end", "session_controls_changed", "provider_auth_changed", "runtime_policy_changed"].includes(String(payload.type))) {
-        void this.driver.snapshot().then((snapshot) => this.projection.refresh(snapshot)).catch(() => undefined);
-      }
-    }
   }
 
   private publish(type: string, payload: unknown): void {
@@ -688,8 +686,27 @@ export class ServerTransport {
   private removeClient(client: SseClient): void {
     if (!this.clients.delete(client)) return;
     clearInterval(client.heartbeat);
+    this.startTabLossGrace(client.session, client.tabId);
     const owner = this.dialogOwner;
     if (owner?.tabId === client.tabId) this.startDialogOwnerLossGrace(owner);
+  }
+  private tabTimerKey(session: BrowserSession, tabId: string): string { return `${session.secret}\0${tabId}`; }
+  private cancelTabLossGrace(session: BrowserSession, tabId: string): void {
+    const key = this.tabTimerKey(session, tabId);
+    const timer = this.tabLossTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.tabLossTimers.delete(key);
+  }
+  private startTabLossGrace(session: BrowserSession, tabId: string): void {
+    if ([...this.clients].some((client) => client.session === session && client.tabId === tabId)) return;
+    const key = this.tabTimerKey(session, tabId);
+    if (this.tabLossTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.tabLossTimers.delete(key);
+      if (![...this.clients].some((client) => client.session === session && client.tabId === tabId)) session.tabs.delete(tabId);
+    }, this.options.dialogReconnectGraceMs ?? 10_000);
+    timer.unref?.();
+    this.tabLossTimers.set(key, timer);
   }
   private startDialogOwnerLossGrace(owner: DialogOwner): void {
     const tabId = owner.tabId;

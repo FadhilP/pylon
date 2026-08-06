@@ -11,7 +11,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
@@ -19,7 +19,7 @@ import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { useAgentColors } from "./agent-color";
 import { ArchiveDialog } from "./archive-dialog";
-import { ConversationPanel } from "./conversation-panel";
+import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
 import { BrowserPanel } from "./browser-panel";
 import { DatabasePanel } from "./database-panel";
 import { FilesPanel } from "./files-panel";
@@ -35,6 +35,14 @@ type Theme = "light" | "dark";
 type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
+type PendingSession = {
+  requestId: number;
+  project: SessionProject;
+  previousSessionId?: string;
+  expectedGeneration?: number;
+  phase: "preparing" | "failed";
+  error?: string;
+};
 type SidebarAction = {
   key: string;
   title: string;
@@ -135,6 +143,8 @@ export function App() {
   const [sidebarAction, setSidebarAction] = useState<SidebarAction>();
   const [sessionBusy, setSessionBusy] = useState("");
   const [sessionTransition, setSessionTransition] = useState(false);
+  const [pendingSession, setPendingSession] = useState<PendingSession>();
+  const [composerFocusTarget, setComposerFocusTarget] = useState<string>();
   const [sessionDeleting, setSessionDeleting] = useState("");
   const [projectLoading, setProjectLoading] = useState("");
   const [projectBusy, setProjectBusy] = useState("");
@@ -164,6 +174,10 @@ export function App() {
   const sessionPagesRef = useRef<SessionProjectPage[]>([]);
   const sessionPagesQuery = useRef("");
   const composerDrafts = useRef(new Map<string, string>());
+  const pendingSessionRequest = useRef(0);
+  const pendingSessionDraft = useRef("");
+  const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
+  const pendingSessionInFlight = useRef(false);
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const mobile = useMediaQuery("(max-width: 900px)");
@@ -338,6 +352,13 @@ export function App() {
     previousRightPanel.current = rightPanel;
   }, [rightPanel]);
 
+  useLayoutEffect(() => {
+    const drawer = workspaceRef.current?.querySelector<HTMLElement>(":scope > .inspector");
+    if (!drawer) return;
+    drawer.inert = Boolean(pendingSession);
+    return () => { drawer.inert = false; };
+  }, [Boolean(pendingSession), rightPanel, live.runtime?.sessionId]);
+
   useEffect(() => {
     const open = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
@@ -389,6 +410,27 @@ export function App() {
       reportError(new Error(live.error), "Command failed");
     }
   }, [live.errorRevision]);
+
+  useEffect(() => {
+    if (!pendingSession || pendingSession.phase !== "preparing" || pendingSession.expectedGeneration === undefined) return;
+    const runtime = live.runtime;
+    if (live.connection !== "connected" || runtime?.ready !== true
+      || runtime.sessionGeneration !== pendingSession.expectedGeneration
+      || runtime.sessionId === pendingSession.previousSessionId) return;
+    const draft = pendingSessionDraft.current;
+    if (draft) composerDrafts.current.set(runtime.sessionId, draft);
+    if (document.activeElement instanceof HTMLTextAreaElement && document.activeElement.id === "runtime-prompt") {
+      pendingSessionSelection.current = {
+        start: document.activeElement.selectionStart,
+        end: document.activeElement.selectionEnd,
+        direction: document.activeElement.selectionDirection,
+      };
+      setComposerFocusTarget(runtime.sessionId);
+    }
+    pendingSessionDraft.current = "";
+    setPendingSession((current) => current?.requestId === pendingSession.requestId ? undefined : current);
+    setSessionBusy("");
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, pendingSession]);
 
   useEffect(() => {
     if (!live.notificationRevision || !live.notification?.message) return;
@@ -484,7 +526,16 @@ export function App() {
   };
 
   const switchSession = async (session: SessionSummary) => {
-    if (session.active || sessionBusy || sessionDeleting) {
+    if (sessionBusy || sessionDeleting) {
+      if (mobile) setSidebarOpen(false);
+      return;
+    }
+    if (pendingSession) {
+      setPendingSession(undefined);
+      pendingSessionDraft.current = "";
+      pendingSessionSelection.current = undefined;
+    }
+    if (session.active) {
       if (mobile) setSidebarOpen(false);
       return;
     }
@@ -501,18 +552,38 @@ export function App() {
     }
   };
 
-  const newSession = async (project: SessionProject) => {
-    if (sessionBusy || sessionDeleting || projectBusy) return;
+  const newSession = async (project: SessionProject, retry = false) => {
+    if (pendingSessionInFlight.current || sessionBusy || sessionDeleting || projectBusy) return;
+    pendingSessionInFlight.current = true;
+    const requestId = retry && pendingSession ? pendingSession.requestId : ++pendingSessionRequest.current;
+    if (!retry) {
+      pendingSessionDraft.current = "";
+      pendingSessionSelection.current = undefined;
+    }
+    setPendingSession({
+      requestId,
+      project,
+      previousSessionId: live.runtime?.sessionId,
+      phase: "preparing",
+    });
+    setTerminalOpen(false);
     setSessionBusy(project.id);
-    setSessionTransition(true);
+    let accepted = false;
     try {
-      await runtimeStore.newSession(project.id);
+      const expectedGeneration = await runtimeStore.newSession(project.id);
+      accepted = true;
+      setPendingSession((current) => current?.requestId === requestId
+        ? { ...current, expectedGeneration }
+        : current);
       if (mobile) setSidebarOpen(false);
     } catch (cause) {
-      reportError(cause, "Unable to create session");
+      const error = cause instanceof Error ? cause.message : "Unable to create session";
+      setPendingSession((current) => current?.requestId === requestId
+        ? { ...current, phase: "failed", error }
+        : current);
     } finally {
-      setSessionBusy("");
-      setSessionTransition(false);
+      pendingSessionInFlight.current = false;
+      if (!accepted) setSessionBusy("");
     }
   };
 
@@ -522,6 +593,7 @@ export function App() {
     sessionListRequest.current++;
     try {
       await runtimeStore.deleteSession(session.id);
+      composerDrafts.current.delete(session.id);
       setActiveSessions((current) => current.filter((candidate) => candidate.id !== session.id));
       updateSessionPages((current) => current.map((page) => ({
         ...page,
@@ -713,6 +785,7 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.archiveProject(project.id);
+      for (const session of project.sessions) composerDrafts.current.delete(session.id);
     } catch (cause) {
       reportError(cause, "Unable to archive project");
     } finally {
@@ -725,6 +798,7 @@ export function App() {
     setSessionBusy(session.id);
     try {
       await runtimeStore.archiveSession(session.id);
+      composerDrafts.current.delete(session.id);
     } catch (cause) {
       reportError(cause, "Unable to archive session");
     } finally {
@@ -938,6 +1012,7 @@ export function App() {
         <Topbar
           live={live}
           session={activeSession}
+          pendingSession={pendingSession}
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
@@ -968,15 +1043,43 @@ export function App() {
         </div>}
         <div
           ref={workspaceRef}
-          className={`workspace-layout ${rightPanel ? "has-inspector" : ""}`}
+          className={`workspace-layout ${rightPanel ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
           style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}
         >
           <ConversationPanel
-            key={`conversation:${live.runtime?.sessionId ?? "loading"}`}
+            key={pendingSession
+              ? `conversation:pending:${pendingSession.requestId}`
+              : `conversation:${live.runtime?.sessionId ?? "loading"}`}
             live={live}
             projectAvailable={live.runtime?.projectAvailable !== false}
-            initialDraft={live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId) : undefined}
+            pendingSession={pendingSession ? {
+              phase: pendingSession.phase,
+              projectLabel: pendingSession.project.label,
+              error: pendingSession.error,
+              onRetry: () => void newSession(pendingSession.project, true),
+            } : undefined}
+            initialDraft={pendingSession
+              ? pendingSessionDraft.current
+              : live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId) : undefined}
+            restoreComposerFocus={composerFocusTarget === live.runtime?.sessionId}
+            restoreComposerSelection={composerFocusTarget === live.runtime?.sessionId ? pendingSessionSelection.current : undefined}
+            onComposerFocusRestored={() => {
+              pendingSessionSelection.current = undefined;
+              setComposerFocusTarget((current) => current === live.runtime?.sessionId ? undefined : current);
+            }}
             onDraftChange={(draft) => {
+              if (pendingSession) {
+                pendingSessionDraft.current = draft;
+                const runtime = live.runtime;
+                if (pendingSession.expectedGeneration !== undefined
+                  && runtime?.ready === true
+                  && runtime.sessionGeneration === pendingSession.expectedGeneration
+                  && runtime.sessionId !== pendingSession.previousSessionId) {
+                  if (draft) composerDrafts.current.set(runtime.sessionId, draft);
+                  else composerDrafts.current.delete(runtime.sessionId);
+                }
+                return;
+              }
               const sessionId = live.runtime?.sessionId;
               if (!sessionId) return;
               if (draft) composerDrafts.current.set(sessionId, draft);
@@ -1005,6 +1108,7 @@ export function App() {
             }}
           />}
           {rightPanel === "inspector" && <Inspector
+              key={`inspector:${live.runtime?.sessionId ?? "loading"}`}
               current={view}
               live={live}
               availableViews={availableViews}
@@ -1332,11 +1436,12 @@ function RecoveryToast({ recovery, onAction }: {
   </div>;
 }
 
-function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, databaseButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, databaseAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleDatabase, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; databaseButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; databaseAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleDatabase: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
-  const sessionName = live.runtime?.sessionName || (session ? sessionTitle(session) : "New session");
-  const branch = live.runtime?.gitBranch || "No Git branch";
-  const turn = live.runtime?.metrics.userMessages ?? 0;
-  const delegatedRuns = live.runtime?.conversation.delegatedRuns ?? [];
+function Topbar({ live, session, pendingSession, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, databaseButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, databaseAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleDatabase, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; pendingSession?: PendingSession; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; databaseButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; databaseAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleDatabase: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
+  const runtime = pendingSession ? undefined : live.runtime;
+  const sessionName = pendingSession ? "New session" : runtime?.sessionName || (session ? sessionTitle(session) : "New session");
+  const branch = pendingSession ? (pendingSession.phase === "failed" ? "setup failed" : "workspace pending") : runtime?.gitBranch || "No Git branch";
+  const turn = runtime?.metrics.userMessages ?? 0;
+  const delegatedRuns = runtime?.conversation.delegatedRuns ?? [];
   const activeAgents = delegatedRuns.filter((run) => run.status === "running").length;
   return (
     <header className="topbar">
@@ -1344,28 +1449,28 @@ function Topbar({ live, session, theme, menuOpen, rightPanel, menuButtonRef, ins
         <button ref={menuButtonRef} className="icon-button navigation-toggle" onClick={onToggleMenu} aria-label="Toggle project navigation" aria-controls="primary-navigation" aria-expanded={menuOpen}><IconMenu2 size={18} /></button>
         <div className="repo-crumb">
           <IconBrandGit size={16} stroke={1.7} />
-          <span>{live.runtime?.cwdLabel || "Pylon"} / <strong>{sessionName.slice(0, 128)}</strong></span>
+          <span>{pendingSession?.project.label || runtime?.cwdLabel || "Pylon"} / <strong>{sessionName.slice(0, 128)}</strong></span>
         </div>
         <span className="topbar-divider" />
-        <div className="branch-label"><IconGitBranch size={14} /><span>{branch} · Turn {turn}</span></div>
+        <div className="branch-label"><IconGitBranch size={14} /><span>{pendingSession ? branch : `${branch} · Turn ${turn}`}</span></div>
       </div>
       <div className="topbar-actions">
-        <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
-        <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
+        <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} disabled={Boolean(pendingSession)} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
+        <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>
           <small>{delegatedRuns.length}</small>
         </button>
-        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
+        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
           <IconFiles size={16} />
           <span>Files</span>
-          {(live.runtime?.workspace?.changedCount ?? 0) > 0 && <small>{live.runtime?.workspace?.changedCount}</small>}
+          {(runtime?.workspace?.changedCount ?? 0) > 0 && <small>{runtime?.workspace?.changedCount}</small>}
         </button>
-        {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
+        {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
           <IconDatabase size={16} />
           <span>Database</span>
         </button>}
-        {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""} ${browserActive ? "is-live" : ""}`} type="button" onClick={onToggleBrowser} aria-label={`Helios browser${browserActive ? ", active" : ""}`} aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
+        {browserAvailable && <button ref={browserButtonRef} className={`agents-trigger ${rightPanel === "browser" ? "is-active" : ""} ${browserActive ? "is-live" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleBrowser} aria-label={`Helios browser${browserActive ? ", active" : ""}`} aria-controls="browser-panel" aria-expanded={rightPanel === "browser"}>
           <IconWorld size={16} />
           <span>Browser</span>
         </button>}

@@ -120,8 +120,20 @@ export class PackageCatalog {
     const enabledIds = new Set(current.enabledIds);
     if (enabled) enabledIds.add(packageId);
     else enabledIds.delete(packageId);
+    for (const item of current.packages) {
+      if (item.required) enabledIds.add(item.id);
+    }
     await this.writeEnabled(enabledIds);
-    return this.scan();
+    const packagePaths = new Set(current.packages.flatMap((item) => item.extensionPaths));
+    const rootOnlyPaths = current.extensionPaths.filter((path) => !packagePaths.has(path));
+    return {
+      packages: current.packages,
+      enabledIds,
+      extensionPaths: [
+        ...rootOnlyPaths,
+        ...current.packages.filter((item) => enabledIds.has(item.id)).flatMap((item) => item.extensionPaths),
+      ],
+    };
   }
 
   async restoreEnabled(enabledIds: Set<string>): Promise<void> {

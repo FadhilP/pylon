@@ -171,6 +171,7 @@ export interface StateQLHistoryEntryReadModel {
   session_id: string;
   actor_id: string;
   command: string;
+  sql: string | null;
   handle: string | null;
   executed: boolean;
   cached: boolean;
@@ -381,6 +382,7 @@ export type PackageSettingsReadModel =
       planner?: PackageModelProfileReadModel;
       executor?: PackageModelProfileReadModel;
       memoryReviewer?: PackageModelProfileReadModel;
+      compactionReviewer?: PackageModelProfileReadModel;
     }
   | {
       kind: "sieve";

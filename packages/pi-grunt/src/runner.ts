@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { truncateUtf8 } from "pylon-core/utf8";
 
 export const GRUNT_CONTEXT_LIMIT = 262_144;
 
@@ -51,13 +52,12 @@ export function contextTokensFromUsage(usage: any): number {
 }
 
 function capText(text: string, maxBytes = 16 * 1024): { text: string; truncated: boolean } {
-  let output = text;
-  let truncated = false;
-  while (Buffer.byteLength(output, "utf8") > maxBytes) {
-    output = output.slice(0, -1);
-    truncated = true;
-  }
-  return { text: truncated ? `${output}\n\n[Truncated to ${maxBytes} bytes.]` : output, truncated };
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated: false };
+  const suffix = `\n\n[Truncated to ${maxBytes} bytes.]`;
+  return {
+    text: truncateUtf8(text, maxBytes - Buffer.byteLength(suffix, "utf8")) + suffix,
+    truncated: true,
+  };
 }
 
 export function getPiInvocation(args: string[]): Invocation {

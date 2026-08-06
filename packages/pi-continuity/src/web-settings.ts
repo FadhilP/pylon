@@ -17,6 +17,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
     ...(config.memoryReviewer ? { memoryReviewer: config.memoryReviewer } : {}),
+    ...(config.compactionReviewer ? { compactionReviewer: config.compactionReviewer } : {}),
   };
 }
 
@@ -25,8 +26,10 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
   const planner = profile(value.planner);
   const executor = profile(value.executor);
   const memoryReviewer = profile(value.memoryReviewer);
+  const compactionReviewer = profile(value.compactionReviewer);
   await updateConfig(() => ({
     version: 2, memoryEnabled: value.memoryEnabled,
     ...(planner ? { planner } : {}), ...(executor ? { executor } : {}), ...(memoryReviewer ? { memoryReviewer } : {}),
+    ...(compactionReviewer ? { compactionReviewer } : {}),
   }), configPath(agentDir));
 }

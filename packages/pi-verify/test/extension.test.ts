@@ -53,6 +53,7 @@ test("verify publishes package tool ownership for the session lifecycle", () => 
 test("verify publishes bounded result metadata and session entry", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-verify-extension-"));
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node ok.js" } }));
+  await writeFile(join(cwd, "file.ts"), "content");
   const tools = new Map<string, any>();
   const events: Array<{ channel: string; value: any }> = [];
   const entries: Array<{ type: string; data: any }> = [];
@@ -66,8 +67,11 @@ test("verify publishes bounded result metadata and session entry", async () => {
     exec: async (command: string, args: string[]) => {
       if (command === "git") gitCalls.push(args.join(" "));
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (command === "git" && args[0] === "status") return { code: 0, stdout: " M file.ts\n", stderr: "" };
+      if (command === "git" && args[0] === "ls-files") return { code: 0, stdout: "file.ts\0", stderr: "" };
+      if (command === "git" && args[0] === "hash-object") return { code: 0, stdout: "blob\n", stderr: "" };
       if (command === "git" && args[0] === "diff") return { code: 0, stdout: "", stderr: "" };
-      if (command === "git") return { code: 0, stdout: " M file.ts\n", stderr: "" };
+      if (command === "git") return { code: 0, stdout: "", stderr: "" };
       return { code: 0, stdout: "ok\n", stderr: "" };
     },
   };
@@ -81,9 +85,15 @@ test("verify publishes bounded result metadata and session entry", async () => {
   assert.deepEqual(gitCalls, [
     "rev-parse HEAD",
     "status --porcelain=v1 --untracked-files=all",
+    "diff --cached --raw -z HEAD --",
+    "ls-files --modified --deleted --others --exclude-standard -z",
+    "hash-object --no-filters -- file.ts",
     "diff --check HEAD --",
     "rev-parse HEAD",
     "status --porcelain=v1 --untracked-files=all",
+    "diff --cached --raw -z HEAD --",
+    "ls-files --modified --deleted --others --exclude-standard -z",
+    "hash-object --no-filters -- file.ts",
   ]);
   const published = events.find((event) => event.channel === "pi-verify:result")?.value;
   assert.equal(published.state, "passed");
@@ -103,6 +113,29 @@ test("verify publishes bounded result metadata and session entry", async () => {
   }] }), undefined);
   handlers.get("tool_call")!({ toolName: "edit" });
   assert.equal(handlers.get("context")!({ messages: [] }), undefined);
+});
+
+test("verify reports stale when already-dirty file contents change", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-content-state-"));
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node ok.js" } }));
+  await writeFile(join(cwd, "file.ts"), "content");
+  let tool: any;
+  let hashes = 0;
+  extension({
+    registerTool: (value: any) => { tool = value; },
+    on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
+    exec: async (command: string, args: string[]) => {
+      if (command !== "git") return { code: 0, stdout: "ok", stderr: "" };
+      if (args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (args[0] === "status") return { code: 0, stdout: " M file.ts\n", stderr: "" };
+      if (args[0] === "ls-files") return { code: 0, stdout: "file.ts\0", stderr: "" };
+      if (args[0] === "hash-object") return { code: 0, stdout: `${++hashes === 1 ? "before" : "after"}\n`, stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  } as any);
+  const result = await tool.execute("content-stale", { scope: "project" }, undefined, undefined, { cwd, hasUI: false });
+  assert.equal(result.details.state, "stale");
+  assert.notEqual(result.details.initialWorktreeId, result.details.worktreeId);
 });
 
 test("Verify never terminates early, even when the assistant emitted prior prose", async () => {
@@ -284,7 +317,9 @@ test("verify stops before declared checks when changed-set hygiene fails", async
     exec: async (command: string, args: string[]) => {
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git" && args[0] === "status") return { code: 0, stdout: " M file.ts\n?? debug.log\n", stderr: "" };
-      if (command === "git" && args[0] === "diff") return { code: 1, stdout: "file.ts:1: trailing whitespace.\n", stderr: "" };
+      if (command === "git" && args[0] === "ls-files") return { code: 0, stdout: "", stderr: "" };
+      if (command === "git" && args[0] === "diff" && args.includes("--check")) return { code: 1, stdout: "file.ts:1: trailing whitespace.\n", stderr: "" };
+      if (command === "git" && args[0] === "diff") return { code: 0, stdout: "", stderr: "" };
       checks++;
       return { code: 0, stdout: "ok\n", stderr: "" };
     },

@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -126,7 +126,7 @@ test("session index pages projects, counts user messages, and searches unloaded 
   }
 });
 
-test("session index refreshes one session directory after lifecycle changes", async () => {
+test("session index refreshes one changed session without SDK-wide scans", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-targeted-index-"));
   const cwd = join(root, "workspace");
   await mkdir(cwd);
@@ -154,12 +154,116 @@ test("session index refreshes one session directory after lifecycle changes", as
     const result = await index.list({ query: "New lifecycle text" }, options);
 
     assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
-    assert.equal(globalScans, 1);
-    assert.equal(directoryScans, 1);
+    assert.equal(globalScans, 0);
+    assert.equal(directoryScans, 0);
   } finally {
     (SessionManager as any).list = originalList;
     (SessionManager as any).listAll = originalListAll;
     if (session.getSessionFile()) await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("session index reuses its persisted cache and rebuilds corrupt or outdated caches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-persisted-index-"));
+  const cwd = join(root, "workspace");
+  await mkdir(cwd);
+  const session = SessionManager.create(cwd);
+  let added: SessionManager | undefined;
+  persistSession(session, "Persisted cache source");
+  const cachePath = join(isolatedAgentDir, "pylon-web", "session-summaries-v1.json");
+  const options = { activeId: session.getSessionId(), generation: 1, stateFor: () => "sleeping" as const };
+
+  try {
+    const initial = new SessionIndex(undefined, isolatedAgentDir);
+    await initial.list({}, options);
+    const cache = JSON.parse(await readFile(cachePath, "utf8"));
+    const record = cache.records.find((item: any) => item.session.id === session.getSessionId());
+    assert.ok(record);
+    record.session.allMessagesText += " persisted-only-sentinel";
+    await writeFile(cachePath, JSON.stringify(cache));
+
+    const warm = new SessionIndex(undefined, isolatedAgentDir);
+    let result = await warm.list({ query: "persisted-only-sentinel" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+
+    const sessionPath = session.getSessionFile()!;
+    const source = await readFile(sessionPath, "utf8");
+    await writeFile(sessionPath, "{temporarily malformed");
+    warm.invalidate();
+    result = await warm.list({ query: "persisted-only-sentinel" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+    await writeFile(sessionPath, source);
+
+    persistSession(session, "Changed file replaces cached sentinel");
+    warm.invalidateSession(session.getSessionId(), session.getSessionFile(), cwd);
+    result = await warm.list({ query: "Changed file replaces cached sentinel" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+
+    added = SessionManager.create(cwd);
+    persistSession(added, "Added after initial cache");
+    warm.invalidate();
+    result = await warm.list({ query: "Added after initial cache" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, added.getSessionId());
+    await rm(added.getSessionFile()!, { force: true });
+    warm.invalidate();
+    result = await warm.list({ query: "Added after initial cache" }, options);
+    assert.equal(result.projects.flatMap((project) => project.sessions).some((item) => item.id === added!.getSessionId()), false);
+
+    const duplicateDirectory = join(isolatedAgentDir, "sessions", "duplicate-id");
+    const duplicatePath = join(duplicateDirectory, "duplicate.jsonl");
+    await mkdir(duplicateDirectory, { recursive: true });
+    await copyFile(sessionPath, duplicatePath);
+    warm.invalidate();
+    result = await warm.list({}, options);
+    assert.equal(result.projects.flatMap((project) => project.sessions).filter((item) => item.id === session.getSessionId()).length, 1);
+    await rm(duplicateDirectory, { recursive: true, force: true });
+
+    await writeFile(cachePath, "{broken");
+    const corrupt = new SessionIndex(undefined, isolatedAgentDir);
+    result = await corrupt.list({ query: "Persisted cache source" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+
+    const outdated = JSON.parse(await readFile(cachePath, "utf8"));
+    outdated.version++;
+    await writeFile(cachePath, JSON.stringify(outdated));
+    result = await new SessionIndex(undefined, isolatedAgentDir).list({ query: "Persisted cache source" }, options);
+    assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
+  } finally {
+    if (session.getSessionFile()) await rm(session.getSessionFile()!, { force: true });
+    if (added?.getSessionFile()) await rm(added.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("switching a session index agent directory drops pending paths from the prior agent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-index-agent-switch-"));
+  const cwdA = join(root, "workspace-a");
+  const cwdB = join(root, "workspace-b");
+  const agentA = join(root, "agent-a");
+  const agentB = join(root, "agent-b");
+  const sessionsA = join(agentA, "sessions", "a");
+  const sessionsB = join(agentB, "sessions", "b");
+  await Promise.all([cwdA, cwdB, sessionsA, sessionsB].map((path) => mkdir(path, { recursive: true })));
+  const first = SessionManager.create(cwdA, sessionsA);
+  const second = SessionManager.create(cwdB, sessionsB);
+  persistSession(first, "Old agent session");
+  persistSession(second, "New agent session");
+
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  try {
+    process.env.PI_CODING_AGENT_DIR = agentA;
+    const index = new SessionIndex(undefined, agentA);
+    await index.list({}, { activeId: first.getSessionId(), generation: 1, stateFor: () => "sleeping" as const });
+    index.invalidateSession(first.getSessionId(), first.getSessionFile(), cwdA);
+    process.env.PI_CODING_AGENT_DIR = agentB;
+    index.setAgentDir(agentB);
+    const result = await index.list({}, { activeId: second.getSessionId(), generation: 2, stateFor: () => "sleeping" as const });
+    const ids = result.projects.flatMap((project) => project.sessions).map((session) => session.id);
+    assert.deepEqual(ids, [second.getSessionId()]);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -563,6 +667,7 @@ test("queued prompts stay ordered and continue after queued control failures", a
   await enqueue("third");
   const [first, second, third] = internal.queueReadModel(slot).items;
   assert.deepEqual([first.preview, second.preview, third.preview], ["first", "second", "third"]);
+  assert.deepEqual([first.commandId, second.commandId, third.commandId], ["command-first", "command-second", "command-third"]);
 
   assert.equal((await coordinator.queuedPrompt({ queueId: second.id, expectedGeneration: 1 })).message, "second");
   await coordinator.restoreQueuedPrompt({ queueId: second.id, expectedGeneration: 1 });
@@ -1283,6 +1388,70 @@ test("fork translates the coordinator generation to the selected runtime generat
       name: "Stale fork",
       mode: "conversation",
     }), /stale session generation/);
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("repeated Local forks retain Local workspace records and allow concurrent sessions", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-local-forks-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const source = SessionManager.create(cwd);
+  persistSession(source, "Repeated Local forks");
+  const sourceId = source.getSessionId();
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    await driver.switchSession({ sessionId: sourceId });
+    const registry = (driver as any).registry() as ProjectRegistry;
+    const projectId = projectIdForCwd(cwd);
+    await registry.setSessionWorkspace({ sessionId: sourceId, projectId, mode: "local" });
+    const sourcePrompt = (await driver.snapshot()).conversation.messages.find((message) =>
+      message.role === "user" && message.entryId);
+    assert.ok(sourcePrompt?.entryId);
+
+    const first = await driver.fork({
+      expectedGeneration: (await driver.snapshot()).sessionGeneration,
+      entryId: sourcePrompt.entryId,
+      name: "First Local fork",
+      mode: "conversation",
+      position: "at",
+    });
+    assert.equal(registry.workspaceForSession(sourceId)?.mode, "local");
+    assert.equal(registry.workspaceForSession(first.sessionId)?.mode, "local");
+
+    const selectedSource = await driver.switchSession({ sessionId: sourceId });
+    const secondSourcePrompt = (await driver.snapshot()).conversation.messages.find((message) =>
+      message.role === "user" && message.entryId);
+    assert.ok(secondSourcePrompt?.entryId);
+    const second = await driver.fork({
+      expectedGeneration: selectedSource.sessionGeneration,
+      entryId: secondSourcePrompt.entryId,
+      name: "Second Local fork",
+      mode: "conversation",
+      position: "at",
+    });
+    assert.equal(registry.workspaceForSession(sourceId)?.mode, "local");
+    assert.equal(registry.workspaceForSession(first.sessionId)?.mode, "local");
+    assert.equal(registry.workspaceForSession(second.sessionId)?.mode, "local");
+
+    const runningFork = (driver as any).selected();
+    const runtimeState = runningFork.driver.runtimeState;
+    runningFork.driver.runtimeState = () => "running";
+    try {
+      await driver.newSession({ expectedGeneration: second.sessionGeneration });
+      const fresh = (driver as any).selected();
+      assert.equal(registry.workspaceForSession(fresh.id)?.mode, "local");
+      assert.doesNotThrow(() => (driver as any).assertCheckoutAvailable(fresh));
+    } finally {
+      runningFork.driver.runtimeState = runtimeState;
+    }
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));

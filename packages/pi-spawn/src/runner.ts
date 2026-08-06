@@ -12,6 +12,7 @@ export type SpawnUsage = {
 };
 
 export type SpawnActivity = {
+  id?: string;
   kind: "call" | "result";
   tool: string;
   text: string;
@@ -21,11 +22,13 @@ export type SpawnActivity = {
 export type SpawnRun = {
   text: string;
   model?: string;
+  thinking?: string;
   stopReason?: string;
   error?: string;
   stderr: string;
   durationMs: number;
   usage: SpawnUsage;
+  sessionUsage?: SpawnUsage;
   turns: number;
   truncated: boolean;
   activity: SpawnActivity[];
@@ -42,12 +45,30 @@ export type RunSpawnOptions = {
   env?: NodeJS.ProcessEnv;
   onActivity?: (item: SpawnActivity, all: readonly SpawnActivity[]) => void;
   onUsage?: (usage: SpawnUsage) => void;
+  onState?: (state: { model?: string; thinking?: string }) => void;
 };
 
 const emptyUsage = (): SpawnUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 const validNumber = (value: unknown) => {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
+};
+const sessionUsage = (value: unknown): SpawnUsage | undefined => {
+  const stats = value && typeof value === "object" ? value as Record<string, any> : {};
+  const tokens = stats.tokens && typeof stats.tokens === "object" ? stats.tokens as Record<string, unknown> : {};
+  const values = [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite, stats.cost];
+  if (!values.every((item) => typeof item === "number" && Number.isFinite(item) && item >= 0)) return;
+  return { input: tokens.input as number, output: tokens.output as number, cacheRead: tokens.cacheRead as number, cacheWrite: tokens.cacheWrite as number, cost: stats.cost as number };
+};
+const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const sessionState = (value: unknown): { model?: string; thinking?: string } | undefined => {
+  const state = value && typeof value === "object" ? value as Record<string, any> : {};
+  const model = state.model && typeof state.model === "object" ? state.model as Record<string, unknown> : {};
+  const modelRef = typeof model.provider === "string" && typeof model.id === "string"
+    ? `${model.provider}/${model.id}`
+    : undefined;
+  const thinking = thinkingLevels.has(String(state.thinkingLevel)) ? String(state.thinkingLevel) : undefined;
+  return modelRef || thinking ? { ...(modelRef ? { model: modelRef } : {}), ...(thinking ? { thinking } : {}) } : undefined;
 };
 
 export function spawnTimeoutMs(value = process.env.PI_SPAWN_TIMEOUT_MS): number {
@@ -102,9 +123,27 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const messages: any[] = [];
   const activity: SpawnActivity[] = [];
   const usage = emptyUsage();
+  let cumulativeUsage: SpawnUsage | undefined;
+  let effectiveState: { model?: string; thinking?: string } | undefined;
   let stdout = "", stderr = "", commandError = "", timedOut = false, aborted = false;
-  let settled = false, commandId = 0;
+  let settled = false, settlementFinished = false, commandId = 0;
+  let initialStateCommandId: string | undefined;
+  let finalStateCommandId: string | undefined;
+  let statsCommandId: string | undefined;
+  const settlementCommands = new Set<string>();
+  let timeout: NodeJS.Timeout, settlementTimer: NodeJS.Timeout | undefined;
 
+  const finishSettled = () => {
+    if (settlementFinished) return;
+    settlementFinished = true;
+    if (settlementTimer) clearTimeout(settlementTimer);
+    settlementTimer = undefined;
+    terminate(child);
+  };
+  const completeSettlementCommand = (id: string) => {
+    settlementCommands.delete(id);
+    if (!settlementCommands.size) finishSettled();
+  };
   const stopWithCommandError = (message: string) => {
     if (commandError) return;
     commandError = message;
@@ -112,7 +151,6 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   };
   const pushActivity = (item: SpawnActivity) => {
     activity.push(item);
-    if (activity.length > 100) activity.shift();
     try { options.onActivity?.(item, activity); } catch { /* Progress observers must not control the child. */ }
   };
   const processLine = (line: string) => {
@@ -122,21 +160,53 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
     if (event.type === "response") {
       if (event.command === "prompt" && event.success === false)
         stopWithCommandError(`Spawn RPC prompt command failed${event.error ? `: ${event.error}` : ""}`);
+      if (event.command === "get_state" && (event.id === initialStateCommandId || event.id === finalStateCommandId)) {
+        if (event.success === true) {
+          const state = sessionState(event.data);
+          if (state) {
+            effectiveState = { ...effectiveState, ...state };
+            try { options.onState?.({ ...effectiveState }); } catch { /* Progress observers must not control the child. */ }
+          }
+        }
+        if (event.id === finalStateCommandId) completeSettlementCommand(event.id);
+      }
+      if (event.command === "get_session_stats" && event.id === statsCommandId) {
+        if (event.success === true) cumulativeUsage = sessionUsage(event.data);
+        completeSettlementCommand(event.id);
+      }
       return;
     }
     if (event.type === "agent_settled") {
+      if (settled) return;
       settled = true;
-      terminate(child);
+      clearTimeout(timeout);
+      finalStateCommandId = `spawn-${++commandId}`;
+      statsCommandId = `spawn-${++commandId}`;
+      settlementCommands.add(finalStateCommandId);
+      settlementCommands.add(statsCommandId);
+      settlementTimer = setTimeout(finishSettled, 1_000);
+      settlementTimer.unref();
+      for (const command of [
+        { id: finalStateCommandId, type: "get_state" },
+        { id: statsCommandId, type: "get_session_stats" },
+      ]) {
+        try {
+          child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
+            if (error) completeSettlementCommand(command.id);
+          });
+        } catch { completeSettlementCommand(command.id); }
+      }
       return;
     }
     if (event.type === "tool_execution_start") {
-      pushActivity({ kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}) });
+      const text = truncateHead(JSON.stringify(event.args ?? {}), { maxBytes: 2000, maxLines: 40 }).content;
+      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "call", tool: event.toolName, text });
       return;
     }
     if (event.type === "tool_execution_end") {
       const text = textContent(event.result);
       const bounded = truncateHead(text, { maxBytes: 2000, maxLines: 40 }).content;
-      pushActivity({ kind: "result", tool: event.toolName, text: bounded, ...(event.isError ? { isError: true } : {}) });
+      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "result", tool: event.toolName, text: bounded, ...(event.isError ? { isError: true } : {}) });
       return;
     }
     if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -165,20 +235,27 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   child.stdin!.on("error", (error) => {
     if (!settled && !timedOut && !aborted) stopWithCommandError(`Spawn RPC write failed: ${error.message}`);
   });
-  const abort = () => { aborted = true; terminate(child); };
+  const abort = () => {
+    if (settled) { finishSettled(); return; }
+    aborted = true;
+    terminate(child);
+  };
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
-  const timeout = setTimeout(() => { timedOut = true; terminate(child); }, options.timeoutMs ?? spawnTimeoutMs());
+  timeout = setTimeout(() => { timedOut = true; terminate(child); }, options.timeoutMs ?? spawnTimeoutMs());
 
   if (!aborted) {
-    const command = { id: `spawn-${++commandId}`, type: "prompt", message: options.prompt };
-    child.stdin!.write(`${JSON.stringify(command)}\n`);
+    initialStateCommandId = `spawn-${++commandId}`;
+    const promptCommand = { id: `spawn-${++commandId}`, type: "prompt", message: options.prompt };
+    child.stdin!.write(`${JSON.stringify({ id: initialStateCommandId, type: "get_state" })}\n`);
+    child.stdin!.write(`${JSON.stringify(promptCommand)}\n`);
   }
   const exitCode = await new Promise<number>((resolveExit) => {
     child.once("error", () => resolveExit(1));
     child.once("close", (code) => resolveExit(code ?? 1));
   });
   clearTimeout(timeout);
+  if (settlementTimer) clearTimeout(settlementTimer);
   options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout.endsWith("\r") ? stdout.slice(0, -1) : stdout);
 
@@ -192,12 +269,14 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       || (!rawText ? "Spawned thread returned no assistant text." : "");
   return {
     text: capped.content,
-    model: final?.model,
+    model: effectiveState?.model ?? final?.model,
+    ...(effectiveState?.thinking ? { thinking: effectiveState.thinking } : {}),
     stopReason: final?.stopReason,
     ...(error ? { error } : {}),
     stderr,
     durationMs: Date.now() - started,
     usage,
+    ...(cumulativeUsage ? { sessionUsage: cumulativeUsage } : {}),
     turns: messages.length,
     truncated: capped.truncated,
     activity,

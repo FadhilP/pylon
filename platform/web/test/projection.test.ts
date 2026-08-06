@@ -83,6 +83,20 @@ test("session status projects completion as a separate pulse", () => {
   ]);
 });
 
+test("correlated user starts reuse the optimistic pending message ID", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply(session({
+    type: "message_start",
+    clientMessageId: "command-1",
+    message: { role: "user", content: "same", timestamp: 1 },
+  }));
+  assert.equal(projection.snapshot().conversation.messages[0]?.id, "pending-command-1");
+  assert.equal(published[0]?.payload.id, "pending-command-1");
+  projection.apply(session({ type: "message_end", message: { role: "user", content: "same" }, entryId: "entry-1" }));
+  assert.equal(projection.snapshot().conversation.messages[0]?.entryId, "entry-1");
+});
+
 test("projection maps SDK event names and retains active messages", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
@@ -126,6 +140,58 @@ test("projection maps SDK event names and retains active messages", () => {
   assert.equal(replaced.messages.length, 1);
   assert.equal(replaced.messages[0]?.text, "Loaded history");
   assert.equal(replaced.tools.length, 0);
+});
+
+test("compaction completion appends a durable disclosure without changing streaming state", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const initial = runtime();
+  initial.conversation.streaming = true;
+  const projection = new RuntimeProjection(initial, (type, payload) => published.push({ type, payload }));
+  const completedMessage = {
+    id: "compaction-entry-1",
+    entryId: "entry-1",
+    role: "system",
+    text: "## Preserved context\n\nSummary body",
+    streaming: false,
+    createdAt: "2026-08-05T09:00:00.000Z",
+    systemSource: "pylon-compaction",
+    compaction: { contextAfterTokens: 28_400, sourceEntryCount: 143 },
+  };
+
+  projection.apply(session({ type: "compaction_end", reason: "threshold", result: { summary: completedMessage.text }, completedMessage }));
+
+  assert.equal(projection.snapshot().conversation.streaming, true);
+  assert.deepEqual(projection.snapshot().conversation.compaction, { active: false, reason: "threshold" });
+  assert.deepEqual(projection.snapshot().conversation.messages, [completedMessage]);
+  assert.deepEqual(published.at(-1), {
+    type: "compaction.update",
+    payload: { active: false, reason: "threshold", completedMessage },
+  });
+
+  projection.apply(session({ type: "compaction_end", reason: "threshold", result: { summary: completedMessage.text }, completedMessage }));
+  assert.equal(projection.snapshot().conversation.messages.length, 1);
+  projection.apply(session({ type: "compaction_end", reason: "manual", aborted: true }));
+  assert.equal(projection.snapshot().conversation.messages.length, 1);
+});
+
+test("history projection retains compaction metadata and summary", () => {
+  assert.deepEqual(projectMessages([{
+    role: "custom",
+    customType: "pylon-compaction",
+    content: "# Compact summary",
+    entryId: "compaction-entry",
+    timestamp: "2026-08-05T09:00:00.000Z",
+    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77 },
+  }]), [{
+    id: "history-0",
+    entryId: "compaction-entry",
+    role: "system",
+    text: "# Compact summary",
+    streaming: false,
+    createdAt: "2026-08-05T09:00:00.000Z",
+    systemSource: "pylon-compaction",
+    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77 },
+  }]);
 });
 
 test("next prompt keeps the expanded existing-session turn", () => {
@@ -206,6 +272,26 @@ test("history projection keeps stable global IDs and skips old non-delegate payl
   assert.equal(page.messages.at(-1)?.id, "history-11");
   assert.equal(decodeHistoryCursor(encodeHistoryCursor(52)), 52);
   assert.equal(decodeHistoryCursor("not-a-cursor"), undefined);
+});
+
+test("history pages do not mark tool calls running when their result is on a later page", () => {
+  const history = [
+    { role: "assistant", content: [{ type: "toolCall", id: "paged-call", name: "read", arguments: { path: "src/app.ts" } }] },
+    ...Array.from({ length: 20 }, (_, index) => ({ role: "assistant", content: `filler-${index}` })),
+    { role: "toolResult", toolCallId: "paged-call", toolName: "read", content: [{ type: "text", text: "done" }], isError: false },
+  ];
+
+  const page = projectConversation(history, { start: 0, end: 10, includeDelegated: false, limitMessages: false });
+  const tool = page.messages.find((message) => message.tool?.id === "paged-call");
+  assert.equal(tool?.tool?.status, "completed");
+  assert.equal(tool?.id, "history-0-tool-0");
+
+  const failed = projectConversation([
+    history[0],
+    { role: "toolResult", toolCallId: "paged-call", toolName: "read", content: [], isError: true },
+    { role: "toolResult", toolCallId: "paged-call", toolName: "read", content: [], isError: false },
+  ], { start: 0, end: 1, includeDelegated: false, limitMessages: false });
+  assert.equal(failed.messages.find((message) => message.tool?.id === "paged-call")?.tool?.status, "failed");
 });
 
 test("existing-session projection keeps the complete latest user turn", () => {
@@ -299,7 +385,7 @@ test("Timeline undo availability is published without exposing Pi entry IDs", ()
   assert.doesNotMatch(JSON.stringify(event), /entry-1/);
 });
 
-test("history projection reconstructs bounded delegated runs from tool details", () => {
+test("history projection retains complete delegated activity with bounded event text", () => {
   const activity = Array.from({ length: 105 }, (_, index) => ({
     kind: index % 2 ? "result" : "call",
     tool: "read",
@@ -340,9 +426,42 @@ test("history projection reconstructs bounded delegated runs from tool details",
     thinkingLevel: "high",
     durationMs: 1_250,
     usage: { input: 10, output: 20, cacheRead: 3, cacheWrite: 0, cost: 0.01 },
-    activity: activity.slice(0, 100).map((item) => ({ ...item, text: item.text.slice(0, 2_000) })),
+    activity: activity.map((item) => ({ ...item, text: item.text.slice(0, 2_000) })),
   });
   assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);
+});
+
+test("live delegated activity appends correlated deltas without replacing prior events", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-live", toolName: "spawn_agent",
+    args: { action: "create", prompt: "Inspect everything" },
+  }));
+  for (let index = 0; index < 125; index++) {
+    for (const kind of ["call", "result"] as const) {
+      projection.apply(session({
+        type: "tool_execution_update", toolCallId: "spawn-live", toolName: "spawn_agent",
+        partialResult: {
+          details: {
+            state: "running",
+            activityDelta: [{ id: `child-${index}`, kind, tool: "read", text: String(index) }],
+          },
+        },
+      }));
+    }
+  }
+  const activity = projection.snapshot().conversation.delegatedRuns[0]?.activity ?? [];
+  assert.equal(activity.length, 250);
+  assert.deepEqual(activity.slice(-2), [
+    { id: "child-124", kind: "call", tool: "read", text: "124" },
+    { id: "child-124", kind: "result", tool: "read", text: "124" },
+  ]);
+  const updates = published.filter((event) => event.type === "delegate.update").slice(1);
+  assert.equal(updates.length, 250);
+  assert.ok(updates.every((event, index) => event.payload.activityMode === "append"
+    && event.payload.activityBase === index && event.payload.activity.length === 1));
+  assert.ok(updates.every((event) => Buffer.byteLength(JSON.stringify(event)) < 64 * 1024));
 });
 
 test("pi-spawn executions expose stable child metadata and ignore list actions", () => {
@@ -356,6 +475,7 @@ test("pi-spawn executions expose stable child metadata and ignore list actions",
         piSpawn: { version: 1, kind: "agent", id: "child-agent" }, agentName: "Agent-child", status: "completed",
         model: "provider/child", durationMs: 20,
         usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+        sessionUsage: { input: 30, output: 15, cacheRead: 10, cacheWrite: 0, cost: 0.2 },
         activity: [{ kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" }],
       },
     },
@@ -376,6 +496,7 @@ test("pi-spawn executions expose stable child metadata and ignore list actions",
   ]);
   assert.equal(agentColorId(projected.delegatedRuns[0]!), agentColorId(projected.delegatedRuns[1]!));
   assert.deepEqual(projected.delegatedRuns[0]?.usage, { input: 3, output: 5, cacheRead: 1, cacheWrite: 0, cost: 0.02 });
+  assert.deepEqual(projected.delegatedRuns[0]?.sessionUsage, { input: 30, output: 15, cacheRead: 10, cacheWrite: 0, cost: 0.2 });
   assert.deepEqual(projected.delegatedRuns[0]?.activity, [{ kind: "call", tool: "read", text: "{\n  \"path\": \"auth.ts\"\n}" }]);
 });
 
@@ -763,7 +884,9 @@ test("authoritative refresh settles delegated runs missed during session switchi
   const completed = runtime();
   completed.conversation.delegatedRuns = [{
     id: "spawn-1", kind: "spawn_agent", turn: 1, request: "Inspect auth", response: "Done",
-    status: "completed", durationMs: 1_250, activity: [{ kind: "call", tool: "read", text: "auth.ts" }],
+    status: "completed", durationMs: 1_250,
+    sessionUsage: { input: 30, output: 15, cacheRead: 10, cacheWrite: 0, cost: 0.2 },
+    activity: [{ kind: "call", tool: "read", text: "auth.ts" }],
   }];
 
   projection.refresh(completed);
@@ -773,6 +896,7 @@ test("authoritative refresh settles delegated runs missed during session switchi
   assert.equal(run?.response, "Done");
   assert.equal(run?.agentName, "Ada");
   assert.equal(run?.modelName, "provider/child");
+  assert.deepEqual(run?.sessionUsage, { input: 30, output: 15, cacheRead: 10, cacheWrite: 0, cost: 0.2 });
   assert.equal(run?.activity.length, 2);
   assert.deepEqual(published.filter((event) => event.type === "delegate.update").map((event) => ({ id: event.payload.id, status: event.payload.status })), [
     { id: "spawn-1", status: "completed" },
@@ -891,6 +1015,43 @@ test("projection persists terminal agent errors and clears them for retries and 
     willRetry: true,
   }));
   assert.equal(projection.snapshot().conversation.agentError, undefined);
+});
+
+test("terminal agent events settle residual tool and delegated activity", () => {
+  const initial = runtime();
+  initial.conversation.messages = [{
+    id: "live-tool-call",
+    role: "tool",
+    text: "",
+    streaming: true,
+    tool: { id: "call", name: "bash", status: "running" },
+  }];
+  initial.conversation.tools = [
+    { id: "call", name: "bash", status: "running" },
+    { id: "done", name: "read", status: "completed" },
+  ];
+  initial.conversation.delegatedRuns = [{
+    id: "delegate",
+    kind: "advisor",
+    turn: 1,
+    status: "running",
+    activity: [],
+  }];
+
+  const stopped = new RuntimeProjection(initial, () => undefined);
+  stopped.apply(session({ type: "agent_end", turnId: "turn-stopped", stopped: true }));
+  const stoppedConversation = stopped.snapshot().conversation;
+  assert.equal(stoppedConversation.messages[0]?.tool?.status, "completed");
+  assert.equal(stoppedConversation.messages[0]?.streaming, false);
+  assert.deepEqual(stoppedConversation.tools.map((tool) => tool.status), ["completed", "completed"]);
+  assert.equal(stoppedConversation.delegatedRuns[0]?.status, "completed");
+
+  const errored = new RuntimeProjection(initial, () => undefined);
+  errored.apply(session({ type: "agent_error", turnId: "turn-error", willRetry: true }));
+  const errorConversation = errored.snapshot().conversation;
+  assert.equal(errorConversation.messages[0]?.tool?.status, "failed");
+  assert.deepEqual(errorConversation.tools.map((tool) => tool.status), ["failed", "completed"]);
+  assert.equal(errorConversation.delegatedRuns[0]?.status, "failed");
 });
 
 test("projection retains stopped tool-only run metadata without an assistant message", () => {

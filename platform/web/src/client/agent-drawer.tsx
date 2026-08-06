@@ -1,11 +1,12 @@
 import { IconArrowLeft, IconBotId, IconTool, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { formatWorkDuration, modelLabel } from "../shared/format";
-import type { DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
-import { MarkdownContent } from "./conversation-panel";
+import type { DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
+import { MarkdownContent, WorkTimer } from "./conversation-panel";
 import { thinkingLabel } from "./format";
 import { agentColor, type AgentColorMap } from "./agent-color";
 import { AnimatedDetails } from "./animated-details";
+import { pairAgentActivity } from "../shared/agent-activity";
 
 export function AgentPanel({ runs, models, colors, selectedId, onSelect, onClose }: {
   runs: DelegatedAgentRunReadModel[];
@@ -74,23 +75,24 @@ function SpawnedAgentDetails({ run, runs, models }: { run: DelegatedAgentRunRead
     <div className="agent-metadata">
       <span className={`agent-status is-${run.status}`}>{run.status}</span>
       {run.threadId && <span className="mono" title={run.threadId}>{run.threadId.slice(0, 8)}</span>}
-      {run.modelName && <span>{modelLabel(run.modelName, models)}</span>}
-      {run.thinkingLevel && <span>{thinkingLabel(run.thinkingLevel)}</span>}
-      {(run.startedAt || run.durationMs !== undefined) && <AgentDuration key={run.id} run={run} />}
     </div>
     <AgentUsage run={run} />
     <section className="agent-conversation" aria-label={`${agentLabel(run.kind)} conversation`}>
       {runs.map((turn) => <div className="agent-chat-turn" key={turn.id}>
         {turn.request && <article className="agent-chat-message role-user">
           <MarkdownContent text={turn.request} />
-          <footer><span>Turn {turn.turn}</span></footer>
         </article>}
         <AgentActivity run={turn} childRuntime />
         {(turn.response || turn.status === "running") && <article className={`agent-chat-message role-assistant is-${turn.status}`}>
-          {turn.response ? <MarkdownContent text={spawnResponse(turn)} /> : <p>Child is working…</p>}
+          {turn.response && <MarkdownContent text={spawnResponse(turn)} />}
           <footer>
-            {turn.status === "running" && <AgentDuration key={turn.id} run={turn} />}
-            {turn.status !== "running" && turn.durationMs !== undefined && <span>Worked for {formatWorkDuration(turn.durationMs)}</span>}
+            {(turn.startedAt || turn.durationMs !== undefined) && <WorkTimer
+              key={turn.id}
+              startedAt={turn.status === "running" ? turn.startedAt : undefined}
+              durationMs={turn.status === "running" ? undefined : turn.durationMs}
+              modelName={turn.modelName ? modelLabel(turn.modelName, models) : undefined}
+              thinkingLevel={turn.thinkingLevel}
+            />}
           </footer>
         </article>}
       </div>)}
@@ -99,7 +101,7 @@ function SpawnedAgentDetails({ run, runs, models }: { run: DelegatedAgentRunRead
 }
 
 function AgentUsage({ run }: { run: DelegatedAgentRunReadModel }) {
-  const usage = run.usage ?? (run.status === "failed"
+  const usage = (isSpawned(run) ? run.sessionUsage : undefined) ?? run.usage ?? (run.status === "failed"
     ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
     : undefined);
   return <dl className={`agent-usage${usage ? "" : " is-pending"}`}>
@@ -126,23 +128,25 @@ function SpecialistDetails({ run, models }: { run: DelegatedAgentRunReadModel; m
 }
 
 function AgentActivity({ run, childRuntime = false }: { run: DelegatedAgentRunReadModel; childRuntime?: boolean }) {
-  const tools = useMemo(() => pairActivity(run.activity), [run.activity]);
+  const tools = useMemo(() => pairAgentActivity(run.activity), [run.activity]);
   const toolNames = [...new Set(tools.map((tool) => tool.tool))];
-  const toolStatus = tools.some((tool) => tool.failed) ? "failed" : run.status === "running" ? "running" : "completed";
+  const toolStatus = run.status === "running"
+    ? "running"
+    : tools.some((tool) => tool.failed) ? "failed" : "completed";
   if (!tools.length) return childRuntime ? null : <div className="agent-activity-empty"><IconTool size={16} /><span>No tool activity recorded.</span></div>;
   return <AnimatedDetails
     className={`agent-tool-group is-${toolStatus}`}
     summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{toolNames.slice(0, 3).join(", ")}{toolNames.length > 3 ? "…" : ""}</span></>}
   ><div className="agent-tools">
-    {tools.map((tool, index) => <details className={`tool-disclosure ${tool.failed ? "is-failed" : run.status === "running" && !tool.output ? "is-running" : ""}`} key={`${tool.tool}-${index}`}>
+    {tools.map((tool, index) => <details className={`tool-disclosure ${tool.failed ? "is-failed" : run.status === "running" && !tool.completed ? "is-running" : ""}`} key={`${tool.tool}-${index}`}>
       <summary>
         <IconTool size={15} />
         <span className="tool-summary-copy"><strong>{tool.tool}</strong>{tool.input && <code>{tool.input.replace(/\s+/g, " ").trim()}</code>}</span>
-        <span className="tool-status">{tool.failed ? "failed" : tool.output ? "completed" : "running"}</span>
+        <span className="tool-status">{tool.failed ? "failed" : tool.completed || run.status !== "running" ? "completed" : "running"}</span>
       </summary>
       <div className="tool-details">
         <section><small>Input</small><pre>{tool.input || "No input"}</pre></section>
-        <section><small>Output</small><pre>{tool.output || (run.status === "running" ? "Waiting for output…" : "No output")}</pre></section>
+        <section><small>Output</small><pre>{tool.output || (run.status === "running" && !tool.completed ? "Waiting for output…" : "No output")}</pre></section>
       </div>
     </details>)}
   </div></AnimatedDetails>;
@@ -186,22 +190,4 @@ function agentLabel(kind: DelegatedAgentKind): string {
   if (kind === "spawn_agent") return "Private Agent";
   if (kind === "spawn_session") return "Spawned Session";
   return kind === "advisor" ? "Advisor" : "Grunt";
-}
-
-function pairActivity(activity: DelegatedAgentActivityReadModel[]) {
-  const tools: Array<{ tool: string; input?: string; output?: string; failed?: boolean }> = [];
-  for (const item of activity) {
-    if (item.kind === "call") {
-      tools.push({ tool: item.tool, input: item.text });
-      continue;
-    }
-    const target = [...tools].reverse().find((tool) => tool.tool === item.tool && tool.output === undefined);
-    if (target) {
-      target.output = item.text;
-      target.failed = item.isError;
-    } else {
-      tools.push({ tool: item.tool, output: item.text, failed: item.isError });
-    }
-  }
-  return tools;
 }

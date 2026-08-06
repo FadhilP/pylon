@@ -5,15 +5,16 @@ import { readVersionedJson, updateJson, writeJson } from "./storage.ts";
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type ModelProfile = { model: string; thinking?: ThinkingLevel };
-export type ContinuityConfig = { version: 2; memoryEnabled?: boolean; planner?: ModelProfile; executor?: ModelProfile; memoryReviewer?: ModelProfile };
+export type ContinuityConfig = { version: 2; memoryEnabled?: boolean; planner?: ModelProfile; executor?: ModelProfile; memoryReviewer?: ModelProfile; compactionReviewer?: ModelProfile };
 export const defaultConfig = (): ContinuityConfig => ({ version: 2, memoryEnabled: true });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-continuity", "config.json");
 const isProfile = (value: any): value is ModelProfile => Boolean(value && typeof value.model === "string" && value.model.trim() && Object.keys(value).every((key) => key === "model" || key === "thinking") && (value.thinking === undefined || thinkingLevels.includes(value.thinking)));
 const normalizeConfig = (value: any): ContinuityConfig | undefined => {
-  if (![1, 2].includes(value?.version) || Object.keys(value).some((key) => !["version", "memoryEnabled", "planner", "executor", "memoryReviewer"].includes(key))
+  if (![1, 2].includes(value?.version) || Object.keys(value).some((key) => !["version", "memoryEnabled", "planner", "executor", "memoryReviewer", "compactionReviewer"].includes(key))
     || (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") || (value.planner !== undefined && !isProfile(value.planner))
-    || (value.executor !== undefined && !isProfile(value.executor)) || (value.memoryReviewer !== undefined && !isProfile(value.memoryReviewer))) return;
-  return { version: 2, memoryEnabled: value.memoryEnabled ?? true, ...(value.planner ? { planner: value.planner } : {}), ...(value.executor ? { executor: value.executor } : {}), ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}) };
+    || (value.executor !== undefined && !isProfile(value.executor)) || (value.memoryReviewer !== undefined && !isProfile(value.memoryReviewer))
+    || (value.compactionReviewer !== undefined && !isProfile(value.compactionReviewer))) return;
+  return { version: 2, memoryEnabled: value.memoryEnabled ?? true, ...(value.planner ? { planner: value.planner } : {}), ...(value.executor ? { executor: value.executor } : {}), ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}), ...(value.compactionReviewer ? { compactionReviewer: value.compactionReviewer } : {}) };
 };
 export const isContinuityConfig = (value: any) => normalizeConfig(value) !== undefined;
 export async function loadConfig(path = configPath()): Promise<ContinuityConfig> {

@@ -125,6 +125,7 @@ export async function runPi(args: string[], options: RunPiOptions): Promise<Scou
   scoutRunQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
   await previousRun;
   try {
+    if (options.signal?.aborted) throw new DOMException("Scout run was aborted.", "AbortError");
     return await runPiUnlocked(args, options);
   } finally {
     releaseRun();

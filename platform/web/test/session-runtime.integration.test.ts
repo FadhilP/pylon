@@ -5,9 +5,9 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, estimateTokens, SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { appendWorkDuration } from "pylon-core/src/work-duration.ts";
-import { deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
+import { correlatePendingUserMessageStart, deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
 import type { DialogMethod, StateQLCredentialHost, StateQLCredentialRequest, UiRequest } from "../src/server/pi/remote-ui-context.ts";
@@ -24,6 +24,26 @@ after(async () => {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   }
+});
+
+test("pending command IDs correlate only with user message starts", () => {
+  const pending = ["same-1", "same-2"];
+  const assistant = { type: "message_start", message: { role: "assistant", content: [] } };
+  assert.equal(correlatePendingUserMessageStart(assistant, pending), assistant);
+  assert.deepEqual(pending, ["same-1", "same-2"]);
+  assert.deepEqual(correlatePendingUserMessageStart({
+    type: "message_start",
+    message: { role: "user", content: "same" },
+  }, pending), {
+    type: "message_start",
+    message: { role: "user", content: "same" },
+    clientMessageId: "same-1",
+  });
+  assert.equal(correlatePendingUserMessageStart({
+    type: "message_starting",
+    role: "user",
+  }, pending).clientMessageId, "same-2");
+  assert.deepEqual(pending, []);
 });
 
 test("user completion resolves its entry ID after persistence", async () => {
@@ -152,6 +172,62 @@ function persistSession(session: SessionManager, name: string): string {
   });
 }
 
+test("runtime publishes usage after a completed message is persisted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-live-usage-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+  const events: any[] = [];
+  const unsubscribe = driver.subscribe((event) => events.push(event));
+
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Working" }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 17,
+        output: 12,
+        cacheRead: 5,
+        cacheWrite: 0,
+        totalTokens: 34,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+    session._emit({ type: "message_end", message });
+    session.sessionManager.appendMessage(message);
+    await Promise.resolve();
+
+    const completions = events.filter((event) => event.type === "session.event"
+      && (event.payload?.type === "message_end" || event.payload?.type === "usage"));
+    assert.deepEqual(completions.map((event) => event.payload.type), ["message_end", "usage"]);
+    const usage = completions[1];
+    assert.equal(usage?.sessionGeneration, handle.sessionGeneration);
+    assert.equal(usage?.payload.metrics.inputTokens, 17);
+    assert.equal(usage?.payload.metrics.outputTokens, 12);
+    assert.equal(usage?.payload.metrics.assistantMessages, 1);
+
+    events.length = 0;
+    session._emit({ type: "message_end", message });
+    (driver as any).gate.beginReplacement();
+    session.sessionManager.appendMessage(message);
+    await Promise.resolve();
+    assert.equal(events.some((event) => event.type === "session.event" && event.payload?.type === "usage"), false);
+    (driver as any).gate.cancelReplacement();
+  } finally {
+    unsubscribe();
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("completed work duration survives runtime restart", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-duration-"));
   const cwd = join(root, "workspace");
@@ -244,6 +320,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
             session_id: "s_1",
             actor_id: value.sessionId,
             command: "query",
+            sql: "SELECT id, email FROM users WHERE id = ?",
             handle: "q_1",
             executed: true,
             cached: false,
@@ -265,6 +342,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal(snapshot.session.name, "shared-workspace");
     assert.equal(snapshot.actor_id, handle.sessionId);
     assert.equal(snapshot.history[0]?.command, "query");
+    assert.equal(snapshot.history[0]?.sql, "SELECT id, email FROM users WHERE id = ?");
     assert.equal("ignored" in snapshot, false);
     assert.equal("ignored" in snapshot.session, false);
     assert.equal("ignored" in snapshot.history[0]!, false);
@@ -765,14 +843,16 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
   const deletablePath = deletable.getSessionFile()!;
   try {
     const handle = await driver.start({ cwd, agentDir, repositoryRoot: root });
-    await assert.rejects(driver.deleteSession({ sessionId: handle.sessionId }), /currently active/);
+    await assert.rejects(driver.deleteSession({ sessionId: deletable.getSessionId(), expectedGeneration: handle.sessionGeneration + 1 }), /stale/i);
+    assert.equal(existsSync(deletablePath), true);
+    await assert.rejects(driver.deleteSession({ sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration }), /currently active/);
     assert.equal((await driver.snapshot()).sessionId, handle.sessionId);
 
-    const deletion = driver.deleteSession({ sessionId: deletable.getSessionId() });
+    const deletion = driver.deleteSession({ sessionId: deletable.getSessionId(), expectedGeneration: handle.sessionGeneration });
     await assert.rejects(driver.switchSession({ sessionId: switchable.getSessionId() }), /another session operation/);
     await deletion;
     assert.equal(existsSync(deletablePath), false);
-    await assert.rejects(driver.deleteSession({ sessionId: "missing-session" }), /unavailable/);
+    await assert.rejects(driver.deleteSession({ sessionId: "missing-session", expectedGeneration: handle.sessionGeneration }), /unavailable/);
   } finally {
     await driver.dispose();
     await Promise.all([deletable.getSessionFile(), switchable.getSessionFile()].map((path) => path ? rm(path, { force: true }) : undefined));
@@ -960,6 +1040,7 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   const session = SessionManager.create(cwd);
   const messageIds: string[] = [];
+  let compactionEntryId = "";
   for (let index = 0; index < 155; index++) {
     messageIds.push(session.appendMessage({
       role: "assistant",
@@ -978,7 +1059,11 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
       stopReason: "stop",
       timestamp: Date.now(),
     }));
-    if (index === 134) session.appendCompaction("summary", messageIds[120]!, 1_000);
+    if (index === 134) compactionEntryId = session.appendCompaction("## Compact summary", messageIds[120]!, 1_000, {
+      type: "pi-continuity-compaction",
+      version: 3,
+      sourceEntryCount: 135,
+    });
   }
 
   const driver = new SessionRuntime();
@@ -986,10 +1071,17 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.conversation.messages.length, 100);
-    assert.equal(snapshot.conversation.messages[0]?.text, "message-56");
-    assert.equal(snapshot.conversation.messages[0]?.entryId, messageIds[56]);
+    assert.equal(snapshot.conversation.messages[0]?.text, "message-57");
+    assert.equal(snapshot.conversation.messages[0]?.entryId, messageIds[57]);
+    const compaction = snapshot.conversation.messages.find((message) => message.entryId === compactionEntryId);
+    assert.equal(compaction?.text, "## Compact summary");
+    assert.equal(compaction?.systemSource, "pylon-compaction");
+    assert.equal(compaction?.compaction?.sourceEntryCount, 135);
+    const expectedContextAfter = buildSessionContext(session.getBranch(), compactionEntryId).messages
+      .reduce((total, message) => total + estimateTokens(message), 0);
+    assert.equal(compaction?.compaction?.contextAfterTokens, expectedContextAfter);
     assert.equal(snapshot.conversation.messages.at(-1)?.systemSource, "pylon-session-start-hook");
-    assert.equal(snapshot.conversation.historyRemaining, 56);
+    assert.equal(snapshot.conversation.historyRemaining, 57);
 
     const earlier: string[] = [];
     let cursor = snapshot.conversation.historyCursor;
@@ -998,9 +1090,9 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
       earlier.unshift(...page.messages.map((message) => message.text));
       cursor = page.nextCursor;
     }
-    assert.equal(earlier.length, 56);
+    assert.equal(earlier.length, 57);
     assert.equal(earlier[0], "message-0");
-    assert.equal(earlier.at(-1), "message-55");
+    assert.equal(earlier.at(-1), "message-56");
     const firstPage = await driver.conversationHistory({ cursor: snapshot.conversation.historyCursor! });
     assert.equal(firstPage.messages[0]?.entryId, messageIds[0]);
     const laterPage = await driver.conversationHistory({

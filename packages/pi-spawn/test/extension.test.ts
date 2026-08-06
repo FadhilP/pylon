@@ -6,12 +6,13 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import spawnExtension from "../extensions/pi-spawn.ts";
 import { configPath, saveConfig, type SpawnConfig } from "../src/config.ts";
-import { SESSION_MARKER, privateAgentDir } from "../src/sessions.ts";
+import { RECENT_THREAD_MAX_TOTAL_CHARS, SESSION_MARKER, privateAgentDir } from "../src/sessions.ts";
 import type { SpawnRun } from "../src/runner.ts";
 
 const completed = (text: string): SpawnRun => ({
-  text, model: "fake/model", stopReason: "stop", stderr: "", durationMs: 5,
+  text, model: "fake/model", thinking: "high", stopReason: "stop", stderr: "", durationMs: 5,
   usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: .1 },
+  sessionUsage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 1 },
   turns: 1, truncated: false, activity: [],
 });
 
@@ -73,6 +74,7 @@ async function fixture(
     calls.push({ args, cwd: options.cwd, prompt: options.prompt, env: options.env });
     if (runOverride) return runOverride(args, options);
     const result = completed(`reply:${options.prompt}`);
+    options.onState?.({ model: result.model, thinking: result.thinking });
     options.onUsage?.(result.usage);
     return result;
   };
@@ -107,13 +109,17 @@ test("extension registers exactly the private-agent and standard-session tools",
   const f = await fixture();
   try {
     assert.deepEqual([...f.tools.keys()].sort(), ["spawn_agent", "spawn_session"]);
-    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.action.enum, ["create", "continue", "list"]);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.action.enum, ["create", "continue", "recent", "list"]);
     assert.deepEqual(f.tools.get("spawn_session").parameters.properties.action.enum, ["create", "adopt", "continue", "list"]);
     assert.equal(f.tools.get("spawn_session").parameters.properties.path, undefined);
     assert.equal(f.tools.get("spawn_session").parameters.properties.systemPrompt, undefined);
     assert.ok(f.tools.get("spawn_session").parameters.properties.project);
     assert.ok(f.tools.get("spawn_session").parameters.properties.model);
     assert.ok(f.tools.get("spawn_agent").parameters.properties.systemPrompt);
+    assert.ok(f.tools.get("spawn_agent").parameters.properties.limit);
+    assert.ok(f.tools.get("spawn_agent").parameters.properties.maxChars);
+    assert.equal(f.tools.get("spawn_session").parameters.properties.limit, undefined);
+    assert.equal(f.tools.get("spawn_session").parameters.properties.maxChars, undefined);
     assert.equal(f.tools.get("spawn_agent").promptSnippet, undefined);
     assert.equal(f.tools.get("spawn_agent").promptGuidelines, undefined);
     assert.equal(f.tools.get("spawn_session").promptSnippet, undefined);
@@ -136,7 +142,8 @@ test("active spawn prompt guidelines explain tool selection and thread actions",
     assert.deepEqual(f.tools.get("spawn_agent").promptGuidelines, [
       "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
       "When using spawn_agent, create one thread with a self-contained prompt and the narrowest useful policy, then continue that thread by ID for follow-ups because its model, system prompt, thinking level, and tools are immutable.",
-      "Use spawn_agent list only to recover private thread IDs available from the current parent branch; review the child response and any workspace changes before relying on them.",
+      "Use spawn_agent recent to inspect bounded recent transcript messages without prompting the child; use list only to recover private thread IDs available from the current parent branch.",
+      "Review child responses and workspace changes before relying on them.",
     ]);
     assert.deepEqual(f.tools.get("spawn_session").promptGuidelines, [
       "Use spawn_session only when the child conversation must be an ordinary Pi session the user can inspect, open, or continue separately; do not use spawn_session as the default delegation tool when a private spawn_agent thread or focused specialist tool is sufficient.",
@@ -174,7 +181,7 @@ test("spawn tools independently control prompt guidelines and deferred discovery
         ...(deferredTools.length ? {
           deferredTools,
           deferredToolUsage: Object.fromEntries(deferredTools.map((tool) => [tool, tool === "spawn_agent"
-            ? "create or continue private customized subagent conversations"
+            ? "create, continue, or inspect private customized subagent conversations"
             : "create, adopt, or continue inspectable Pi sessions"])),
         } : {}),
       });
@@ -195,7 +202,7 @@ test("spawn tools advertise deferred discovery without disabling standalone use"
       enabledTools: ["spawn_agent", "spawn_session"],
       deferredTools: ["spawn_agent", "spawn_session"],
       deferredToolUsage: {
-        spawn_agent: "create or continue private customized subagent conversations",
+        spawn_agent: "create, continue, or inspect private customized subagent conversations",
         spawn_session: "create, adopt, or continue inspectable Pi sessions",
       },
     });
@@ -297,15 +304,50 @@ test("running spawn updates expose the selected model", async () => {
   try {
     for (const name of ["spawn_agent", "spawn_session"]) {
       const updates: any[] = [];
-      await f.tools.get(name).execute("create", {
+      const result = await f.tools.get(name).execute("create", {
         action: "create", prompt: "report model",
       }, undefined, (update: any) => updates.push(update), f.ctx);
       assert.equal(updates[0]?.details.state, "running");
       assert.equal(updates[0]?.details.model, "fake/model");
+      assert.equal(updates.find((update) => update.content?.[0]?.text.endsWith("runtime ready"))?.details.thinking, "high");
       assert.deepEqual(updates.find((update) => update.details?.usage)?.details.usage, {
         input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1,
       });
+      assert.equal(result.details.thinking, "high");
+      assert.deepEqual(result.details.sessionUsage, {
+        input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 1,
+      });
+      assert.deepEqual(result.usage, {
+        input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+      });
     }
+  } finally { f.restore(); }
+});
+
+test("spawn activity progress sends correlated deltas and returns the complete invocation", async () => {
+  const f = await fixture(async (_args, options) => {
+    const activity: any[] = [];
+    for (let index = 0; index < 125; index++) {
+      for (const kind of ["call", "result"] as const) {
+        const item = { id: `call-${index}`, kind, tool: "read", text: String(index) };
+        activity.push(item);
+        options.onActivity?.(item, activity);
+      }
+    }
+    return { ...completed("done"), activity };
+  });
+  try {
+    const updates: any[] = [];
+    const result = await f.tools.get("spawn_agent").execute("create", {
+      action: "create", prompt: "many tools",
+    }, undefined, (update: any) => updates.push(update), f.ctx);
+    const activityUpdates = updates.filter((update) => update.details?.activityDelta);
+    assert.equal(activityUpdates.length, 250);
+    assert.ok(activityUpdates.every((update) => update.details.activity === undefined && update.details.activityDelta.length === 1));
+    assert.equal(result.details.activity.length, 250);
+    assert.equal(result.details.activity[0].id, "call-0");
+    assert.equal(result.details.activity.at(-1).id, "call-124");
   } finally { f.restore(); }
 });
 
@@ -341,6 +383,53 @@ test("private agents stay outside the normal session index and preserve creation
     const invalid = await tool.execute("invalid", { action: "continue", id, prompt: "x", systemPrompt: "changed" }, undefined, undefined, f.ctx);
     assert.equal(invalid.details.failureCode, "invalid");
     assert.equal(f.calls.length, 2);
+  } finally { f.restore(); }
+});
+
+test("private agent recent inspects the authorized transcript without prompting the child", async () => {
+  const f = await fixture();
+  try {
+    const tool = f.tools.get("spawn_agent");
+    const created = await tool.execute("create", { action: "create", prompt: "inspect auth" }, undefined, undefined, f.ctx);
+    const id = created.details.piSpawn.id;
+    persist(f.parent, "spawn_agent", created);
+    const child = SessionManager.open(created.details.piSpawn.path);
+    child.appendMessage({ role: "user", content: [{ type: "text", text: "review the token" }, { type: "image", data: "ignored", mimeType: "image/png" }], timestamp: Date.now() } as any);
+    child.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private reasoning" },
+        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "secret.txt" } },
+        { type: "text", text: "x".repeat(200) },
+      ],
+      api: "fake", provider: "fake", model: "fake", usage: {}, stopReason: "stop", timestamp: Date.now(),
+    } as any);
+
+    const recent = await tool.execute("recent", { action: "recent", id, limit: 2, maxChars: 80 }, undefined, undefined, f.ctx);
+    assert.equal(f.calls.length, 1);
+    assert.equal(recent.details.action, "recent");
+    assert.equal(recent.details.returned, 2);
+    assert.equal(recent.details.available, 2);
+    assert.equal(recent.details.truncated, true);
+    assert.match(recent.content[0].text, /\[user\][\s\S]*review the token[\s\S]*\[image\]/);
+    assert.match(recent.content[0].text, /\[assistant\][\s\S]*tool calls: read/);
+    assert.doesNotMatch(recent.content[0].text, /private reasoning|secret\.txt/);
+
+    for (let index = 0; index < 20; index++)
+      child.appendMessage({ role: "user", content: `${index}:${"y".repeat(2_000)}`, timestamp: Date.now() } as any);
+    const bounded = await tool.execute("bounded-recent", { action: "recent", id, limit: 50, maxChars: 2_000 }, undefined, undefined, f.ctx);
+    assert.ok(bounded.content[0].text.length <= RECENT_THREAD_MAX_TOTAL_CHARS);
+    assert.equal(bounded.details.truncated, true);
+
+    const invalid = await tool.execute("invalid-recent", { action: "recent", id, prompt: "do work" }, undefined, undefined, f.ctx);
+    assert.equal(invalid.details.failureCode, "invalid");
+    const outOfRange = await tool.execute("invalid-limit", { action: "recent", id, limit: 51 }, undefined, undefined, f.ctx);
+    assert.equal(outOfRange.details.failureCode, "invalid");
+
+    const otherParent = SessionManager.create(f.cwd);
+    const unavailable = await tool.execute("foreign-recent", { action: "recent", id }, undefined, undefined, { ...f.ctx, sessionManager: otherParent });
+    assert.equal(unavailable.details.failureCode, "not_found");
+    assert.equal(f.calls.length, 1);
   } finally { f.restore(); }
 });
 

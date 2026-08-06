@@ -78,10 +78,10 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
   }, [request.requestId, request.owned]);
 
   useEffect(() => {
-    if (!request.owned || request.timeoutSeconds === undefined) return;
+    if (!request.owned || request.timeoutSeconds === undefined || focused) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [request.owned, request.timeoutSeconds]);
+  }, [focused, request.owned, request.timeoutSeconds]);
 
   const respond = async (body: Record<string, unknown>) => {
     if (actionLock.current) return;

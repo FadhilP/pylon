@@ -27,6 +27,7 @@ const history = (command_id: string, command: string, handle: string | null, suc
   session_id: "session-1",
   actor_id: "actor-1",
   command,
+  sql: null,
   handle,
   executed: command === "query" || command === "exec",
   cached: false,
@@ -39,7 +40,7 @@ test("buildStateQLActivity correlates handles without duplicating retained metad
     recent_results: [{ alias: "accounts", handle: "result-1", rows: 3 }],
     recent_operations: [{ handle: "operation-1", actor_id: "actor-1", type: "UPDATE", affected_rows: 2, status: "committed" }],
     history: [
-      history("command-1", "query", "result-1"),
+      { ...history("command-1", "query", "result-1"), sql: "SELECT id, email\nFROM accounts\nORDER BY id" },
       history("command-2", "show", "result-1"),
       history("command-3", "exec", "operation-1"),
     ],
@@ -47,6 +48,8 @@ test("buildStateQLActivity correlates handles without duplicating retained metad
 
   assert.equal(items.length, 3);
   assert.equal(items[0]?.result?.alias, "accounts");
+  assert.equal(items[0]?.sql, "SELECT id, email\nFROM accounts\nORDER BY id");
+  assert.equal(items[1]?.sql, undefined);
   assert.equal(items[1]?.result?.handle, "result-1");
   assert.equal(items[2]?.operation?.status, "committed");
   assert.deepEqual(items[0]?.tags, ["read"]);

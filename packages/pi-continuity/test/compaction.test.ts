@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import {
   buildContinuityCompaction,
+  buildGenericContinuityCompaction,
+  finalizeContinuityCompaction,
+  prepareContinuityCompaction,
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
-  type ContinuityCompactionDetails,
 } from "../src/compaction.ts";
 import { assertSafe } from "../src/secrets.ts";
 import type { Work } from "../src/active-work.ts";
@@ -93,7 +96,7 @@ test("repeated compaction merges structured file history without parsing its ren
   });
   const result = build([...firstEntries, prior, assistant("More progress", "suffix")], work(), 10);
   assert.equal(occurrences(result.summary, "[Current Task]"), 1);
-  assert.equal(occurrences(result.summary, "# Continuity Compaction v2"), 1);
+  assert.equal(occurrences(result.summary, "# Continuity Compaction v3"), 1);
   assert.match(result.summary, /src\/first\.ts/);
   assert.doesNotMatch(result.summary, /POISONED RENDERED TEXT|First scoped task/);
   assert.equal(result.firstKeptEntryId, "suffix");
@@ -204,6 +207,25 @@ test("rejects unknown versions and oversized structured history", () => {
       sourceEntryCount: 1,
       history: { read: [{ path: "x".repeat(600) }], modified: [] },
     },
+    {
+      type: CONTINUITY_COMPACTION_TYPE,
+      version: 3,
+      mode: "active-work",
+      runId: "x".repeat(300),
+      timelineId: "timeline",
+      sourceEntryCount: 1,
+      history: { read: [], modified: [] },
+      supplements: [],
+    },
+    {
+      type: CONTINUITY_COMPACTION_TYPE,
+      version: 3,
+      mode: "generic",
+      sourceEntryCount: 1,
+      history: { read: [], modified: [] },
+      records: [],
+      supplements: [{ sourceEntryId: "source", role: "user", category: "constraint", quote: "quote", sourceHash: "a".repeat(64), quoteHash: "b".repeat(64) }],
+    },
   ]) {
     const previous = entry({ type: "compaction", summary: "bad", firstKeptEntryId: "old", tokensBefore: 1, details });
     const entries = [user("Old", "old"), previous, assistant("Suffix", "suffix")];
@@ -239,7 +261,7 @@ test("fails closed for a malformed latest handoff or active Work identity mismat
 });
 
 test("a new handoff rejects a previous summary from another boundary", () => {
-  const poisonedDetails: ContinuityCompactionDetails = {
+  const poisonedDetails = {
     type: CONTINUITY_COMPACTION_TYPE,
     version: 2,
     runId: "old-run",
@@ -391,4 +413,90 @@ test("bounds output with whole-record eviction and degrades safely for empty bra
   const empty = build([handoff("run", "timeline", "only-handoff")]);
   assert.equal(empty.firstKeptEntryId, "only-handoff");
   assert.match(empty.summary, /no in-scope user request/);
+});
+
+test("generic compaction deterministically extracts discarded transcript records", () => {
+  const entries = [
+    user("Keep compatibility", "old-user"),
+    assistant("Decision: use the existing hook", "old-assistant"),
+    toolResult("provider unavailable", true, "old-error"),
+    user("Current request", "current"),
+    assistant("Current response", "suffix"),
+  ];
+  const result = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(result);
+  assert.equal(result.details?.mode, "generic");
+  assert.equal(result.firstKeptEntryId, "suffix");
+  assert.match(result.summary, /Keep compatibility|existing hook|provider unavailable|Current request/);
+  assert.doesNotMatch(result.summary, /Current response/);
+  assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
+});
+
+test("generic compaction carries structured records instead of parsing a poisoned summary", () => {
+  const firstEntries = [user("Original constraint", "original"), assistant("Original decision", "decision"), user("Current", "current")];
+  const first = buildGenericContinuityCompaction({ branchEntries: firstEntries, preparation: preparation(firstEntries, 1) });
+  assert.ok(first);
+  const prior = entry({
+    type: "compaction",
+    summary: first.summary.replace("Original constraint", "POISONED SUMMARY"),
+    firstKeptEntryId: first.firstKeptEntryId,
+    tokensBefore: first.tokensBefore,
+    details: first.details,
+  });
+  const entries = [...firstEntries, prior, assistant("New discarded text", "new"), user("Latest", "latest")];
+  const next = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(next);
+  assert.match(next.summary, /Original constraint/);
+  assert.doesNotMatch(next.summary, /POISONED SUMMARY/);
+});
+
+test("draft review sources contain only sanitized entries discarded by the selected cut", () => {
+  const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const entries = [user(`Old ${credential}`, "old"), assistant("Old answer", "answer"), user("Retained", "retained")];
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(draft);
+  assert.deepEqual(draft.reviewSources.map((source) => source.sourceEntryId), ["old", "answer"]);
+  assert.match(draft.reviewSources[0]!.content, /\[REDACTED CREDENTIAL\]/);
+  assert.doesNotMatch(JSON.stringify(draft.reviewSources), new RegExp(credential));
+});
+
+test("supplements remain lower-authority, bounded, deduplicated, and provenance-carrying", () => {
+  const entries = [
+    user("Critical constraint", "source"),
+    ...Array.from({ length: 7 }, (_, index) => user(`Newer user record ${index}`, `newer-${index}`)),
+    assistant("Retained suffix", "retained"),
+  ];
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(draft);
+  assert.doesNotMatch(draft.canonical.summary, /Critical constraint/);
+  const source = draft.reviewSources.find((item) => item.sourceEntryId === "source")!;
+  const supplement = {
+    sourceEntryId: source.sourceEntryId,
+    role: source.role,
+    category: "constraint" as const,
+    quote: "Critical constraint",
+    sourceHash: source.sourceHash,
+    quoteHash: createHash("sha256").update("Critical constraint").digest("hex"),
+  };
+  const result = finalizeContinuityCompaction(draft.canonical, [supplement, supplement]);
+  assert.equal(result.details?.supplements.length, 1);
+  assert.match(result.summary, /Reviewer Supplemental Context — lower authority/);
+  assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
+
+  const prior = entry({
+    type: "compaction", summary: result.summary, firstKeptEntryId: result.firstKeptEntryId,
+    tokensBefore: result.tokensBefore, details: result.details,
+  });
+  const chainedEntries = [...entries, prior, assistant("More discarded context", "more"), user("Latest", "latest")];
+  const chained = buildGenericContinuityCompaction({ branchEntries: chainedEntries, preparation: preparation(chainedEntries, 1) });
+  assert.ok(chained);
+  assert.equal(chained.details?.supplements.length, 1);
+  assert.equal(occurrences(chained.summary, "Critical constraint"), 1);
+
+  const orphaned = buildGenericContinuityCompaction({
+    branchEntries: [prior, assistant("More discarded context", "orphan-more"), user("Latest", "orphan-latest")],
+    preparation: { firstKeptEntryId: "orphan-latest", tokensBefore: 42_000, settings: { keepRecentTokens: 1 } },
+  });
+  assert.ok(orphaned);
+  assert.equal(orphaned.details?.supplements.length, 0);
 });

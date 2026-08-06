@@ -119,6 +119,7 @@ export interface SwitchSessionInput {
 
 export interface DeleteSessionInput {
   sessionId: string;
+  expectedGeneration: number;
 }
 
 export interface SessionArchiveInput extends ProjectInput {

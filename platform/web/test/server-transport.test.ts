@@ -32,6 +32,25 @@ const snapshot: RuntimeSnapshot = {
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
 };
 
+test("transport keeps backpressured SSE clients until the connection actually closes", async () => {
+  const driver = new FakeDriver();
+  const transport = new ServerTransport(driver, structuredClone(snapshot), { allowedHosts: ["localhost"], dialogReconnectGraceMs: 5 });
+  const session = { secret: "secret", csrfToken: "csrf", tabs: new Set(["slow-tab"]) };
+  let ended = 0;
+  const response = { write: () => false, end: () => { ended++; }, writableEnded: false };
+  const heartbeat = setInterval(() => {}, 10_000);
+  const client = { response, session, tabId: "slow-tab", heartbeat };
+  (transport as any).clients.add(client);
+  (transport as any).publish("test.event", { value: true });
+  assert.equal((transport as any).clients.size, 1);
+  assert.equal(ended, 0);
+
+  (transport as any).removeClient(client);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(session.tabs.has("slow-tab"), false);
+  transport.dispose();
+});
+
 class FakeDriver implements PiDriver {
   private listeners = new Set<DriverEventListener>();
   private current = structuredClone(snapshot);

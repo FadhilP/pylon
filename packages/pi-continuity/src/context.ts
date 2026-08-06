@@ -65,11 +65,12 @@ function dedupeStrings(values: string[]) {
   });
 }
 
-export function buildContext(work: Work | undefined, notes: NotebookNote[], latest = "", budget = 450, parent: NotebookNote[] = [], options: { resolvedQuery?: boolean } = {}) {
+export function buildContext(work: Work | undefined, notes: NotebookNote[], latest = "", budget = 450, parent: NotebookNote[] = [], options: { resolvedQuery?: boolean; candidateLimit?: number } = {}) {
   const query = options.resolvedQuery ? latest : promptQuery(latest, work);
-  const selected = shortlistResolvedNotes(notes, query, 2);
+  const candidateLimit = options.candidateLimit ?? 8;
+  const selected = shortlistResolvedNotes(notes, query, candidateLimit);
   const selectedIds = new Set(selected.map((note) => note.id));
-  const selectedParent = shortlistResolvedNotes(parent, query, 2 - selected.length).filter((note) => !selectedIds.has(note.id));
+  const selectedParent = shortlistResolvedNotes(parent, query, candidateLimit).filter((note) => !selectedIds.has(note.id));
   const lines = ["Continuity state. Memory may be stale; direct instructions and repository evidence win."];
   if (work) {
     const remaining = work.todos.filter((todo) => todo.status !== "done");
@@ -100,15 +101,16 @@ export function buildContext(work: Work | undefined, notes: NotebookNote[], late
   const content = lines.filter(Boolean), max = budget * 4;
   if (work) {
     const base = content.join("\n").slice(0, max), remaining = Math.max(0, max - base.length - 1);
-    const memory = fitWholeLines(memoryLines, Math.min(600, remaining));
+    const memory = fitWholeLines(memoryLines, Math.min(600, remaining), 2);
     return [base, memory].filter(Boolean).join("\n");
   }
-  const header = content[0]!, memory = fitWholeLines(memoryLines, Math.min(600, max - header.length - 1));
+  const header = content[0]!, memory = fitWholeLines(memoryLines, Math.min(600, max - header.length - 1), 2);
   return memory ? `${header}\n${memory}` : "";
 }
-function fitWholeLines(lines: string[], max: number) {
+function fitWholeLines(lines: string[], max: number, maxLines: number) {
   const accepted: string[] = []; let used = 0;
   for (const line of lines) {
+    if (accepted.length >= maxLines) break;
     const size = line.length + (accepted.length ? 1 : 0);
     if (size <= max - used) { accepted.push(line); used += size; }
   }

@@ -6,6 +6,7 @@ import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ArchivedProjectSummary, ArchivedSessionSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../../shared/protocol/snapshots.ts";
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
+import { SessionSummaryCache, type SessionFileMetadata } from "./session-summary-cache.ts";
 
 const REFRESH_MS = 60_000;
 const SPAWN_SESSION_MARKER = "pi-spawn-session";
@@ -67,12 +68,23 @@ export interface SessionIndexOptions {
 
 export class SessionIndex {
   private sessions: SessionInfo[] = [];
-  private metadata = new Map<string, { path: string; mtimeMs: number; ctimeMs: number; size: number; userMessageCount: number; owner?: SpawnOwner }>();
-  private dirtyDirectories = new Map<string, { cwd: string; directory: string; sessionIds: Set<string> }>();
+  private metadata = new Map<string, SessionFileMetadata>();
+  private dirtySessions = new Map<string, { path: string; cwd: string }>();
   private scannedAt = 0;
   private scan?: Promise<void>;
+  private cache?: SessionSummaryCache;
 
-  constructor(private registry?: ProjectRegistry) {}
+  constructor(private registry?: ProjectRegistry, agentDir = process.env.PI_CODING_AGENT_DIR) {
+    if (agentDir) this.cache = new SessionSummaryCache(agentDir);
+  }
+
+  setAgentDir(agentDir: string): void {
+    this.cache = new SessionSummaryCache(agentDir);
+    this.sessions = [];
+    this.metadata.clear();
+    this.dirtySessions.clear();
+    this.invalidate();
+  }
 
   setProjectRegistry(registry: ProjectRegistry): void {
     this.registry = registry;
@@ -96,14 +108,12 @@ export class SessionIndex {
       this.invalidate();
       return;
     }
-    const directory = dirname(sessionPath);
-    const key = `${canonicalPath(directory)}\0${canonicalPath(sessionCwd)}`;
-    const target = this.dirtyDirectories.get(key) ?? { cwd: sessionCwd, directory, sessionIds: new Set<string>() };
-    target.sessionIds.add(sessionId);
-    this.dirtyDirectories.set(key, target);
+    this.dirtySessions.set(sessionId, { path: sessionPath, cwd: sessionCwd });
   }
 
   remove(sessionId: string): void {
+    const current = this.sessions.find((session) => session.id === sessionId);
+    if (current) this.dirtySessions.set(sessionId, { path: current.path, cwd: current.cwd });
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
     this.metadata.delete(sessionId);
   }
@@ -111,15 +121,20 @@ export class SessionIndex {
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
     await this.refresh();
     const registered = this.registry?.list();
-    const registeredIds = registered ? new Set(registered.map((project) => project.id)) : undefined;
+    const registeredById = registered ? new Map(registered.map((project) => [project.id, project])) : undefined;
+    const registeredIds = registeredById ? new Set(registeredById.keys()) : undefined;
+    const workspaceProjectIds = new Map(this.registry?.listSessionWorkspaces().map((record) => [record.sessionId, record.projectId]));
+    const archivedIds = new Set(this.registry?.listArchivedSessions().map((record) => record.id));
+    const projectIdFor = (session: Pick<SessionInfo, "id" | "cwd">) => workspaceProjectIds.get(session.id) ?? projectIdForCwd(session.cwd);
+    const projectFor = (session: Pick<SessionInfo, "id" | "cwd">) => registeredById?.get(projectIdFor(session));
     const fallbacks = options.fallbacks ?? (options.activeFallback ? [options.activeFallback] : []);
     const missing = fallbacks.filter((fallback) => {
       if (this.sessions.some((session) => session.id === fallback.id)) return false;
       return (options.userCountFor?.(fallback.id) ?? fallback.messageCount) > 0;
     });
     const source = [...missing, ...this.sessions]
-      .filter((session) => !registeredIds || registeredIds.has(this.projectId(session)))
-      .filter((session) => !this.registry?.isSessionArchived(session.id))
+      .filter((session) => !registeredIds || registeredIds.has(projectIdFor(session)))
+      .filter((session) => !archivedIds.has(session.id))
       .sort((left, right) => right.modified.getTime() - left.modified.getTime());
     const query = input.query?.trim().toLowerCase() ?? "";
     const filtered = query
@@ -127,13 +142,13 @@ export class SessionIndex {
       : source;
     const grouped = new Map<string, SessionInfo[]>();
     for (const session of filtered) {
-      const projectId = this.projectId(session);
+      const projectId = projectIdFor(session);
       if (input.projectId && projectId !== input.projectId) continue;
       const group = grouped.get(projectId) ?? [];
       group.push(session);
       grouped.set(projectId, group);
     }
-    const labels = this.projectLabels(source);
+    const labels = this.projectLabels(source, projectIdFor);
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
     const limit = Math.min(100, Math.max(1, input.limit ?? 10));
     const projects: SessionProjectPage[] = [];
@@ -153,7 +168,7 @@ export class SessionIndex {
         label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
         cwd,
         totalCount: sessions.length,
-        sessions: page.map((session) => this.summary(session, options, sessionLookup)),
+        sessions: page.map((session) => this.summary(session, options, sessionLookup, projectIdFor, projectFor)),
         ...(offset + page.length < sessions.length && page.length
           ? { nextCursor: encodeCursor(page.at(-1)!.id) }
           : {}),
@@ -173,7 +188,7 @@ export class SessionIndex {
         return right.modified.getTime() - left.modified.getTime();
       })
       .slice(0, 100)
-      .map((session) => this.summary(session, options, sessionLookup));
+      .map((session) => this.summary(session, options, sessionLookup, projectIdFor, projectFor));
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, activeSessions, projects };
   }
 
@@ -186,18 +201,22 @@ export class SessionIndex {
     const query = input.query?.trim().toLowerCase() ?? "";
     const archivedProjects = registry.listArchived();
     const archivedProjectIds = new Set(archivedProjects.map((project) => project.id));
+    const workspaceProjectIds = new Map(registry.listSessionWorkspaces().map((record) => [record.sessionId, record.projectId]));
+    const projectById = new Map(registry.list().map((project) => [project.id, project]));
+    const projectIdFor = (session: Pick<SessionInfo, "id" | "cwd">) => workspaceProjectIds.get(session.id) ?? projectIdForCwd(session.cwd);
+    const projectFor = (session: Pick<SessionInfo, "id" | "cwd">) => projectById.get(projectIdFor(session));
     const projects: ArchivedProjectSummary[] = archivedProjects
       .filter((project) => !query || `${project.label} ${project.cwd}`.toLowerCase().includes(query))
       .map((project) => ({
         id: project.id,
         label: project.label,
-        sessionCount: this.sessions.filter((session) => this.projectId(session) === project.id).length,
+        sessionCount: this.sessions.filter((session) => projectIdFor(session) === project.id).length,
         archivedAt: project.archivedAt!,
       }));
     const archiveRecords = new Map(registry.listArchivedSessions().map((record) => [record.id, record.archivedAt]));
     const source = this.sessions
       .filter((session) => archiveRecords.has(session.id))
-      .filter((session) => !archivedProjectIds.has(this.projectId(session)))
+      .filter((session) => !archivedProjectIds.has(projectIdFor(session)))
       .filter((session) => !query || `${session.name ?? ""} ${session.firstMessage} ${session.allMessagesText} ${session.cwd}`.toLowerCase().includes(query))
       .sort((left, right) => Date.parse(archiveRecords.get(right.id)!) - Date.parse(archiveRecords.get(left.id)!));
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
@@ -206,7 +225,7 @@ export class SessionIndex {
     const page = cursorId && offset === 0 ? [] : source.slice(offset, offset + limit);
     const sessionLookup = this.sessionLookup();
     const sessions: ArchivedSessionSummary[] = page.map((session) => ({
-      ...this.summary(session, options, sessionLookup),
+      ...this.summary(session, options, sessionLookup, projectIdFor, projectFor),
       active: false,
       runtimeState: "sleeping",
       archivedAt: archiveRecords.get(session.id)!,
@@ -223,7 +242,7 @@ export class SessionIndex {
 
   private async refresh(): Promise<void> {
     if (this.scan) return this.scan;
-    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtyDirectories.size) return;
+    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtySessions.size) return;
     this.scan = this.refreshPending().finally(() => {
       this.scan = undefined;
     });
@@ -233,22 +252,48 @@ export class SessionIndex {
   private async refreshPending(): Promise<void> {
     while (true) {
       if (!this.scannedAt || Date.now() - this.scannedAt >= REFRESH_MS) {
-        this.sessions = await SessionManager.listAll();
+        if (this.cache) {
+          const cache = this.cache;
+          const indexed = await cache.scan();
+          if (cache !== this.cache) continue;
+          this.sessions = indexed.map((item) => item.session);
+          this.metadata = new Map(indexed.map((item) => [item.session.id, item.metadata]));
+        } else {
+          this.sessions = await SessionManager.listAll();
+        }
         this.scannedAt = Date.now();
         continue;
       }
-      if (!this.dirtyDirectories.size) return;
-      const pending = [...this.dirtyDirectories.entries()];
-      this.dirtyDirectories.clear();
-      for (const [key, target] of pending) {
-        const sessions = await SessionManager.list(target.cwd, target.directory);
-        const replaced = (session: SessionInfo) =>
-          target.sessionIds.has(session.id)
-          || `${canonicalPath(dirname(session.path))}\0${canonicalPath(session.cwd)}` === key;
-        const previousIds = this.sessions.filter(replaced).map((session) => session.id);
-        this.sessions = [...this.sessions.filter((session) => !replaced(session)), ...sessions];
-        const currentIds = new Set(sessions.map((session) => session.id));
-        for (const id of previousIds) if (!currentIds.has(id)) this.metadata.delete(id);
+      if (!this.dirtySessions.size) return;
+      const pending = [...this.dirtySessions.entries()];
+      this.dirtySessions.clear();
+      for (const [sessionId, target] of pending) {
+        if (!this.cache) {
+          const sessions = await SessionManager.list(target.cwd, dirname(target.path));
+          const previousIds = this.sessions
+            .filter((session) => session.id === sessionId || dirname(session.path) === dirname(target.path))
+            .map((session) => session.id);
+          this.sessions = [
+            ...this.sessions.filter((session) => !previousIds.includes(session.id)),
+            ...sessions,
+          ];
+          const currentIds = new Set(sessions.map((session) => session.id));
+          for (const id of previousIds) if (!currentIds.has(id)) this.metadata.delete(id);
+          continue;
+        }
+        const cache = this.cache;
+        const indexed = await cache.refresh(sessionId, target.path);
+        if (cache !== this.cache) continue;
+        const replacementId = indexed?.session.id;
+        const removedIds = this.sessions
+          .filter((session) => session.id === sessionId || replacementId && session.id === replacementId)
+          .map((session) => session.id);
+        this.sessions = this.sessions.filter((session) => !removedIds.includes(session.id));
+        for (const id of removedIds) this.metadata.delete(id);
+        if (indexed) {
+          this.sessions.push(indexed.session);
+          this.metadata.set(indexed.session.id, indexed.metadata);
+        }
       }
     }
   }
@@ -257,13 +302,15 @@ export class SessionIndex {
     session: SessionInfo,
     options: SessionIndexOptions,
     sessionLookup: Map<string, SessionInfo>,
+    projectIdFor: (session: Pick<SessionInfo, "id" | "cwd">) => string = (value) => this.projectId(value),
+    projectFor: (session: Pick<SessionInfo, "id" | "cwd">) => { label: string } | undefined = (value) => this.registry?.projectForSession(value.id, value.cwd),
   ): SessionSummary {
     let manager: SessionManager | undefined;
     const open = () => manager ??= SessionManager.open(session.path);
     const metadata = this.metadataFor(session, open);
     const userMessageCount = options.userCountFor?.(session.id) ?? metadata.userMessageCount;
     const owner = metadata.owner;
-    const project = this.registry?.projectForSession(session.id, session.cwd);
+    const project = projectFor(session);
     const workStartedAt = options.workStartedAtFor?.(session.id);
     const parent = owner
       ? sessionLookup.get(this.sessionKey(owner.id, session.cwd, owner.file))
@@ -271,7 +318,7 @@ export class SessionIndex {
     const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
     return {
       id: session.id.slice(0, 128),
-      projectId: this.projectId(session),
+      projectId: projectIdFor(session),
       ...(session.name ? { name: session.name.slice(0, 200) } : {}),
       ...(parent && parentTitle ? { parentSession: { id: parent.id.slice(0, 128), title: parentTitle } } : {}),
       cwdLabel: project?.label ?? (basename(session.cwd) || "Workspace"),
@@ -316,11 +363,11 @@ export class SessionIndex {
     return new Map(this.sessions.map((session) => [this.sessionKey(session.id, session.cwd, session.path), session]));
   }
 
-  private projectLabels(sessions: SessionInfo[]): Map<string, string> {
+  private projectLabels(sessions: SessionInfo[], projectIdFor: (session: Pick<SessionInfo, "id" | "cwd">) => string = (session) => this.projectId(session)): Map<string, string> {
     const rawLabels = new Map<string, string>();
     const counts = new Map<string, number>();
     for (const session of sessions) {
-      const id = this.projectId(session);
+      const id = projectIdFor(session);
       if (rawLabels.has(id)) continue;
       const label = basename(session.cwd) || "Workspace";
       rawLabels.set(id, label);

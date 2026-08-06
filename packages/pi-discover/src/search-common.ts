@@ -5,6 +5,7 @@ import {
   formatSize,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
+import { truncateUtf8 } from "pylon-core/utf8";
 
 export const SEARCH_TIMEOUT_MS = 30_000;
 
@@ -18,9 +19,7 @@ export function workspacePath(cwd: string, input = "."): string {
 }
 
 function fit(text: string, maxBytes: number): string {
-  let value = text;
-  while (Buffer.byteLength(value, "utf8") > maxBytes) value = value.slice(0, -1);
-  return value;
+  return truncateUtf8(text, maxBytes);
 }
 
 export function bounded(output: string, maxBytes = DEFAULT_MAX_BYTES): string {
