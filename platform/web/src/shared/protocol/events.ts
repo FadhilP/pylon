@@ -1,6 +1,37 @@
+export const MAX_COMPACTION_DISPLAY_RECORDS = 20;
+export const MAX_COMPACTION_DISPLAY_HISTORY_ITEMS = 12;
+export const MAX_COMPACTION_DISPLAY_TEXT = 2_000;
+export const MAX_COMPACTION_DISPLAY_SOURCE_ID = 240;
+export const MAX_COMPACTION_DISPLAY_PATH = 540;
+
+export interface CompactionDisplaySourceReadModel {
+  sourceEntryId: string;
+  text: string;
+}
+
+export interface CompactionDisplayRecordReadModel extends CompactionDisplaySourceReadModel {
+  role: "user" | "assistant";
+}
+
+export interface CompactionDisplayHistoryRecordReadModel {
+  path: string;
+  sourceEntryId?: string;
+}
+
+export interface CompactionDisplayReadModel {
+  records: CompactionDisplayRecordReadModel[];
+  failedTools: CompactionDisplaySourceReadModel[];
+  toolResults: CompactionDisplaySourceReadModel[];
+  history: {
+    read: CompactionDisplayHistoryRecordReadModel[];
+    modified: CompactionDisplayHistoryRecordReadModel[];
+  };
+}
+
 export interface CompactionMessageReadModel {
   contextAfterTokens: number;
   sourceEntryCount?: number;
+  display?: CompactionDisplayReadModel;
 }
 
 export interface MessageReadModel {
@@ -324,7 +355,15 @@ export interface ContinuityWorkReadModel {
   mode: "planning" | "executing" | "handed_off" | "completed" | "cancelled";
   goal: string;
   approved: boolean;
+  approvalPending: boolean;
   planSummary: string;
+  handoff?: {
+    workingSet: string[];
+    assumptions: string[];
+    acceptanceCriteria: string[];
+  };
+  planRevision?: number;
+  revisionFeedback?: { revision: number; text: string; createdAt: string };
   currentTodoId?: string;
   latestFailure?: string;
   nextAction?: string;

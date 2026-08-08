@@ -279,9 +279,9 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
     promptSnippet:
       "Gather cited repository evidence about paths, symbols, boundaries, data flow, cross-file impact, exact line ranges, and uncertainty without making decisions",
     promptGuidelines: [
-      "Use repo_scout for non-local, cross-file, or unfamiliar-code work, including architecture/data flow. Orient just enough to frame a task: usually 3–6 inspections, never over 10; nested/parallel operations count separately. Then call it. Skip orientation with exact anchors, and Scout only for known-file self-contained work.",
-      "Ask repo_scout only to search, map, or trace observable evidence. Convert normative or mixed questions into factual tasks covering contracts, callers, transformations, divergences, constraints, and tests; never ask repo_scout to design, recommend, prioritize, choose architecture, or decide whether something should be canonical. Include an observable action, concrete scope anchors, required evidence, and a finite stopping boundary. Main model evaluates and decides.",
-      "Treat repo_scout citations as working set. Reread only for exact edit, evidence gap/conflict, or changed state. Follow-ups include prior facts and unresolved gap; each repo_scout child starts fresh.",
+      "Use repo_scout for non-local, cross-file, or unfamiliar-code work, including architecture/data flow. Orient just enough to frame a task: usually 3–6 inspections, never over 10; nested/parallel operations count separately. Then call it. Skip orientation with exact anchors; Scout only for known-file self-contained work.",
+      "Ask repo_scout only to search, map, or trace observable evidence. Convert normative or mixed questions into factual tasks; never ask repo_scout to design, recommend, prioritize, choose architecture, or decide whether something should be canonical. Include an observable action, concrete scope anchors, required evidence, and a finite stopping boundary. Main model evaluates and decides.",
+      "Use repo_scout citations. Reread only for exact edit, evidence gap/conflict, or changed state. Call repo_scout again only for new subsystem/data flow or cross-file cause—not exact edits, rereads, or verification. Follow-ups state facts and gaps; each repo_scout child starts fresh.",
     ],
     parameters: Type.Object(
       {

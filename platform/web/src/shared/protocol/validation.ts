@@ -1,6 +1,7 @@
 import { validGuardRules } from "../guard-policy.ts";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
+import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "./events.ts";
 import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
@@ -138,6 +139,9 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   }
   if (value.kind === "continuity") {
     return typeof value.memoryEnabled === "boolean"
+      && Number.isSafeInteger(value.reserveTokens)
+      && (value.reserveTokens as number) >= 1_000
+      && (value.reserveTokens as number) <= 1_000_000
       && Number.isSafeInteger(value.keepRecentTokens)
       && (value.keepRecentTokens as number) >= 1_000
       && (value.keepRecentTokens as number) <= 50_000
@@ -193,6 +197,15 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   }
   if (["restoreQueuedPrompt", "steerQueuedPrompt"].includes(value.type) && !identifier(value.queueId)) {
     return { ok: false, error: "invalid queueId" };
+  }
+  if (value.type === "continuityPlanAction") {
+    if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 1)
+      return { ok: false, error: "invalid plan revision" };
+    if (value.action === "approve") {
+      if (typeof value.resetContext !== "boolean") return { ok: false, error: "invalid plan approval" };
+    } else if (value.action === "requestChanges") {
+      if (!boundedString(value.feedback, 1_000) || !value.feedback.trim()) return { ok: false, error: "invalid plan feedback" };
+    } else return { ok: false, error: "invalid plan action" };
   }
   if (value.type === "editPrompt"
     && (!identifier(value.entryId) || typeof value.rollbackFiles !== "boolean")) {
@@ -580,11 +593,40 @@ function validDelegatedRun(value: unknown): boolean {
     && (item.isError === undefined || typeof item.isError === "boolean"));
 }
 
+function validCompactionDisplay(value: unknown): boolean {
+  const exact = (item: Record<string, unknown>, keys: string[]) => Object.keys(item).every((key) => keys.includes(key));
+  if (!record(value) || !exact(value, ["records", "failedTools", "toolResults", "history"])
+    || !Array.isArray(value.records) || !Array.isArray(value.failedTools) || !Array.isArray(value.toolResults)
+    || value.records.length + value.failedTools.length + value.toolResults.length > MAX_COMPACTION_DISPLAY_RECORDS
+    || !record(value.history) || !exact(value.history, ["read", "modified"])
+    || !Array.isArray(value.history.read) || !Array.isArray(value.history.modified)
+    || value.history.read.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS
+    || value.history.modified.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS) return false;
+  const source = (item: unknown) => record(item)
+    && exact(item, ["sourceEntryId", "text"])
+    && boundedString(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)
+    && boundedString(item.text, MAX_COMPACTION_DISPLAY_TEXT);
+  const historyRecord = (item: unknown) => record(item)
+    && exact(item, ["path", "sourceEntryId"])
+    && boundedString(item.path, MAX_COMPACTION_DISPLAY_PATH)
+    && (item.sourceEntryId === undefined || typeof item.sourceEntryId === "string"
+      && item.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID);
+  return value.records.every((item) => record(item) && exact(item, ["sourceEntryId", "role", "text"])
+    && boundedString(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)
+    && boundedString(item.text, MAX_COMPACTION_DISPLAY_TEXT)
+    && (item.role === "user" || item.role === "assistant"))
+    && value.failedTools.every(source)
+    && value.toolResults.every(source)
+    && value.history.read.every(historyRecord)
+    && value.history.modified.every(historyRecord);
+}
+
 function validCompactionMessage(value: unknown): boolean {
   return record(value)
     && Number.isSafeInteger(value.contextAfterTokens) && (value.contextAfterTokens as number) >= 0
     && (value.sourceEntryCount === undefined
-      || Number.isSafeInteger(value.sourceEntryCount) && (value.sourceEntryCount as number) >= 0);
+      || Number.isSafeInteger(value.sourceEntryCount) && (value.sourceEntryCount as number) >= 0)
+    && (value.display === undefined || validCompactionDisplay(value.display));
 }
 
 function validHistoryMessage(message: unknown): boolean {

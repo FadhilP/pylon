@@ -7,7 +7,7 @@ import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
-import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
+import type { CompactionDisplayReadModel, CompactionDisplaySourceReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -122,6 +122,7 @@ export function ConversationPanel({
   const draftingOnly = Boolean(pendingSession);
   const runtime = draftingOnly ? undefined : live.runtime;
   const controls = runtime?.sessionControls;
+  const continuityPlanning = runtime?.operational.continuity.work?.mode === "planning";
   const updateMessage = (value: string) => {
     setMessage(value);
     onDraftChange?.(value);
@@ -879,6 +880,7 @@ export function ConversationPanel({
               onFiles={addFiles}
             />
             {planMode && <button className="plan-mode-indicator" type="button" onClick={() => setPlanMode(false)} aria-label="Turn off Plan mode" title="Turn off Plan mode"><IconBulb size={14} />Plan mode</button>}
+            {continuityPlanning && <span className="continuity-planning-indicator" role="status" aria-live="polite"><IconBulb size={14} />Planning</span>}
           </div>
           <div className="prompt-right">
           <div className="prompt-metrics" aria-label="Session usage">
@@ -1855,14 +1857,15 @@ function TranscriptActivity({
 
 function CompactionDisclosure({ message }: { message: MessageReadModel }) {
   const compaction = message.compaction!;
+  const display = compaction.display;
   const timestamp = formatMessageTime(message.createdAt);
   return <details className="compaction-disclosure">
     <summary>
       <span className="compaction-disclosure-chevron" aria-hidden="true"><IconChevronDown size={14} /></span>
       <span className="compaction-disclosure-title">
         <strong>Context compacted</strong>
-        <span className="when-closed">View compaction summary</span>
-        <span className="when-open">Hide compaction summary</span>
+        <span className="when-closed">View compacted context</span>
+        <span className="when-open">Hide compacted context</span>
       </span>
       {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
     </summary>
@@ -1871,9 +1874,47 @@ function CompactionDisclosure({ message }: { message: MessageReadModel }) {
         <div><dt>Context after</dt><dd>~{formatCompactNumber(compaction.contextAfterTokens)} tokens</dd></div>
         {compaction.sourceEntryCount !== undefined && <div><dt>Source entries</dt><dd>{compaction.sourceEntryCount.toLocaleString()}</dd></div>}
       </dl>
-      <MarkdownContent text={message.text} />
+      {display && <div className="compaction-display">
+        {display.records.map((record, index) => <article className={`compaction-record is-${record.role}`} key={`${record.sourceEntryId}:${record.role}:${index}`}>
+          <header><strong>{record.role === "user" ? "User" : "Assistant"}</strong><code title={record.sourceEntryId}>{record.sourceEntryId}</code></header>
+          <pre>{record.text}</pre>
+        </article>)}
+        <CompactionToolGroup title="Failed tool calls" records={display.failedTools} failed />
+        <CompactionToolGroup title="Tool results" records={display.toolResults} />
+        <CompactionFileActivity history={display.history} />
+      </div>}
     </div>
   </details>;
+}
+
+function CompactionToolGroup({ title, records, failed = false }: {
+  title: string;
+  records: CompactionDisplaySourceReadModel[];
+  failed?: boolean;
+}) {
+  if (!records.length) return null;
+  return <details className={`compaction-tool-group${failed ? " is-failed" : ""}`}>
+    <summary><strong>{title} ({records.length})</strong><IconChevronDown size={14} aria-hidden="true" /></summary>
+    <div>{records.map((record, index) => <article key={`${record.sourceEntryId}:${index}`}>
+      <code title={record.sourceEntryId}>{record.sourceEntryId}</code>
+      <pre>{record.text}</pre>
+    </article>)}</div>
+  </details>;
+}
+
+function CompactionFileActivity({ history }: { history: CompactionDisplayReadModel["history"] }) {
+  const items = [
+    ...history.modified.map((record) => ({ ...record, label: "Modified" })),
+    ...history.read.map((record) => ({ ...record, label: "Read" })),
+  ];
+  if (!items.length) return null;
+  return <section className="compaction-file-activity">
+    <strong>Observed file activity</strong>
+    <ul>{items.map((item, index) => <li key={`${item.label}:${item.path}:${item.sourceEntryId ?? index}`}>
+      <span>{item.label}</span><code title={item.path}>{item.path}</code>
+      {item.sourceEntryId && <small title={item.sourceEntryId}>Entry {item.sourceEntryId}</small>}
+    </li>)}</ul>
+  </section>;
 }
 
 function SystemDisclosure({ message }: { message: MessageReadModel }) {

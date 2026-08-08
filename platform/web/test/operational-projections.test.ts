@@ -78,12 +78,16 @@ test("state snapshots reject stale revisions and policy unregister removes owner
     version: 4, revision: 2, sessionId: "session", available: true,
     memory: [{ id: "00000000-0000-0000-0000-000000000001", scope: "project", trigger: "Architecture", guidance: "Use the coordinator", authority: "project_contract", origin: "agent", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "test" }],
     globalMemory: [{ id: "00000000-0000-0000-0000-000000000002", scope: "user", trigger: "Preference", guidance: "Keep output concise", authority: "user_instruction", origin: "user", revision: 1, updatedAt: new Date(0).toISOString(), sourceSummary: "user" }],
-    work: { mode: "executing", goal: "Ship", approved: true, planSummary: "Implement", createdAt: "now", updatedAt: "now", todos: [{ id: "todo_1", text: "Build", status: "in_progress", updatedAt: "now" }] },
+    work: { mode: "planning", goal: "Ship", approved: false, approvalPending: true, planSummary: "Implement", planRevision: 2, handoff: { workingSet: ["src/index.ts"], assumptions: ["API remains stable"], acceptanceCriteria: ["Tests pass"] }, revisionFeedback: { revision: 1, text: "Clarify it", createdAt: new Date(0).toISOString() }, createdAt: "now", updatedAt: "now", todos: [{ id: "todo_1", text: "Build", status: "in_progress", updatedAt: "now" }] },
   }, [], "session");
   state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 4, revision: 2, sessionId: "session", available: false, memory: [], globalMemory: [] }, [], "session");
   state = applyOperationalEvent(state, "pi-continuity:state-change", { version: 4, revision: 3, sessionId: "old-session", available: false, memory: [], globalMemory: [] }, [], "session");
   assert.equal(state.continuity.revision, 2);
   assert.equal(state.continuity.work?.goal, "Ship");
+  assert.equal(state.continuity.work?.approvalPending, true);
+  assert.equal(state.continuity.work?.planRevision, 2);
+  assert.deepEqual(state.continuity.work?.handoff?.workingSet, ["src/index.ts"]);
+  assert.equal(state.continuity.work?.revisionFeedback?.text, "Clarify it");
   assert.equal(state.continuity.memory[0]?.trigger, "Architecture");
   assert.equal(state.continuity.globalMemory[0]?.trigger, "Preference");
   state = applyOperationalEvent(state, "pi-continuity:state-change", {

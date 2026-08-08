@@ -47,6 +47,76 @@ function runtime(sessionId: string, messages: RuntimeSnapshot["conversation"]["m
   };
 }
 
+test("session selection publishes before its workspace refresh completes", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const slot = {
+    id: "next",
+    driver: {
+      snapshot: async () => runtime("next"),
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({ workStartedAt: undefined }),
+    },
+    eventRevision: 0,
+    lastActivityAt: 0,
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [],
+  };
+  internal.slots.set(slot.id, slot);
+  internal.generation = 1;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  internal.refreshWorkspace = async (target: any) => {
+    await refreshGate;
+    target.workspace = {
+      gitAvailable: false,
+      mode: "non-git",
+      changedCount: 0,
+      canMoveToCheckout: false,
+      canMoveToWorktree: false,
+      canApplyChanges: false,
+    };
+  };
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+
+  const result = await internal.select(slot);
+
+  assert.equal(result.sessionId, slot.id);
+  assert.equal(result.sessionGeneration, 2);
+  assert.equal(events.find((event) => event.type === "session.replaced")?.runtime.workspace, undefined);
+  assert.equal(events.some((event) => event.type === "workspace.revision"), false);
+
+  releaseRefresh();
+  await waitFor(() => events.some((event) => event.type === "workspace.revision"));
+  assert.equal(events.filter((event) => event.type === "workspace.revision").length, 1);
+});
+
+test("slot disposal waits for a background workspace refresh", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let releaseRefresh!: () => void;
+  const workspaceRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let driverDisposed = false;
+  const slot = {
+    id: "session",
+    workspaceRefresh,
+    unsubscribe: () => undefined,
+    driver: { dispose: async () => { driverDisposed = true; } },
+  };
+  internal.slots.set(slot.id, slot);
+
+  const disposal = internal.disposeSlot(slot);
+  await Promise.resolve();
+
+  assert.equal(internal.slots.has(slot.id), false);
+  assert.equal(driverDisposed, false);
+
+  releaseRefresh();
+  await disposal;
+  assert.equal(driverDisposed, true);
+});
+
 function persistSession(session: SessionManager, name: string): void {
   session.appendSessionInfo(name);
   session.appendMessage({
@@ -448,19 +518,22 @@ test("memory mutations forward scoped IDs and revisions, and reject changed gene
   const coordinator = new RuntimeCoordinator();
   try {
     const internal = coordinator as any; internal.generation = 1; internal.selectedId = "session";
-    let release!: () => void; const updates: any[] = [], deletes: any[] = [], migrations: any[] = [];
+    let release!: () => void; const updates: any[] = [], deletes: any[] = [], migrations: any[] = [], planActions: any[] = [];
     internal.slots.set("session", { id: "session", innerGeneration: 7, lastActivityAt: 0, unsubscribe: () => {}, driver: {
       updateContinuityMemory: (input: any) => { updates.push(input); return Promise.resolve(); },
       deleteContinuityMemory: (input: any) => { deletes.push(input); return Promise.resolve(); },
-      migrateContinuityMemory: (input: any) => { migrations.push(input); return migrations.length === 2 ? new Promise<void>((resolve) => { release = resolve; }) : Promise.resolve(); }, dispose: async () => {},
+      migrateContinuityMemory: (input: any) => { migrations.push(input); return migrations.length === 2 ? new Promise<void>((resolve) => { release = resolve; }) : Promise.resolve(); },
+      continuityPlanAction: (input: any) => { planActions.push(input); return Promise.resolve(); }, dispose: async () => {},
     } });
     const userId = "00000000-0000-4000-8000-000000000001", projectId = "00000000-0000-4000-8000-000000000002";
     await coordinator.updateContinuityMemory({ expectedGeneration: 1, scope: "user", id: userId, trigger: "responding", guidance: "Keep replies concise.", expectedRevision: 3 });
     await coordinator.deleteContinuityMemory({ expectedGeneration: 1, scope: "project", id: projectId, expectedRevision: 4 });
     await coordinator.migrateContinuityMemory({ expectedGeneration: 1 });
+    await coordinator.continuityPlanAction({ expectedGeneration: 1, action: "approve", resetContext: true, expectedRevision: 2 });
     assert.deepEqual(updates[0], { expectedGeneration: 7, scope: "user", id: userId, trigger: "responding", guidance: "Keep replies concise.", expectedRevision: 3 });
     assert.deepEqual(deletes[0], { expectedGeneration: 7, scope: "project", id: projectId, expectedRevision: 4 });
     assert.deepEqual(migrations[0], { expectedGeneration: 7 });
+    assert.deepEqual(planActions[0], { expectedGeneration: 7, action: "approve", resetContext: true, expectedRevision: 2 });
     const pending = coordinator.migrateContinuityMemory({ expectedGeneration: 1 });
     await Promise.resolve(); internal.generation = 2; release();
     await assert.rejects(pending, /stale/i);

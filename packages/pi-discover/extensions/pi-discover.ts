@@ -198,7 +198,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
       deferredToolUsage: {
         relationship_graph: "map source symbols or tokens to related files and source locations",
         index_status: "inspect local repository code-index status",
-        search_sessions: "search historical Pi sessions when explicitly requested",
+        search_sessions: "search historical Pi sessions or assistant tool calls when explicitly requested",
         session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
       },
       acknowledge: () => { coordinated = true; },

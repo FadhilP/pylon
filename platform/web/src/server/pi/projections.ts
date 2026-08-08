@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import type { ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
+import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
+import type { CompactionDisplayReadModel, ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.ts";
 import type { DriverEvent } from "./pi-driver.ts";
@@ -85,15 +86,62 @@ function promptFileCount(value: unknown): number | undefined {
   const files = object(raw.details).files;
   return Array.isArray(files) && files.length > 0 ? Math.min(100, files.length) : undefined;
 }
+function compactionDisplay(value: unknown): CompactionDisplayReadModel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const source = (item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.sourceEntryId === "string" && record.sourceEntryId.length > 0
+      && record.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID
+      && typeof record.text === "string" && record.text.length > 0 && record.text.length <= MAX_COMPACTION_DISPLAY_TEXT;
+  };
+  const record = (item: unknown) => source(item)
+    && ((item as Record<string, unknown>).role === "user" || (item as Record<string, unknown>).role === "assistant");
+  const historyRecord = (item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.path === "string" && record.path.length > 0 && record.path.length <= MAX_COMPACTION_DISPLAY_PATH
+      && (record.sourceEntryId === undefined || typeof record.sourceEntryId === "string"
+        && record.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID);
+  };
+  const history = raw.history as Record<string, unknown> | undefined;
+  if (!Array.isArray(raw.records) || !Array.isArray(raw.failedTools) || !Array.isArray(raw.toolResults)
+    || raw.records.length + raw.failedTools.length + raw.toolResults.length > MAX_COMPACTION_DISPLAY_RECORDS
+    || !raw.records.every(record) || !raw.failedTools.every(source) || !raw.toolResults.every(source)
+    || !history || Array.isArray(history)
+    || !Array.isArray(history.read) || history.read.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS || !history.read.every(historyRecord)
+    || !Array.isArray(history.modified) || history.modified.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS || !history.modified.every(historyRecord)) return undefined;
+  const sourceValue = (item: unknown) => {
+    const record = item as Record<string, unknown>;
+    return { sourceEntryId: record.sourceEntryId as string, text: record.text as string };
+  };
+  const historyValue = (item: unknown) => {
+    const record = item as Record<string, unknown>;
+    return {
+      path: record.path as string,
+      ...(typeof record.sourceEntryId === "string" ? { sourceEntryId: record.sourceEntryId } : {}),
+    };
+  };
+  return {
+    records: raw.records.map((item) => ({ ...sourceValue(item), role: (item as Record<string, unknown>).role as "user" | "assistant" })),
+    failedTools: raw.failedTools.map(sourceValue),
+    toolResults: raw.toolResults.map(sourceValue),
+    history: { read: history.read.map(historyValue), modified: history.modified.map(historyValue) },
+  };
+}
+
 function compactionMessage(value: unknown): MessageReadModel["compaction"] {
   const raw = object(value);
   if (!Number.isSafeInteger(raw.contextAfterTokens) || Number(raw.contextAfterTokens) < 0) return undefined;
   const sourceEntryCount = Number.isSafeInteger(raw.sourceEntryCount) && Number(raw.sourceEntryCount) >= 0
     ? Number(raw.sourceEntryCount)
     : undefined;
+  const display = compactionDisplay(raw.display);
   return {
     contextAfterTokens: Number(raw.contextAfterTokens),
     ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
+    ...(display ? { display } : {}),
   };
 }
 function messageText(value: unknown): string {

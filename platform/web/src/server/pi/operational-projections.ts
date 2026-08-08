@@ -385,8 +385,29 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
     if (!item || !id || !text || !todoStates.has(String(item.status)) || typeof item.updatedAt !== "string") return [];
     return [{ id, text, status: item.status as "pending" | "in_progress" | "done" | "blocked", updatedAt: item.updatedAt.slice(0, 64) }];
   });
+  const boundedList = (value: unknown, maxItems: number, maxLength: number) =>
+    Array.isArray(value) && value.length <= maxItems && value.every((item) => typeof item === "string" && item.length > 0 && item.length <= maxLength)
+      ? value as string[]
+      : undefined;
+  const rawHandoff = record(work.handoff);
+  const workingSet = rawHandoff ? boundedList(rawHandoff.workingSet, 20, 240) : undefined;
+  const assumptions = rawHandoff ? boundedList(rawHandoff.assumptions, 12, 500) : undefined;
+  const acceptanceCriteria = rawHandoff ? boundedList(rawHandoff.acceptanceCriteria, 12, 500) : undefined;
+  if (rawHandoff && (!workingSet || !assumptions || !acceptanceCriteria))
+    return { availability: "unavailable", revision: input.revision as number, memory, globalMemory, v4MigrationAvailable };
+  const rawFeedback = record(work.revisionFeedback);
+  const feedbackText = rawFeedback ? string(rawFeedback.text, 1_000) : undefined;
+  const feedbackCreatedAt = rawFeedback ? timestamp(rawFeedback.createdAt) : undefined;
+  const revisionFeedback = rawFeedback && Number.isSafeInteger(rawFeedback.revision) && Number(rawFeedback.revision) > 0 && feedbackText && feedbackCreatedAt
+    ? { revision: Number(rawFeedback.revision), text: feedbackText, createdAt: feedbackCreatedAt }
+    : undefined;
+  if (rawFeedback && !revisionFeedback)
+    return { availability: "unavailable", revision: input.revision as number, memory, globalMemory, v4MigrationAvailable };
+  const planRevision = Number.isSafeInteger(work.planRevision) && Number(work.planRevision) > 0 ? Number(work.planRevision) : undefined;
   return { availability: "available", revision: input.revision as number, memory, globalMemory, v4MigrationAvailable, work: {
-    mode: work.mode as NonNullable<ContinuityReadModel["work"]>["mode"], goal: work.goal.slice(0, 2_000), approved: work.approved, planSummary: work.planSummary.slice(0, 4_000), todos,
+    mode: work.mode as NonNullable<ContinuityReadModel["work"]>["mode"], goal: work.goal.slice(0, 2_000), approved: work.approved, approvalPending: work.approvalPending === true, planSummary: work.planSummary.slice(0, 4_000), todos,
+    ...(rawHandoff ? { handoff: { workingSet: [...workingSet!], assumptions: [...assumptions!], acceptanceCriteria: [...acceptanceCriteria!] } } : {}),
+    ...(planRevision ? { planRevision } : {}), ...(revisionFeedback ? { revisionFeedback } : {}),
     ...(identifier(work.currentTodoId) ? { currentTodoId: identifier(work.currentTodoId) } : {}), ...(string(work.latestFailure, 1_000) ? { latestFailure: string(work.latestFailure, 1_000) } : {}), ...(string(work.nextAction, 1_000) ? { nextAction: string(work.nextAction, 1_000) } : {}), ...(identifier(work.runId) ? { runId: identifier(work.runId) } : {}),
     createdAt: string(work.createdAt, 64) ?? "", updatedAt: string(work.updatedAt, 64) ?? "", ...(string(work.completedAt, 64) ? { completedAt: string(work.completedAt, 64) } : {}),
   } };

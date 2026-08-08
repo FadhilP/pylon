@@ -76,6 +76,7 @@ import {
 import {
   findRunEntry,
   HANDOFF_ENTRY_TYPE,
+  isRunEntry,
   runTimelineId,
   RUN_ENTRY_TYPE,
   type RunEntry,
@@ -87,10 +88,27 @@ import { canUseBroadRecall, recallProjectSessions, recallSession } from "../src/
 import { loadProjectRecallSessions } from "../src/project-recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
+const EXECUTION_ENTRY_TYPE = "pi-continuity-execution";
 const memoryPreflightTools = new Set(["bash", "edit", "grunt", "heartbeat_start", "write"]);
 const memoryActionFields = ["action", "checkCommands", "command", "label", "operation", "package", "packages", "path", "paths", "query", "sql", "suggestedPaths", "target", "targetedContext", "task"];
+const inspectionBashCommand = /^(?:(?:pwd|ls|dir|cat|head|tail|wc|grep|rg|fd)\b|git\s+(?:status|diff|log|show|rev-parse|ls-files)\b)/i;
+const unsafeInspectionOption = /(?:^|\s)(?:--pre(?:=|\s)|--exec(?:=|\s)|--exec-batch(?:=|\s)|--ext-diff(?:\s|$)|--textconv(?:\s|$)|--output(?:=|\s))/i;
+const unsafeFdShortOption = /(?:^|\s)-[a-z]*x\S*/i;
+
+export function isReadOnlyBashInspection(command: unknown): boolean {
+  if (typeof command !== "string" || !command.trim()) return false;
+  if (/[\r\n;|<>`$]/u.test(command) || command.replaceAll("&&", "").includes("&")) return false;
+  const parts = command.split(/\s*&&\s*/u);
+  return parts.every((part) => {
+    const trimmed = part.trim();
+    return inspectionBashCommand.test(trimmed)
+      && !unsafeInspectionOption.test(trimmed)
+      && !(/^fd\b/iu.test(trimmed) && unsafeFdShortOption.test(trimmed));
+  });
+}
+
 const memoryAction = (toolName: string, input: any) => {
-  if (!memoryPreflightTools.has(toolName)) return;
+  if (!memoryPreflightTools.has(toolName) || (toolName === "bash" && isReadOnlyBashInspection(input?.command))) return;
   const fields: Array<[string, string]> = [];
   for (const field of memoryActionFields) {
     const value = input?.[field];
@@ -155,6 +173,21 @@ const formatPlan = (work: Work) => [
   "Approach",
   work.planSummary?.trim() || "Not specified",
   "",
+  "Working Set",
+  ...(work.handoff?.workingSet.length
+    ? work.handoff.workingSet.map((value) => `- ${value}`)
+    : ["- Not specified"]),
+  "",
+  "Assumptions / Gaps",
+  ...(work.handoff?.assumptions.length
+    ? work.handoff.assumptions.map((value) => `- ${value}`)
+    : ["- None stated"]),
+  "",
+  "Acceptance Criteria",
+  ...(work.handoff?.acceptanceCriteria.length
+    ? work.handoff.acceptanceCriteria.map((value) => `- ${value}`)
+    : ["- Not specified"]),
+  "",
   "Constraints",
   ...(work.constraints.length
     ? work.constraints.map((constraint) => `- ${constraint}`)
@@ -187,7 +220,7 @@ const Status = StringEnum(["pending", "in_progress", "done", "blocked"] as const
   MemAction = StringEnum(["list", "propose"] as const),
   ScopeName = StringEnum(["user", "project"] as const),
   RecallScopeName = StringEnum(["execution", "lineage", "all", "project_sessions"] as const),
-  RecallModeName = StringEnum(["text", "files", "touched"] as const);
+  RecallModeName = StringEnum(["text", "files", "touched", "tools"] as const);
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
   pi.events.emit("pi-continuity:instance-claim", {
@@ -238,18 +271,26 @@ export default function continuityExtension(pi: ExtensionAPI) {
     sharedWorktreeObserver = false,
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
-    approvalSelectionOpen = false,
+    approvalSelection: object | undefined,
     clarifyTimeoutSeconds: number | null | undefined,
     sessionGeneration = 0,
     stateRevision = 0,
     releaseSessionLease: ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
     leasedSessionId = "",
     ephemeralSession = false,
-    schedulePlanApproval = (_ctx: any) => {};
-  let memoryLifecycleQueue = Promise.resolve();
+    schedulePlanApproval = (_ctx: any) => {},
+    resumeApproval = async (_ctx: any) => false,
+    disposePlanAction = () => {};
+  let memoryLifecycleQueue = Promise.resolve(), planMutationQueue = Promise.resolve();
   const withMemoryLifecycle = async <T>(task: () => Promise<T>): Promise<T> => {
     const previous = memoryLifecycleQueue; let release = () => {};
     memoryLifecycleQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await task(); } finally { release(); }
+  };
+  const withPlanMutation = async <T>(task: () => Promise<T>): Promise<T> => {
+    const previous = planMutationQueue; let release = () => {};
+    planMutationQueue = new Promise<void>((resolve) => { release = resolve; });
     await previous;
     try { return await task(); } finally { release(); }
   };
@@ -473,10 +514,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   const saveWork = async () => {
     if (work) {
+      if (!isWork(work)) throw Error("Continuity Work invariants are invalid.");
       assertSafe(
         work.goal,
         work.planSummary,
         ...work.constraints,
+        ...(work.handoff?.workingSet ?? []),
+        ...(work.handoff?.assumptions ?? []),
+        ...(work.handoff?.acceptanceCriteria ?? []),
+        work.revisionFeedback?.text,
         work.latestFailure,
         work.nextAction,
         ...work.todos.map((t) => t.text),
@@ -486,7 +532,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
   };
   const refresh = (ctx: any) => {
-    if (ctx.hasUI) ctx.ui.setStatus("pi-continuity", undefined);
+    if (ctx.hasUI)
+      ctx.ui.setStatus(
+        "pi-continuity",
+        work?.mode === "planning"
+          ? (ctx.mode === "tui" && ctx.ui.theme?.fg
+              ? ctx.ui.theme.fg("warning", "Plan mode")
+              : "Plan mode")
+          : undefined,
+      );
     if (ctx.mode === "tui")
       ctx.ui.setWidget(
         "pi-continuity",
@@ -722,6 +776,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     currentCwd = ctx.cwd;
     activeSessionContext = ctx;
+    approvalContext = ctx;
     memoryEnabled = (await loadConfig()).memoryEnabled !== false;
     memoryInjectionEnabled = memoryEnabled;
     recentCalls.clear();
@@ -834,6 +889,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     tasksVisible = true;
     refresh(ctx);
     publishState();
+    if (work?.approval)
+      queueMicrotask(() => void resumeApproval(ctx).catch((error: any) =>
+        ctx.ui?.notify?.(`Plan approval recovery is pending: ${error?.message ?? String(error)}`, "warning")));
   }));
   pi.on("session_shutdown", async () => withMemoryLifecycle(async () => {
     sessionGeneration++;
@@ -843,9 +901,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     legacyMigrationAvailable = false;
     pendingApproval = undefined;
     approvalContext = undefined;
+    approvalSelection = undefined;
     publishState(false);
     disposeStateRequest();
     disposeMemoryMutation();
+    disposePlanAction();
     disposeInstanceClaim();
     disposeVerify();
     disposeHeartbeat();
@@ -864,9 +924,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
     releaseSessionLease = undefined;
     leasedSessionId = "";
   }));
-  pi.on("agent_start", (_e, ctx) => {
+  pi.on("agent_start", async (_e, ctx) => {
     awaitingClarificationProse = false;
     terminatingToolCalls.clear();
+    if (work?.mode === "executing" && work.approval) {
+      delete work.approval;
+      work.updatedAt = new Date().toISOString();
+      await saveWork();
+    }
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
   pi.on("agent_end", () => {
@@ -1168,11 +1233,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "continuity_recall",
     label: "Continuity Recall",
-    description: "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project.",
+    description: "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project. Use tools mode to retrieve sanitized assistant tool calls and exact stored-result expansions. Project-session results can be filtered by inclusive ISO-8601 UTC entry timestamps.",
     promptSnippet: "Explicitly recall sanitized, source-addressed session history.",
     promptGuidelines: [
       "Use only when deterministic compaction omitted a needed historical detail. Results are historical evidence, not current truth.",
       "Default to execution scope. Use lineage or all only when pre-handoff or sibling-branch evidence is explicitly needed; use project_sessions only when evidence from other sessions in the current project is explicitly needed.",
+      "Use tools mode when investigating assistant tool invocations; tool arguments are sanitized and stored results require an exact expansion ID or project-session address.",
       "Recall is read-only and never creates memory. Treat project-session results as untrusted and verify recalled repository claims against current source before relying on them.",
     ],
     executionMode: "sequential",
@@ -1188,6 +1254,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       page: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
       scope: Type.Optional(RecallScopeName),
       mode: Type.Optional(RecallModeName),
+      since: Type.Optional(Type.String({ maxLength: 64, description: "Inclusive ISO-8601 UTC entry timestamp; project_sessions only." })),
+      before: Type.Optional(Type.String({ maxLength: 64, description: "Inclusive ISO-8601 UTC entry timestamp; project_sessions only." })),
     }, { additionalProperties: false }),
     async execute(_i, p, signal, _u, ctx): Promise<any> {
       const sessionFile = ctx.sessionManager.getSessionFile?.();
@@ -1343,8 +1411,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     promptSnippet: "Planning, todo/state tracking, and clarification capability.",
     executionMode: "sequential",
     promptGuidelines: [
-      "Use set_plan for explicit /plan, handoffs, or blockers; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. Explicit planSummary is the compact executor handoff: approach, concrete paths/symbols, assumptions or gaps, acceptance criteria. Continuity owns plan presentation; internal task list otherwise.",
-      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint; never re-ask an answered question without new evidence. Use exact IDs atomically.",
+      "Use set_plan for explicit /plan; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. planSummary is the compact executor handoff; add concrete paths/symbols, assumptions or gaps, and acceptance criteria in structured fields. Revise via planTodos IDs. Continuity owns plan presentation; otherwise use internal task list.",
+      "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use IDs.",
       "Keep verification out of new todo lists; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
       "Never call a completion tool. Write exactly one text-only final response. For clean/no_checks, acknowledge allowUnverified tool-only; disclose the limitation.",
       "After failed, stale, cancelled, or error Verify results, write one caveated text-only final response and stop without another tool call.",
@@ -1405,9 +1473,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
           Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 }),
         ),
         planSummary: Type.Optional(Type.String({ maxLength: 4000 })),
+        workingSet: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
+        assumptions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 12 })),
+        acceptanceCriteria: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 12 })),
         todos: Type.Optional(
           Type.Array(Type.String({ maxLength: 120 }), { maxItems: 12 }),
         ),
+        planTodos: Type.Optional(Type.Array(Type.Object({
+          id: Type.Optional(Type.String({
+            maxLength: 120,
+            description: "Omit when creating a plan; on revisions, use only an exact ID from the current plan.",
+          })),
+          text: Type.String({ minLength: 1, maxLength: 120 }),
+        }, { additionalProperties: false }), { maxItems: 12 })),
         todoId: Type.Optional(
           Type.String({
             description:
@@ -1428,7 +1506,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
           }),
         ),
         status: Type.Optional(Status),
-        currentTodoId: Type.Optional(Type.String()),
+        currentTodoId: Type.Optional(Type.String({
+          description: "Used only by action state; ignored by set_plan, which generates todo IDs and normally starts the first todo when execution begins.",
+        })),
         latestFailure: Type.Optional(Type.String({ maxLength: 1000 })),
         nextAction: Type.Optional(Type.String({ maxLength: 1000 })),
         allowUnverified: Type.Optional(Type.Boolean({ description: "Acknowledge clean or no_checks in a tool-only state update; disclose the limitation in the final response." })),
@@ -1526,7 +1606,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (p.action === "set_plan") {
         const planning = work?.mode === "planning";
-        const todos = (p.todos || []).map((todo) => todo.trim()).filter(Boolean);
+        if (p.todos !== undefined && p.planTodos !== undefined)
+          throw Error("Use either todos or planTodos, not both.");
+        const planItems = p.planTodos ?? (p.todos || []).map((text) => ({ text }));
+        const todos = planItems.map((todo) => ({ ...todo, text: todo.text.trim() })).filter((todo) => todo.text);
         if (!todos.length)
           return {
             content: [
@@ -1547,13 +1630,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
           .map((constraint) => constraint.trim())
           .filter(Boolean)
           .slice(0, 12);
-        work.planSummary = p.planSummary?.trim() || todos.join("; ") || work.goal;
+        work.planSummary = p.planSummary?.trim() || todos.map((todo) => todo.text).join("; ") || work.goal;
+        if (p.workingSet !== undefined || p.assumptions !== undefined || p.acceptanceCriteria !== undefined)
+          work.handoff = {
+            workingSet: (p.workingSet || []).map((value) => value.trim()).filter(Boolean).slice(0, 20),
+            assumptions: (p.assumptions || []).map((value) => value.trim()).filter(Boolean).slice(0, 12),
+            acceptanceCriteria: (p.acceptanceCriteria || []).map((value) => value.trim()).filter(Boolean).slice(0, 12),
+          };
         setPlan(work, todos, now);
         if (!planning && !work.currentTodoId) {
           const first = work.todos.find((todo) => todo.status !== "done");
           if (first) updateTodo(work, first.id, "in_progress", now);
         }
-        if (planning) work.planRevision = (work.planRevision ?? 0) + 1;
+        if (planning) {
+          work.planRevision = (work.planRevision ?? 0) + 1;
+          delete work.approval;
+          delete work.revisionFeedback;
+        }
         work.updatedAt = now;
         await saveWork();
         if (planning)
@@ -1685,77 +1778,124 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return { content: [{ type: "text", text: "Continuity state updated." }] };
     },
   });
-  const approvePlan = async (ctx: any, resetContext: boolean) => {
-    if (!work?.planSummary) {
-      ctx.ui.notify("No stored plan.", "error");
-      return false;
-    }
-    const config = await loadConfig();
-    const executor = await configuredModel(ctx, config.executor, work.baseModel);
-    if (!executor || !(await pi.setModel(executor))) {
-      ctx.ui.notify("Executor model unavailable.", "error");
-      return false;
-    }
-    const previousWork = work;
-    const previousPendingApproval = pendingApproval;
-    const now = new Date().toISOString();
-    const runId = work.runId ?? randomUUID();
-    const timelineId = work.timelineId ?? runId;
-    const thinking = config.executor?.thinking ?? work.baseThinking;
-    if (thinking) pi.setThinkingLevel(thinking as ThinkingLevel);
-    work = {
-      ...work,
-      mode: "executing",
-      approved: true,
-      runId,
-      timelineId,
-      updatedAt: now,
-    };
-    let gateReleased = false;
-    try {
-      await saveWork();
+  const approvalEntry = (ctx: any, customType: string, token: string) =>
+    (ctx.sessionManager.getEntries?.() ?? []).find((entry: any) =>
+      entry.customType === customType && (entry.data?.approvalToken === token || entry.details?.approvalToken === token));
+  const executionInstruction = "Execute the approved Continuity plan now.";
+  const planDialogOptions = { timeout: 0 };
+  resumeApproval = async (ctx: any) => {
+    const transition = work?.approval;
+    if (!work || !transition || !["planning", "executing"].includes(work.mode)) return false;
+    if (work.planRevision !== transition.revision) throw Error("Approval revision is stale.");
+    const executor = ctx.modelRegistry.find(transition.executorModel.provider, transition.executorModel.id);
+    if (!executor || !(await pi.setModel(executor))) throw Error("Executor model unavailable.");
+    if (transition.thinking) pi.setThinkingLevel(transition.thinking as ThinkingLevel);
+    const priorRunEntry = approvalEntry(ctx, RUN_ENTRY_TYPE, transition.token);
+    const priorRun = isRunEntry(priorRunEntry?.data) ? priorRunEntry.data : undefined;
+    const runId = work.runId ?? priorRun?.runId ?? randomUUID();
+    const timelineId = work.timelineId ?? priorRun?.timelineId ?? runId;
+    if (!priorRunEntry)
       pi.appendEntry(RUN_ENTRY_TYPE, {
         version: 1,
         runId,
         timelineId,
         role: "executor",
         parentSessionId: ctx.sessionManager.getSessionId(),
-        createdAt: now,
+        approvalToken: transition.token,
+        createdAt: transition.createdAt,
       } satisfies RunEntry);
-      if (resetContext)
-        pi.sendMessage({
-          customType: HANDOFF_ENTRY_TYPE,
-          content: [
-            "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
-            buildContext({ ...work, mode: "planning" }, [], "", 600),
-          ].filter(Boolean).join("\n"),
-          display: false,
-          details: {
-            version: 1,
-            runId,
-            timelineId,
-            model: { provider: executor.provider, id: executor.id },
-            ...(thinking ? { thinking } : {}),
-          },
-        }, { triggerTurn: false });
-      gate(false);
-      gateReleased = true;
-      tasksVisible = true;
-      refresh(ctx);
-      pi.sendUserMessage(resetContext
-        ? "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification."
-        : "Execute approved stored plan in current session. Track and verify todos.");
-      pendingApproval = undefined;
-      return true;
-    } catch (error) {
-      work = previousWork;
-      pendingApproval = previousPendingApproval;
-      if (gateReleased) gate(true);
-      await saveWork().catch(() => {});
-      refresh(ctx);
-      throw error;
-    }
+    if (transition.resetContext && !approvalEntry(ctx, HANDOFF_ENTRY_TYPE, transition.token))
+      pi.sendMessage({
+        customType: HANDOFF_ENTRY_TYPE,
+        content: [
+          "Continuity execution boundary. Earlier messages remain visible but are excluded from model context.",
+          buildContext({ ...work, mode: "planning" }, [], "", 600),
+        ].filter(Boolean).join("\n"),
+        display: false,
+        details: {
+          version: 1,
+          runId,
+          timelineId,
+          approvalToken: transition.token,
+          model: transition.executorModel,
+          ...(transition.thinking ? { thinking: transition.thinking } : {}),
+        },
+      }, { triggerTurn: false });
+    work.mode = "executing";
+    work.approved = true;
+    work.runId = runId;
+    work.timelineId = timelineId;
+    work.updatedAt = new Date().toISOString();
+    await saveWork();
+    pendingApproval = undefined;
+    gate(false);
+    tasksVisible = true;
+    refresh(ctx);
+    if (!approvalEntry(ctx, EXECUTION_ENTRY_TYPE, transition.token))
+      pi.sendMessage({
+        customType: EXECUTION_ENTRY_TYPE,
+        content: executionInstruction,
+        display: false,
+        details: { version: 1, approvalToken: transition.token, runId, timelineId },
+      }, { triggerTurn: true });
+    return true;
   };
+  const approvePlan = (ctx: any, resetContext: boolean, expectedRevision?: number) => withPlanMutation(async () => {
+    if (!work?.planSummary || work.mode !== "planning" || !work.todos.length) {
+      ctx.ui?.notify?.("No pending stored plan.", "error");
+      return false;
+    }
+    if (expectedRevision !== undefined && work.planRevision !== expectedRevision)
+      throw Error("Plan revision changed; refresh and review the latest plan.");
+    if (work.approval) return resumeApproval(ctx);
+    if (work.revisionFeedback?.revision === work.planRevision)
+      throw Error("Plan has requested changes; review the next revision before approval.");
+    const config = await loadConfig();
+    const executor = await configuredModel(ctx, config.executor, work.baseModel);
+    if (!executor) {
+      ctx.ui?.notify?.("Executor model unavailable.", "error");
+      return false;
+    }
+    const now = new Date().toISOString();
+    work.approval = {
+      token: randomUUID(),
+      revision: work.planRevision ?? 1,
+      resetContext,
+      executorModel: { provider: executor.provider, id: executor.id },
+      ...(config.executor?.thinking ?? work.baseThinking ? { thinking: config.executor?.thinking ?? work.baseThinking } : {}),
+      createdAt: now,
+    };
+    work.updatedAt = now;
+    await saveWork();
+    return resumeApproval(ctx);
+  });
+  const requestPlanChanges = (feedback: string, expectedRevision?: number) => withPlanMutation(async () => {
+    const text = feedback.trim();
+    if (!work || work.mode !== "planning" || !work.planRevision || !text) throw Error("Plan feedback is unavailable or empty.");
+    if (expectedRevision !== undefined && work.planRevision !== expectedRevision)
+      throw Error("Plan revision changed; refresh and review the latest plan.");
+    if (work.approval) throw Error("Plan approval is already pending.");
+    work.revisionFeedback = { revision: work.planRevision, text: text.slice(0, 1_000), createdAt: new Date().toISOString() };
+    work.offeredPlanRevision = work.planRevision;
+    work.updatedAt = new Date().toISOString();
+    pendingApproval = undefined;
+    await saveWork();
+    refresh(activeSessionContext);
+    pi.sendUserMessage(`Plan changes requested for revision ${work.planRevision}:\n${work.revisionFeedback.text}`);
+  });
+  disposePlanAction = pi.events.on("pi-continuity:plan-action", (request: any) => {
+    if (request?.version !== 1 || typeof request.respond !== "function") return;
+    if (request.sessionId !== leasedSessionId || request.expectedGeneration !== sessionGeneration || !activeSessionContext) {
+      request.respond(Promise.reject(new Error("Continuity plan action is stale or belongs to another session")));
+      return;
+    }
+    const operation = request.action === "approve"
+      ? approvePlan(activeSessionContext, request.resetContext === true, request.expectedRevision)
+      : request.action === "requestChanges" && typeof request.feedback === "string"
+        ? requestPlanChanges(request.feedback, request.expectedRevision)
+        : Promise.reject(new Error("Invalid Continuity plan action"));
+    request.respond(operation);
+  });
   const planCommand = {
     description: "Start, approve, cancel, or inspect plan",
     handler: async (args: string, ctx: any) => {
@@ -1788,6 +1928,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         pendingApproval = undefined;
         if (work) {
           work.mode = "cancelled";
+          delete work.approval;
           await saveWork();
         }
         gate(false);
@@ -1798,7 +1939,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         const feedback = value.slice("deny".length).trim();
         if (!feedback)
           return void ctx.ui.notify("Plan feedback required.", "error");
-        pi.sendUserMessage(`Plan changes requested:\n${feedback}`);
+        await requestPlanChanges(feedback);
         return;
       }
       if (value === "status") {
@@ -1843,7 +1984,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       refresh(ctx);
       if (value)
         pi.sendUserMessage(
-          `Plan this task without modifying project files. Use continuity_update set_plan; make planSummary a compact executor handoff with the approach, concrete paths/symbols, assumptions or unresolved gaps, and acceptance criteria. Keep todos outcome-level: ${value}`,
+          `Plan this task without modifying project files. Use continuity_update set_plan; put the approach in planSummary, concrete paths/symbols in workingSet, unresolved assumptions or gaps in assumptions, and completion checks in acceptanceCriteria. Keep todos outcome-level: ${value}`,
         );
     },
   };
@@ -1854,44 +1995,44 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (
       !token ||
       !actionCtx ||
-      settledCtx.mode !== "tui" ||
-      approvalSelectionOpen ||
+      !["tui", "rpc"].includes(settledCtx.mode) ||
+      approvalSelection ||
       work?.mode !== "planning" ||
       work.runId !== token.runId ||
       work.planRevision !== token.revision ||
+      work.approval ||
+      work.revisionFeedback?.revision === token.revision ||
       !work.planSummary ||
       !work.todos.length
     ) return;
     pendingApproval = undefined;
-    approvalSelectionOpen = true;
+    const selection = {};
+    approvalSelection = selection;
     queueMicrotask(async () => {
       const previousOfferedRevision = work?.offeredPlanRevision;
+      const isCurrentPending = () =>
+        sessionGeneration === generation &&
+        work?.mode === "planning" &&
+        work.runId === token.runId &&
+        work.planRevision === token.revision &&
+        !work.approval &&
+        work.revisionFeedback?.revision !== token.revision;
       const requeue = async () => {
-        if (
-          sessionGeneration !== generation ||
-          work?.mode !== "planning" ||
-          work.runId !== token.runId ||
-          work.planRevision !== token.revision
-        ) return;
-        work.offeredPlanRevision = previousOfferedRevision;
+        if (!isCurrentPending()) return;
+        work!.offeredPlanRevision = previousOfferedRevision;
         pendingApproval = token;
         await saveWork();
       };
       try {
-        if (
-          sessionGeneration !== generation ||
-          work?.mode !== "planning" ||
-          work.runId !== token.runId ||
-          work.planRevision !== token.revision
-        ) return;
-        work.offeredPlanRevision = token.revision;
+        if (!isCurrentPending()) return;
+        work!.offeredPlanRevision = token.revision;
         await saveWork();
         const choice = await settledCtx.ui.select("Plan ready — review structured plan above", [
           "Approve — reset context",
           "Approve — continue current session",
           "Request changes",
-        ]);
-        if (sessionGeneration !== generation) return;
+        ], planDialogOptions);
+        if (!isCurrentPending()) return;
         if (!choice) {
           await requeue();
           return;
@@ -1901,19 +2042,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
         } else if (choice === "Approve — continue current session") {
           if (await approvePlan(actionCtx, false) === false) await requeue();
         } else if (choice === "Request changes") {
-          const feedback = await settledCtx.ui.editor("Plan feedback", "");
+          const feedback = await settledCtx.ui.editor("Plan feedback", "", planDialogOptions);
           if (!feedback?.trim()) {
             await requeue();
             return;
           }
-          if (sessionGeneration === generation)
-            pi.sendUserMessage(`Plan changes requested:\n${feedback.trim()}`);
+          if (isCurrentPending()) await requestPlanChanges(feedback.trim());
         }
       } catch (error: any) {
         await requeue().catch(() => {});
         settledCtx.ui.notify(error?.message ?? String(error), "error");
       } finally {
-        approvalSelectionOpen = false;
+        if (approvalSelection === selection) approvalSelection = undefined;
       }
     });
   };

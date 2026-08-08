@@ -399,6 +399,7 @@ export type PackageSettingsReadModel =
   | {
       kind: "continuity";
       memoryEnabled: boolean;
+      reserveTokens: number;
       keepRecentTokens: number;
       planner?: PackageModelProfileReadModel;
       executor?: PackageModelProfileReadModel;

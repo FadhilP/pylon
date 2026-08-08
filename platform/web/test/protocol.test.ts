@@ -126,12 +126,16 @@ test("command and memory validation allowlists bounded v28 commands and attachme
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "migrateContinuityMemory", commandId: "memory-migrate", expectedGeneration: 1, scope: "user" }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings",  packageId: "pi-timeline", settings: { kind: "timeline", editRollbackDefault: false }, commandId: "timeline-settings", expectedGeneration: 1 }).ok, true);
-  const continuitySettings = { kind: "continuity", memoryEnabled: true, keepRecentTokens: 25_000, memoryReviewer: { model: "provider/reviewer", thinking: "high" }, compactionReviewer: { model: "provider/compact", thinking: "low" } };
+  const continuitySettings = { kind: "continuity", memoryEnabled: true, reserveTokens: 16_384, keepRecentTokens: 25_000, memoryReviewer: { model: "provider/reviewer", thinking: "high" }, compactionReviewer: { model: "provider/compact", thinking: "low" } };
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: continuitySettings, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
   for (const keepRecentTokens of [1_000, 50_000])
     assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, keepRecentTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
   for (const keepRecentTokens of [999, 50_001, 25_000.5])
     assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, keepRecentTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, false);
+  for (const reserveTokens of [1_000, 1_000_000])
+    assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, reserveTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, true);
+  for (const reserveTokens of [999, 1_000_001, 16_384.5])
+    assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-continuity", settings: { ...continuitySettings, reserveTokens }, commandId: "continuity-settings", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "active", sessionAvailability: "deferred", models: ["provider/worker"], agentThinkingLevels: ["low", "high"] }, commandId: "spawn-settings", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "updatePackageSettings", packageId: "pi-spawn", settings: { kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: [] }, commandId: "spawn-settings-invalid", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "handoffSession", destination: "checkout", commandId: "handoff", expectedGeneration: 1 }).ok, true);
@@ -155,6 +159,10 @@ test("command and memory validation allowlists bounded v28 commands and attachme
   assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "", mode: "active", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "updateToolPolicy", scope: "project", tool: "repo_scout", mode: "sometimes", expectedRevision: 2, commandId: "tool-policy", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "dismissCommandResult", resultId: "result-1", commandId: "dismiss", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "continuityPlanAction", action: "approve", resetContext: true, expectedRevision: 2, commandId: "approve-plan", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "continuityPlanAction", action: "requestChanges", feedback: "Clarify the boundary.", expectedRevision: 2, commandId: "revise-plan", expectedGeneration: 1 }).ok, true);
+  assert.equal(validateCommand({ type: "continuityPlanAction", action: "approve", resetContext: "yes", expectedRevision: 2, commandId: "bad-plan", expectedGeneration: 1 }).ok, false);
+  assert.equal(validateCommand({ type: "continuityPlanAction", action: "requestChanges", feedback: " ", expectedRevision: 2, commandId: "bad-feedback", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "timeline", name: "Investigate fix", commandId: "fork", expectedGeneration: 1 }).ok, true);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: " ", commandId: "fork", expectedGeneration: 1 }).ok, false);
   assert.equal(validateCommand({ type: "fork", entryId: "prompt-1", mode: "conversation", name: "x".repeat(201), commandId: "fork", expectedGeneration: 1 }).ok, false);
@@ -450,14 +458,40 @@ test("event and snapshot validators reject incompatible versions", () => {
     protocolVersion: PROTOCOL_VERSION,
     sessionId: "session-1",
     sessionGeneration: 1,
-    messages: [{ id: "history-1", entryId: "entry-1", role: "user", text: "Earlier", streaming: false }],
+    messages: [{
+      id: "history-1",
+      entryId: "entry-1",
+      role: "system",
+      text: "Canonical summary",
+      streaming: false,
+      compaction: {
+        contextAfterTokens: 1_000,
+        display: {
+          records: [{ sourceEntryId: "user-source", role: "user", text: "Exact context" }],
+          failedTools: [{ sourceEntryId: "failed-source", text: "Exact failure" }],
+          toolResults: [{ sourceEntryId: "result-source", text: "Exact result" }],
+          history: { read: [{ path: "src/read.ts" }], modified: [] },
+        },
+      },
+    }],
     remaining: 10,
     nextCursor: "cursor",
   };
   assert.equal(isConversationHistoryPage(history), true);
+  const exactLimitDisplay = {
+    ...history.messages[0].compaction.display,
+    records: [{ sourceEntryId: "s".repeat(240), role: "user", text: "x".repeat(2_000) }],
+    history: { read: [{ path: "p".repeat(540), sourceEntryId: "" }], modified: [] },
+  };
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: exactLimitDisplay } }] }), true);
   assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], entryId: "" }] }), false);
   assert.equal(isConversationHistoryPage({ ...history, messages: Array(101).fill(history.messages[0]) }), false);
   assert.equal(isConversationHistoryPage({ ...history, remaining: -1 }), false);
+  const display = history.messages[0].compaction.display;
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: { ...display, records: [{ sourceEntryId: "source", role: "summary", text: "not displayable" }] } } }] }), false);
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: { ...display, failedTools: Array(21).fill(display.failedTools[0]) } } }] }), false);
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: { ...display, toolResults: [{ sourceEntryId: "source", text: "x".repeat(2_001) }] } } }] }), false);
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: { ...display, records: [{ ...display.records[0], unknown: true }] } } }] }), false);
 });
 
 test("conversation turn index validation keeps metadata bounded", () => {

@@ -153,6 +153,33 @@ test("terminal agent errors come only from the latest assistant response", () =>
   ])?.length, 1_000);
 });
 
+test("plan runtime bridge forwards revision-checked approval and feedback actions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-plan-bridge-")), cwd = join(root, "workspace"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const actions: any[] = [];
+  const planBridge: InlineExtension = { name: "plan-bridge-probe", factory(pi) {
+    pi.events.on("pi-continuity:plan-action", (request: any) => {
+      actions.push({ ...request, respond: undefined });
+      request.respond(request.expectedRevision === 9 ? Promise.reject(new Error("plan revision changed")) : Promise.resolve());
+    });
+  } };
+  const driver = new SessionRuntime({ extensionFactories: [planBridge] });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    await driver.continuityPlanAction({ expectedGeneration: handle.sessionGeneration, action: "approve", resetContext: true, expectedRevision: 2 });
+    await driver.continuityPlanAction({ expectedGeneration: handle.sessionGeneration, action: "requestChanges", feedback: "Clarify it", expectedRevision: 3 });
+    assert.deepEqual(actions.map(({ sessionId, expectedGeneration, action, resetContext, feedback, expectedRevision }) => ({ sessionId, expectedGeneration, action, resetContext, feedback, expectedRevision })), [
+      { sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration, action: "approve", resetContext: true, feedback: undefined, expectedRevision: 2 },
+      { sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration, action: "requestChanges", resetContext: undefined, feedback: "Clarify it", expectedRevision: 3 },
+    ]);
+    await assert.rejects(driver.continuityPlanAction({ expectedGeneration: handle.sessionGeneration, action: "approve", resetContext: false, expectedRevision: 9 }), /revision changed/);
+    assert.throws(() => driver.continuityPlanAction({ expectedGeneration: handle.sessionGeneration + 1, action: "approve", resetContext: false, expectedRevision: 2 }), { name: "StaleGenerationError" });
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("memory runtime bridge forwards scoped CAS mutations and maps stale errors", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-memory-bridge-")), cwd = join(root, "workspace"), agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]); const mutations: any[] = [];
@@ -1140,7 +1167,20 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     if (index === 134) compactionEntryId = session.appendCompaction("## Compact summary", messageIds[120]!, 1_000, {
       type: "pi-continuity-compaction",
       version: 3,
+      mode: "generic",
       sourceEntryCount: 135,
+      records: [
+        { sourceEntryId: "user-source", role: "user", text: "Original request" },
+        { sourceEntryId: "failed-source", role: "tool", text: "exact failure", isError: true },
+        { sourceEntryId: "assistant-source", role: "assistant", text: "Continued work" },
+        { sourceEntryId: "result-source", role: "tool", text: "exact result" },
+        { sourceEntryId: "prior-summary", role: "summary", text: "Prior canonical summary" },
+      ],
+      history: {
+        read: [{ path: "src/read.ts", sourceEntryId: "read-source" }],
+        modified: [{ path: "src/changed.ts", sourceEntryId: "changed-source" }],
+      },
+      supplements: [],
     });
   }
 
@@ -1155,6 +1195,18 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     assert.equal(compaction?.text, "## Compact summary");
     assert.equal(compaction?.systemSource, "pylon-compaction");
     assert.equal(compaction?.compaction?.sourceEntryCount, 135);
+    assert.deepEqual(compaction?.compaction?.display, {
+      records: [
+        { sourceEntryId: "user-source", role: "user", text: "Original request" },
+        { sourceEntryId: "assistant-source", role: "assistant", text: "Continued work" },
+      ],
+      failedTools: [{ sourceEntryId: "failed-source", text: "exact failure" }],
+      toolResults: [{ sourceEntryId: "result-source", text: "exact result" }],
+      history: {
+        read: [{ path: "src/read.ts", sourceEntryId: "read-source" }],
+        modified: [{ path: "src/changed.ts", sourceEntryId: "changed-source" }],
+      },
+    });
     const expectedContextAfter = buildSessionContext(session.getBranch(), compactionEntryId).messages
       .reduce((total, message) => total + estimateTokens(message), 0);
     assert.equal(compaction?.compaction?.contextAfterTokens, expectedContextAfter);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validatePngFile } from "../src/capture.ts";
@@ -63,6 +63,106 @@ test("adapter invokes pinned CLI with argument array and private cwd", async () 
     assert.equal(call!.options.cwd, cli.directory);
     assert.equal(result.snapshot, "- heading [ref=e1]");
     assert.equal(result.value.snapshot, undefined);
+  } finally { await cli.dispose(); }
+});
+
+test("adapter consumes file-backed action snapshots from top-level and nested results", async () => {
+  let cli: PlaywrightCli;
+  let call = 0;
+  const files: string[] = [];
+  cli = await PlaywrightCli.create(async () => {
+    const file = join(cli.directory, "artifacts", `action-${++call}.yml`);
+    files.push(file);
+    const content = call === 1 ? '- textbox "Password" [ref=e1]: hunter2'
+      : call === 2 ? '- button "Continue" [ref=e2]'
+        : call === 4 ? '- link "Created later" [ref=e3]'
+          : "";
+    if (call === 1) {
+      await writeFile(file, "");
+      setTimeout(() => void writeFile(file, content), 10);
+    } else if (call === 4) setTimeout(() => void writeFile(file, content), 10);
+    else await writeFile(file, content);
+    const snapshot = { file: call === 1 ? join("artifacts", `action-${call}.yml`) : file };
+    return { code: 0, stdout: JSON.stringify(call === 1 ? { snapshot } : { result: { snapshot } }), stderr: "", killed: false };
+  });
+  try {
+    const first = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+    assert.equal(first.snapshot, '- textbox "Password" [ref=e1]: [value redacted]');
+    assert.equal(first.value.snapshot, undefined);
+
+    const second = await cli.run(SESSION, { kind: "click", target: "e1" });
+    assert.equal(second.snapshot, '- button "Continue" [ref=e2]');
+    assert.deepEqual(second.value.result, {});
+
+    const empty = await cli.run(SESSION, { kind: "tab-new", url: "about:blank" });
+    assert.equal(empty.snapshot, "");
+
+    const createdLater = await cli.run(SESSION, { kind: "navigate", url: "https://example.com/next" });
+    assert.equal(createdLater.snapshot, '- link "Created later" [ref=e3]');
+    for (const file of files) await assert.rejects(access(file), (error: any) => error?.code === "ENOENT");
+  } finally { await cli.dispose(); }
+});
+
+test("file-backed snapshots reject unsafe or invalid artifacts without leaking paths", async (t) => {
+  let payload: unknown;
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: JSON.stringify({ snapshot: payload }), stderr: "", killed: false }));
+  const outside = await mkdtemp(join(tmpdir(), "helios-snapshot-outside-"));
+  const run = () => cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+  try {
+    const escaped = join(outside, "escaped.yml");
+    await writeFile(escaped, "- button [ref=e1]");
+    payload = { file: escaped };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output" && !error.message.includes(outside));
+    await access(escaped);
+
+    const oversized = join(cli.directory, "artifacts", "oversized.yml");
+    await writeFile(oversized, Buffer.alloc(256 * 1024 + 1, 0x61));
+    payload = { file: oversized };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(oversized), (error: any) => error?.code === "ENOENT");
+
+    const malformed = join(cli.directory, "artifacts", "malformed.yml");
+    await writeFile(malformed, Buffer.from([0xc3, 0x28]));
+    payload = { file: malformed };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(malformed), (error: any) => error?.code === "ENOENT");
+
+    payload = { file: "missing.yml", extra: true };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+
+    const vanished = join(cli.directory, "artifacts", "vanished.yml");
+    await writeFile(vanished, "");
+    setTimeout(() => void rm(vanished, { force: true }), 10);
+    payload = { file: vanished };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+
+    const target = join(cli.directory, "artifacts", "target.yml");
+    const link = join(cli.directory, "artifacts", "link.yml");
+    await writeFile(target, "- button [ref=e1]");
+    try { await symlink(target, link); }
+    catch (error: any) {
+      if (error?.code === "EPERM") return void t.diagnostic("symlink assertion skipped: Windows privilege unavailable");
+      throw error;
+    }
+    payload = { file: link };
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(link), (error: any) => error?.code === "ENOENT");
+    await access(target);
+  } finally {
+    await cli.dispose();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("malformed top-level snapshots do not fall back to valid nested snapshots", async () => {
+  const cli = await PlaywrightCli.create(async () => ({
+    code: 0,
+    stdout: JSON.stringify({ snapshot: { file: "ignored.yml", extra: true }, result: { snapshot: "- button [ref=e1]" } }),
+    stderr: "",
+    killed: false,
+  }));
+  try {
+    await assert.rejects(cli.run(SESSION, { kind: "navigate", url: "https://example.com" }), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
   } finally { await cli.dispose(); }
 });
 

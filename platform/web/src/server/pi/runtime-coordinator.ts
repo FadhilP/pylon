@@ -37,6 +37,7 @@ import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
   MigrateContinuityMemoryInput,
+  ContinuityPlanActionInput,
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
@@ -1485,6 +1486,15 @@ export class RuntimeCoordinator implements PiDriver {
     });
   }
 
+  async continuityPlanAction(input: ContinuityPlanActionInput): Promise<void> {
+    await this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected(); slot.lastActivityAt = Date.now();
+      await slot.driver.continuityPlanAction({ ...input, expectedGeneration: slot.innerGeneration });
+      this.assertGeneration(input.expectedGeneration);
+    });
+  }
+
   async answerUiRequest(input: UiResponse): Promise<void> {
     const slot = this.selected();
     await slot.driver.answerUiRequest({ ...input, sessionGeneration: slot.innerGeneration });
@@ -2160,14 +2170,11 @@ export class RuntimeCoordinator implements PiDriver {
   private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
     const previousId = this.selectedId;
     slot.lastActivityAt = Date.now();
-    const cachedWorkspace = Boolean(slot.workspace);
-    let useCachedWorkspace = cachedWorkspace;
     let runtime: RuntimeSnapshot;
     let revision: number;
     do {
       revision = slot.eventRevision;
-      runtime = await this.snapshotFor(slot, useCachedWorkspace);
-      useCachedWorkspace = true;
+      runtime = await this.snapshotFor(slot, true);
     } while (revision !== slot.eventRevision);
     const issue = describeRuntimeSnapshotIssue(runtime);
     if (issue) throw new InvalidRuntimeSnapshotError(issue);
@@ -2177,7 +2184,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (slot.pendingUi) this.emit({ type: "ui.event", sessionId: slot.id, sessionGeneration: this.generation, payload: slot.pendingUi });
     if (previousId) this.publishStatus(previousId);
     this.publishStatus(slot.id);
-    if (cachedWorkspace) this.queueWorkspaceRefresh(slot);
+    this.queueWorkspaceRefresh(slot);
     return this.replacement(false);
   }
 
@@ -2360,7 +2367,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async snapshotFor(slot: RuntimeSlot, useCachedWorkspace = false): Promise<RuntimeSnapshot> {
-    if (!useCachedWorkspace || !slot.workspace) {
+    if (!useCachedWorkspace) {
       await (slot.workspaceRefresh ?? this.refreshWorkspace(slot, false));
     }
     return this.translateSnapshot(await slot.driver.snapshot(), slot);
@@ -2937,6 +2944,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (slot.queueFlushTimer) clearTimeout(slot.queueFlushTimer);
     slot.unsubscribe();
     this.slots.delete(slot.id);
+    await slot.workspaceRefresh?.catch(() => undefined);
     await slot.driver.dispose();
   }
 

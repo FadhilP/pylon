@@ -53,6 +53,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       registerCommand: (name: string, command: any) => commands.set(name, command),
       registerEntryRenderer: () => {},
       appendEntry: () => {},
+      sendMessage: () => {},
       sendUserMessage: () => {},
       setModel: async () => true,
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
@@ -135,7 +136,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     assert.deepEqual(capabilities[0].catalog(), [
       { name: "index_status", usage: "inspect local repository code-index status" },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
-      { name: "search_sessions", usage: "search historical Pi sessions when explicitly requested" },
+      { name: "search_sessions", usage: "search historical Pi sessions or assistant tool calls when explicitly requested" },
       { name: "session_stats", usage: "inspect historical Pi session usage and tool-call statistics when explicitly requested" },
       { name: "web_scout", usage: "research current public web pages with bounded URL-cited evidence" },
     ]);

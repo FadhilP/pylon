@@ -1,6 +1,7 @@
 import { DEFAULT_MAX_BYTES, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { executableAvailable, type ExecutableProbe } from "pylon-core/executable";
 import { Type } from "typebox";
-import { boundedError, SEARCH_TIMEOUT_MS, unavailable, workspacePath } from "./search-common.ts";
+import { boundedError, SEARCH_TIMEOUT_MS, workspacePath } from "./search-common.ts";
 
 const MAX_GRAPH_RESULTS = 100;
 const DEFAULT_GRAPH_RESULTS = 40;
@@ -129,7 +130,7 @@ function relationshipMap(
   }
 }
 
-export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_MAX_BYTES) {
+export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_MAX_BYTES, probe: ExecutableProbe = executableAvailable) {
   pi.registerTool({
     name: "relationship_graph",
     label: "Relationship map",
@@ -158,41 +159,48 @@ export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_M
         args.push("--", query, ...paths);
         return args;
       };
-      try {
-        const fileResult = await pi.exec("rg", addQuery([...common, "--files-with-matches", "--null"], [path]), { signal, timeout: SEARCH_TIMEOUT_MS });
-        if (fileResult.code !== 0 && fileResult.code !== 1) {
-          if (unavailable(fileResult.stderr)) return {
-            content: [{ type: "text" as const, text: "ripgrep unavailable; relationship map was not built." }],
-            details: { unavailable: true },
-          };
-          throw new Error(`ripgrep failed (${fileResult.code}): ${boundedError(fileResult.stderr)}`);
+      const unavailableResult = () => ({
+        content: [{ type: "text" as const, text: "ripgrep unavailable; relationship map was not built." }],
+        details: { unavailable: true },
+      });
+      const runRg = async (args: string[]) => {
+        try {
+          return await pi.exec("rg", args, { signal, timeout: SEARCH_TIMEOUT_MS });
+        } catch (error) {
+          if (await probe("rg", signal)) throw error;
+          return undefined;
         }
-        const matchingFiles = fileResult.code === 1 ? [] : fileResult.stdout.split("\0").filter(Boolean);
-        const files = matchingFiles.slice(0, MAX_MATCHING_FILES);
-        let parsed = { matches: [] as RelationshipMatch[], observed: 0, malformed: 0, searchMayBeTruncated: false };
-        if (files.length) {
-          const args = addQuery([
-            ...common, "--json", "--line-number", "--max-columns=500", "--max-columns-preview",
-            "--max-count", String(perFileLimit),
-          ], files);
-          const result = await pi.exec("rg", args, { signal, timeout: SEARCH_TIMEOUT_MS });
-          if (result.code !== 0 && result.code !== 1)
-            throw new Error(`ripgrep failed (${result.code}): ${boundedError(result.stderr)}`);
-          if (result.code === 0) parsed = parseRelationshipMatches(result.stdout, query, perFileLimit);
-        }
-        parsed.searchMayBeTruncated ||= matchingFiles.length > files.length;
-        const { value, text } = relationshipMap(
-          query, path, parsed.matches, maxResults, parsed.observed, parsed.malformed, parsed.searchMayBeTruncated,
-          matchingFiles.length, files.length, maxBytes,
-        );
-        return { content: [{ type: "text" as const, text }], details: value.metadata };
-      } catch (error) {
-        if (unavailable(error)) return {
-          content: [{ type: "text" as const, text: "ripgrep unavailable; relationship map was not built." }],
-          details: { unavailable: true },
-        };
-        throw error;
+      };
+      const fileResult = await runRg(addQuery([...common, "--files-with-matches", "--null"], [path]));
+      if (!fileResult) return unavailableResult();
+      if (fileResult.code === 1 && !await probe("rg", signal)) return unavailableResult();
+      if (fileResult.code !== 0 && fileResult.code !== 1) {
+        if (!await probe("rg", signal)) return unavailableResult();
+        throw new Error(`ripgrep failed (${fileResult.code}): ${boundedError(fileResult.stderr)}`);
       }
+      const matchingFiles = fileResult.code === 1 ? [] : fileResult.stdout.split("\0").filter(Boolean);
+      const files = matchingFiles.slice(0, MAX_MATCHING_FILES);
+      let parsed = { matches: [] as RelationshipMatch[], observed: 0, malformed: 0, searchMayBeTruncated: false };
+      if (files.length) {
+        const args = addQuery([
+          ...common, "--json", "--line-number", "--max-columns=500", "--max-columns-preview",
+          "--max-count", String(perFileLimit),
+        ], files);
+        const result = await runRg(args);
+        if (!result) return unavailableResult();
+        if (result.code === 1 && !await probe("rg", signal)) return unavailableResult();
+        if (result.code !== 0 && result.code !== 1) {
+          if (!await probe("rg", signal)) return unavailableResult();
+          throw new Error(`ripgrep failed (${result.code}): ${boundedError(result.stderr)}`);
+        }
+        if (result.code === 0) parsed = parseRelationshipMatches(result.stdout, query, perFileLimit);
+      }
+      parsed.searchMayBeTruncated ||= matchingFiles.length > files.length;
+      const { value, text } = relationshipMap(
+        query, path, parsed.matches, maxResults, parsed.observed, parsed.malformed, parsed.searchMayBeTruncated,
+        matchingFiles.length, files.length, maxBytes,
+      );
+      return { content: [{ type: "text" as const, text }], details: value.metadata };
     },
   });
 }

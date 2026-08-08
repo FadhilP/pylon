@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DEFAULT_KEEP_RECENT_TOKENS, defaultConfig, loadConfig, parseModelRef, saveConfig, updateConfig } from "../src/config.ts";
@@ -78,19 +78,35 @@ test("concurrent role updates retain independent Continuity settings", async () 
   assert.equal(config.planner?.model, "provider/planner"); assert.equal(config.memoryReviewer?.model, "provider/reviewer");
 });
 
-test("web settings toggle durable memory without changing model profiles", async () => {
+test("web settings persist the global compaction reserve without changing unrelated Pi settings", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "continuity-settings-"));
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark", compaction: { enabled: true, keepRecentTokens: 20_000 } }));
   assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "continuity", memoryEnabled: true, keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
+    kind: "continuity", memoryEnabled: true, reserveTokens: 16_384, keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
   });
-  await updateSettings({ kind: "continuity", memoryEnabled: false, keepRecentTokens: 32_000, planner: { model: "provider/planner" }, compactionReviewer: { model: "provider/compaction", thinking: "low" } }, { agentDir });
+  await updateSettings({ kind: "continuity", memoryEnabled: false, reserveTokens: 24_000, keepRecentTokens: 32_000, planner: { model: "provider/planner" }, compactionReviewer: { model: "provider/compaction", thinking: "low" } }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
     kind: "continuity",
     memoryEnabled: false,
+    reserveTokens: 24_000,
     keepRecentTokens: 32_000,
     planner: { model: "provider/planner" },
     compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
-  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: "no", keepRecentTokens: 25_000 }, { agentDir }), /invalid Continuity settings/);
-  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: true, keepRecentTokens: 999 }, { agentDir }), /invalid Continuity settings/);
+  assert.deepEqual(JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")), {
+    theme: "dark", compaction: { enabled: true, keepRecentTokens: 20_000, reserveTokens: 24_000 },
+  });
+  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: "no", reserveTokens: 24_000, keepRecentTokens: 25_000 }, { agentDir }), /invalid Continuity settings/);
+  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: true, reserveTokens: 999, keepRecentTokens: 25_000 }, { agentDir }), /invalid Continuity settings/);
+  await assert.rejects(updateSettings({ kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 999 }, { agentDir }), /invalid Continuity settings/);
+});
+
+test("failed Continuity persistence restores an absent global reserve exactly", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "continuity-settings-rollback-"));
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+  await writeFile(join(agentDir, "pi-continuity"), "blocks the config directory");
+  await assert.rejects(updateSettings({
+    kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 25_000,
+  }, { agentDir }));
+  assert.deepEqual(JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")), { theme: "dark" });
 });

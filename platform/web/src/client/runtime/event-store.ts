@@ -796,6 +796,20 @@ export class RuntimeEventStore {
     await this.sendCommand({ type: "migrateContinuityMemory", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
+  async continuityPlanAction(
+    expectedRevision: number,
+    action: { action: "approve"; resetContext: boolean } | { action: "requestChanges"; feedback: string },
+  ): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "continuityPlanAction",
+      expectedRevision,
+      ...action,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async switchSession(sessionId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     this.historyCache.delete(sessionId);

@@ -146,31 +146,14 @@ export default function papercutExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("papercut", {
-    description: "List, capture, or update project papercuts",
+  pi.registerCommand("papercuts", {
+    description: "List project papercuts: /papercuts [open|resolved|dismissed|all]",
     handler: async (args, ctx) => {
       try {
-        const text = args.trim();
-        const status = text.toLowerCase() as PapercutStatus | "all";
-        if (!text || ["open", "resolved", "dismissed", "all"].includes(status)) {
-          const selected = text ? status : "open";
-          ctx.ui.notify(formatList(await list(ctx, selected), selected), "info");
-          return;
-        }
-        const match = text.match(/^(resolve|dismiss|reopen)\s+(\S+)(?:\s+([\s\S]+))?$/i);
-        if (!match) {
-          if (/^(?:resolve|dismiss|reopen)\b/i.test(text))
-            throw new Error("usage: /papercut resolve <id> <resolution>|dismiss <id> [reason]|reopen <id>");
-          if (/^review\b/i.test(text)) throw new Error("session review is not supported");
-          const result = await capture(ctx, text);
-          ctx.ui.notify(result.duplicate
-            ? `Papercut already open: ${shortId(result.record.id)} (seen ${result.record.occurrences}×).`
-            : `Papercut captured: ${shortId(result.record.id)}.`, "info");
-          return;
-        }
-        const action = match[1].toLowerCase() as "resolve" | "dismiss" | "reopen";
-        const records = await manage(ctx, action, [match[2]], match[3]);
-        ctx.ui.notify(`${action === "resolve" ? "Resolved" : action === "dismiss" ? "Dismissed" : "Reopened"} ${shortId(records[0].id)}.`, "info");
+        const status = (args.trim() || "open") as PapercutStatus | "all";
+        if (!["open", "resolved", "dismissed", "all"].includes(status))
+          throw new Error("usage: /papercuts [open|resolved|dismissed|all]");
+        ctx.ui.notify(formatList(await list(ctx, status), status), "info");
       } catch (error: any) { ctx.ui.notify(error?.message ?? String(error), "error"); }
     },
   });

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { continuityStateSnapshot, CONTINUITY_STATE_VERSION } from "../src/state.ts";
+import { fresh, setPlan } from "../src/active-work.ts";
 import type { NotebookNote } from "../src/memory.ts";
 
 test("continuity state publishes V5 scoped note models", () => {
@@ -14,4 +15,20 @@ test("continuity state publishes V5 scoped note models", () => {
   assert.equal(snapshot.v4MigrationAvailable, true);
   assert.equal("confidence" in snapshot.memory[0]!, false);
   assert.equal("kind" in snapshot.memory[0]!, false);
+});
+
+test("continuity state projects structured plan and approval recovery fields", () => {
+  const work = fresh("Ship");
+  setPlan(work, ["Implement"]);
+  work.planRevision = 1;
+  work.planSummary = "Implement safely";
+  work.handoff = { workingSet: ["src/index.ts"], assumptions: ["API stable"], acceptanceCriteria: ["Tests pass"] };
+  work.approval = { token: "token", revision: 1, resetContext: true, executorModel: { provider: "provider", id: "executor" }, createdAt: new Date(0).toISOString() };
+  work.revisionFeedback = { revision: 1, text: "Clarify it", createdAt: new Date(0).toISOString() };
+
+  const projected = continuityStateSnapshot("session", 1, work).work!;
+  assert.equal(projected.approvalPending, true);
+  assert.equal(projected.planRevision, 1);
+  assert.deepEqual(projected.handoff?.workingSet, ["src/index.ts"]);
+  assert.equal(projected.revisionFeedback?.text, "Clarify it");
 });

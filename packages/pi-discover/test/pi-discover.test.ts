@@ -10,8 +10,10 @@ import { DatabaseSync } from "node:sqlite";
 const execFileAsync = promisify(execFile);
 import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
+import { registerFd } from "../src/fd.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
+import { registerRg } from "../src/rg.ts";
 import { registerSessionSearch, registerSessionStats, searchSessions, sessionStats, type SessionSource } from "../src/sessions.ts";
 
 class Bus {
@@ -71,6 +73,16 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
+const gitObject = "a".repeat(40);
+
+function porcelainStatus(head = "abc123", branch = "main", entries = ""): string {
+  return `# branch.oid ${head}\0# branch.head ${branch}\0${entries}`;
+}
+
+function changedPath(path: string, state = ".M"): string {
+  return `1 ${state} N... 100644 100644 100644 ${gitObject} ${gitObject} ${path}\0`;
+}
+
 function sessionSource(sessions: any[], branches: Record<string, any[]>): SessionSource {
   return {
     async listAll() { return sessions; },
@@ -106,6 +118,70 @@ test("session search scopes by cwd, excludes the active session, redacts, and ac
   assert.equal(outside.sessionLookup, "outside_scope");
   assert.equal((await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "current" }, source)).sessionLookup, "active_session");
   assert.equal((await searchSessions({ query: "OAuth", cwd, sessionId: "missing" }, source)).sessionLookup, "not_found");
+});
+
+test("session search retrieves correlated tool calls only in explicit tools mode", async () => {
+  const cwd = process.cwd();
+  const credential = `ghp_${"x".repeat(32)}`;
+  const source = sessionSource([{
+    id: "tools", path: "tools", cwd, modified: new Date("2026-01-01"), allMessagesText: "",
+  }], {
+    tools: [
+      { id: "call-entry", type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: "advisor-call", name: "advisor", arguments: { request: `diagnose OAuth api_key=${credential}` } },
+        { type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "echo unrelated" } },
+      ] } },
+      { id: "result-entry", type: "message", message: {
+        role: "toolResult", toolCallId: "advisor-call", toolName: "advisor",
+        content: [{ type: "text", text: `failure secret=${credential}` }], isError: true,
+      } },
+    ],
+  });
+
+  assert.equal((await searchSessions({ query: "diagnose", cwd }, source)).matches.length, 0);
+  const call = await searchSessions({ query: "diagnose", cwd, mode: "tools", toolName: "advisor" }, source);
+  assert.equal(call.matches.length, 1);
+  assert.equal(call.matches[0].kind, "tool_call");
+  assert.equal(call.matches[0].toolCallId, "advisor-call");
+  assert.equal(call.matches[0].resultEntryId, "result-entry");
+  assert.equal(call.matches[0].status, "error");
+  assert.match(call.matches[0].text, /diagnose OAuth/);
+  assert.doesNotMatch(call.matches[0].text, new RegExp(credential));
+  assert.equal((await searchSessions({ query: "failure", cwd, mode: "tools" }, source)).matches.length, 0);
+
+  const result = await searchSessions({ query: "failure", cwd, mode: "tools", includeResult: true }, source);
+  assert.equal(result.matches.length, 1);
+  assert.match(result.matches[0].text, /error result: failure/);
+  assert.doesNotMatch(result.matches[0].text, new RegExp(credential));
+  await assert.rejects(
+    searchSessions({ query: "diagnose", cwd, toolName: "advisor" }, source),
+    /require tools mode/,
+  );
+});
+
+test("session tool search rejects ambiguous calls and results", async () => {
+  const cwd = process.cwd();
+  const source = sessionSource([{
+    id: "ambiguous", path: "ambiguous", cwd, modified: new Date("2026-01-01"), allMessagesText: "",
+  }], {
+    ambiguous: [
+      { id: "call-1", type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
+        { type: "toolCall", id: "multi-result", name: "bash", arguments: { command: "ambiguous results" } },
+      ] } },
+      { id: "result-1", type: "message", message: { role: "toolResult", toolCallId: "duplicate", toolName: "advisor", content: [{ type: "text", text: "must not link" }] } },
+      { id: "call-2", type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
+      ] } },
+      { id: "result-2", type: "message", message: { role: "toolResult", toolCallId: "multi-result", toolName: "bash", content: [{ type: "text", text: "first" }] } },
+      { id: "result-3", type: "message", message: { role: "toolResult", toolCallId: "multi-result", toolName: "bash", content: [{ type: "text", text: "second" }] } },
+    ],
+  });
+
+  const result = await searchSessions({ query: "ambiguous", cwd, mode: "tools", includeResult: true }, source);
+  assert.equal(result.matches.length, 3);
+  assert.ok(result.matches.every((match) => match.status === "pending" && !match.resultEntryId));
+  assert.doesNotMatch(JSON.stringify(result), /must not link|first|second/);
 });
 
 test("session search reports truncation only when session or match limits overflow", async () => {
@@ -366,7 +442,7 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
     if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
     if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "current.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: "", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(), stderr: "" };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
@@ -379,9 +455,51 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count, 1);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='stale.ts'").get() as any).count, 0);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='current.ts'").get() as any).count, 1);
+      assert.ok((migrated.prepare("SELECT count(*) AS count FROM sqlite_stat1").get() as any).count > 0);
     } finally {
       migrated.close();
     }
+  } finally {
+    await index.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("porcelain v2 refresh handles unborn and detached branches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-discover-branch-state-"));
+  const dbPath = join(root, "index.sqlite");
+  await writeFile(join(root, "app.ts"), "export function branchState() {}\n");
+  let head = "unborn";
+  let branch = "main";
+  const executor = async (_command: string, args: string[]) => {
+    const gitArgs = args.slice(2);
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse") return head === "unborn"
+      ? { code: 128, stdout: "", stderr: "unknown revision" }
+      : { code: 0, stdout: `${head}\n`, stderr: "" };
+    if (gitArgs[0] === "branch") return { code: 0, stdout: branch ? `${branch}\n` : "", stderr: "" };
+    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "status") return {
+      code: 0,
+      stdout: porcelainStatus(head === "unborn" ? "(initial)" : head, branch || "(detached)", "? app.ts\0"),
+      stderr: "",
+    };
+    throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
+  };
+  const index = new WorkspaceIndex(root, executor, dbPath);
+  try {
+    await index.refresh();
+    const unborn = await index.status() as any;
+    assert.equal(unborn.head, "unborn");
+    assert.equal(unborn.branch, "main");
+    assert.equal(unborn.files, 1);
+    assert.equal(unborn.symbols, 1);
+    head = "abc123";
+    branch = "";
+    await index.refresh();
+    const detached = await index.status() as any;
+    assert.equal(detached.head, "abc123");
+    assert.equal(detached.branch, "");
   } finally {
     await index.close();
     await rm(root, { recursive: true, force: true });
@@ -424,7 +542,7 @@ test("SQLite index refreshes changed, restored, and deleted files atomically", a
       assert.equal(gitArgs.includes("--full-name"), true);
       return { code: 0, stdout: "src/a.ts\0", stderr: "" };
     }
-    if (gitArgs[0] === "status") return { code: 0, stdout: status, stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus("abc123", "main", status), stderr: "" };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, exec, dbPath);
@@ -434,7 +552,7 @@ test("SQLite index refreshes changed, restored, and deleted files atomically", a
     assert.equal((await index.searchCode(root, { query: "authentication middleware" }) as any[])[0].path, "src/a.ts");
 
     await writeFile(sourcePath, "export function beta() { return 'changed token'; }\n");
-    status = " M src/a.ts\0";
+    status = changedPath("src/a.ts");
     await index.refresh();
     assert.deepEqual((await index.searchSymbols(root, { query: "beta" }) as any[]).map((row) => row.name), ["beta"]);
 
@@ -444,9 +562,44 @@ test("SQLite index refreshes changed, restored, and deleted files atomically", a
     assert.deepEqual((await index.searchSymbols(root, { query: "alpha" }) as any[]).map((row) => row.name), ["alpha"]);
 
     await rm(sourcePath);
-    status = " D src/a.ts\0";
+    status = changedPath("src/a.ts", ".D");
     await index.refresh();
     assert.equal((await index.searchSymbols(root, { query: "alpha" }) as any[]).length, 0);
+  } finally {
+    await index.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refresh retries when a clean path becomes dirty after the initial snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-discover-refresh-race-"));
+  const sourcePath = join(root, "app.ts");
+  const dbPath = join(root, "index.sqlite");
+  await writeFile(sourcePath, "export function beforeRace() {}\n");
+  let injectChange = false;
+  let changed = false;
+  let dirty = "";
+  const executor = async (_command: string, args: string[]) => {
+    const gitArgs = args.slice(2);
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "ls-files" && gitArgs.includes("--stage")) {
+      if (injectChange && !changed) {
+        await writeFile(sourcePath, "export function afterRace() {}\n");
+        dirty = changedPath("app.ts");
+        changed = true;
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (gitArgs[0] === "ls-files") return { code: 0, stdout: "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus("abc123", "main", dirty), stderr: "" };
+    throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
+  };
+  const index = new WorkspaceIndex(root, executor, dbPath);
+  try {
+    await index.refresh();
+    injectChange = true;
+    assert.equal((await index.searchSymbols(root, { query: "afterRace" }) as any[]).length, 1);
+    assert.equal((await index.searchSymbols(root, { query: "beforeRace" }) as any[]).length, 0);
   } finally {
     await index.close();
     await rm(root, { recursive: true, force: true });
@@ -470,7 +623,7 @@ test("SQLite index prunes workspaces, repositories, and FTS rows for missing dir
     if (gitArgs[0] === "rev-parse") return { code: 0, stdout: `${cwd === live ? "live" : "stale"}-head\n`, stderr: "" };
     if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: "", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(`${cwd === live ? "live" : "stale"}-head`), stderr: "" };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const liveIndex = new WorkspaceIndex(live, executor, dbPath);
@@ -674,7 +827,7 @@ test("SQLite index projects one physical repository through two gitlink prefixes
       return { code: 0, stdout: cwd === root ? `${entries.join("\0")}\0` : "", stderr: "" };
     }
     if (gitArgs[0] === "ls-files") return { code: 0, stdout: cwd === child ? "nested.ts\0" : "", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: "", stderr: "" };
+    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(cwd === root ? "root-head" : "child-head"), stderr: "" };
     throw new Error(`unexpected git call: ${cwd} ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
@@ -703,15 +856,21 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
   const previousPath = process.env.PI_DISCOVER_INDEX_PATH;
   let status = "";
   let statusCalls = 0;
+  const gitCalls: string[][] = [];
   await writeFile(sourcePath, "export function beforeTurn() {}\n");
   process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
   const runtime = setup(async (_command, args) => {
     const gitArgs = args.slice(2);
+    gitCalls.push(gitArgs);
     if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
     if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
     if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files") return { code: 0, stdout: "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") { statusCalls++; return { code: 0, stdout: status, stderr: "" }; }
+    if (gitArgs[0] === "status") {
+      assert.ok(gitArgs.includes("--porcelain=v2"));
+      statusCalls++;
+      return { code: 0, stdout: porcelainStatus("abc123", "main", status), stderr: "" };
+    }
     return { code: 1, stdout: "", stderr: "unexpected git call" };
   });
   const notifications: Array<{ text: string; level: string }> = [];
@@ -740,7 +899,7 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
-      search_sessions: "search historical Pi sessions when explicitly requested",
+      search_sessions: "search historical Pi sessions or assistant tool calls when explicitly requested",
       session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
     });
     assert.ok(!runtime.active.includes("index_status"));
@@ -751,8 +910,12 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.equal(indexStates.at(-1)?.state, "idle");
     assert.equal(indexStates.at(-1)?.files, 1);
     assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
+    const callsBeforeSearch = gitCalls.length;
     let result = await runtime.tools.get("symbol_search").execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "beforeTurn");
+    const searchCalls = gitCalls.slice(callsBeforeSearch);
+    assert.equal(searchCalls.length, 3);
+    assert.deepEqual(searchCalls.map((args) => args[0]).sort(), ["ls-files", "status", "status"]);
 
     await writeFile(sourcePath, "export function manualRebuild() {}\n");
     await runtime.commands.get("discover-index").handler("rebuild", ctx);
@@ -771,7 +934,7 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.equal(indexStates.at(-1)?.state, "idle");
 
     await writeFile(sourcePath, "export function afterTurn() {}\n");
-    status = " M app.ts\0";
+    status = changedPath("app.ts");
     const statusCallsBeforeTurn = statusCalls;
     await runtime.lifecycle.emitAsync("turn_end", {}, ctx);
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -840,6 +1003,20 @@ test("rg uses argument arrays and supports files mode", async () => {
   assert.deepEqual(result.content[0].text.trimEnd().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
 });
 
+test("rg resolves paths without restricting them to the workspace", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const { tools } = setup(async (command, args) => {
+    calls.push({ command, args });
+    return { stdout: "", stderr: "", code: 0, killed: false };
+  });
+  const cwd = process.cwd();
+  const outside = resolve(cwd, "..");
+  await tools.get("rg").execute("absolute", { pattern: "needle", path: `@${outside}` }, undefined, undefined, { cwd });
+  await tools.get("rg").execute("relative", { pattern: "needle", path: "../elsewhere" }, undefined, undefined, { cwd });
+  await tools.get("rg").execute("default", { pattern: "needle" }, undefined, undefined, { cwd });
+  assert.deepEqual(calls.map(({ args }) => args.at(-1)), [outside, resolve(cwd, "../elsewhere"), cwd]);
+});
+
 test("fd resolves paths without restricting them to the workspace", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const { tools } = setup(async (command, args) => {
@@ -858,15 +1035,99 @@ test("fd resolves paths without restricting them to the workspace", async () => 
   ]);
 });
 
-test("fd tries fdfind then directs models to built-in find", async () => {
+test("rg falls back to grep in line and files modes only when ripgrep is absent", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string, args: string[]) => {
+      calls.push({ command, args });
+      if (command === "rg") return { stdout: "", stderr: "", code: 1, killed: false };
+      const files = args.includes("-l");
+      return { stdout: files ? "src/a.ts\nsrc/b.ts\n" : "src/a.ts:3:needle\n", stderr: "", code: 0, killed: false };
+    },
+  };
+  registerRg(pi, 8 * 1024, async (command) => command === "grep");
+  const ctx = { cwd: process.cwd() };
+  const lines = await tools.get("rg").execute("lines", { pattern: "needle" }, undefined, undefined, ctx);
+  const files = await tools.get("rg").execute("files", { pattern: "needle", mode: "files" }, undefined, undefined, ctx);
+  assert.match(lines.content[0].text, /src\/a\.ts:3:needle/);
+  assert.equal(lines.details.fallback, true);
+  assert.deepEqual(files.content[0].text.trim().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
+  assert.equal(files.details.fallback, true);
+  assert.deepEqual(calls.map(({ command }) => command), ["rg", "grep", "rg", "grep"]);
+});
+
+test("rg does not mistake an invalid path error for a missing executable", async () => {
   const calls: string[] = [];
-  const { tools } = setup(async (command) => {
-    calls.push(command);
-    throw new Error("ENOENT");
-  });
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => {
+      calls.push(command);
+      return { stdout: "", stderr: "The system cannot find the path specified", code: 2, killed: false };
+    },
+  };
+  registerRg(pi, 8 * 1024, async () => true);
+  await assert.rejects(
+    tools.get("rg").execute("id", { pattern: "needle", path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
+    /ripgrep failed.*cannot find the path/i,
+  );
+  assert.deepEqual(calls, ["rg"]);
+});
+
+test("rg does not start a fallback after cancellation", async () => {
+  const calls: string[] = [];
+  const tools = new Map<string, any>();
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled"));
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => {
+      calls.push(command);
+      throw new Error("command aborted");
+    },
+  };
+  registerRg(pi);
+  await assert.rejects(
+    tools.get("rg").execute("id", { pattern: "needle" }, controller.signal, undefined, { cwd: process.cwd() }),
+    /cancelled/,
+  );
+  assert.deepEqual(calls, ["rg"]);
+});
+
+test("fd tries fdfind only when the preceding executable is absent", async () => {
+  const calls: string[] = [];
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => {
+      calls.push(command);
+      return { stdout: "", stderr: "", code: 1, killed: false };
+    },
+  };
+  registerFd(pi, 8 * 1024, async () => false);
   const result = await tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(calls, ["fd", "fdfind"]);
-  assert.match(result.content[0].text, /use find instead/);
+  assert.match(result.content[0].text, /fd\/fdfind unavailable/);
+});
+
+test("fd does not mistake an invalid path error for a missing executable", async () => {
+  const calls: string[] = [];
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => {
+      calls.push(command);
+      return { stdout: "", stderr: "The system cannot find the path specified", code: 1, killed: false };
+    },
+  };
+  registerFd(pi, 8 * 1024, async () => true);
+  await assert.rejects(
+    tools.get("fd").execute("id", { path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
+    /fd failed.*cannot find the path/i,
+  );
+  assert.deepEqual(calls, ["fd"]);
 });
 
 function rgMatch(path: string, line: number, text: string) {

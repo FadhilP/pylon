@@ -116,6 +116,10 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
               <Status tone={workTone}>{work.mode}</Status>
               <span>{work.todos.filter((todo) => todo.status === "done").length} of {work.todos.length} complete</span>
             </div>
+            {(work.latestFailure || work.nextAction) && <div className="run-issue" role={work.latestFailure ? "alert" : "status"}>
+              {work.latestFailure && <strong>{work.latestFailure}</strong>}
+              {work.nextAction && <span>{work.nextAction}</span>}
+            </div>}
             <TodoList work={work} />
           </> : <div className="empty-state"><IconListCheck size={20} /><strong>No active work</strong><span>Continuity has no plan for this session.</span></div>}
         </InspectorSection>}

@@ -35,14 +35,10 @@ IDs may be full UUIDs or unique prefixes of at least four characters. Resolution
 ## Commands
 
 ```text
-/papercut [open|resolved|dismissed|all]
-/papercut <message>
-/papercut resolve <id> <resolution>
-/papercut dismiss <id> [reason]
-/papercut reopen <id>
+/papercuts [open|resolved|dismissed|all]
 ```
 
-With no arguments, `/papercut` lists open records. Exact status words list that status; all other text is captured as a new papercut.
+With no arguments, `/papercuts` lists open records.
 
 Session transcript review is intentionally not included.
 

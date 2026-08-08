@@ -39,11 +39,12 @@ test("live pinned CLI owned browser workflow", { skip: !live, timeout: 120_000 }
   assert.ok(address && typeof address === "object");
   const manager = new BrowserSessionManager(exec);
   try {
-    await manager.start("live-contract", `http://127.0.0.1:${address.port}`);
-    let snapshot = await manager.operate("live-contract", { kind: "snapshot", depth: 6 });
-    await manager.operate("live-contract", { kind: "fill", target: reference(snapshot.snapshot, "textbox"), text: "Helios" });
-    snapshot = await manager.operate("live-contract", { kind: "snapshot", depth: 6 });
-    await manager.operate("live-contract", { kind: "click", target: reference(snapshot.snapshot, "button") });
+    const started = await manager.start("live-contract", `http://127.0.0.1:${address.port}`);
+    assert.ok(started.snapshot, "open should return its automatic post-action snapshot");
+    const filled = await manager.operate("live-contract", { kind: "fill", target: reference(started.snapshot, "textbox"), text: "Helios" });
+    const afterFill = filled.snapshot ?? (await manager.operate("live-contract", { kind: "snapshot", depth: 6 })).snapshot;
+    const clicked = await manager.operate("live-contract", { kind: "click", target: reference(afterFill, "button") });
+    assert.ok(clicked.snapshot, "click should return its automatic post-action snapshot");
     const screenshot = await manager.operate("live-contract", { kind: "screenshot", fullPage: true });
     assert.ok(screenshot.artifactPath);
     await rm(screenshot.artifactPath!, { force: true });

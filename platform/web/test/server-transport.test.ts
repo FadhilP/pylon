@@ -72,6 +72,7 @@ class FakeDriver implements PiDriver {
   selectedThinking: string[] = [];
   packageSettingsUpdates: unknown[] = [];
   hookSettingsUpdates: HookSettingsReadModel[] = [];
+  planActions: unknown[] = [];
   hookSettings: HookSettingsReadModel = { sessionStart: { enabled: false, sources: [] }, beforeAgentStart: { enabled: false, sources: [] } };
   indexRebuilds = 0;
   newSessionParent?: string;
@@ -248,6 +249,7 @@ class FakeDriver implements PiDriver {
   updateContinuityMemory(): Promise<void> { return Promise.resolve(); }
   deleteContinuityMemory(): Promise<void> { return Promise.resolve(); }
   migrateContinuityMemory(): Promise<void> { return Promise.resolve(); }
+  continuityPlanAction(input: unknown): Promise<void> { this.planActions.push(input); return Promise.resolve(); }
   answerUiRequest(input: UiResponse): Promise<void> { this.answers.push(input); this.emit({ type: "ui.closed", sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, requestId: input.requestId }); return Promise.resolve(); }
   keepUiRequestAlive(requestId: string, sessionGeneration: number): void {
     this.keepAlives.push({ requestId, sessionGeneration });
@@ -668,6 +670,10 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);
     assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(indexCommand) })).status, 200);
     assert.equal(driver.indexRebuilds, 1);
+    const approvePlanCommand = { type: "continuityPlanAction", action: "approve", resetContext: true, expectedRevision: 2, commandId: "approve-plan-once", expectedGeneration: 1 };
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(approvePlanCommand) })).status, 200);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(approvePlanCommand) })).status, 200);
+    assert.deepEqual(driver.planActions, [approvePlanCommand]);
 
     const timeline = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "timeline", action: "fork", checkpointId: "session-1:checkpoint-1", commandId: "timeline-fork", expectedGeneration: 1 }) });
     assert.equal(timeline.status, 200);

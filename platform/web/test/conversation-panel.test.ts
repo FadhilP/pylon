@@ -10,15 +10,22 @@ test("earlier history preserves a stable transcript anchor", async () => {
   assert.match(source, /requestAnimationFrame\(\(\) => \{[\s\S]*?if \(preserveAnchor\)[\s\S]*?setTranscriptScrollTop[\s\S]*?finally \{\s*setHistoryLoading\(undefined\)/);
 });
 
-test("compaction history renders a dedicated collapsed disclosure", async () => {
+test("compaction history renders bounded structured context in native disclosures", async () => {
   const source = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
 
   assert.match(source, /if \(block\.compaction\) return <CompactionDisclosure/);
   assert.match(source, /<details className="compaction-disclosure">[\s\S]*?compaction-disclosure-chevron[\s\S]*?<strong>Context compacted<\/strong>/);
-  assert.match(source, /when-closed">View compaction summary[\s\S]*?when-open">Hide compaction summary/);
+  assert.match(source, /when-closed">View compacted context[\s\S]*?when-open">Hide compacted context/);
   assert.match(source, /<dt>Context after<\/dt>[\s\S]*?contextAfterTokens/);
   assert.match(source, /sourceEntryCount !== undefined[\s\S]*?<dt>Source entries<\/dt>/);
-  assert.match(source, /<MarkdownContent text=\{message\.text\} \/>/);
+  assert.match(source, /display\.records\.map\(\(record, index\)[\s\S]*?record\.role === "user" \? "User" : "Assistant"[\s\S]*?record\.sourceEntryId[\s\S]*?<pre>\{record\.text\}<\/pre>/);
+  assert.match(source, /title="Failed tool calls" records=\{display\.failedTools\} failed/);
+  assert.match(source, /title="Tool results" records=\{display\.toolResults\}/);
+  assert.match(source, /<details className=\{`compaction-tool-group[\s\S]*?<summary><strong>\{title\} \(\{records\.length\}\)<\/strong>/);
+  assert.match(source, /records\.map\(\(record, index\)[\s\S]*?key=\{`\$\{record\.sourceEntryId\}:\$\{index\}`\}/);
+  assert.match(source, /history\.modified[\s\S]*?history\.read[\s\S]*?Observed file activity/);
+  const disclosure = source.slice(source.indexOf("function CompactionDisclosure"), source.indexOf("function SystemDisclosure"));
+  assert.doesNotMatch(disclosure, /MarkdownContent|dangerouslySetInnerHTML/);
   assert.doesNotMatch(source, /<dt>Context before<\/dt>|<dt>Reduction<\/dt>|<dt>Reason<\/dt>/);
 });
 
@@ -53,6 +60,16 @@ test("new sessions show an isolated drafting shell until the authoritative runti
   assert.match(app, /workspace-layout[\s\S]*?pendingSession \? " is-session-pending"/);
   assert.match(app, /querySelector<HTMLElement>\(":scope > \.inspector"\)[\s\S]*?drawer\.inert = Boolean\(pendingSession\)/);
   assert.match(styles, /\.workspace-layout\.is-session-pending > \.inspector[\s\S]*?filter: blur\(1\.5px\)[\s\S]*?pointer-events: none/);
+});
+
+test("active Continuity planning remains visible after the one-shot composer mode resets", async () => {
+  const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
+
+  assert.match(panel, /continuityPlanning = runtime\?\.operational\.continuity\.work\?\.mode === "planning"/);
+  assert.match(panel, /continuityPlanning && <span className="continuity-planning-indicator" role="status" aria-live="polite">[\s\S]*?Planning<\/span>/);
+  assert.match(panel, /setPlanMode\(false\)/);
+  assert.match(styles, /\.continuity-planning-indicator[\s\S]*?background: var\(--accent-soft\)/);
 });
 
 test("pending user messages use the approved unsent treatment and queue controls", async () => {

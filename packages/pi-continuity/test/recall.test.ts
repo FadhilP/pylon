@@ -136,6 +136,98 @@ test("explicit project_sessions scope searches other sessions with composite sou
   assert.doesNotMatch(result.text, /session=current/);
 });
 
+test("project-session entry-time filters are inclusive and reject invalid ranges", () => {
+  const timed = (id: string, time: string) => {
+    const value = user(id, null, `dated marker ${id}`);
+    value.timestamp = time;
+    return value;
+  };
+  const sessions = [{
+    sessionId: "history",
+    modifiedAt: timestamp,
+    entries: [
+      timed("old", "2024-12-31T23:59:59.999Z"),
+      timed("lower", "2025-01-01T00:00:00.000Z"),
+      timed("upper", "2025-01-31T23:59:59.999Z"),
+      timed("new", "2025-02-01T00:00:00.000Z"),
+    ],
+  }];
+  const recallRange = (params: Record<string, unknown>) => recallProjectSessions({
+    currentSessionId: "current",
+    sessions,
+    skipped: 0,
+    truncated: false,
+    params: { scope: "project_sessions", query: "dated marker", ...params },
+  });
+
+  const bounded = recallRange({
+    since: "2025-01-01T00:00:00.000Z",
+    before: "2025-01-31T23:59:59.999Z",
+  });
+  assert.equal(bounded.total, 2);
+  assert.match(bounded.text, /Entry time filter \(inclusive\)/);
+  assert.match(bounded.text, /entry=lower|entry=upper/);
+  assert.doesNotMatch(bounded.text, /entry=old|entry=new|Bounded scan/);
+
+  const invalid = recallRange({ since: "not-a-date" });
+  assert.equal(invalid.total, 0);
+  assert.match(invalid.text, /Invalid since timestamp/);
+  assert.doesNotMatch(invalid.text, /Bounded scan/);
+
+  const nonIso = recallRange({ since: "January 1, 2025" });
+  assert.equal(nonIso.total, 0);
+  assert.match(nonIso.text, /Invalid since timestamp/);
+
+  const inverted = recallRange({
+    since: "2025-02-01T00:00:00.000Z",
+    before: "2025-01-01T00:00:00.000Z",
+  });
+  assert.equal(inverted.total, 0);
+  assert.match(inverted.text, /since must be at or before before/);
+
+  const currentSession = recall(baseBranch(), { since: "2025-01-01T00:00:00.000Z" });
+  assert.equal(currentSession.total, 0);
+  assert.match(currentSession.text, /supported only with project_sessions scope/);
+});
+
+test("project-session date filtering preserves unbounded entries and uses file call time", () => {
+  const malformed = user("malformed", null, "unbounded malformed timestamp");
+  malformed.timestamp = "unknown";
+  const unbounded = recallProjectSessions({
+    currentSessionId: "current",
+    sessions: [{ sessionId: "history", modifiedAt: timestamp, entries: [malformed] }],
+    skipped: 0,
+    truncated: false,
+    params: { scope: "project_sessions", query: "unbounded malformed" },
+  });
+  assert.equal(unbounded.total, 1);
+
+  const call = assistant("call", null, [{
+    type: "toolCall", id: "read-1", name: "read", arguments: { path: "safe.txt" },
+  }]);
+  const result = toolResult("result", "call", "read-1", "read", "stored result outside range");
+  call.timestamp = "2025-01-15T00:00:00.000Z";
+  result.timestamp = "2025-02-01T00:00:00.000Z";
+  const files = recallProjectSessions({
+    currentSessionId: "current",
+    sessions: [{ sessionId: "history", modifiedAt: timestamp, entries: [call, result] }],
+    skipped: 0,
+    truncated: false,
+    params: {
+      scope: "project_sessions",
+      mode: "files",
+      query: "safe.txt",
+      expand: ["history:result"],
+      since: "2025-01-01T00:00:00.000Z",
+      before: "2025-01-31T23:59:59.999Z",
+    },
+  });
+  assert.equal(files.total, 1);
+  assert.match(files.text, /read safe\.txt/);
+  assert.match(files.text, /Ignored expansion addresses.*history:result/);
+  assert.doesNotMatch(files.text, /stored result outside range/);
+});
+
 test("project-session expansion requires a composite in-scope address", () => {
   const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
   const call = assistant("call", null, [{
@@ -157,6 +249,30 @@ test("project-session expansion requires a composite in-scope address", () => {
   assert.match(exact.text, /address=history:result/);
   assert.match(exact.text, /stored \[REDACTED CREDENTIAL\]/);
   assert.doesNotMatch(exact.text, new RegExp(credential));
+});
+
+test("project-session tools mode uses composite addresses for result expansion", () => {
+  const call = assistant("call", null, [{
+    type: "toolCall", id: "advisor-1", name: "advisor", arguments: { request: "diagnose delegated failure" },
+  }]);
+  const stored = toolResult("result", "call", "advisor-1", "advisor", "stored diagnostic result");
+  const project = (expand: string[] = []) => recallProjectSessions({
+    currentSessionId: "current",
+    sessions: [{ sessionId: "history", modifiedAt: timestamp, entries: [call, stored] }],
+    skipped: 0,
+    truncated: false,
+    params: { scope: "project_sessions", mode: "tools", query: "diagnose", expand },
+  });
+
+  const found = project();
+  assert.equal(found.total, 1);
+  assert.match(found.text, /session=history address=history:call/);
+  assert.doesNotMatch(found.text, /stored diagnostic result/);
+
+  const expanded = project(["history:result"]);
+  assert.equal(expanded.total, 2);
+  assert.match(expanded.text, /address=history:result/);
+  assert.match(expanded.text, /stored diagnostic result/);
 });
 
 test("raw source entries remain addressable after compaction", () => {
@@ -247,6 +363,50 @@ test("text search excludes thinking, tool arguments, results, and unrelated cust
   const allowed = recall(active, { query: "allowed continuity" });
   assert.equal(allowed.total, 1);
   assert.match(allowed.text, /entry=allowed role=custom:pi-continuity/);
+});
+
+test("tools mode retrieves sanitized calls and exact linked result expansions", () => {
+  const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const active = baseBranch();
+  const call = assistant("tool-call", "response", [
+    { type: "toolCall", id: "advisor-1", name: "advisor", arguments: { request: `diagnose retry secret=${credential}` } },
+    { type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "echo unrelated" } },
+  ]);
+  const failed = toolResult("tool-result", "tool-call", "advisor-1", "advisor", `provider failure ${credential}`);
+  failed.message.isError = true;
+  active.push(call, failed);
+
+  const tools = recall(active, { mode: "tools", query: "advisor diagnose" });
+  assert.equal(tools.total, 1);
+  assert.match(tools.text, /\[tool call\] entry=tool-call role=tool:advisor/);
+  assert.match(tools.text, /Call ID: advisor-1; status: error/);
+  assert.match(tools.text, /Stored result entry: tool-result/);
+  assert.doesNotMatch(tools.text, /provider failure|ghp_/);
+
+  const expanded = recall(active, { mode: "tools", query: "no-match", expand: ["tool-result"] });
+  assert.equal(expanded.total, 1);
+  assert.match(expanded.text, /\[tool result \(expanded\)\].*entry=tool-result/s);
+  assert.match(expanded.text, /provider failure \[REDACTED CREDENTIAL\]/);
+  assert.doesNotMatch(expanded.text, new RegExp(credential));
+});
+
+test("tools mode leaves duplicate calls and results unlinked", () => {
+  const active = baseBranch();
+  active.push(assistant("calls", "response", [
+    { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
+    { type: "toolCall", id: "multi-result", name: "bash", arguments: { command: "ambiguous results" } },
+  ]));
+  active.push(toolResult("first-duplicate-result", "calls", "duplicate", "advisor", "must not link"));
+  active.push(assistant("duplicate-call", "first-duplicate-result", [
+    { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
+  ]));
+  active.push(toolResult("first-result", "duplicate-call", "multi-result", "bash", "first result"));
+  active.push(toolResult("second-result", "first-result", "multi-result", "bash", "second result"));
+
+  const result = recall(active, { mode: "tools", query: "ambiguous" });
+  assert.equal(result.total, 3);
+  assert.equal((result.text.match(/status: pending/g) ?? []).length, 3);
+  assert.doesNotMatch(result.text, /Stored result entry|must not link|first result|second result/);
 });
 
 test("file evidence is path-only by default and exact result expansion is bounded and redacted", () => {

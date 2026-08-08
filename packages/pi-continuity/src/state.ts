@@ -14,7 +14,8 @@ export interface ContinuityStateSnapshot {
   memory: ContinuityMemoryNoteReadModel[];
   globalMemory: ContinuityMemoryNoteReadModel[];
   v4MigrationAvailable: boolean;
-  work?: Pick<Work, "mode" | "goal" | "approved" | "planSummary" | "currentTodoId" | "latestFailure" | "nextAction" | "runId" | "createdAt" | "updatedAt" | "completedAt"> & {
+  work?: Pick<Work, "mode" | "goal" | "approved" | "planSummary" | "handoff" | "planRevision" | "revisionFeedback" | "currentTodoId" | "latestFailure" | "nextAction" | "runId" | "createdAt" | "updatedAt" | "completedAt"> & {
+    approvalPending: boolean;
     todos: Array<Pick<Work["todos"][number], "id" | "text" | "status" | "updatedAt">>;
   };
 }
@@ -45,7 +46,18 @@ export function continuityStateSnapshot(sessionId: string, revision: number, wor
     globalMemory: globalMemory.slice(0, 1_000).map(memoryNote),
     v4MigrationAvailable,
     ...(work ? { work: {
-      mode: work.mode, goal: work.goal.slice(0, 2_000), approved: work.approved, planSummary: work.planSummary.slice(0, 4_000),
+      mode: work.mode, goal: work.goal.slice(0, 2_000), approved: work.approved, approvalPending: !!work.approval, planSummary: work.planSummary.slice(0, 4_000),
+      ...(work.handoff ? { handoff: {
+        workingSet: work.handoff.workingSet.slice(0, 20).map((value) => value.slice(0, 240)),
+        assumptions: work.handoff.assumptions.slice(0, 12).map((value) => value.slice(0, 500)),
+        acceptanceCriteria: work.handoff.acceptanceCriteria.slice(0, 12).map((value) => value.slice(0, 500)),
+      } } : {}),
+      ...(work.planRevision ? { planRevision: work.planRevision } : {}),
+      ...(work.revisionFeedback ? { revisionFeedback: {
+        revision: work.revisionFeedback.revision,
+        text: work.revisionFeedback.text.slice(0, 1_000),
+        createdAt: work.revisionFeedback.createdAt,
+      } } : {}),
       ...(work.currentTodoId ? { currentTodoId: work.currentTodoId.slice(0, 120) } : {}),
       ...(work.latestFailure ? { latestFailure: work.latestFailure.slice(0, 1_000) } : {}),
       ...(work.nextAction ? { nextAction: work.nextAction.slice(0, 1_000) } : {}),

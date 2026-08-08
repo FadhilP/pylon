@@ -216,6 +216,14 @@ export interface MigrateContinuityMemoryInput {
   expectedGeneration: number;
 }
 
+export type ContinuityPlanActionInput = {
+  expectedGeneration: number;
+  expectedRevision: number;
+} & (
+  | { action: "approve"; resetContext: boolean }
+  | { action: "requestChanges"; feedback: string }
+);
+
 export interface ReplacementResult {
   cancelled: boolean;
   sessionId: string;
@@ -353,6 +361,7 @@ export interface PiDriver {
   updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void>;
   deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void>;
   migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void>;
+  continuityPlanAction(input: ContinuityPlanActionInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
   keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined | void;
   dismissCommandResult?(resultId: string, sessionGeneration: number): void;

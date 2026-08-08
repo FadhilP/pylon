@@ -291,12 +291,14 @@ test("secondary missing-session metadata marks cleanup required", async () => {
 
 test("action snapshots preserve namespaced reference identity and replace stale references", async () => {
   const actions: string[] = [];
+  let clicks = 0;
   const cli = fakeCli(actions);
   cli.run = async (session: string, action: any) => {
     actions.push(action.kind);
     if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "navigate") return { value: {}, snapshot: "- link [ref=f1e2]" };
-    return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
+    if (action.kind === "click") return { value: {}, snapshot: clicks++ === 0 ? "- button [ref=f1e3]" : "" };
+    return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("action-refs");
@@ -304,8 +306,11 @@ test("action snapshots preserve namespaced reference identity and replace stale 
   assert.match(navigated.snapshot!, /ref=f1e2/);
   await assert.rejects(manager.operate("action-refs", { kind: "click", target: "e2" }), /stale/);
   await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f2e2" }), /stale/);
-  await manager.operate("action-refs", { kind: "click", target: "f1e2" });
+  const clicked = await manager.operate("action-refs", { kind: "click", target: "f1e2" });
+  assert.match(clicked.snapshot!, /ref=f1e3/);
   await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e2" }), /stale/);
+  await manager.operate("action-refs", { kind: "click", target: "f1e3" });
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e3" }), /stale/);
   assert.equal(actions.includes("list"), false);
   await manager.close("action-refs", "close");
 });

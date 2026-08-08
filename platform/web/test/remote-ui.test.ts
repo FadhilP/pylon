@@ -51,8 +51,15 @@ test("remote UI correlates every RPC dialog and validates responses", async () =
   bridge.answer({ requestId: requests.at(-1)!.requestId, sessionGeneration: 3, method: "input", value: "Pylon" });
   assert.equal(await input, "Pylon");
 
-  const edited = ui.editor("Edit", "before");
-  bridge.answer({ requestId: requests.at(-1)!.requestId, sessionGeneration: 3, method: "editor", value: "after" });
+  const edited = (ui.editor as (
+    title: string,
+    prefill?: string,
+    options?: { timeout?: number },
+  ) => Promise<string | undefined>)("Edit", "before", { timeout: 0 });
+  const editorRequest = requests.at(-1)!;
+  assert.equal(editorRequest.timeoutSeconds, undefined);
+  assert.equal(editorRequest.expiresAt, undefined);
+  bridge.answer({ requestId: editorRequest.requestId, sessionGeneration: 3, method: "editor", value: "after" });
   assert.equal(await edited, "after");
 
   assert.throws(() => bridge.answer({

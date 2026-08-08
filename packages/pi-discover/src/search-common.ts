@@ -29,10 +29,6 @@ export function bounded(output: string, maxBytes = DEFAULT_MAX_BYTES): string {
   return `${fit(result.content, maxBytes - Buffer.byteLength(notice, "utf8"))}${notice}`;
 }
 
-export function unavailable(error: unknown): boolean {
-  return /ENOENT|not recognized|not found|cannot find/i.test(String(error));
-}
-
 export function boundedError(error: unknown, maxBytes = 4 * 1024): string {
   return fit(String(error).trim(), maxBytes);
 }

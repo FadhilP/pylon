@@ -7,6 +7,7 @@ export type RunEntry = {
   timelineId: string;
   role: RunRole;
   parentSessionId?: string;
+  approvalToken?: string;
   createdAt: string;
 };
 
@@ -20,6 +21,8 @@ export function isRunEntry(value: any): value is RunEntry {
       ["planner", "executor", "reviewer"].includes(value.role) &&
       (value.parentSessionId === undefined ||
         typeof value.parentSessionId === "string") &&
+      (value.approvalToken === undefined ||
+        (typeof value.approvalToken === "string" && value.approvalToken.length > 0)) &&
       typeof value.createdAt === "string",
   );
 }

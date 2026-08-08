@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { access, chmod, lstat, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { validatePngFile, type Exec } from "./capture.ts";
@@ -16,6 +18,8 @@ const MAX_FIND_LINES = 120;
 const MAX_FIND_BYTES = 12 * 1024;
 const MAX_ACTION_SNAPSHOT_LINES = 100;
 const MAX_ACTION_SNAPSHOT_BYTES = 10 * 1024;
+const SNAPSHOT_FILE_SETTLE_ATTEMPTS = 20;
+const SNAPSHOT_FILE_SETTLE_MS = 25;
 const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const CONTINUATION_CURSOR = /^hc_[a-f0-9]{32}$/;
 const INVALIDATES_CONTINUATION = new Set([
@@ -253,6 +257,18 @@ function commandFailureMessage(stderr: string): string {
   return "Playwright CLI command failed";
 }
 
+type SnapshotSource = string | { file: string };
+
+function snapshotSource(value: unknown): SnapshotSource | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const object = value as Record<string, unknown>;
+    if (Object.keys(object).length === 1 && typeof object.file === "string" && object.file) return { file: object.file };
+  }
+  throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot");
+}
+
 function parseJson(result: ExecResult, privateDirectory: string, sessionName: string): Record<string, unknown> {
   if (Buffer.byteLength(result.stdout) > MAX_STDOUT_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI output exceeded 256KB limit");
   if (Buffer.byteLength(result.stderr) > MAX_STDERR_BYTES) throw new HeliosCliError("invalid-output", "Playwright CLI error output exceeded 16KB limit");
@@ -301,10 +317,16 @@ export class PlaywrightCli {
     await rm(this.directory, { recursive: true, force: true });
   }
 
-  async readArtifact(path: string, maximumBytes: number): Promise<Buffer> {
+  private artifactPath(path: string): string {
     const artifactDirectory = resolve(this.directory, "artifacts");
-    const resolved = resolve(path);
-    if (dirname(resolved) !== artifactDirectory || !Number.isInteger(maximumBytes) || maximumBytes < 1) throw new Error("Invalid Helios artifact path");
+    const resolved = resolve(this.directory, path);
+    if (dirname(resolved) !== artifactDirectory) throw new Error("Invalid Helios artifact path");
+    return resolved;
+  }
+
+  async readArtifact(path: string, maximumBytes: number): Promise<Buffer> {
+    const resolved = this.artifactPath(path);
+    if (!Number.isInteger(maximumBytes) || maximumBytes < 1) throw new Error("Invalid Helios artifact path");
     const info = await lstat(resolved);
     if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > maximumBytes) throw new Error("Helios artifact is invalid or oversized");
     const handle = await open(resolved, "r");
@@ -322,6 +344,44 @@ export class PlaywrightCli {
       return buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();
+    }
+  }
+
+  private async readSnapshot(source: SnapshotSource | undefined, signal?: AbortSignal): Promise<string | undefined> {
+    if (source === undefined || typeof source === "string") return source;
+    let path: string;
+    try { path = this.artifactPath(source.file); }
+    catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact"); }
+    try {
+      let previousSize = -1;
+      for (let attempt = 0; attempt < SNAPSHOT_FILE_SETTLE_ATTEMPTS; attempt++) {
+        let info;
+        try { info = await lstat(path); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (info) {
+          if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_STDOUT_BYTES) throw new Error("Invalid snapshot artifact");
+          if (info.size > 0 && info.size === previousSize) {
+            const data = await this.readArtifact(path, MAX_STDOUT_BYTES);
+            try { return new TextDecoder("utf-8", { fatal: true }).decode(data); }
+            catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact"); }
+          }
+          previousSize = info.size;
+        }
+        if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
+        await delay(SNAPSHOT_FILE_SETTLE_MS);
+      }
+      if (previousSize === 0) {
+        const final = await lstat(path);
+        if (final.isFile() && !final.isSymbolicLink() && final.size === 0) return "";
+      }
+      throw new Error("Snapshot artifact did not settle");
+    } catch (error) {
+      if (error instanceof HeliosCliError) throw error;
+      throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact");
+    } finally {
+      await rm(path, { force: true }).catch(() => {});
     }
   }
 
@@ -363,15 +423,11 @@ export class PlaywrightCli {
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
     const value = parseJson(result, this.directory, sessionName);
     const nested = value.result && typeof value.result === "object" ? value.result as Record<string, unknown> : undefined;
-    const rawSnapshot = typeof value.snapshot === "string"
-      ? value.snapshot
-      : typeof nested?.snapshot === "string"
-        ? nested.snapshot
-        : action.kind === "find" && typeof value.result === "string"
-          ? value.result
-          : undefined;
+    const source = snapshotSource(value.snapshot !== undefined ? value.snapshot : nested?.snapshot);
     delete value.snapshot;
     if (nested) delete nested.snapshot;
+    const rawSnapshot = await this.readSnapshot(source, signal)
+      ?? (action.kind === "find" && typeof value.result === "string" ? value.result : undefined);
     if (action.kind === "find" && typeof value.result === "string") delete value.result;
     if (rawSnapshot !== undefined) this.continuations.delete(sessionName);
     if (artifactPath) {

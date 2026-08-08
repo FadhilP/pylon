@@ -1506,7 +1506,7 @@ function Topbar({ live, session, pendingSession, theme, menuOpen, rightPanel, me
         <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
           <IconFiles size={16} />
           <span>Files</span>
-          {(runtime?.workspace?.changedCount ?? 0) > 0 && <small>{runtime?.workspace?.changedCount}</small>}
+          <small>{runtime?.workspace?.changedCount ?? 0}</small>
         </button>
         {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
           <IconDatabase size={16} />

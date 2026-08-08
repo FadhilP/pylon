@@ -893,13 +893,14 @@ class GenerationUiContext implements ExtensionUIContext {
     });
   }
 
-  editor(title: string, prefill?: string): Promise<string | undefined> {
+  editor(title: string, prefill?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
     return this.bridge.dialog({
       sessionId: this.sessionId,
       sessionGeneration: this.generation,
       method: "editor",
       payload: { title: bounded(title), prefill: prefill && bounded(prefill, MAX_EVENT_TEXT) },
       neutral: undefined,
+      dialogOptions: opts,
     });
   }
 

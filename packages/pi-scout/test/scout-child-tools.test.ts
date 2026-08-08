@@ -38,10 +38,10 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
     registerTool(tool: any) { tools.set(tool.name, tool); },
     async exec(command: string, args: string[]) {
       calls.push({ command, args });
-      if (command === "rg") return { stdout: "", stderr: "ENOENT", code: 127, killed: false };
+      if (command === "rg") return { stdout: "", stderr: "", code: 1, killed: false };
       return { stdout: "src/a.ts-9-before\nsrc/a.ts:10:needle\nsrc/a.ts-11-after\n", stderr: "", code: 0, killed: false };
     },
-  } as any);
+  } as any, async (command) => command === "grep");
   const result = await tools.get("search_excerpt").execute("id", { pattern: "needle", path: "src", glob: "*.ts", context: 1 }, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(calls.map((call) => call.command), ["rg", "grep"]);
   assert.ok(calls[0].args.includes("--sort"));
@@ -50,6 +50,23 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
   assert.match(result.content[0].text, /src\/a\.ts:10:needle/);
   assert.equal(result.details.command, "grep");
   await assert.rejects(tools.get("search_excerpt").execute("id", { pattern: "x", path: "../secret" }, undefined, undefined, { cwd: process.cwd() }), /within workspace/);
+});
+
+test("search_excerpt does not treat an invalid path as a missing ripgrep executable", async () => {
+  const tools = new Map<string, any>();
+  const calls: string[] = [];
+  registerScoutChildTools({
+    registerTool(tool: any) { tools.set(tool.name, tool); },
+    async exec(command: string) {
+      calls.push(command);
+      return { stdout: "", stderr: "The system cannot find the path specified", code: 2, killed: false };
+    },
+  } as any, async () => true);
+  await assert.rejects(
+    tools.get("search_excerpt").execute("id", { pattern: "needle", path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
+    /ripgrep failed.*cannot find the path/i,
+  );
+  assert.deepEqual(calls, ["rg"]);
 });
 
 test("bounded search samples citations across files instead of keeping only the head", () => {

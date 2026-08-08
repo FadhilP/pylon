@@ -41,7 +41,8 @@ function context(cwd: string, notifications: Array<{ text: string; level: string
 test("one tool exposes capture and lifecycle actions without session review", async () => {
   const app = runtime();
   assert.deepEqual([...app.tools.keys()], ["papercut"]);
-  assert.deepEqual([...app.commands.keys()], ["papercut"]);
+  assert.deepEqual([...app.commands.keys()], ["papercuts"]);
+  assert.equal(app.commands.has("papercut"), false);
   const tool = app.tools.get("papercut");
   assert.equal(tool.executionMode, "sequential");
   assert.deepEqual(Object.keys(tool.parameters.properties), ["action", "message", "status", "limit", "ids", "note"]);
@@ -117,19 +118,14 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
 
   const notifications: Array<{ text: string; level: string }> = [];
   const commandCtx = context(cwd, notifications);
-  const command = app.commands.get("papercut");
+  const command = app.commands.get("papercuts");
   await command.handler("", commandCtx);
-  await command.handler("ALL", commandCtx);
-  await command.handler("A flaky command needed a retry", commandCtx);
-  await command.handler("open issue needed a retry", commandCtx);
-  await command.handler("resolve", commandCtx);
-  await command.handler("review", commandCtx);
+  await command.handler("resolved", commandCtx);
+  await command.handler("all", commandCtx);
+  await command.handler("capture this", commandCtx);
   assert.match(notifications[0].text, /No open papercuts/i);
-  assert.match(notifications[1].text, /Papercuts \(all, 1\)/i);
-  assert.match(notifications[2].text, /captured/i);
-  assert.match(notifications[3].text, /captured/i);
-  assert.match(notifications[4].text, /usage:/i);
-  assert.match(notifications[5].text, /session review is not supported/i);
-  assert.equal(notifications[4].level, "error");
-  assert.equal(notifications[5].level, "error");
+  assert.match(notifications[1].text, /Documented setup and added a regression test/i);
+  assert.match(notifications[2].text, /Papercuts \(all, 1\)/i);
+  assert.match(notifications[3].text, /usage: \/papercuts/i);
+  assert.equal(notifications[3].level, "error");
 });

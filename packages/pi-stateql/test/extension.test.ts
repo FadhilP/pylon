@@ -137,7 +137,13 @@ test("registers one deferred, sequential StateQL tool bound to the Pi actor", as
   assert.ok(tool.parameters.properties.command.enum.includes("doctor"));
   assert.ok(!tool.parameters.properties.command.enum.includes("purge"));
   assert.match(tool.parameters.properties.target.description, /masked password dialog/);
+  assert.match(tool.parameters.properties.target.description, /native absolute path/);
+  assert.match(tool.parameters.properties.read_only.description, /connect\/profile\.add only/);
+  assert.match(tool.parameters.properties.limit.description, /rows\/history only/);
+  assert.match(tool.parameters.properties.offset.description, /preview_count/);
   assert.match(tool.parameters.properties.secret_env.description, /complete PostgreSQL\/MySQL URL or explicit sqlite:<path>/);
+  assert.match(tool.description, /preview_count/);
+  assert.ok(tool.promptGuidelines.some((guideline: string) => /preview_count/.test(guideline)));
   assert.ok(!tool.parameters.properties.command.enum.includes("session.start"));
   assert.ok(!tool.parameters.properties.command.enum.includes("session.list"));
   assert.equal(value.instances[0].options.actor, "pi-session");
@@ -557,10 +563,16 @@ test("confirmed operations use the Guard timeout only while Guard is enabled", a
 test("rejects irrelevant, ambiguous, and oversized inputs before StateQL", async () => {
   const value = await start();
   const tool = value.tools.get("stateql");
-  await assert.rejects(
-    tool.execute("call", { command: "status", sql: "SELECT 1" }, undefined, undefined, context()),
-    /status does not accept sql/,
-  );
+  for (const [input, message] of [
+    [{ command: "status", sql: "SELECT 1" }, /status does not accept sql/],
+    [{ command: "inspect", kind: "columns", table: "items", limit: 10 }, /inspect does not accept limit/],
+    [{ command: "query", sql: "SELECT 1", read_only: true }, /query does not accept read_only/],
+  ] as const) {
+    await assert.rejects(
+      tool.execute("call", input, undefined, undefined, context()),
+      message,
+    );
+  }
   await assert.rejects(
     tool.execute("call", { command: "connect", target: " ", secret_env: "APP_DATABASE_URL" }, undefined, undefined, context()),
     /either target or secret_env.*complete database URL or explicit sqlite:<path> source/,

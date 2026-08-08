@@ -611,6 +611,8 @@ export class ServerTransport {
       case "migrateContinuityMemory":
         return this.driver.migrateContinuityMemory({ expectedGeneration: command.expectedGeneration })
           .then(() => accepted(command.expectedGeneration));
+      case "continuityPlanAction":
+        return this.driver.continuityPlanAction(command).then(() => accepted(command.expectedGeneration));
       case "handoffSession":
         if (!this.driver.handoffSession) return Promise.reject(httpError(409, "workspace handoff is unavailable"));
         return this.driver.handoffSession(command).then((result) => accepted(result.sessionGeneration));

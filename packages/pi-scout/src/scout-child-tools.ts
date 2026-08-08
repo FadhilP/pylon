@@ -7,6 +7,7 @@ import {
   truncateHead,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { executableAvailable, type ExecutableProbe } from "pylon-core/executable";
 import { Type } from "typebox";
 
 const TIMEOUT_MS = 30_000;
@@ -78,10 +79,6 @@ export function boundedSearch(output: string, maxBytes = SCOUT_TOOL_MAX_BYTES): 
   return `${fit(evenlySample(prepared, 1)[0], bodyBudget)}${notice}`;
 }
 
-function unavailable(error: unknown): boolean {
-  return /ENOENT|not recognized|not found|cannot find/i.test(String(error));
-}
-
 async function excerptSearch(
   pi: ExtensionAPI,
   pattern: string,
@@ -89,6 +86,7 @@ async function excerptSearch(
   glob: string | undefined,
   context: number,
   signal: AbortSignal | undefined,
+  probe: ExecutableProbe,
 ): Promise<{ text: string; details: Record<string, unknown> }> {
   const rgArgs = [
     "--line-number", "--no-heading", "--color=never", "--sort", "path",
@@ -97,31 +95,31 @@ async function excerptSearch(
   ];
   if (glob) rgArgs.push("--glob", glob);
   rgArgs.push("--", pattern, path);
-  try {
-    const result = await pi.exec("rg", rgArgs, { signal, timeout: TIMEOUT_MS });
-    if (result.code === 0) return { text: boundedSearch(result.stdout) || "No matches found", details: { command: "rg", code: 0 } };
-    if (result.code === 1) return { text: "No matches found", details: { command: "rg", code: 1 } };
-    if (!unavailable(result.stderr)) throw new Error(`ripgrep failed (${result.code}): ${result.stderr.trim()}`);
-  } catch (error) {
-    if (!unavailable(error)) throw error;
-  }
+  const run = async (command: string, args: string[]) => {
+    try {
+      return await pi.exec(command, args, { signal, timeout: TIMEOUT_MS });
+    } catch (error) {
+      if (await probe(command, signal)) throw error;
+      return undefined;
+    }
+  };
+  const rgResult = await run("rg", rgArgs);
+  if (rgResult?.code === 0) return { text: boundedSearch(rgResult.stdout) || "No matches found", details: { command: "rg", code: 0 } };
+  if (rgResult?.code === 1 && await probe("rg", signal)) return { text: "No matches found", details: { command: "rg", code: 1 } };
+  if (rgResult && rgResult.code !== 1 && await probe("rg", signal))
+    throw new Error(`ripgrep failed (${rgResult.code}): ${rgResult.stderr.trim()}`);
 
   const grepArgs = ["-r", "-n", "-H", "--color=never", "-m", String(MAX_MATCHES), "-C", String(context)];
   if (glob) grepArgs.push(`--include=${glob}`);
   grepArgs.push("--", pattern, path);
-  try {
-    const result = await pi.exec("grep", grepArgs, { signal, timeout: TIMEOUT_MS });
-    if (result.code === 0) return { text: boundedSearch(result.stdout) || "No matches found", details: { command: "grep", code: 0, fallback: true } };
-    if (result.code === 1) return { text: "No matches found", details: { command: "grep", code: 1, fallback: true } };
-    if (unavailable(result.stderr)) return { text: "ripgrep and grep unavailable; no excerpt search was run.", details: { unavailable: true } };
-    throw new Error(`grep failed (${result.code}): ${result.stderr.trim()}`);
-  } catch (error) {
-    if (unavailable(error)) return { text: "ripgrep and grep unavailable; no excerpt search was run.", details: { unavailable: true } };
-    throw error;
-  }
+  const grepResult = await run("grep", grepArgs);
+  if (grepResult?.code === 0) return { text: boundedSearch(grepResult.stdout) || "No matches found", details: { command: "grep", code: 0, fallback: true } };
+  if (grepResult?.code === 1 && await probe("grep", signal)) return { text: "No matches found", details: { command: "grep", code: 1, fallback: true } };
+  if (!grepResult || !await probe("grep", signal)) return { text: "ripgrep and grep unavailable; no excerpt search was run.", details: { unavailable: true } };
+  throw new Error(`grep failed (${grepResult.code}): ${grepResult.stderr.trim()}`);
 }
 
-export default function scoutChildToolsExtension(pi: ExtensionAPI) {
+export default function scoutChildToolsExtension(pi: ExtensionAPI, probe: ExecutableProbe = executableAvailable) {
   const read = createReadToolDefinition(process.cwd());
   pi.registerTool({
     ...read,
@@ -150,7 +148,7 @@ export default function scoutChildToolsExtension(pi: ExtensionAPI) {
       context: Type.Optional(Type.Integer({ minimum: 0, maximum: 3, description: "Lines of context on each side; default 2" })),
     }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
-      const result = await excerptSearch(pi, params.pattern, workspacePath(ctx.cwd, params.path), params.glob, params.context ?? 2, signal);
+      const result = await excerptSearch(pi, params.pattern, workspacePath(ctx.cwd, params.path), params.glob, params.context ?? 2, signal, probe);
       return { content: [{ type: "text" as const, text: result.text }], details: result.details };
     },
   });

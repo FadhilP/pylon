@@ -174,24 +174,52 @@ test("compaction completion appends a durable disclosure without changing stream
   assert.equal(projection.snapshot().conversation.messages.length, 1);
 });
 
-test("history projection retains compaction metadata and summary", () => {
+test("history projection retains bounded structured compaction display data", () => {
+  const display = {
+    records: [
+      { sourceEntryId: "user-entry", role: "user" as const, text: "Keep exact **plain text**" },
+      { sourceEntryId: "assistant-entry", role: "assistant" as const, text: "Implemented the change" },
+    ],
+    failedTools: [{ sourceEntryId: "failed-entry", text: "permission denied" }],
+    toolResults: [{ sourceEntryId: "result-entry", text: "all checks passed" }],
+    history: {
+      read: [{ path: "src/input.ts", sourceEntryId: "read-entry" }],
+      modified: [{ path: "src/output.ts", sourceEntryId: "write-entry" }],
+    },
+  };
   assert.deepEqual(projectMessages([{
     role: "custom",
     customType: "pylon-compaction",
-    content: "# Compact summary",
+    content: "# Canonical summary stays separate",
     entryId: "compaction-entry",
     timestamp: "2026-08-05T09:00:00.000Z",
-    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77 },
+    compaction: {
+      contextAfterTokens: 12_345,
+      sourceEntryCount: 77,
+      display: {
+        ...display,
+        ignored: "not transported",
+        records: display.records.map((record) => ({ ...record, ignored: true })),
+      },
+    },
   }]), [{
     id: "history-0",
     entryId: "compaction-entry",
     role: "system",
-    text: "# Compact summary",
+    text: "# Canonical summary stays separate",
     streaming: false,
     createdAt: "2026-08-05T09:00:00.000Z",
     systemSource: "pylon-compaction",
-    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77 },
+    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77, display },
   }]);
+
+  const malformed = projectMessages([{
+    role: "custom",
+    customType: "pylon-compaction",
+    content: "summary",
+    compaction: { contextAfterTokens: 10, display: { ...display, toolResults: [{ sourceEntryId: "result", text: "x".repeat(2_001) }] } },
+  }])[0];
+  assert.deepEqual(malformed?.compaction, { contextAfterTokens: 10 });
 });
 
 test("next prompt keeps the expanded existing-session turn", () => {

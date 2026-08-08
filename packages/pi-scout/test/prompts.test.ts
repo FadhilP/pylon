@@ -6,6 +6,11 @@ import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClai
 test("repo scout prompt preserves core contracts", () => {
   assert.match(REPO_SCOUT_PROMPT, /path:start-end/);
   assert.match(REPO_SCOUT_PROMPT, /search_excerpt/i);
+  assert.match(REPO_SCOUT_PROMPT, /symbol_search for identifiers/i);
+  assert.match(REPO_SCOUT_PROMPT, /code_search for concepts/i);
+  assert.match(REPO_SCOUT_PROMPT, /relationship_graph for known symbols or dependencies/i);
+  assert.match(REPO_SCOUT_PROMPT, /rg\/fd for index misses or live confirmation/i);
+  assert.match(REPO_SCOUT_PROMPT, /index_status only when indexed results appear unavailable or stale/i);
   assert.match(REPO_SCOUT_PROMPT, /only the tools exposed to you/i);
   assert.match(REPO_SCOUT_PROMPT, /at most 8 lines/i);
   assert.match(REPO_SCOUT_PROMPT, /Keep the report compact/i);

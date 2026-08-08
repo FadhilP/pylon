@@ -23,13 +23,15 @@ const ALLOWED_CUSTOM_MESSAGES = new Set([HANDOFF_ENTRY_TYPE, "pi-continuity"]);
 const FILE_TOOLS = new Set(["read", "write", "edit"]);
 
 export type RecallScope = "execution" | "lineage" | "all" | "project_sessions";
-export type RecallMode = "text" | "files" | "touched";
+export type RecallMode = "text" | "files" | "touched" | "tools";
 export type RecallParams = {
   query?: string;
   expand?: string[];
   page?: number;
   scope?: RecallScope;
   mode?: RecallMode;
+  since?: string;
+  before?: string;
 };
 export type RecallInput = {
   sessionId: string;
@@ -60,10 +62,14 @@ type RecallRecord = {
   sourceSessionId?: string;
 };
 type TextCandidate = Omit<RecallRecord, "content"> & { searchText: string };
-type FileOperation = {
+type ToolOperation = {
   callEntry: SessionEntry;
   resultEntry?: SessionEntry;
   toolCallId: string;
+  toolName: string;
+  arguments: unknown;
+};
+type FileOperation = ToolOperation & {
   toolName: "read" | "write" | "edit";
   path: string;
 };
@@ -75,6 +81,22 @@ function textContent(content: unknown) {
     .filter((part: any) => part?.type === "text" && typeof part.text === "string")
     .map((part: any) => part.text)
     .join("\n");
+}
+
+function boundedTextContent(content: unknown, max: number) {
+  const limit = max + 1;
+  let output = "";
+  if (typeof content === "string") output = content.slice(0, limit);
+  else if (Array.isArray(content)) {
+    for (const part of content) {
+      if (part?.type !== "text" || typeof part.text !== "string") continue;
+      output += `${output ? "\n" : ""}${part.text.slice(0, limit - output.length)}`;
+      if (output.length >= limit) break;
+    }
+  }
+  if (output.length <= max) return output;
+  const marker = "\n[truncated by Continuity]";
+  return `${output.slice(0, max - marker.length)}${marker}`;
 }
 
 function validActiveBranch(entries: SessionEntry[]) {
@@ -203,6 +225,46 @@ function selectScope(input: RecallInput) {
   };
 }
 
+function projectDateFilter(params: RecallParams) {
+  const parse = (value: string | undefined, name: "since" | "before") => {
+    if (value === undefined) return;
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/);
+    const timestamp = match ? Date.parse(value) : Number.NaN;
+    const date = new Date(timestamp);
+    const valid = Boolean(match) && Number.isFinite(timestamp) &&
+      date.getUTCFullYear() === Number(match![1]) &&
+      date.getUTCMonth() + 1 === Number(match![2]) &&
+      date.getUTCDate() === Number(match![3]) &&
+      date.getUTCHours() === Number(match![4]) &&
+      date.getUTCMinutes() === Number(match![5]) &&
+      date.getUTCSeconds() === Number(match![6]);
+    return valid
+      ? { timestamp, value }
+      : { timestamp, value, error: `Invalid ${name} timestamp; expected an ISO-8601 UTC date/time.` };
+  };
+  const since = parse(params.since, "since");
+  const before = parse(params.before, "before");
+  const enabled = Boolean(since || before);
+  const error = since?.error ?? before?.error ??
+    (since && before && since.timestamp > before.timestamp
+      ? "Invalid entry-time range: since must be at or before before."
+      : undefined);
+  return {
+    error,
+    description: !error && enabled
+      ? `Entry time filter (inclusive):${since ? ` since=${since.value}` : ""}${before ? ` before=${before.value}` : ""}.`
+      : undefined,
+    test: (entry: SessionEntry) => {
+      if (error) return false;
+      if (!enabled) return true;
+      const timestamp = Date.parse(entry.timestamp);
+      return Number.isFinite(timestamp) &&
+        (!since || timestamp >= since.timestamp) &&
+        (!before || timestamp <= before.timestamp);
+    },
+  };
+}
+
 function queryMatcher(query: string | undefined) {
   const value = query?.trim() ?? "";
   if (!value) return { test: (_text: string) => true };
@@ -265,39 +327,101 @@ function textRecord(candidate: TextCandidate, expanded: boolean): RecallRecord {
   };
 }
 
-function fileOperations(entries: SessionEntry[]) {
-  const operations: FileOperation[] = [];
-  const byCallId = new Map<string, FileOperation>();
+function toolOperations(entries: SessionEntry[]) {
+  const operations: ToolOperation[] = [];
+  const byCallId = new Map<string, ToolOperation>();
   const ambiguous = new Set<string>();
   for (const entry of entries) {
     if (entry.type !== "message") continue;
     const message = entry.message as any;
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const part of message.content) {
-        if (
-          part?.type !== "toolCall" ||
-          !FILE_TOOLS.has(part.name) ||
-          typeof part.id !== "string" ||
-          typeof part.arguments?.path !== "string"
-        ) continue;
-        const operation: FileOperation = {
+        if (part?.type !== "toolCall" || typeof part.id !== "string" || typeof part.name !== "string") continue;
+        const operation: ToolOperation = {
           callEntry: entry,
           toolCallId: part.id,
           toolName: part.name,
-          path: inline(part.arguments.path, 500),
+          arguments: part.arguments,
         };
         operations.push(operation);
-        if (byCallId.has(part.id)) {
+        const existing = byCallId.get(part.id);
+        if (existing) {
+          existing.resultEntry = undefined;
           byCallId.delete(part.id);
           ambiguous.add(part.id);
         } else if (!ambiguous.has(part.id)) byCallId.set(part.id, operation);
       }
     } else if (message.role === "toolResult" && typeof message.toolCallId === "string") {
       const operation = ambiguous.has(message.toolCallId) ? undefined : byCallId.get(message.toolCallId);
-      if (operation && message.toolName === operation.toolName) operation.resultEntry = entry;
+      if (!operation || message.toolName !== operation.toolName) continue;
+      if (operation.resultEntry) {
+        operation.resultEntry = undefined;
+        byCallId.delete(message.toolCallId);
+        ambiguous.add(message.toolCallId);
+      } else operation.resultEntry = entry;
     }
   }
   return operations;
+}
+
+function fileOperations(entries: SessionEntry[]) {
+  return toolOperations(entries).flatMap((operation): FileOperation[] => {
+    const path = (operation.arguments as any)?.path;
+    return FILE_TOOLS.has(operation.toolName) && typeof path === "string"
+      ? [{ ...operation, toolName: operation.toolName as FileOperation["toolName"], path: inline(path, 500) }]
+      : [];
+  });
+}
+
+function boundedJson(value: unknown, max: number) {
+  const seen = new WeakSet<object>();
+  const visit = (item: any, depth: number): any => {
+    if (typeof item === "string") return item.slice(0, max);
+    if (item === null || typeof item !== "object") return item;
+    if (depth >= 4 || seen.has(item)) return "[truncated]";
+    seen.add(item);
+    if (Array.isArray(item)) return item.slice(0, 25).map((child) => visit(child, depth + 1));
+    const output: Record<string, unknown> = {};
+    let count = 0;
+    for (const key in item) {
+      if (!Object.hasOwn(item, key)) continue;
+      if (count++ >= 25) { output["[truncated]"] = true; break; }
+      output[key.slice(0, 200)] = visit(item[key], depth + 1);
+    }
+    return output;
+  };
+  try { return (JSON.stringify(visit(value, 0)) ?? "null").slice(0, max); }
+  catch { return "[unserializable arguments]"; }
+}
+
+function toolRecord(operation: ToolOperation): RecallRecord {
+  const result = operation.resultEntry?.type === "message" ? operation.resultEntry.message as any : undefined;
+  const status = !result ? "pending" : result.isError ? "error" : "completed";
+  return {
+    key: `tool:${operation.callEntry.id}:${operation.toolCallId}`,
+    entry: operation.callEntry,
+    role: `tool:${operation.toolName}`,
+    label: "tool call",
+    content: [
+      `${operation.toolName} ${inline(boundedJson(operation.arguments, 1_200), 1_200)}`,
+      `Call ID: ${inline(operation.toolCallId, 200)}; status: ${status}.`,
+      ...(operation.resultEntry ? [`Stored result entry: ${inline(operation.resultEntry.id, 200)}`] : []),
+    ].join("\n"),
+  };
+}
+
+function toolResultExpansion(operation: ToolOperation): RecallRecord | undefined {
+  const entry = operation.resultEntry;
+  if (entry?.type !== "message" || (entry.message as any).role !== "toolResult") return;
+  const content = boundedTextContent((entry.message as any).content, MAX_EXPANSION_CHARS);
+  if (!content) return;
+  return {
+    key: `tool-result:${entry.id}`,
+    entry,
+    role: `toolResult:${operation.toolName}`,
+    label: "tool result (expanded)",
+    content: sanitizeAndClip(content, MAX_EXPANSION_CHARS),
+  };
 }
 
 function operationRecord(operation: FileOperation): RecallRecord {
@@ -313,7 +437,7 @@ function operationRecord(operation: FileOperation): RecallRecord {
 function resultExpansion(operation: FileOperation): RecallRecord | undefined {
   const entry = operation.resultEntry;
   if (entry?.type !== "message" || (entry.message as any).role !== "toolResult") return;
-  const content = textContent((entry.message as any).content);
+  const content = boundedTextContent((entry.message as any).content, MAX_EXPANSION_CHARS);
   if (!content) return;
   return {
     key: `file-result:${entry.id}`,
@@ -339,6 +463,9 @@ function formatRecord(record: RecallRecord) {
 export function recallSession(input: RecallInput): RecallResult {
   const requestedScope = input.params.scope ?? "execution";
   const mode = input.params.mode ?? "text";
+  const dateFilterError = input.params.since !== undefined || input.params.before !== undefined
+    ? "Entry-time filters are supported only with project_sessions scope."
+    : undefined;
   const selected = selectScope(input);
   const scanEntries = selected.entries.slice(-MAX_RECALL_SCAN_ENTRIES);
   const scopedIds = new Set(scanEntries.map((entry) => entry.id));
@@ -357,7 +484,7 @@ export function recallSession(input: RecallInput): RecallResult {
     records.push(record);
   };
 
-  if (!matcher.error && mode === "text") {
+  if (!matcher.error && !dateFilterError && mode === "text") {
     for (const id of requestedExpansions) {
       if (!scopedIds.has(id)) continue;
       const entry = scanEntries.find((item) => item.id === id);
@@ -368,7 +495,19 @@ export function recallSession(input: RecallInput): RecallResult {
       const candidate = textCandidate(scanEntries[index]);
       if (candidate && matcher.test(candidate.searchText)) push(textRecord(candidate, false));
     }
-  } else if (!matcher.error) {
+  } else if (!matcher.error && !dateFilterError && mode === "tools") {
+    const operations = toolOperations(scanEntries);
+    for (const id of requestedExpansions) {
+      for (const operation of operations) {
+        if (operation.callEntry.id !== id && operation.resultEntry?.id !== id) continue;
+        push(id === operation.resultEntry?.id ? toolResultExpansion(operation) : toolRecord(operation));
+      }
+    }
+    for (let index = operations.length - 1; index >= 0 && records.length < collectionLimit; index--) {
+      const record = toolRecord(operations[index]);
+      if (matcher.test(record.content)) push(record);
+    }
+  } else if (!matcher.error && !dateFilterError) {
     const operations = fileOperations(scanEntries);
     for (const id of requestedExpansions) {
       const operation = operations.find((item) => item.callEntry.id === id || item.resultEntry?.id === id);
@@ -400,6 +539,7 @@ export function recallSession(input: RecallInput): RecallResult {
       ? [`Result limit reached: collected the first ${MAX_RECALL_RESULTS} matches.`]
       : []),
     ...(matcher.error ? [matcher.error] : []),
+    ...(dateFilterError ? [dateFilterError] : []),
     ...(outside.length ? [`Ignored expansion IDs outside the bounded effective scope: ${outside.map((id) => inline(id, 100)).join(", ")}`] : []),
     `Page ${page}; ${pageRecords.length} selected; ${hasMore
       ? "more matches available"
@@ -417,7 +557,7 @@ export function recallSession(input: RecallInput): RecallResult {
     emitted++;
   }
   if (emitted < pageRecords.length) text += omission;
-  else if (!pageRecords.length && !matcher.error)
+  else if (!pageRecords.length && !matcher.error && !dateFilterError)
     text += records.length
       ? "\n\nNo historical evidence on this page."
       : "\n\nNo historical evidence matched.";
@@ -441,12 +581,17 @@ export function recallProjectSessions(input: {
 }): RecallResult {
   const requestedScope = "project_sessions" as const;
   const mode = input.params.mode ?? "text";
+  const dates = projectDateFilter(input.params);
   const perSession = Math.max(1, Math.floor(MAX_RECALL_SCAN_ENTRIES / Math.max(1, input.sessions.length)));
-  const sessions = input.sessions.map((session) => ({
+  const eligibleSessions = input.sessions.map((session) => ({
+    ...session,
+    entries: session.entries.filter(dates.test),
+  }));
+  const clipped = eligibleSessions.some((session) => session.entries.length > perSession);
+  const sessions = eligibleSessions.map((session) => ({
     ...session,
     entries: session.entries.slice(-perSession),
   }));
-  const clipped = sessions.some((session, index) => session.entries.length < input.sessions[index].entries.length);
   const address = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
   const scopedAddresses = new Set(sessions.flatMap((session) =>
     session.entries.map((entry) => address(session.sessionId, entry.id))));
@@ -472,7 +617,7 @@ export function recallProjectSessions(input: {
     records.push(record);
   };
 
-  if (!matcher.error && mode === "text") {
+  if (!matcher.error && !dates.error && mode === "text") {
     for (const requested of requestedExpansions) {
       for (const session of sessions) {
         const entry = session.entries.find((item) => address(session.sessionId, item.id) === requested);
@@ -486,14 +631,16 @@ export function recallProjectSessions(input: {
       if (candidate && matcher.test(candidate.searchText))
         push(sourced(textRecord(candidate, false), item.sessionId));
     }
-  } else if (!matcher.error) {
+  } else if (!matcher.error && !dates.error) {
+    const toolMode = mode === "tools";
     const operations = sessions.flatMap((session, sessionIndex) =>
-      fileOperations(session.entries).map((operation, operationIndex) => ({
-        sessionId: session.sessionId,
-        sessionIndex,
-        operationIndex,
-        operation,
-      })))
+      (toolMode ? toolOperations(session.entries) : fileOperations(session.entries))
+        .map((operation, operationIndex) => ({
+          sessionId: session.sessionId,
+          sessionIndex,
+          operationIndex,
+          operation,
+        })))
       .sort((left, right) =>
         Date.parse(right.operation.callEntry.timestamp) - Date.parse(left.operation.callEntry.timestamp) ||
         left.sessionIndex - right.sessionIndex || right.operationIndex - left.operationIndex);
@@ -504,18 +651,20 @@ export function recallProjectSessions(input: {
           address(sessionId, operation.callEntry.id) !== requested &&
           (!operation.resultEntry || address(sessionId, operation.resultEntry.id) !== requested)
         ) continue;
+        const expandingResult = operation.resultEntry && address(sessionId, operation.resultEntry.id) === requested;
         push(sourced(
-          mode === "files" && operation.resultEntry &&
-            address(sessionId, operation.resultEntry.id) === requested
-            ? resultExpansion(operation)
-            : operationRecord(operation),
+          toolMode
+            ? expandingResult ? toolResultExpansion(operation) : toolRecord(operation)
+            : mode === "files" && expandingResult
+              ? resultExpansion(operation as FileOperation)
+              : operationRecord(operation as FileOperation),
           sessionId,
         ));
       }
     }
     for (const { operation, sessionId } of operations) {
       if (records.length >= collectionLimit) break;
-      const record = operationRecord(operation);
+      const record = toolMode ? toolRecord(operation) : operationRecord(operation as FileOperation);
       if (matcher.test(record.content)) push(sourced(record, sessionId));
     }
   }
@@ -535,6 +684,8 @@ export function recallProjectSessions(input: {
     ...(input.truncated ? ["Project-session discovery was truncated by Continuity bounds."] : []),
     ...(resultLimitReached ? [`Result limit reached: collected the first ${MAX_RECALL_RESULTS} matches.`] : []),
     ...(matcher.error ? [matcher.error] : []),
+    ...(dates.error ? [dates.error] : []),
+    ...(dates.description ? [dates.description] : []),
     ...(outside.length ? [`Ignored expansion addresses outside the bounded effective scope: ${outside.map((id) => inline(id, 100)).join(", ")}`] : []),
     `Page ${page}; ${pageRecords.length} selected; ${hasMore
       ? "more matches available"
@@ -552,7 +703,7 @@ export function recallProjectSessions(input: {
     emitted++;
   }
   if (emitted < pageRecords.length) text += omission;
-  else if (!pageRecords.length && !matcher.error)
+  else if (!pageRecords.length && !matcher.error && !dates.error)
     text += records.length
       ? "\n\nNo historical evidence on this page."
       : "\n\nNo historical evidence matched.";

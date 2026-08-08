@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import extension from "../extensions/pi-continuity.ts";
+import extension, { isReadOnlyBashInspection } from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
 import { emptyMemoryState, isMemoryState, isNotebookNote, isReviewRecord, serverNoteId, serverReviewId, type ReviewRecord } from "../src/memory.ts";
 import { writeJsonAtomic } from "../src/storage.ts";
@@ -28,6 +28,21 @@ async function waitFor(predicate: () => boolean) {
   assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
 }
 
+test("read-only Bash classification is conservative", () => {
+  for (const command of [
+    "pwd", "ls -la", "cat package.json", "rg needle packages && fd package.json .",
+    "git status --short && git diff --check", "git log -1", "git rev-parse HEAD",
+  ]) assert.equal(isReadOnlyBashInspection(command), true, command);
+
+  for (const command of [
+    "npm install useful-package", "cat package.json > copy.json", "pwd\nrm -rf build", "cat $(touch marker)",
+    "cat $FILE", "cat ${FILE}", "cat package.json | tee copy.json", "rg --pre 'touch marker' needle",
+    "rg --pre=helper needle", "rg ${IFS}--pre=helper needle", "fd -x rm {}", "fd -X rm",
+    "fd -Hx rm {}", "fd --exec rm {}", "fd --exec-batch=rm", "git diff --output=patch",
+    "git diff --ext-diff", "git log --textconv", "git status && rm -rf build", "pwd &&", "&& pwd",
+  ]) assert.equal(isReadOnlyBashInspection(command), false, command);
+});
+
 function runtime(initialActive = ["read", "edit", "continuity_update"]) {
   let active = [...initialActive];
   let thinking = "medium";
@@ -41,6 +56,7 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
   const commands = new Map<string, any>();
   const listeners = new Map<string, Set<(value: unknown) => void>>();
   let sendHook: ((message: string) => void) | undefined;
+  let appendFailure: Error | undefined;
   const pi: any = {
     events: {
       emit: (channel: string, value: unknown) => {
@@ -57,7 +73,10 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
-    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    appendEntry: (customType: string, data: any) => {
+      if (appendFailure) { const error = appendFailure; appendFailure = undefined; throw error; }
+      appended.push({ customType, data });
+    },
     setModel: async (model: any) => {
       selectedModel = model;
       modelSelections++;
@@ -85,6 +104,7 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
     active: () => [...active],
     loadAgain: () => extension(pi),
     onSendUserMessage: (hook: (message: string) => void) => { sendHook = hook; },
+    failNextAppend: (error = new Error("append failed")) => { appendFailure = error; },
     emit: (channel: string, value: unknown) => {
       for (const listener of listeners.get(channel) ?? []) listener(value);
     },
@@ -255,10 +275,22 @@ test("consequential actions surface memory once before execution and reset on ne
     const toolCall = app.handlers.get("tool_call")![0];
     const toolResult = app.handlers.get("tool_result")![0];
 
+    const readOnly = await toolCall({
+      toolName: "bash", toolCallId: "inspect-1",
+      input: { command: "rg 'adding package dependencies' package.json && git status --short" },
+    }, ctx);
+    assert.equal(readOnly, undefined, "matching memory must not interrupt a clearly read-only Bash command");
+
     const blocked = await toolCall({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
     assert.equal(blocked.block, true);
     assert.match(blocked.reason, /Use the approved registry/);
     await toolResult({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
+
+    const siblingRead = await toolCall({
+      toolName: "bash", toolCallId: "inspect-sibling",
+      input: { command: "rg 'adding package dependencies' package.json" },
+    }, ctx);
+    assert.equal(siblingRead, undefined, "read-only inspection must proceed while consequential siblings remain deferred");
 
     const sibling = await toolCall({ toolName: "edit", toolCallId: "sibling", input: { path: "package.json" } }, ctx);
     assert.equal(sibling.block, true);
@@ -587,7 +619,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     const recall = app.tools.get("continuity_recall");
     assert.equal(recall.executionMode, "sequential");
     assert.match(recall.description, /historical evidence/i);
-    assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*project_sessions.*text.*files.*touched/);
+    assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*project_sessions.*text.*files.*touched.*since.*before/);
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
 
@@ -1095,7 +1127,7 @@ test("circuit breaker ignores distinct or expired calls", async () => {
   }
 });
 
-test("set_plan creates executing todos without explicit plan mode", async () => {
+test("set_plan canonicalizes invented IDs and creates executing todos without explicit plan mode", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-todos-"));
   const cwd = join(root, "repo");
@@ -1116,7 +1148,10 @@ test("set_plan creates executing todos without explicit plan mode", async () => 
         goal: "Ship change",
         planSummary: "Implement safely, then run checks",
         constraints: [" Keep API stable ", "  "],
-        todos: ["Implement", "Verify"],
+        planTodos: [
+          { id: "todo_1", text: "Implement" },
+          { id: "todo_1", text: "Verify" },
+        ],
       }, undefined, undefined, ctx,
     );
     assert.match(result.content[0].text, /Executing task list stored/);
@@ -1675,7 +1710,7 @@ test("explicit plan resets model context without replacing the visible session",
     );
     await app.commands.get("plan").handler("Ship change", ctx);
     await planningRun;
-    await waitFor(() => app.customMessages.length > 0);
+    await waitFor(() => app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
     assert.equal(newSessions, 0);
     assert.equal(app.selectedModel()?.id, "executor");
     assert.equal(app.thinking(), "low");
@@ -1692,10 +1727,11 @@ test("explicit plan resets model context without replacing the visible session",
     assert.equal(boundary.options.triggerTurn, false);
     assert.match(boundary.message.content, /Earlier messages remain visible but are excluded/);
     assert.match(boundary.message.content, /Plan: Implement then verify/);
-    assert.equal(
-      app.sent.at(-1),
-      "Inspect the current workspace and validate the approved plan's assumptions before editing. Treat paths, symbols, and line ranges in the approved plan as the working set: check them with narrow reads, and call Scout only when repository state changed, anchors are missing, or an unresolved gap requires broader tracing. Execute the plan, track todos, and run fresh verification.",
-    );
+    const kickoff = app.customMessages.find((entry) => entry.message.customType === "pi-continuity-execution");
+    assert.ok(kickoff);
+    assert.equal(kickoff.options.triggerTurn, true);
+    assert.equal(kickoff.message.details.approvalToken, executorRun.approvalToken);
+    assert.equal(kickoff.message.content, "Execute the approved Continuity plan now.");
     const context = app.handlers.get("context")![0];
     const filtered = await context({
       messages: [
@@ -1948,13 +1984,12 @@ test("TUI approval waits for the scheduled planner response before showing choic
       await handler({ reason: "startup" }, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
     await planningRun;
-    await waitFor(() => app.sent.length === 2);
+    await waitFor(() => app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
     assert.equal(selections, 1);
     assert.equal(approvalTitle, "Plan ready — review structured plan above");
     assert.match(structuredPlan, /^Plan\n\nGoal\nShip change/);
     assert.deepEqual(app.sent, [
-      "Plan this task without modifying project files. Use continuity_update set_plan; make planSummary a compact executor handoff with the approach, concrete paths/symbols, assumptions or unresolved gaps, and acceptance criteria. Keep todos outcome-level: Ship change",
-      "Execute approved stored plan in current session. Track and verify todos.",
+      "Plan this task without modifying project files. Use continuity_update set_plan; put the approach in planSummary, concrete paths/symbols in workingSet, unresolved assumptions or gaps in assumptions, and completion checks in acceptanceCriteria. Keep todos outcome-level: Ship change",
     ]);
     const executorRun = [...app.appended].reverse().find((entry) =>
       entry.customType === "pylon-run" && entry.data.role === "executor"
@@ -1962,7 +1997,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
     assert.ok(executorRun?.runId);
     assert.ok(executorRun?.timelineId);
     assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
-    assert.equal(app.customMessages.length, 0);
+    assert.equal(app.customMessages.filter((entry) => entry.message.customType === "pi-continuity-execution").length, 1);
     const context = await app.handlers.get("context")?.[0]({
       messages: [{ role: "user", content: "Keep this context" }],
     }, ctx);
@@ -2033,7 +2068,7 @@ test("dismissed TUI approval is offered again on the next settlement", async () 
     }
     assert.equal(selections, 2);
     await waitFor(() =>
-      app.sent.at(-1) === "Execute approved stored plan in current session. Track and verify todos."
+      app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution")
     );
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2109,7 +2144,7 @@ test("unavailable executor leaves TUI approval pending", async () => {
     }
     assert.equal(selections, 2);
     await waitFor(() => app.active().includes("edit"));
-    assert.equal(app.sent.at(-1), "Execute approved stored plan in current session. Track and verify todos.");
+    assert.ok(app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -2182,7 +2217,7 @@ test("approval survives a clarification turn and normalizes missing plan summary
     for (const handler of app.handlers.get("agent_settled") ?? [])
       await handler({}, ctx);
     await waitFor(() => selections === 1);
-    assert.ok(app.sent.some((message) => message.startsWith("Plan changes requested:")));
+    await waitFor(() => app.sent.some((message) => message.startsWith("Plan changes requested for revision 1:")));
 
     await app.tools.get("continuity_update").execute(
       "revised",
@@ -2195,17 +2230,280 @@ test("approval survives a clarification turn and normalizes missing plan summary
       await handler({}, ctx);
     await waitFor(() =>
       app.active().includes("edit") &&
-      app.sent.includes("Execute approved stored plan in current session. Track and verify todos."),
+      app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"),
     );
 
     assert.equal(selections, 2);
     assert.ok(app.active().includes("edit"));
-    assert.ok(app.sent.includes("Execute approved stored plan in current session. Track and verify todos."));
+    assert.ok(app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
     const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Plan anchor: Implement; Verify/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("RPC settlement presents plan review and keeps Plan mode status until approval", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-rpc-plan-review-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  const statuses: Array<string | undefined> = [];
+  let selections = 0;
+  let editors = 0;
+  const selectOptions: unknown[] = [];
+  const editorOptions: unknown[] = [];
+  const ctx: any = {
+    cwd, hasUI: true, mode: "rpc", model, isIdle: () => true,
+    modelRegistry: {
+      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: { getSessionId: () => "rpc-plan-review-session", getEntries: () => [] },
+    ui: {
+      notify: () => {},
+      setStatus: (_key: string, value: string | undefined) => statuses.push(value),
+      setWidget: () => {},
+      select: async (_title: string, _choices: string[], options: unknown) => {
+        selectOptions.push(options);
+        return ++selections === 1 ? "Request changes" : "Approve — reset context";
+      },
+      editor: async (_title: string, _prefill: string, options: unknown) => {
+        editorOptions.push(options);
+        editors++;
+        return "Clarify the implementation boundary.";
+      },
+    },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute("plan", {
+      action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"],
+    }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => app.sent.some((message) => message.startsWith("Plan changes requested for revision 1:")));
+    assert.equal(selections, 1);
+    assert.equal(editors, 1);
+    assert.deepEqual(selectOptions, [{ timeout: 0 }]);
+    assert.deepEqual(editorOptions, [{ timeout: 0 }]);
+    assert.equal(statuses.at(-1), "Plan mode");
+
+    await app.tools.get("continuity_update").execute("revised", {
+      action: "set_plan", goal: "Ship change", planSummary: "Implement safely", todos: ["Implement"],
+    }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
+
+    assert.equal(selections, 2);
+    assert.deepEqual(selectOptions, [{ timeout: 0 }, { timeout: 0 }]);
+    assert.equal(statuses.at(-1), undefined);
+    const kickoff = app.customMessages.find((entry) => entry.message.customType === "pi-continuity-execution");
+    assert.equal(kickoff?.message.content, "Execute the approved Continuity plan now.");
+    assert.ok(app.customMessages.some((entry) => entry.message.customType === "pi-continuity-handoff"));
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Inspector feedback makes an open RPC approval dialog stale without requeueing it", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-rpc-plan-race-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  let resolveChoice: ((choice: string | undefined) => void) | undefined;
+  let selections = 0;
+  const ctx: any = {
+    cwd, hasUI: true, mode: "rpc", model, isIdle: () => true,
+    modelRegistry: {
+      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: { getSessionId: () => "rpc-plan-race-session", getEntries: () => [] },
+    ui: {
+      notify: () => {}, setStatus: () => {}, setWidget: () => {},
+      select: async () => { selections++; return new Promise<string | undefined>((resolve) => { resolveChoice = resolve; }); },
+      editor: async () => "",
+    },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute("plan", {
+      action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"],
+    }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => selections === 1 && Boolean(resolveChoice));
+
+    let action: Promise<unknown> | undefined;
+    app.emit("pi-continuity:plan-action", {
+      version: 1,
+      sessionId: "rpc-plan-race-session",
+      expectedGeneration: 1,
+      expectedRevision: 1,
+      action: "requestChanges",
+      feedback: "Use the narrower boundary.",
+      respond: (value: unknown | Promise<unknown>) => { action = Promise.resolve(value); },
+    });
+    await action;
+    resolveChoice!("Approve — continue current session");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(selections, 1);
+    assert.equal(app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"), false);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("RPC plan actions persist feedback, preserve todo IDs, and approve the reviewed revision", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-plan-action-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  const ctx: any = {
+    cwd, hasUI: false, mode: "rpc", model, isIdle: () => true,
+    modelRegistry: {
+      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: { getSessionId: () => "rpc-plan-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute("plan", {
+      action: "set_plan",
+      goal: "Ship change",
+      planSummary: "Update the boundary",
+      workingSet: ["src/index.ts"],
+      assumptions: ["The API remains stable."],
+      acceptanceCriteria: ["Focused tests pass."],
+      todos: ["Implement", "Review"],
+    }, undefined, undefined, ctx);
+
+    const state = () => {
+      let snapshot: any;
+      app.emit("pi-continuity:state-request", { version: 4, sessionId: "rpc-plan-session", respond: (value: any) => { snapshot = value; } });
+      return snapshot;
+    };
+    const action = (request: Record<string, unknown>) => {
+      let result: Promise<unknown> | undefined;
+      app.emit("pi-continuity:plan-action", {
+        version: 1,
+        sessionId: "rpc-plan-session",
+        expectedGeneration: 1,
+        ...request,
+        respond: (value: unknown | Promise<unknown>) => { result = Promise.resolve(value); },
+      });
+      assert.ok(result);
+      return result;
+    };
+    const initial = state().work;
+    assert.deepEqual(initial.handoff.workingSet, ["src/index.ts"]);
+    await action({ action: "requestChanges", expectedRevision: 1, feedback: "Clarify the implementation step." });
+    assert.equal(state().work.revisionFeedback.text, "Clarify the implementation step.");
+    await assert.rejects(action({ action: "approve", resetContext: false, expectedRevision: 1 }), /requested changes/i);
+    await assert.rejects(action({ action: "approve", resetContext: false, expectedRevision: 2 }), /revision changed/i);
+
+    await app.tools.get("continuity_update").execute("revised", {
+      action: "set_plan",
+      goal: "Ship change",
+      planSummary: "Update the boundary safely",
+      planTodos: [
+        { id: initial.todos[0].id, text: "Implement safely" },
+        { id: initial.todos[1].id, text: "Review" },
+      ],
+    }, undefined, undefined, ctx);
+    const revised = state().work;
+    assert.equal(revised.planRevision, 2);
+    assert.equal(revised.todos[0].id, initial.todos[0].id);
+    assert.equal(revised.revisionFeedback, undefined);
+
+    await Promise.all([
+      action({ action: "approve", resetContext: false, expectedRevision: 2 }),
+      action({ action: "approve", resetContext: false, expectedRevision: 2 }),
+    ]);
+    assert.equal(app.customMessages.filter((entry) => entry.message.customType === "pi-continuity-execution").length, 1);
+    assert.equal(app.appended.filter((entry) => entry.customType === "pylon-run" && entry.data.role === "executor").length, 1);
+    assert.equal(state().work.approvalPending, true);
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+    assert.equal(state().work.approvalPending, false);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("interrupted approval reconciles forward once on reload", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-approval-recovery-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const model = { provider: "provider", id: "base" };
+  let app: ReturnType<typeof runtime>;
+  const ctx: any = {
+    cwd, hasUI: true, mode: "tui", model, isIdle: () => true,
+    modelRegistry: {
+      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: {
+      getSessionId: () => "approval-recovery-session",
+      getEntries: () => [
+        ...(app?.appended ?? []).map((entry) => ({ type: "custom", ...entry })),
+        ...(app?.customMessages ?? []).map((entry) => ({ type: "custom_message", ...entry.message })),
+      ],
+    },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {}, select: async () => undefined },
+  };
+  try {
+    app = runtime();
+    const sessionStart = app.handlers.get("session_start")![0];
+    await sessionStart({}, ctx);
+    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.tools.get("continuity_update").execute("plan", {
+      action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"],
+    }, undefined, undefined, ctx);
+
+    app.failNextAppend();
+    await assert.rejects(app.commands.get("plan").handler("approve-current", ctx), /append failed/);
+    assert.equal(app.appended.filter((entry) => entry.customType === "pylon-run" && entry.data.role === "executor").length, 0);
+
+    await sessionStart({ reason: "reload" }, ctx);
+    await waitFor(() => app.customMessages.some((entry) => entry.message.customType === "pi-continuity-execution"));
+    const token = app.appended.find((entry) => entry.customType === "pylon-run" && entry.data.role === "executor")?.data.approvalToken;
+    assert.ok(token);
+    assert.equal(app.appended.filter((entry) => entry.data?.approvalToken === token).length, 1);
+    assert.equal(app.customMessages.filter((entry) => entry.message.details?.approvalToken === token).length, 1);
+
+    await sessionStart({ reason: "reload" }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(app.appended.filter((entry) => entry.data?.approvalToken === token).length, 1);
+    assert.equal(app.customMessages.filter((entry) => entry.message.details?.approvalToken === token).length, 1);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
   }
 });
 

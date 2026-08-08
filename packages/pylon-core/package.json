@@ -8,6 +8,7 @@
   "files": ["extensions", "src", "README.md", "LICENSE"],
   "exports": {
     "./delegate-retry": "./src/delegate-retry.ts",
+    "./executable": "./src/executable.ts",
     "./token-meter": "./src/token-meter.ts",
     "./utf8": "./src/utf8.ts",
     "./extensions/*": "./extensions/*",

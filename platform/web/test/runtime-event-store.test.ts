@@ -14,6 +14,15 @@ test("expected session replacement clears stale runtime while staying loading", 
   assert.match(source, /source\.onerror = \(\) => \{[\s\S]*?connection: "disconnected"/);
 });
 
+test("Continuity plan review stays in the runtime dialog rather than Inspector Overview", async () => {
+  const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  const inspector = await readFile(new URL("../src/client/inspector.tsx", import.meta.url), "utf8");
+
+  assert.match(store, /async continuityPlanAction[\s\S]*?type: "continuityPlanAction"[\s\S]*?expectedRevision/);
+  assert.doesNotMatch(inspector, /PlanReview|Approve & reset context|Keep current context|Request changes/);
+  assert.match(inspector, /title="Task List"[\s\S]*?work\.latestFailure[\s\S]*?work\.nextAction[\s\S]*?<TodoList work=\{work\}/);
+});
+
 test("switching sessions drops history cached for a potentially different branch", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
 

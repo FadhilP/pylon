@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
@@ -35,7 +35,8 @@ import { DEFAULT_GUARD_RULES } from "../../shared/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
-import type { ChangedFileReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
+import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
+import type { ChangedFileReadModel, CompactionDisplayReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
@@ -43,6 +44,7 @@ import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
   MigrateContinuityMemoryInput,
+  ContinuityPlanActionInput,
   DriverEvent,
   DriverEventListener,
   EditPromptInput,
@@ -165,6 +167,67 @@ function compactionSourceEntryCount(details: unknown): number | undefined {
     : undefined;
 }
 
+function compactionDisplay(details: unknown): CompactionDisplayReadModel | undefined {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const raw = details as Record<string, unknown>;
+  const bounded = (value: unknown, maximum: number, required = false) => typeof value === "string"
+    && value.length <= maximum && (!required || value.length > 0);
+  const historyRecord = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const item = value as Record<string, unknown>;
+    return bounded(item.path, MAX_COMPACTION_DISPLAY_PATH, true)
+      && (item.sourceEntryId === undefined || bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID));
+  };
+  const record = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const item = value as Record<string, unknown>;
+    return bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true)
+      && (item.role === "user" || item.role === "assistant" || item.role === "tool" || item.role === "summary")
+      && bounded(item.text, MAX_COMPACTION_DISPLAY_TEXT, true)
+      && (item.isError === undefined || typeof item.isError === "boolean");
+  };
+  const supplement = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const item = value as Record<string, unknown>;
+    return bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true)
+      && (item.role === "user" || item.role === "assistant" || item.role === "tool")
+      && (item.category === "constraint" || item.category === "decision" || item.category === "error"
+        || item.category === "outcome" || item.category === "context")
+      && bounded(item.quote, 800, true)
+      && typeof item.sourceHash === "string" && /^[a-f0-9]{64}$/.test(item.sourceHash)
+      && typeof item.quoteHash === "string" && item.quoteHash === createHash("sha256").update(item.quote as string).digest("hex");
+  };
+  const history = raw.history as Record<string, unknown> | undefined;
+  if (raw.type !== "pi-continuity-compaction" || raw.version !== 3 || raw.mode !== "generic"
+    || !Number.isSafeInteger(raw.sourceEntryCount) || Number(raw.sourceEntryCount) < 0
+    || (raw.currentTaskEntryId !== undefined && !bounded(raw.currentTaskEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID))
+    || !history || Array.isArray(history)
+    || !Array.isArray(history.read) || history.read.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS || !history.read.every(historyRecord)
+    || !Array.isArray(history.modified) || history.modified.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS || !history.modified.every(historyRecord)
+    || !Array.isArray(raw.records) || raw.records.length > MAX_COMPACTION_DISPLAY_RECORDS || !raw.records.every(record)
+    || !Array.isArray(raw.supplements) || raw.supplements.length > 8 || !raw.supplements.every(supplement)) return undefined;
+  const records = raw.records as Array<Record<string, unknown>>;
+  const source = (item: Record<string, unknown>) => ({ sourceEntryId: item.sourceEntryId as string, text: item.text as string });
+  const historySource = (item: unknown) => {
+    const record = item as Record<string, unknown>;
+    return {
+      path: record.path as string,
+      ...(typeof record.sourceEntryId === "string" ? { sourceEntryId: record.sourceEntryId } : {}),
+    };
+  };
+  return {
+    records: records.flatMap((item) => item.role === "user" || item.role === "assistant"
+      ? [{ ...source(item), role: item.role }]
+      : []),
+    failedTools: records.flatMap((item) => item.role === "tool" && item.isError === true ? [source(item)] : []),
+    toolResults: records.flatMap((item) => item.role === "tool" && item.isError !== true ? [source(item)] : []),
+    history: {
+      read: (history.read as unknown[]).map(historySource),
+      modified: (history.modified as unknown[]).map(historySource),
+    },
+  };
+}
+
 function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEntry): Record<string, unknown> {
   const estimatedContextAfter = buildSessionContext(branch, entry.id).messages
     .reduce((total, message) => total + estimateTokens(message), 0);
@@ -172,6 +235,7 @@ function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEn
     ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, estimatedContextAfter))
     : 0;
   const sourceEntryCount = compactionSourceEntryCount(entry.details);
+  const display = compactionDisplay(entry.details);
   return {
     role: "custom",
     customType: PYLON_COMPACTION_SOURCE,
@@ -182,6 +246,7 @@ function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEn
     compaction: {
       contextAfterTokens,
       ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
+      ...(display ? { display } : {}),
     },
   };
 }
@@ -1798,6 +1863,30 @@ export class SessionRuntime implements PiDriver {
 
   migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void> {
     return this.continuityMemoryMutation({ action: "migrate" }, input.expectedGeneration);
+  }
+
+  continuityPlanAction(input: ContinuityPlanActionInput): Promise<void> {
+    this.gate.assert(input.expectedGeneration);
+    const session = this.controlSession();
+    return new Promise<void>((resolve, reject) => {
+      let answered = false;
+      this.eventBus.emit("pi-continuity:plan-action", {
+        version: 1,
+        sessionId: session.sessionId,
+        expectedGeneration: input.expectedGeneration,
+        expectedRevision: input.expectedRevision,
+        action: input.action,
+        ...(input.action === "approve"
+          ? { resetContext: input.resetContext }
+          : { feedback: input.feedback }),
+        respond: (result: unknown | Promise<unknown>) => {
+          if (answered) return;
+          answered = true;
+          Promise.resolve(result).then(() => resolve(), reject);
+        },
+      });
+      if (!answered) reject(new Error("Continuity planning is unavailable"));
+    });
   }
 
   async answerUiRequest(input: UiResponse): Promise<void> {

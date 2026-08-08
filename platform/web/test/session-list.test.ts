@@ -84,6 +84,6 @@ test("pin and activation updates do not show a current-session transition", asyn
 
   assert.doesNotMatch(activation, /setSessionTransition/);
   assert.doesNotMatch(pinning, /setSessionTransition/);
-  assert.match(switching, /setSessionTransition\(true\)/);
+  assert.match(switching, /setSessionTransition\(!listedParentId \|\| live\.runtime\?\.sessionId !== listedParentId\)/);
   assert.match(app, /\{\(sessionTransition \|\| packageBusy\) && <div className="session-transition"/);
 });

@@ -32,7 +32,8 @@ type PreparedFile = {
 type ExecResult = { code: number; stdout: string; stderr: string };
 type IndexExecutor = (command: string, args: string[], options: { timeout: number }) => Promise<ExecResult>;
 type RepositoryIdentity = { root: string; rootKey: string; head: string; branch: string };
-type IndexedRepository = RepositoryIdentity & { prefix: string };
+type RepositorySnapshot = RepositoryIdentity & { dirty: Set<string> };
+type IndexedRepository = RepositorySnapshot & { prefix: string };
 
 const languages: Record<string, string> = {
   ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".h": "c", ".hpp": "cpp",
@@ -146,20 +147,48 @@ function canonicalPath(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-function statusPaths(value: string): Set<string> {
+function statusSnapshot(root: string, value: string): RepositorySnapshot {
+  let head: string | undefined;
+  let branch = "";
+  const dirty = new Set<string>();
   const tokens = parseNul(value);
-  const paths = new Set<string>();
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
-    if (token.length < 4) continue;
-    const status = token.slice(0, 2);
-    paths.add(token.slice(3));
-    if (/[RC]/.test(status)) {
-      const original = tokens[++index];
-      if (original) paths.add(original);
+    if (token.startsWith("# branch.oid ")) {
+      const oid = token.slice(13);
+      head = oid === "(initial)" ? "unborn" : oid;
+    } else if (token.startsWith("# branch.head ")) {
+      const name = token.slice(14);
+      branch = name === "(detached)" ? "" : name;
+    } else if (token.startsWith("? ")) {
+      dirty.add(token.slice(2));
+    } else {
+      const match = token[0] === "1"
+        ? /^1 (?:\S+ ){7}([\s\S]+)$/.exec(token)
+        : token[0] === "2"
+          ? /^2 (?:\S+ ){8}([\s\S]+)$/.exec(token)
+          : token[0] === "u"
+            ? /^u (?:\S+ ){9}([\s\S]+)$/.exec(token)
+            : undefined;
+      if (match) {
+        dirty.add(match[1]);
+        if (token[0] === "2") {
+          const original = tokens[++index];
+          if (!original) throw new Error("git status rename record did not include its original path");
+          dirty.add(original);
+        }
+      } else if (token[0] === "1" || token[0] === "2" || token[0] === "u") {
+        throw new Error("git status returned a malformed file record");
+      }
     }
   }
-  return paths;
+  if (!head) throw new Error("git status did not report a branch HEAD");
+  return { root, rootKey: canonicalPath(root), head, branch, dirty };
+}
+
+function sameSnapshot(left: RepositorySnapshot, right: RepositorySnapshot): boolean {
+  return left.head === right.head && left.branch === right.branch
+    && left.dirty.size === right.dirty.size && [...left.dirty].every((path) => right.dirty.has(path));
 }
 
 function ftsQuery(query: string): string {
@@ -225,6 +254,16 @@ async function directoryExists(path: string): Promise<boolean> {
 }
 
 const SCHEMA_VERSION = 3;
+// 0x10000 checks every table, including existing indexes with no query history; 0x2 runs the recommended bounded analysis.
+const SQLITE_OPTIMIZE_ALL = "PRAGMA optimize=0x10002;";
+
+function optimizeDatabase(db: DatabaseSync, inspectAll = false): void {
+  try {
+    db.exec(inspectAll ? SQLITE_OPTIMIZE_ALL : "PRAGMA optimize;");
+  } catch {
+    // Planner statistics are optional derived data; contention must not fail an otherwise committed refresh.
+  }
+}
 
 function createSchema(db: DatabaseSync): void {
   db.exec(`
@@ -315,6 +354,7 @@ export class WorkspaceIndex {
     try {
       this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
       initializeSchema(this.db);
+      optimizeDatabase(this.db, true);
       return this.db;
     } catch (error) {
       this.db.close();
@@ -333,22 +373,14 @@ export class WorkspaceIndex {
     return this.gitAt(this.cwd, args);
   }
 
-  private async identityAt(root: string): Promise<RepositoryIdentity> {
-    const [headResult, branchResult] = await Promise.all([
-      this.gitAt(root, ["rev-parse", "--verify", "HEAD"]).catch(() => ({ code: 0, stdout: "unborn\n", stderr: "" })),
-      this.gitAt(root, ["branch", "--show-current"]).catch(() => ({ code: 0, stdout: "", stderr: "" })),
-    ]);
-    return {
-      root,
-      rootKey: canonicalPath(root),
-      head: headResult.stdout.trim(),
-      branch: branchResult.stdout.trim(),
-    };
+  private async snapshotAt(root: string): Promise<RepositorySnapshot> {
+    const result = await this.gitAt(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
+    return statusSnapshot(root, result.stdout);
   }
 
-  private async identity(): Promise<RepositoryIdentity> {
+  private async snapshot(): Promise<RepositorySnapshot> {
     if (!this.root) this.root = await realpath((await this.git(["rev-parse", "--show-toplevel"])).stdout.trim());
-    return this.identityAt(this.root);
+    return this.snapshotAt(this.root);
   }
 
   private ensureWorkspace(identity: RepositoryIdentity): void {
@@ -375,11 +407,11 @@ export class WorkspaceIndex {
     }
   }
 
-  private async indexedRepositories(root: RepositoryIdentity): Promise<IndexedRepository[]> {
+  private async indexedRepositories(root: RepositorySnapshot): Promise<IndexedRepository[]> {
     const repositories: IndexedRepository[] = [{ ...root, prefix: "" }];
     const queue = [{ repository: repositories[0], ancestors: new Set([root.rootKey]) }];
     const physicalRoots = new Set([root.rootKey]);
-    const childrenByRoot = new Map<string, Array<{ path: string; identity: RepositoryIdentity }>>();
+    const childrenByRoot = new Map<string, Array<{ path: string; snapshot: RepositorySnapshot }>>();
     const prefixes = new Set([""]);
     for (let index = 0; index < queue.length; index++) {
       const { repository, ancestors } = queue[index];
@@ -411,18 +443,18 @@ export class WorkspaceIndex {
           if (canonicalPath(topLevel) !== rootKey) continue;
           if (!physicalRoots.has(rootKey) && physicalRoots.size >= 100) throw new Error("pi-discover nested repository limit exceeded");
           physicalRoots.add(rootKey);
-          children.push({ path: gitlinkPath, identity: await this.identityAt(childRoot) });
+          children.push({ path: gitlinkPath, snapshot: await this.snapshotAt(childRoot) });
         }
         childrenByRoot.set(repository.rootKey, children);
       }
       for (const child of children) {
-        if (ancestors.has(child.identity.rootKey)) continue;
+        if (ancestors.has(child.snapshot.rootKey)) continue;
         const prefix = repository.prefix ? `${repository.prefix}/${child.path}` : child.path;
         if (prefixes.has(prefix)) continue;
         prefixes.add(prefix);
-        const member = { ...child.identity, prefix };
+        const member = { ...child.snapshot, prefix };
         repositories.push(member);
-        queue.push({ repository: member, ancestors: new Set([...ancestors, child.identity.rootKey]) });
+        queue.push({ repository: member, ancestors: new Set([...ancestors, child.snapshot.rootKey]) });
       }
     }
     return repositories;
@@ -523,20 +555,20 @@ export class WorkspaceIndex {
     }
   }
 
-  private async refreshRepository(repoId: number, repository: RepositoryIdentity, forceFull: boolean): Promise<void> {
+  private async refreshRepository(repoId: number, repository: IndexedRepository, forceFull: boolean): Promise<RepositorySnapshot> {
     const db = this.database();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const identity = await this.identityAt(repository.root);
+      const snapshot = attempt === 0 ? repository : await this.snapshotAt(repository.root);
       const state = db.prepare(`
         SELECT r.head,r.indexed_at,s.generation
         FROM repositories r JOIN repository_states s ON s.repo_id=r.id WHERE r.id=?
       `).get(repoId) as { head: string; indexed_at?: number; generation: number };
-      const full = forceFull || !state.indexed_at || state.head !== identity.head;
-      const dirty = statusPaths((await this.gitAt(identity.root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+      const full = forceFull || !state.indexed_at || state.head !== snapshot.head;
+      const dirty = snapshot.dirty;
       let inventory: Set<string> | undefined;
       let candidates: Set<string>;
       if (full) {
-        inventory = new Set(parseNul((await this.gitAt(identity.root, ["ls-files", "--full-name", "-co", "--exclude-standard", "-z"])).stdout));
+        inventory = new Set(parseNul((await this.gitAt(snapshot.root, ["ls-files", "--full-name", "-co", "--exclude-standard", "-z"])).stdout));
         candidates = inventory;
       } else {
         const prior = db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>;
@@ -549,7 +581,7 @@ export class WorkspaceIndex {
         for (;;) {
           const index = nextCandidate++;
           if (index >= candidatePaths.length) return;
-          outcomes[index] = await this.prepare(identity.root, candidatePaths[index]!, dirty.has(candidatePaths[index]!));
+          outcomes[index] = await this.prepare(snapshot.root, candidatePaths[index]!, dirty.has(candidatePaths[index]!));
         }
       };
       await Promise.all(Array.from({ length: Math.min(8, candidatePaths.length) }, prepareWorker));
@@ -564,8 +596,9 @@ export class WorkspaceIndex {
         const existing = db.prepare("SELECT path FROM files WHERE repo_id=?").all(repoId) as Array<{ path: string }>;
         for (const { path } of existing) if (!inventory.has(path)) removals.push(path);
       }
-      if ((await this.identityAt(identity.root)).head !== identity.head) continue;
-      if (this.apply(repoId, prepared, [...new Set(removals)], identity, state.generation)) return;
+      const verified = await this.snapshotAt(snapshot.root);
+      if (!sameSnapshot(snapshot, verified)) continue;
+      if (this.apply(repoId, prepared, [...new Set(removals)], verified, state.generation)) return verified;
     }
     throw new Error(`pi-discover repository changed repeatedly while indexing: ${repository.root}`);
   }
@@ -594,15 +627,21 @@ export class WorkspaceIndex {
 
   private async refreshNow(forceFull = false): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const identity = await this.identity();
-      this.ensureWorkspace(identity);
-      const repositories = await this.indexedRepositories(identity);
+      const snapshot = await this.snapshot();
+      this.ensureWorkspace(snapshot);
+      const repositories = await this.indexedRepositories(snapshot);
       const ids = this.repositoryIds(repositories);
       const physical = new Map(repositories.map((repository) => [repository.rootKey, repository]));
-      for (const repository of physical.values()) await this.refreshRepository(ids.get(repository.rootKey)!, repository, forceFull);
-      const latestIdentity = await this.identityAt(identity.root);
-      if (latestIdentity.head !== identity.head) continue;
-      this.publishWorkspace(latestIdentity, repositories, ids);
+      const rootRepository = physical.get(snapshot.rootKey)!;
+      // Refresh the root last so its verified snapshot is also the final workspace race check.
+      for (const repository of physical.values()) {
+        if (repository.rootKey !== snapshot.rootKey)
+          await this.refreshRepository(ids.get(repository.rootKey)!, repository, forceFull);
+      }
+      const latestSnapshot = await this.refreshRepository(ids.get(snapshot.rootKey)!, rootRepository, forceFull);
+      if (!sameSnapshot(snapshot, latestSnapshot)) continue;
+      this.publishWorkspace(latestSnapshot, repositories, ids);
+      optimizeDatabase(this.database());
       return;
     }
     throw new Error(`pi-discover workspace changed repeatedly while indexing: ${this.root}`);
@@ -671,7 +710,7 @@ export class WorkspaceIndex {
 
   private async ready(): Promise<void> {
     await this.pending;
-    if (!this.workspaceId) this.ensureWorkspace(await this.identity());
+    if (!this.workspaceId) this.ensureWorkspace(await this.snapshot());
   }
 
   private scopedPath(cwd: string, input?: string): string {

@@ -440,6 +440,13 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   if (settings.kind === "continuity") {
     return <div className="package-fields continuity-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.memoryEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, memoryEnabled: event.target.checked })} />Durable memory</label>
+      <label>Automatic compaction reserve (global)<input key={settings.reserveTokens} type="number" min={1_000} max={1_000_000} step={1_000} defaultValue={settings.reserveTokens} disabled={disabled} onBlur={(event) => {
+        const reserveTokens = Number(event.target.value);
+        if (Number.isSafeInteger(reserveTokens) && reserveTokens >= 1_000 && reserveTokens <= 1_000_000) {
+          if (reserveTokens !== settings.reserveTokens) onUpdate({ ...settings, reserveTokens });
+        } else event.currentTarget.value = String(settings.reserveTokens);
+      }} /></label>
+      <p className="settings-policy-note">Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi settings can override it.</p>
       <label>Continuity retained tokens<input key={settings.keepRecentTokens} type="number" min={1_000} max={50_000} step={1_000} defaultValue={settings.keepRecentTokens} disabled={disabled} onBlur={(event) => {
         const keepRecentTokens = Number(event.target.value);
         if (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 1_000 && keepRecentTokens <= 50_000) {

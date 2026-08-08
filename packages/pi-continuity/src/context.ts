@@ -111,8 +111,12 @@ export function buildContext(work: Work | undefined, notes: NotebookNote[], late
     if (work.mode === "planning") lines.push(
       `Work: planning; goal: ${work.goal.slice(0, 500)}`,
       work.planSummary ? `Plan: ${work.planSummary.slice(0, 900)}` : "",
+      ...dedupeStrings(work.handoff?.workingSet ?? []).slice(0, 8).map((value) => `Working set: ${value.slice(0, 240)}`),
+      ...dedupeStrings(work.handoff?.assumptions ?? []).slice(0, 4).map((value) => `Assumption/gap: ${value.slice(0, 300)}`),
+      ...dedupeStrings(work.handoff?.acceptanceCriteria ?? []).slice(0, 4).map((value) => `Acceptance: ${value.slice(0, 300)}`),
       ...dedupeStrings(work.constraints).slice(0, 6).map((value) => `Constraint: ${value.slice(0, 220)}`),
       ...work.todos.map((todo) => `Todo ${todo.id} [${todo.status}]: ${todo.text}`),
+      work.revisionFeedback ? `Revision feedback: ${work.revisionFeedback.text.slice(0, 500)}` : "",
       work.latestFailure ? `Blocked: ${work.latestFailure.slice(0, 300)}` : "",
       work.nextAction ? `Next: ${work.nextAction.slice(0, 300)}` : "",
     );
@@ -127,6 +131,7 @@ export function buildContext(work: Work | undefined, notes: NotebookNote[], late
         work.nextAction ? `Next: ${work.nextAction.slice(0, 260)}` : "",
         ...dedupeStrings(work.constraints).slice(0, 2).map((value) => `Constraint: ${value.slice(0, 160)}`),
         work.planSummary ? `Plan anchor: ${work.planSummary.slice(0, 360)}` : "",
+        ...dedupeStrings(work.handoff?.workingSet ?? []).slice(0, 4).map((value) => `Working set: ${value.slice(0, 180)}`),
       );
     }
   }

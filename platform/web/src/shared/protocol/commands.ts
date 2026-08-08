@@ -41,6 +41,7 @@ export const COMMAND_NAMES = [
   "updateContinuityMemory",
   "deleteContinuityMemory",
   "migrateContinuityMemory",
+  "continuityPlanAction",
   "handoffSession",
   "applySessionChanges",
   "updateProjectWorktreeSettings",
@@ -116,6 +117,10 @@ export type WebCommand =
   | ({ type: "updateContinuityMemory"; scope: "user" | "project"; id: string; trigger: string; guidance: string; expectedRevision: number } & CommandBase)
   | ({ type: "deleteContinuityMemory"; scope: "user" | "project"; id: string; expectedRevision: number } & CommandBase)
   | ({ type: "migrateContinuityMemory" } & CommandBase)
+  | ({ type: "continuityPlanAction"; expectedRevision: number } & (
+      | { action: "approve"; resetContext: boolean }
+      | { action: "requestChanges"; feedback: string }
+    ) & CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
   | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)

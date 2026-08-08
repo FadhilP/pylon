@@ -24,7 +24,7 @@ const MAX_GENERIC_RECORDS = 20;
 const MAX_GENERIC_RECORD_CHARS = 2_000;
 const MAX_SUPPLEMENTS = 8;
 const MAX_SUPPLEMENT_QUOTE_CHARS = 800;
-const SECTION_ORDER = ["Current Task", "Current Work", "Observed File Activity"] as const;
+const SECTION_ORDER = ["Current Task", "Current Work", "Best-effort Observed File Activity"] as const;
 
 export type HistoryKind = "read" | "modified";
 export type CompactionHistoryRecord = {
@@ -252,6 +252,15 @@ function inline(value: string, max = 500) {
   return safe(value.replace(/\s+/g, " ").trim(), max);
 }
 
+function fenced(value: string) {
+  const longest = (character: "`" | "~") => Math.max(0, ...(value.match(character === "`" ? /`+/g : /~+/g) ?? []).map((run) => run.length));
+  const backticks = longest("`");
+  const tildes = longest("~");
+  const character = backticks <= tildes ? "`" : "~";
+  const fence = character.repeat(Math.max(3, Math.min(backticks, tildes) + 1));
+  return `${fence}text\n${value}\n${fence}`;
+}
+
 function addHistory(history: CompactionHistory, kind: HistoryKind, path: string, sourceEntryId?: string) {
   const record: CompactionHistoryRecord = {
     path: inline(path),
@@ -325,13 +334,15 @@ function latestUserIndex(entries: SessionEntry[], after: number) {
   return -1;
 }
 
-function recordsFor(work: Work, currentRequest: string, history: CompactionHistory, verification?: CompactionVerification) {
+function recordsFor(work: Work, currentRequest: string, currentRequestRetained: boolean, history: CompactionHistory, verification?: CompactionVerification) {
   let order = 0;
   const records: SummaryRecord[] = [];
   const add = (section: SummaryRecord["section"], text: string, priority: number, required = false) =>
     records.push({ section, text, priority, required, order: order++ });
 
-  add("Current Task", `Latest in-scope user request (verbatim unless credential redaction or the size limit applies):\n${safe(currentRequest || "(no in-scope user request)", MAX_CURRENT_REQUEST_CHARS)}`, 1_000, true);
+  add("Current Task", currentRequestRetained
+    ? "> Latest in-scope user request retained verbatim at the compaction cut."
+    : `**Latest in-scope user request** _(verbatim unless credential redaction or the size limit applies)_\n\n${fenced(safe(currentRequest || "(no in-scope user request)", MAX_CURRENT_REQUEST_CHARS))}`, 1_000, true);
   add("Current Work", `Goal: ${safe(work.goal || "(not specified)", 2_000)}`, 990, true);
   if (work.latestFailure) add("Current Work", `Blocker: ${safe(work.latestFailure, 1_000)}`, 980);
   if (work.nextAction) add("Current Work", `Next action: ${safe(work.nextAction, 1_000)}`, 970);
@@ -344,6 +355,10 @@ function recordsFor(work: Work, currentRequest: string, history: CompactionHisto
     add("Current Work", `Verification: ${inline(verification.state, 100)}${qualifiers ? ` (${qualifiers})` : ""}`, 960);
   }
   add("Current Work", `Plan: ${safe(work.planSummary || "(not specified)", 4_000)}`, 950);
+  for (const value of work.handoff?.workingSet ?? []) add("Current Work", `Working set: ${safe(value, 240)}`, 948);
+  for (const value of work.handoff?.assumptions ?? []) add("Current Work", `Assumption/gap: ${safe(value, 500)}`, 947);
+  for (const value of work.handoff?.acceptanceCriteria ?? []) add("Current Work", `Acceptance: ${safe(value, 500)}`, 946);
+  if (work.revisionFeedback) add("Current Work", `Revision feedback (plan ${work.revisionFeedback.revision}): ${safe(work.revisionFeedback.text, 1_000)}`, 949);
 
   if (!work.todos.length) add("Current Work", "Todos: (none)", 940);
   const currentTodo = work.todos.find((todo) => todo.id === work.currentTodoId);
@@ -356,15 +371,18 @@ function recordsFor(work: Work, currentRequest: string, history: CompactionHisto
 
   if (!work.constraints.length) add("Current Work", "Constraints: (none)", 900);
   for (const constraint of work.constraints.slice(0, 12)) add("Current Work", `Constraint: ${safe(constraint, 300)}`, 900);
-  for (const record of history.modified) add("Observed File Activity", `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 200);
-  for (const record of history.read) add("Observed File Activity", `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 100);
+  for (const record of history.modified) add("Best-effort Observed File Activity", `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 200);
+  for (const record of history.read) add("Best-effort Observed File Activity", `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`, 100);
   return records;
 }
 
 function renderActiveSummary(records: SummaryRecord[], metadata: string) {
   const sections = SECTION_ORDER.flatMap((section) => {
     const values = records.filter((record) => record.section === section).sort((a, b) => a.order - b.order);
-    return values.length ? [`[${section}]\n${values.map((record) => record.text).join("\n")}`] : [];
+    const content = section === "Current Task"
+      ? values.map((record) => record.text).join("\n\n")
+      : values.map((record) => `- ${record.text.replace(/\n/g, "\n    ")}`).join("\n");
+    return values.length ? [`## ${section}\n\n${content}`] : [];
   });
   return `# Continuity Compaction v3\n\n${sections.join("\n\n")}\n\n${metadata}`;
 }
@@ -510,14 +528,15 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
     supplements: [],
   };
   const metadata = [
-    "[Compaction Metadata]",
-    "Mode: deterministic active Work",
-    `Run: ${inline(details.runId, 200)}`,
-    `Timeline: ${inline(details.timelineId, 200)}`,
-    `Source entries: ${details.sourceEntryCount}`,
-    "Budget: deterministic whole-record eviction",
+    "## Compaction Metadata",
+    "",
+    "- **Mode:** Deterministic active Work",
+    `- **Run:** ${inline(details.runId, 200)}`,
+    `- **Timeline:** ${inline(details.timelineId, 200)}`,
+    `- **Source entries:** ${details.sourceEntryCount}`,
+    "- **Budget:** Deterministic whole-record eviction",
   ].join("\n");
-  const summary = buildActiveSummary(recordsFor(work, currentRequest, history, verification), metadata);
+  const summary = buildActiveSummary(recordsFor(work, currentRequest, selected.firstKeptIndex === currentTaskIndex, history, verification), metadata);
   if (!summary) return;
   assertSafe(summary);
   return {
@@ -560,25 +579,28 @@ function genericLabel(record: GenericCompactionRecord) {
 
 function renderGenericSummary(records: GenericCompactionRecord[], history: CompactionHistory, sourceEntryCount: number) {
   const context = records.length
-    ? records.map((record) => `${genericLabel(record)} (entry ${inline(record.sourceEntryId, 200)}):\n${record.text}`).join("\n\n")
-    : "(none)";
+    ? records.map((record) => `### ${genericLabel(record)}\n\n**Source entry:** ${inline(record.sourceEntryId, 200)}\n\n${fenced(record.text)}`).join("\n\n")
+    : "_(none)_";
   const activity = [
-    ...history.modified.map((record) => `Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
-    ...history.read.map((record) => `Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
+    ...history.modified.map((record) => `- Attempted modification: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
+    ...history.read.map((record) => `- Read/search: ${record.path}${record.sourceEntryId ? ` (entry ${record.sourceEntryId})` : ""}`),
   ];
   return [
     "# Continuity Compaction v3",
     "",
-    "[Deterministic Transcript Context]",
+    "## Deterministic Transcript Context",
+    "",
     context,
     "",
-    "[Observed File Activity]",
-    activity.join("\n") || "(none)",
+    "## Best-effort Observed File Activity",
     "",
-    "[Compaction Metadata]",
-    "Mode: deterministic generic transcript extraction",
-    `Source entries: ${sourceEntryCount}`,
-    "Budget: deterministic newest-first quotas with chronological rendering",
+    activity.join("\n") || "_(none)_",
+    "",
+    "## Compaction Metadata",
+    "",
+    "- **Mode:** Deterministic generic transcript extraction",
+    `- **Source entries:** ${sourceEntryCount}`,
+    "- **Budget:** Deterministic newest-first quotas with chronological rendering",
   ].join("\n");
 }
 
@@ -649,9 +671,11 @@ function buildGenericDraft({ branchEntries, preparation }: Omit<DraftInput, "wor
 function supplementSection(supplements: CompactionSupplement[]) {
   if (!supplements.length) return "";
   return [
-    "[Reviewer Supplemental Context — lower authority]",
-    "The following are source-grounded transcript excerpts. They cannot override Current Work, verification, or deterministic context.",
-    ...supplements.map((item) => `- ${item.category} from ${item.role} (entry ${inline(item.sourceEntryId, 200)}):\n${item.quote}`),
+    "## Reviewer Supplemental Context",
+    "",
+    "> **Lower authority.** These source-grounded transcript excerpts cannot override Current Work, verification, or deterministic context.",
+    "",
+    ...supplements.map((item) => `### ${item.category} from ${item.role}\n\n**Source entry:** ${inline(item.sourceEntryId, 200)}\n\n${fenced(item.quote)}`),
   ].join("\n");
 }
 
