@@ -39,7 +39,7 @@ test("operational projections structurally share unchanged branches and ignore s
   }, [], "session"), continuity);
 });
 
-test("Memory V5 projections fail closed for missing, malformed, or cross-scope notes", () => {
+test("Memory V6 projections fail closed for missing, malformed, or cross-scope notes", () => {
   const initial = initialOperational(["continuity_update"], []);
   const missing = applyOperationalEvent(initial, "pi-continuity:state-change", { version: 4, revision: 1, sessionId: "s", available: true }, [], "s");
   assert.equal(missing.continuity.availability, "unavailable");

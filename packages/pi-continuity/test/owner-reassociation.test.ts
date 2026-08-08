@@ -15,7 +15,7 @@ const exec = promisify(execFile);
 const note = (owner: string, trigger: string, commits: string[] = []): NotebookNote => ({
   id: randomUUID(), scope: "project", owner, trigger, guidance: "Keep the boundary.", authority: commits.length ? "project_contract" : "imported", origin: commits.length ? "agent" : "migration",
   sourceRefs: commits.map((captureCommit, index) => ({ type: "repository" as const, path: `src/${index}.ts`, excerptSha256: String(index).repeat(64), captureCommit })),
-  revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z",
+  disposition: "archival", enforcementAuthority: "context_only", revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z",
 });
 
 test("owner reassociation revises moved notes and backs current-owner collisions out of the result", () => {
@@ -29,7 +29,7 @@ test("owner reassociation revises moved notes and backs current-owner collisions
 });
 
 test("moved owner detection requires stale missing homes and two commits from exactly one owner", async () => {
-  const root = await mkdtemp(join(tmpdir(), "continuity-v5-owner-move-")), oldPath = join(root, "old"), currentPath = join(root, "current");
+  const root = await mkdtemp(join(tmpdir(), "continuity-v6-owner-move-")), oldPath = join(root, "old"), currentPath = join(root, "current");
   try {
     await mkdir(oldPath); await exec("git", ["init"], { cwd: oldPath }); await exec("git", ["config", "user.email", "test@example.com"], { cwd: oldPath }); await exec("git", ["config", "user.name", "Test"], { cwd: oldPath });
     await writeFile(join(oldPath, "one.txt"), "one\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "one"], { cwd: oldPath });

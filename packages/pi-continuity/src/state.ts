@@ -2,7 +2,7 @@ import type { Work } from "./active-work.ts";
 import type { NotebookNote } from "./memory.ts";
 
 export const CONTINUITY_STATE_VERSION = 4 as const;
-export type ContinuityMemoryNoteReadModel = Pick<NotebookNote, "id" | "scope" | "trigger" | "guidance" | "authority" | "origin" | "revision" | "updatedAt"> & {
+export type ContinuityMemoryNoteReadModel = Pick<NotebookNote, "id" | "scope" | "trigger" | "guidance" | "authority" | "origin" | "disposition" | "enforcementAuthority" | "revision" | "updatedAt"> & {
   relatedPaths?: string[];
   sourceSummary: string;
 };
@@ -34,6 +34,8 @@ const memoryNote = (note: NotebookNote): ContinuityMemoryNoteReadModel => ({
   guidance: note.guidance,
   authority: note.authority,
   origin: note.origin,
+  disposition: note.disposition,
+  enforcementAuthority: note.enforcementAuthority,
   ...(note.relatedPaths?.length ? { relatedPaths: note.relatedPaths.slice(0, 5) } : {}),
   revision: note.revision,
   updatedAt: note.updatedAt,

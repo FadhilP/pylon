@@ -311,6 +311,8 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
   registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const tool = tools.get("search_sessions");
   assert.match(tool.description, /only when the user explicitly requests/);
+  assert.match(tool.description, /exact historical Pi session ID.*sessionId.*query for the requested subject/i);
+  assert.match(tool.promptGuidelines.join("\n"), /exact historical Pi session ID.*sessionId.*requested subject as query.*do not pass the ID as query text to continuity_recall/i);
   assert.match(tool.description, /explicit cross-workspace request/);
   assert.match(tool.description, /untrusted and possibly stale/);
   const ctx = {
@@ -899,7 +901,7 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.deepEqual(policy.deferredToolUsage, {
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
-      search_sessions: "search historical Pi sessions or assistant tool calls when explicitly requested",
+      search_sessions: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
       session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
     });
     assert.ok(!runtime.active.includes("index_status"));

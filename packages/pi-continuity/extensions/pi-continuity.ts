@@ -22,6 +22,7 @@ import {
   readJson,
   readVersionedJson,
   writeJson,
+  writeBytesAtomic,
   writeJsonAtomic,
   updateJson,
   withFileLock,
@@ -40,8 +41,10 @@ import {
   enforceMemoryLimits,
   exactDuplicate,
   isMemoryState,
+  migrateV5MemoryState,
   notesForOwners,
   normalizeMemoryState,
+  semanticIdentity,
   stageReview,
   sha256,
   strongDuplicate,
@@ -59,7 +62,22 @@ import {
 import { hasPendingV4Migration, isMigrationJournal, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
 import { assertSafe, sanitizeAndClip } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
-import { buildContext, buildMemoryInjection, retrievalQueries, shortlistNotes } from "../src/context.ts";
+import { buildContext, shortlistNotes } from "../src/context.ts";
+import {
+  MEMORY_LEDGER_ENTRY_TYPE,
+  activeMemoryForDelivery,
+  compileMemorySidecar,
+  emptyMemoryLedger,
+  eventFrame,
+  indexMemorySidecar,
+  markActiveMemoryDelivered,
+  processMemoryEvent,
+  rearmMemoryAfterCompaction,
+  restoreMemoryLedger,
+  type CompiledMemorySidecar,
+  type MemoryIntervention,
+  type MemoryLedger,
+} from "../src/memory-runtime.ts";
 import { validateQuestions } from "../src/questions.ts";
 import { askQuestionnaire } from "../src/clarify-ui.ts";
 import { captureEvidenceRanges, currentChangedPaths, projectContext, worktreeFingerprint, type ProjectContext } from "../src/worktree.ts";
@@ -89,43 +107,25 @@ import { loadProjectRecallSessions } from "../src/project-recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const EXECUTION_ENTRY_TYPE = "pi-continuity-execution";
-const memoryPreflightTools = new Set(["bash", "edit", "grunt", "heartbeat_start", "write"]);
-const memoryActionFields = ["action", "checkCommands", "command", "label", "operation", "package", "packages", "path", "paths", "query", "sql", "suggestedPaths", "target", "targetedContext", "task"];
-const inspectionBashCommand = /^(?:(?:pwd|ls|dir|cat|head|tail|wc|grep|rg|fd)\b|git\s+(?:status|diff|log|show|rev-parse|ls-files)\b)/i;
-const unsafeInspectionOption = /(?:^|\s)(?:--pre(?:=|\s)|--exec(?:=|\s)|--exec-batch(?:=|\s)|--ext-diff(?:\s|$)|--textconv(?:\s|$)|--output(?:=|\s))/i;
-const unsafeFdShortOption = /(?:^|\s)-[a-z]*x\S*/i;
-
-export function isReadOnlyBashInspection(command: unknown): boolean {
-  if (typeof command !== "string" || !command.trim()) return false;
-  if (/[\r\n;|<>`$]/u.test(command) || command.replaceAll("&&", "").includes("&")) return false;
-  const parts = command.split(/\s*&&\s*/u);
-  return parts.every((part) => {
-    const trimmed = part.trim();
-    return inspectionBashCommand.test(trimmed)
-      && !unsafeInspectionOption.test(trimmed)
-      && !(/^fd\b/iu.test(trimmed) && unsafeFdShortOption.test(trimmed));
-  });
-}
-
-const memoryAction = (toolName: string, input: any) => {
-  if (!memoryPreflightTools.has(toolName) || (toolName === "bash" && isReadOnlyBashInspection(input?.command))) return;
-  const fields: Array<[string, string]> = [];
-  for (const field of memoryActionFields) {
-    const value = input?.[field];
-    if (typeof value === "string") fields.push([field, value]);
-    else if (Array.isArray(value))
-      fields.push(...value.filter((item): item is string => typeof item === "string").map((item) => [field, item] as [string, string]));
-  }
-  const raw = `${toolName.replaceAll("_", " ")} ${fields.map(([, value]) => value).join(" ")}`;
-  const signals = [
-    /\b(?:npm|pnpm|yarn|bun)\b[^\n]*\b(?:add|install|remove|uninstall)\b|\b(?:pip|cargo|go)\s+(?:install|get)\b/i.test(raw) ? "dependency package" : "",
-    /\b(?:migrat\w*|schema)\b/i.test(raw) ? "database migration" : "",
-    /\b(?:deploy|publish|release)\w*\b/i.test(raw) ? "deploy publish release" : "",
-  ].filter(Boolean);
-  const query = sanitizeAndClip(`${raw} ${signals.join(" ")}`, 2_000).trim();
-  const signatureFields = fields.map(([field, value]) => [field, sanitizeAndClip(value, 500).toLowerCase().replace(/\s+/g, " ").trim()]);
-  return { query, signature: sha256(JSON.stringify([toolName, signatureFields])) };
+type V5MigrationJournal = {
+  version: 1;
+  status: "prepared" | "activated" | "rolled_back";
+  sourceSha256: string;
+  stateSha256: string;
+  activatedRevision: number;
+  backupPath: string;
+  preparedAt: string;
+  migratedAt?: string;
+  rolledBackAt?: string;
 };
+const isV5MigrationJournal = (value: any): value is V5MigrationJournal => value?.version === 1
+  && ["prepared", "activated", "rolled_back"].includes(value.status)
+  && [value.sourceSha256, value.stateSha256].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/.test(item))
+  && Number.isSafeInteger(value.activatedRevision) && value.activatedRevision >= 0
+  && typeof value.backupPath === "string" && value.backupPath.length > 0 && value.backupPath.length <= 500
+  && typeof value.preparedAt === "string" && !Number.isNaN(Date.parse(value.preparedAt))
+  && (value.migratedAt === undefined || typeof value.migratedAt === "string" && !Number.isNaN(Date.parse(value.migratedAt)))
+  && (value.rolledBackAt === undefined || typeof value.rolledBackAt === "string" && !Number.isNaN(Date.parse(value.rolledBackAt)));
 const isVerificationOnlyTodo = (text: string) =>
   /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
   !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
@@ -243,6 +243,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     work: Work | undefined,
     memoryState: MemoryStateFile = emptyMemoryState(),
     memoryNotes: NotebookNote[] = [],
+    memorySidecar: CompiledMemorySidecar = compileMemorySidecar([], 0),
+    memoryRuleIndex = indexMemorySidecar(memorySidecar),
+    memoryLedger: MemoryLedger = emptyMemoryLedger("unleased"),
     reviewCalledThisTask = false,
     memoryProposalToken: string | undefined,
     memoryTaskGeneration = 0,
@@ -250,11 +253,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     savedTools: string[] | undefined,
     lastPrompt = "",
     memoryEnabled = true,
-    memoryInjectionEnabled = true,
-    memoryContextToken: string | undefined,
-    surfacedMemoryIds = new Set<string>(),
-    pendingPreflightMemoryIds = new Set<string>(),
-    preflightedMemoryActions = new Set<string>(),
+    memoryActivationEnabled = true,
     legacyMigrationAvailable = false,
     activeSessionContext: any,
     tasksVisible = true,
@@ -392,14 +391,87 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   const paths = () => ({
     work: workFile,
-    memory: join(root, "memory-v5", "state.json"),
-    migration: join(root, "memory-v5", "migration.json"),
+    memory: join(root, "memory-v6", "state.json"),
+    compiledMemory: join(root, "memory-v6", "compiled.json"),
+    v6Migration: join(root, "memory-v6", "migration-v5.json"),
+    v5Memory: join(root, "memory-v5", "state.json"),
+    migration: join(root, "memory-v6", "migration.json"),
     legacyMemory: join(root, "memory-v4", "memory.json"),
     legacyCandidates: join(root, "memory-v4", "candidates.json"),
   });
-  const memoryDirectory = () => join(root, "memory-v5");
-  const readMemory = async () => normalizeMemoryState(await readVersionedJson(paths().memory, emptyMemoryState(), isMemoryState))!;
-  const writeMemory = async (state: MemoryStateFile) => writeJsonAtomic(paths().memory, state);
+  const memoryDirectory = () => join(root, "memory-v6");
+  const readV5MigrationJournal = async () => {
+    try {
+      const value = JSON.parse(await readFile(paths().v6Migration, "utf8"));
+      if (!isV5MigrationJournal(value)) throw Error("Memory V5 migration journal is invalid");
+      return value;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+  const scopedMemoryNotes = (notes = memoryNotes) => project ? notesForOwners(notes, project.owner) : notes.filter((note) => note.scope === "user" && note.owner === "default");
+  const pruneMemoryLedger = () => {
+    const compiled = new Set(memorySidecar.rules.map((rule) => `${rule.memoryId}\0${rule.noteRevision}`));
+    memoryLedger = { ...memoryLedger, active: memoryLedger.active.filter((item) => compiled.has(`${item.memoryId}\0${item.noteRevision}`)) };
+  };
+  const refreshMemoryCompilation = async (state: MemoryStateFile, persist = true) => {
+    const scoped = scopedMemoryNotes(state.notes), compilable: NotebookNote[] = [], stale: CompiledMemorySidecar["failures"] = [];
+    for (const note of scoped) {
+      if (note.disposition !== "eligible_advisory" || note.authority !== "project_contract") { compilable.push(note); continue; }
+      const review = state.reviews.find((item) => item.reviewId === note.sourceReviewId);
+      const refs = note.sourceRefs.filter((ref): ref is Extract<NotebookNote["sourceRefs"][number], { type: "repository" }> => ref.type === "repository");
+      const ranges = (review?.evidenceBatches?.flat() ?? []).filter((range) => refs.some((ref) => ref.path === range.path && ref.excerptSha256 === range.excerptSha256));
+      try {
+        const captured = ranges.length ? await captureEvidenceRanges(currentCwd, ranges.map(({ path, start, end }) => ({ path, start, end }))) : [];
+        if (!refs.length || !refs.every((ref) => captured.some((item) => item.path === ref.path && item.excerptSha256 === ref.excerptSha256))) throw Error("stale");
+        compilable.push(note);
+      } catch { stale.push({ memoryId: note.id, noteRevision: note.revision, reason: "source_stale" }); }
+    }
+    memorySidecar = compileMemorySidecar(compilable, state.revision);
+    memorySidecar.failures.push(...stale);
+    memoryRuleIndex = indexMemorySidecar(memorySidecar);
+    pruneMemoryLedger();
+    if (persist) await writeJsonAtomic(paths().compiledMemory, memorySidecar).catch(() => {});
+  };
+  const readMemory = async () => {
+    try {
+      await readFile(paths().memory, "utf8");
+      const state = normalizeMemoryState(await readVersionedJson(paths().memory, emptyMemoryState(), isMemoryState))!;
+      const journal = await readV5MigrationJournal();
+      if (journal?.status === "prepared") {
+        if (journal.activatedRevision !== state.revision || journal.stateSha256 !== sha256(JSON.stringify(state))) throw Error("Memory V5 migration is incomplete and does not match V6 state");
+        await writeJsonAtomic(paths().v6Migration, { ...journal, status: "activated", migratedAt: new Date().toISOString() } satisfies V5MigrationJournal);
+      }
+      await refreshMemoryCompilation(state);
+      return state;
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    const existingJournal = await readV5MigrationJournal();
+    if (existingJournal?.status === "rolled_back") throw Error("Memory V5 migration was rolled back; restore or remove its journal before migrating again");
+    if (existingJournal?.status === "activated") throw Error("Memory V6 state is missing after an activated V5 migration");
+    let rawV5: string;
+    try { rawV5 = await readFile(paths().v5Memory, "utf8"); }
+    catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      const state = emptyMemoryState(); await refreshMemoryCompilation(state); return state;
+    }
+    let legacy: unknown;
+    try { legacy = JSON.parse(rawV5); } catch { throw Error("Memory V5 state is malformed; migration stopped without modifying it"); }
+    const migrated = migrateV5MemoryState(legacy);
+    if (!migrated) throw Error("Memory V5 state is unsupported; migration stopped without modifying it");
+    const sourceSha256 = sha256(rawV5), stateSha256 = sha256(JSON.stringify(migrated));
+    if (existingJournal?.status === "prepared" && (existingJournal.sourceSha256 !== sourceSha256 || existingJournal.stateSha256 !== stateSha256 || existingJournal.activatedRevision !== migrated.revision)) throw Error("Memory V5 changed after migration preparation");
+    const backupPath = join(memoryDirectory(), "backups", `state-v5-${sourceSha256}.json`), preparedAt = new Date().toISOString();
+    await writeBytesAtomic(backupPath, rawV5);
+    const prepared: V5MigrationJournal = { version: 1, status: "prepared", sourceSha256, stateSha256, activatedRevision: migrated.revision, backupPath, preparedAt };
+    await writeJsonAtomic(paths().v6Migration, prepared);
+    await writeMemory(migrated);
+    await writeJsonAtomic(paths().v6Migration, { ...prepared, status: "activated", migratedAt: new Date().toISOString() });
+    return migrated;
+  };
+  const writeMemory = async (state: MemoryStateFile) => { await writeJsonAtomic(paths().memory, state); await refreshMemoryCompilation(state); };
   const ownerFor = (scope: MemoryScope) => scope === "user" ? "default" : project?.owner;
   const resolveProject = async (cwd: string) => {
     const resolved = await projectContext(cwd, workspace?.projectOwner ?? project?.owner ?? workspace!.id);
@@ -432,17 +504,28 @@ export default function continuityExtension(pi: ExtensionAPI) {
     await writeJsonAtomic(join(memoryDirectory(), "backups", `owner-reassociation-${migrationId}.json`), backup);
     return next;
   };
-  const newlyRelevantMemory = async (queries: string[], markSurfaced = true) => {
-    if (!queries.length) return { text: "", notes: [] as NotebookNote[] };
-    project = await resolveProject(currentCwd);
-    const injection = buildMemoryInjection(
-      notesForOwners(memoryNotes, project.owner),
-      queries,
-      100,
-      surfacedMemoryIds,
-    );
-    if (markSurfaced) for (const note of injection.notes) surfacedMemoryIds.add(note.id);
-    return injection;
+  const persistMemoryLedger = () => pi.appendEntry(MEMORY_LEDGER_ENTRY_TYPE, memoryLedger);
+  const interventionText = (interventions: readonly MemoryIntervention[]) => {
+    const byId = new Map(scopedMemoryNotes().map((note) => [note.id, note]));
+    const lines = interventions.flatMap((intervention) => {
+      const note = byId.get(intervention.memoryId);
+      return note && note.revision === intervention.noteRevision ? [`Applicable working rule [${note.id}]: When ${note.trigger}, ${note.guidance}`] : [];
+    });
+    return lines.join("\n");
+  };
+  const queueMemoryInterventions = (interventions: readonly MemoryIntervention[]) => {
+    const text = interventionText(interventions);
+    if (!text) return;
+    persistMemoryLedger();
+    pi.sendMessage({ customType: "pi-continuity-memory", content: text, display: false, details: { version: 2, contextEpoch: memoryLedger.contextEpoch, memoryIds: interventions.map((item) => item.memoryId) } }, { deliverAs: "steer" });
+    pi.events.emit("pi-continuity:memory-activation", { version: 1, outcome: "delivered", memoryIds: interventions.map((item) => item.memoryId), contextEpoch: memoryLedger.contextEpoch });
+  };
+  const processProspectiveMemory = (frame: ReturnType<typeof eventFrame>) => {
+    const processed = processMemoryEvent(memoryRuleIndex, frame, memoryLedger);
+    memoryLedger = processed.ledger;
+    if (processed.uncertain.length) pi.events.emit("pi-continuity:memory-activation", { version: 1, outcome: "abstained", memoryIds: processed.uncertain, contextEpoch: memoryLedger.contextEpoch });
+    queueMemoryInterventions(processed.interventions);
+    return processed.interventions;
   };
   const projectMemory = () => project
     ? memoryNotes.filter((note) => note.scope === "project" && note.owner === project!.owner)
@@ -513,7 +596,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     request.respond(operation);
   });
   const saveWork = async () => {
-    if (work) {
+    const path = paths().work;
+    try {
+      if (!work) return;
       if (!isWork(work)) throw Error("Continuity Work invariants are invalid.");
       assertSafe(
         work.goal,
@@ -527,8 +612,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.nextAction,
         ...work.todos.map((t) => t.text),
       );
-      await writeJson(paths().work, work);
+      await writeJson(path, work);
       publishState();
+    } catch (error) {
+      work = undefined;
+      try {
+        work = await readJson<Work | undefined>(path, undefined, (value) => value === undefined || isWork(value));
+      } catch { /* Preserve the save error and fail closed if durable state cannot be restored. */ }
+      throw error;
     }
   };
   const refresh = (ctx: any) => {
@@ -594,15 +685,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           } catch { evidenceValid = false; }
         }
         if (!evidenceValid) { discard("cited evidence changed or is unavailable after memory review"); continue; }
-        const currentIdentity = original.requiresVerification ? await worktreeFingerprint(expectedCwd) : undefined;
-        if (original.requiresVerification && (!currentIdentity || original.worktreeIdentity !== currentIdentity)) { discard("worktree changed after memory review"); continue; }
-        if (original.requiresVerification) {
-          if (["failed", "stale", "cancelled", "error"].includes(latestVerification?.state)) { discard(`verification ${latestVerification.state}`); continue; }
-          if (latestVerification?.state !== "passed") continue;
-          if (latestVerification.sessionId !== expectedSession || latestVerification.worktreeId !== currentIdentity) { discard("verification does not cover the reviewed worktree"); continue; }
-        }
-        const record = original.requiresVerification ? { ...original, verificationRevision: latestVerification.runId } : original;
-        try { latest = applyReview(latest, record); changed = true; emitMemoryOutcome("committed"); }
+        try { latest = applyReview(latest, original); changed = true; emitMemoryOutcome("committed"); }
         catch (error: any) { discard(error?.message ?? "review conflict"); }
       }
       if (changed) await writeMemory(latest);
@@ -680,22 +763,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   const completeWork = async (ctx: any) => {
     if (!work || work.mode === "completed") return false;
-    const previous = {
-      mode: work.mode,
-      currentTodoId: work.currentTodoId,
-      completedAt: work.completedAt,
-      updatedAt: work.updatedAt,
-    };
     work.mode = "completed";
     work.currentTodoId = undefined;
     work.completedAt = new Date().toISOString();
     work.updatedAt = new Date().toISOString();
-    try {
-      await saveWork();
-    } catch (error) {
-      Object.assign(work, previous);
-      throw error;
-    }
+    await saveWork();
     gate(false);
     refresh(ctx);
     return true;
@@ -778,13 +850,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     activeSessionContext = ctx;
     approvalContext = ctx;
     memoryEnabled = (await loadConfig()).memoryEnabled !== false;
-    memoryInjectionEnabled = memoryEnabled;
     recentCalls.clear();
     pendingMutations.clear();
     deniedToolCalls.clear();
-    surfacedMemoryIds.clear();
-    pendingPreflightMemoryIds.clear();
-    preflightedMemoryActions.clear();
     seenMutationMessages.clear();
     terminatingToolCalls.clear();
     automaticCompaction = undefined;
@@ -867,9 +935,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return reconciled;
     }) : emptyMemoryState();
     memoryNotes = memoryState.notes;
+    memoryTaskGeneration++;
+    memoryLedger = restoreMemoryLedger(ctx.sessionManager.getBranch?.() ?? [], sessionId, memoryTaskGeneration);
+    pruneMemoryLedger();
     reviewCalledThisTask = false;
     memoryProposalToken = undefined;
-    memoryTaskGeneration++;
     const startupIdentity = await worktreeFingerprint(ctx.cwd), startupChanges = await currentChangedPaths(ctx.cwd);
     needsVerification = work?.mode === "executing" && (startupChanges === undefined || startupChanges.size > 0)
       && !(latestVerification?.state === "passed" && latestVerification.sessionId === sessionId && latestVerification.worktreeId === startupIdentity);
@@ -894,6 +964,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ctx.ui?.notify?.(`Plan approval recovery is pending: ${error?.message ?? String(error)}`, "warning")));
   }));
   pi.on("session_shutdown", async () => withMemoryLifecycle(async () => {
+    if (memoryEnabled) persistMemoryLedger();
     sessionGeneration++;
     activeSessionContext = undefined;
     automaticCompaction = undefined;
@@ -934,11 +1005,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
-  pi.on("agent_end", () => {
-    if (!pendingPreflightMemoryIds.size) return;
-    pendingPreflightMemoryIds.clear();
-    preflightedMemoryActions.clear();
-  });
+  pi.on("agent_end", () => {});
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
@@ -979,27 +1046,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
         block: true,
         reason: "Plan mode is read-only. Memory mutations are blocked; use memory list only.",
       };
-    if (memoryEnabled && memoryInjectionEnabled) {
-      const action = memoryAction(event.toolName, event.input);
-      if (action && pendingPreflightMemoryIds.size) {
-        deniedToolCalls.add(event.toolCallId);
-        return {
-          block: true,
-          reason: "A sibling consequential action was deferred because Continuity surfaced relevant memory in this tool batch. Reconsider the batch, then retry appropriate actions.",
-        };
-      }
-      if (action && !preflightedMemoryActions.has(action.signature)) {
-        const injection = await newlyRelevantMemory([...retrievalQueries("", activeWork()), action.query], false);
-        if (injection.text) {
-          preflightedMemoryActions.add(action.signature);
-          for (const note of injection.notes) pendingPreflightMemoryIds.add(note.id);
-          deniedToolCalls.add(event.toolCallId);
-          return {
-            block: true,
-            reason: `Continuity surfaced relevant memory before this action. Reconsider it, then retry if still appropriate.\n${injection.text}`,
-          };
-        }
-      }
+    if (memoryEnabled && memoryActivationEnabled && project) {
+      const rawPath = typeof (event.input as any)?.path === "string" ? String((event.input as any).path).replace(/^@/, "").replace(/\\/g, "/") : undefined;
+      const rawCommand = event.toolName === "bash" && typeof (event.input as any)?.command === "string" ? sanitizeAndClip((event.input as any).command, 500).slice(0, 500) : undefined;
+      processProspectiveMemory(eventFrame({
+        kind: "before_tool_call",
+        ledger: memoryLedger,
+        repository: project.owner,
+        taskPhase: work?.mode ?? "idle",
+        toolCallId: event.toolCallId,
+        facts: { "tool.name": event.toolName, ...(rawCommand ? { "tool.command": rawCommand } : {}), ...(rawPath ? { "file.path": rawPath } : {}), "attempt.count": 1 },
+      }));
     }
     if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
       pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
@@ -1013,28 +1070,51 @@ export default function continuityExtension(pi: ExtensionAPI) {
       pendingMutations.delete(event.toolCallId);
       return;
     }
+    let observedMutation = event.toolName === "bash" && sharedWorktreeObserver;
     if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt") {
       const before = pendingMutations.get(event.toolCallId);
       pendingMutations.delete(event.toolCallId);
       const after = await worktreeFingerprint(ctx.cwd);
-      if (!before || !after || before !== after) invalidateVerification();
-      return;
+      observedMutation = !before || !after || before !== after;
+      if (observedMutation) invalidateVerification();
+    } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
+      observedMutation = true;
+      invalidateVerification();
     }
-    if (["write", "edit", "heartbeat_start"].includes(event.toolName)) invalidateVerification();
+    if (memoryEnabled && memoryActivationEnabled && project && event.isError !== true && observedMutation) await refreshMemoryCompilation(memoryState, false);
+    if (memoryEnabled && memoryActivationEnabled && project) {
+      const content = Array.isArray(event.content) ? event.content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("\n").slice(0, 8_000) : "";
+      const signature = content.match(/\b(?:E[A-Z]{3,}|[A-Z][A-Z0-9_]{4,})\b/)?.[0];
+      const rawPath = typeof (event.input as any)?.path === "string" ? String((event.input as any).path).replace(/^@/, "").replace(/\\/g, "/") : undefined;
+      const rawCommand = event.toolName === "bash" && typeof (event.input as any)?.command === "string" ? sanitizeAndClip((event.input as any).command, 500).slice(0, 500) : undefined;
+      processProspectiveMemory(eventFrame({
+        kind: "after_tool_result",
+        ledger: memoryLedger,
+        repository: project.owner,
+        taskPhase: work?.mode ?? "idle",
+        toolCallId: event.toolCallId,
+        facts: {
+          "tool.name": event.toolName,
+          ...(rawCommand ? { "tool.command": rawCommand } : {}),
+          "tool.isError": event.isError === true,
+          ...((event.details as any)?.exitCode !== undefined ? { "tool.exitCode": Number((event.details as any).exitCode) } : {}),
+          ...(signature ? { "tool.errorSignature": signature } : {}),
+          ...(rawPath ? { "file.path": rawPath } : {}),
+        },
+      }));
+    }
+
   });
   pi.on("input", (event) => {
     if (event.source !== "extension") {
       lastPrompt = event.text;
       memoryTaskGeneration++;
+      memoryLedger = { ...memoryLedger, taskGeneration: memoryTaskGeneration };
       reviewCalledThisTask = false;
-      surfacedMemoryIds.clear();
-      pendingPreflightMemoryIds.clear();
-      preflightedMemoryActions.clear();
+      if (memoryEnabled && memoryActivationEnabled && project) processProspectiveMemory(eventFrame({ kind: "task_started", ledger: memoryLedger, repository: project.owner, taskPhase: work?.mode ?? "idle" }));
     }
   });
   pi.on("turn_end", (event, ctx) => {
-    for (const id of pendingPreflightMemoryIds) surfacedMemoryIds.add(id);
-    pendingPreflightMemoryIds.clear();
     const toolResults = Array.isArray(event.toolResults) ? event.toolResults : [];
     const hasToolCalls = Array.isArray((event.message as any)?.content) &&
       (event.message as any).content.some((part: any) => part?.type === "toolCall");
@@ -1164,21 +1244,31 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return { cancel: true };
     }
   });
-  pi.on("before_agent_start", async (event) => {
-    memoryContextToken = undefined;
-    if (!memoryEnabled || !memoryInjectionEnabled) return;
-    const injection = await newlyRelevantMemory(retrievalQueries(event.prompt, activeWork()));
-    if (injection.text) {
-      memoryContextToken = randomUUID();
-      return {
-        message: {
-          customType: "pi-continuity-memory",
-          content: injection.text,
-          display: false,
-          details: { version: 1, token: memoryContextToken },
-        },
-      };
-    }
+  pi.on("session_tree", (_event, ctx) => {
+    if (!memoryEnabled || !memoryActivationEnabled) return;
+    memoryTaskGeneration++;
+    memoryLedger = restoreMemoryLedger(ctx.sessionManager.getBranch?.() ?? [], leasedSessionId, memoryTaskGeneration);
+    pruneMemoryLedger();
+  });
+  pi.on("session_compact", () => {
+    if (!memoryEnabled || !memoryActivationEnabled) return;
+    memoryLedger = rearmMemoryAfterCompaction(memoryLedger);
+    const active = activeMemoryForDelivery(memoryLedger);
+    if (!active.length) { persistMemoryLedger(); return; }
+    const interventions = active.map((item) => ({ memoryId: item.memoryId, noteRevision: item.noteRevision, mode: "inject_once" as const, cause: "context_compacted" }));
+    memoryLedger = markActiveMemoryDelivered(memoryLedger, active);
+    queueMemoryInterventions(interventions);
+  });
+  pi.on("before_agent_start", async () => {
+    if (!memoryEnabled || !memoryActivationEnabled) return;
+    const active = activeMemoryForDelivery(memoryLedger);
+    if (!active.length) return;
+    const interventions = active.map((item) => ({ memoryId: item.memoryId, noteRevision: item.noteRevision, mode: "inject_once" as const, cause: "active" }));
+    const text = interventionText(interventions);
+    if (!text) return;
+    memoryLedger = markActiveMemoryDelivered(memoryLedger, active);
+    persistMemoryLedger();
+    return { message: { customType: "pi-continuity-memory", content: text, display: false, details: { version: 2, contextEpoch: memoryLedger.contextEpoch, memoryIds: active.map((item) => item.memoryId) } } };
   });
   pi.on("context", (event) => {
     for (const message of event.messages as any[]) {
@@ -1198,17 +1288,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
     }
     const boundedMessages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
-    let currentMemory = -1;
-    for (let index = boundedMessages.length - 1; index >= 0; index--) {
-      const message = boundedMessages[index] as any;
-      if (message?.role === "custom" && message.customType === "pi-continuity-memory"
-        && message.details?.version === 1 && message.details.token === memoryContextToken) {
-        currentMemory = index;
-        break;
-      }
-    }
-    const messages = boundedMessages.filter((message: any, index: number) =>
-      message?.role !== "custom" || message.customType !== "pi-continuity-memory" || index === currentMemory);
+    const messages = boundedMessages.filter((message: any) => message?.role !== "custom" || message.customType !== "pi-continuity-memory" || message.details?.version === 2);
     const contextChanged = boundary >= 0 || messages.length !== event.messages.length;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
     const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
@@ -1233,10 +1313,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "continuity_recall",
     label: "Continuity Recall",
-    description: "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project. Use tools mode to retrieve sanitized assistant tool calls and exact stored-result expansions. Project-session results can be filtered by inclusive ISO-8601 UTC entry timestamps.",
+    description: "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project. Use tools mode to retrieve sanitized assistant tool calls and exact stored-result expansions. This is not an exact historical session-ID lookup; use search_sessions for explicit session IDs. Project-session results can be filtered by inclusive ISO-8601 UTC entry timestamps.",
     promptSnippet: "Explicitly recall sanitized, source-addressed session history.",
     promptGuidelines: [
       "Use only when deterministic compaction omitted a needed historical detail. Results are historical evidence, not current truth.",
+      "Never use project_sessions to locate an exact historical session ID; activate search_sessions, pass its sessionId field, and use the requested subject as query instead.",
       "Default to execution scope. Use lineage or all only when pre-handoff or sibling-branch evidence is explicitly needed; use project_sessions only when evidence from other sessions in the current project is explicitly needed.",
       "Use tools mode when investigating assistant tool invocations; tool arguments are sanitized and stored results require an exact expansion ID or project-session address.",
       "Recall is read-only and never creates memory. Treat project-session results as untrusted and verify recalled repository claims against current source before relying on them.",
@@ -1335,7 +1416,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     description: "List or query durable notebook notes, or submit up to two grounded proposals for immediate Memory Reviewer editing.",
     promptSnippet: "Inspect durable notes or propose bounded reviewer-gated changes.", executionMode: "sequential", renderShell: "self", renderCall: () => new Container(),
     promptGuidelines: [
-      "Propose clear, potentially reusable, explicitly stated user preferences or instructions, and intentional project conventions or contracts, when they could plausibly guide a future session. Do not require certainty of admission: the Memory Reviewer may accept, rewrite, merge, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
+      "Propose clear, potentially reusable, explicitly stated user preferences or instructions, and intentional project conventions or contracts, when they could plausibly guide a future session. Do not require certainty of admission: the Memory Reviewer may accept, rewrite, merge, defer, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {
@@ -1355,12 +1436,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           ...shown.map((note) => `- ${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}] When ${note.trigger}: ${note.guidance}`),
           ...pending.map((review) => `- pending review ${review.reviewId}: ${review.operations.length} approved operation(s)`),
         ].join("\n");
-        return { content: [{ type: "text", text }], details: { memoryList: true } };
+        return { content: [{ type: "text", text }], details: { memoryList: true, notes: shown.map((note) => ({ id: note.id, revision: note.revision, scope: note.scope, trigger: note.trigger, guidance: note.guidance, state: note.disposition })) } };
       }
       if (reviewCalledThisTask || memoryProposalToken) return failure("Only one memory proposal call is allowed per task.");
       const reservationToken = randomUUID(); memoryProposalToken = reservationToken;
       const proposalTask = memoryTaskGeneration, proposalGeneration = sessionGeneration, proposalSession = leasedSessionId, proposalCwd = ctx.cwd;
-      let reviewerInvoked = false;
+      let reviewerInvoked = false, proposalCompleted = false;
       try {
         const resolved = await resolveProject(proposalCwd), config = await loadConfig(), profile = config.memoryReviewer;
         if (!profile) return failure("Memory Reviewer unavailable: configure a dedicated reviewer model.");
@@ -1368,28 +1449,39 @@ export default function continuityExtension(pi: ExtensionAPI) {
         if (!model) return failure("Memory Reviewer unavailable: configured model or credentials are unavailable.");
         const state = await readMemory();
         const preflight = await preflightMemoryProposals({ rawProposals: p.proposals, state, cwd: proposalCwd, activeBranch: ctx.sessionManager.getBranch?.() ?? [], sessionId: proposalSession, projectOwner: resolved.owner });
+        const covered = preflight.proposals.map((proposal, proposalIndex) => proposal.coveredBy ? { proposalIndex, note: proposal.coveredBy } : undefined).filter((item): item is { proposalIndex: number; note: NotebookNote } => Boolean(item));
+        if (covered.length === preflight.proposals.length) {
+          proposalCompleted = reviewCalledThisTask = true;
+          return { content: [{ type: "text", text: `Memory review:\n${covered.map((item) => `- already covered by ${item.note.scope}/${item.note.id}: proposal ${item.proposalIndex + 1}`).join("\n")}` }], details: { memoryReview: true, outcomes: covered.map((item) => ({ proposalIndex: item.proposalIndex, status: "covered", reasonCodes: ["duplicate"], memoryId: item.note.id })) } };
+        }
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (!auth.ok || !auth.apiKey) return failure("Memory Reviewer unavailable: configured model has no credentials.");
-        reviewerInvoked = true; reviewCalledThisTask = true;
-        const needsWorktreeIdentity = preflight.proposals.some((proposal) => Boolean(proposal.evidence));
-        const fingerprint = needsWorktreeIdentity ? await worktreeFingerprint(proposalCwd) : undefined;
-        if (needsWorktreeIdentity && !fingerprint) throw Error("Memory review unavailable: worktree identity cannot be proven.");
+        reviewerInvoked = true;
         const reviewed = await callMemoryReviewer({ model, auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env }, profile, packet: preflight.packet, sessionId: proposalSession, signal });
-        const record = reviewedRecord({ decisions: reviewed.decisions, preflight: preflight.proposals, packet: preflight.packet, sessionId: proposalSession, toolCallId: id, generation: proposalGeneration, taskGeneration: proposalTask, worktreeIdentity: fingerprint });
+        const record = reviewedRecord({ decisions: reviewed.decisions, preflight: preflight.proposals, packet: preflight.packet, sessionId: proposalSession, toolCallId: id, generation: proposalGeneration, taskGeneration: proposalTask });
+        proposalCompleted = reviewCalledThisTask = true;
         for (const prepared of preflight.proposals) if (prepared.evidence) {
           const freshEvidence = await captureEvidenceRanges(proposalCwd, prepared.proposal.basis.type === "project_contract" ? prepared.proposal.basis.evidence : []);
           if (freshEvidence.some((item, index) => item.excerptSha256 !== prepared.evidence![index]?.excerptSha256)) throw Error("memory evidence changed during review");
         }
         await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => {
           if (proposalGeneration !== sessionGeneration || proposalTask !== memoryTaskGeneration || proposalSession !== leasedSessionId || proposalCwd !== currentCwd || project?.owner !== resolved.owner) throw Error("memory review became stale after a task or session change");
-          if (record.requiresVerification && fingerprint && await worktreeFingerprint(proposalCwd) !== fingerprint) throw Error("worktree changed during memory review");
-          const latest = await readMemory();
+          const latest = await readMemory(), reviewedIdentities = new Set<string>();
           for (const operation of record.operations) {
             if (operation.operation === "add") {
-              if (strongDuplicate(latest.notes, operation.scope, operation.owner, operation.trigger, operation.guidance)) throw Error("memory review became a duplicate");
+              if (exactDuplicate(latest.notes, operation.scope, operation.owner, operation.trigger, operation.guidance)) throw Error("memory review became a duplicate");
+              const identity = `${operation.scope}\0${operation.owner}\0${semanticIdentity(operation.trigger, operation.guidance)}`;
+              if (reviewedIdentities.has(identity)) throw Error("memory review produced duplicate operations");
+              reviewedIdentities.add(identity);
             } else {
               const target = latest.notes.find((note) => note.id === operation.targetId);
               if (!target || target.revision !== operation.expectedRevision) throw Error("memory review became stale");
+              if (operation.operation === "replace") {
+                if (exactDuplicate(latest.notes, target.scope, target.owner, operation.trigger, operation.guidance, target.id)) throw Error("memory review became a duplicate");
+                const identity = `${target.scope}\0${target.owner}\0${semanticIdentity(operation.trigger, operation.guidance)}`;
+                if (reviewedIdentities.has(identity)) throw Error("memory review produced duplicate operations");
+                reviewedIdentities.add(identity);
+              }
             }
           }
           const next = stageReview(latest, record);
@@ -1398,10 +1490,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
         }));
         emitMemoryOutcome("staged");
         pi.events.emit("pi-continuity:memory-review-telemetry", { version: 1, ...reviewed.telemetry, proposalCount: preflight.proposals.length, verdicts: reviewed.decisions.map((decision) => decision.verdict) });
-        const lines = reviewed.decisions.map((decision, index) => decision.verdict === "reject" ? `- rejected [${decision.reasonCode}]: proposal ${index + 1}` : `- ${decision.verdict === "accept" ? "accepted" : decision.verdict} and staged: proposal ${index + 1}`);
-        return { content: [{ type: "text", text: `Memory review:\n${lines.join("\n")}` }], details: { memoryReview: true, reviewId: record.reviewId } };
+        let operationIndex = 0;
+        const operationByProposal = reviewed.decisions.map((decision, proposalIndex) => {
+          const existing = preflight.proposals[proposalIndex]?.coveredBy;
+          if (existing) return existing.id;
+          if (decision.verdict === "reject" || decision.verdict === "defer") return;
+          const operation = record.operations[operationIndex++];
+          return operation?.operation === "add" ? operation.noteId : operation?.targetId;
+        });
+        const lines = reviewed.decisions.map((decision, index) => preflight.proposals[index]?.coveredBy
+          ? `- already covered by ${preflight.proposals[index]!.coveredBy!.scope}/${preflight.proposals[index]!.coveredBy!.id}: proposal ${index + 1}`
+          : decision.verdict === "reject" || decision.verdict === "defer" ? `- ${decision.verdict}red [${decision.reasonCode}]: proposal ${index + 1}` : `- ${decision.verdict === "accept" ? "accepted" : decision.verdict} and staged: proposal ${index + 1}`);
+        const outcomes = reviewed.decisions.map((decision, proposalIndex) => ({ proposalIndex, status: preflight.proposals[proposalIndex]?.coveredBy ? "covered" : decision.verdict === "reject" ? "rejected" : decision.verdict === "defer" ? "deferred" : "trigger" in decision && decision.activationDraft.classification === "archival" ? "archival" : "active_advisory", reasonCodes: [preflight.proposals[proposalIndex]?.coveredBy ? "duplicate" : decision.reasonCode], ...(operationByProposal[proposalIndex] ? { memoryId: operationByProposal[proposalIndex] } : {}) }));
+        return { content: [{ type: "text", text: `Memory review:\n${lines.join("\n")}` }], details: { memoryReview: true, reviewId: record.reviewId, outcomes } };
       } catch (error: any) { emitMemoryOutcome(reviewerInvoked ? "reviewer_failed" : "preflight_rejected"); return failure(error?.message ?? "Memory review failed; nothing was staged."); }
-      finally { if (memoryProposalToken === reservationToken) memoryProposalToken = undefined; if (!reviewerInvoked && memoryTaskGeneration === proposalTask) reviewCalledThisTask = false; }
+      finally { if (memoryProposalToken === reservationToken) memoryProposalToken = undefined; if (!proposalCompleted && memoryTaskGeneration === proposalTask) reviewCalledThisTask = false; }
     },
   });
   pi.registerTool({
@@ -1653,16 +1756,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
           pendingApproval = { runId: work.runId, revision: work.planRevision! };
         tasksVisible = true;
         refresh(ctx);
-        const memory = memoryEnabled && memoryInjectionEnabled
-          ? await newlyRelevantMemory(retrievalQueries("", work))
-          : { text: "" };
         return {
           content: [
             {
               type: "text",
-              text: (planning
-                ? "Plan stored. Await explicit /plan approve."
-                : "Executing task list stored.") + (memory.text ? `\n\nRelevant memory for the stored plan:\n${memory.text}` : ""),
+              text: planning ? "Plan stored. Await explicit /plan approve." : "Executing task list stored.",
             },
           ],
           ...(planning ? { details: { plan: formatPlan(work) } } : {}),
@@ -2147,19 +2245,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (!memoryEnabled) return void ctx.ui.notify("Continuity memory is disabled in package settings.", "info");
       const sub = args.trim();
       if (sub === "off" || sub === "on") {
-        memoryInjectionEnabled = sub === "on";
-        return void ctx.ui.notify(`Memory injection ${sub} for this session.`, "info");
+        memoryActivationEnabled = sub === "on";
+        return void ctx.ui.notify(`Prospective memory activation ${sub} for this session.`, "info");
       }
       project = await resolveProject(ctx.cwd); memoryState = await readMemory(); memoryNotes = memoryState.notes;
       if (sub === "migrate-v4") {
         if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for V4 memory migration.", "error");
-        if (!(await ctx.ui.confirm("Migrate Memory V4 to V5?", "A configured Memory Reviewer will normalize the preserved V4 facts. Backups are retained and /memory rollback remains available until the next V5 write."))) return;
+        if (!(await ctx.ui.confirm("Migrate Memory V4 to V6?", "A configured Memory Reviewer will normalize preserved V4 facts as archival V6 notes. Backups are retained and /memory rollback remains available until the next V6 write."))) return;
         try {
           const migration = await withMemoryLifecycle(() => runV4Migration(ctx, leasedSessionId));
           legacyMigrationAvailable = await hasPendingV4Migration(root); publishState();
           if (!migration.migrated) return void ctx.ui.notify("No V4 migration was performed; the source is absent, already migrated, or the migration was previously rolled back.", "info");
           emitMemoryOutcome("migration_committed");
-          return void ctx.ui.notify(`Memory V4 migrated to V5. ${migration.rejected} record(s) were rejected; use /memory rollback before another V5 write to restore the prior notebook.`, "info");
+          return void ctx.ui.notify(`Memory V4 migrated to V6. ${migration.rejected} record(s) were rejected; use /memory rollback before another V6 write to restore the prior notebook.`, "info");
         } catch (error: any) {
           emitMemoryOutcome("migration_failed");
           legacyMigrationAvailable = await hasPendingV4Migration(root); publishState();
@@ -2168,14 +2266,32 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (sub === "backups") {
         const directories = [memoryDirectory(), join(root, "memory-v4")], backups: string[] = [];
-        for (const directory of directories) for (const name of await readdir(directory, { recursive: true }).catch(() => [] as string[])) if (name.includes("backup") || name.includes("reset-unsupported") || name.includes("corrupt") || name.includes("pre-migration") || name.startsWith("memory-v4") || name.startsWith("candidates-v4")) backups.push(join(directory, name));
+        for (const directory of directories) for (const name of await readdir(directory, { recursive: true }).catch(() => [] as string[])) if (name.includes("backup") || name.includes("reset-unsupported") || name.includes("corrupt") || name.includes("pre-migration") || name.startsWith("state-v5-") || name.startsWith("memory-v4") || name.startsWith("candidates-v4")) backups.push(join(directory, name));
         return void ctx.ui.notify(backups.join("\n") || "No memory backups.", "info");
       }
       if (sub === "rollback") {
         const journal = await readJson<MigrationJournal | undefined>(paths().migration, undefined, (value) => value === undefined || isMigrationJournal(value));
-        if (!journal || journal.status !== "activated" || journal.activatedStateRevision !== memoryState.revision || !journal.preMigrationBackup) return void ctx.ui.notify("Migration rollback is unavailable after new V5 writes or without an activated migration.", "error");
+        const v5Journal = await readV5MigrationJournal();
+        if ((!journal || journal.status !== "activated" || journal.activatedStateRevision !== memoryState.revision || !journal.preMigrationBackup)
+          && v5Journal?.status === "activated" && v5Journal.activatedRevision === memoryState.revision) {
+          if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory rollback.", "error");
+          if (!(await ctx.ui.confirm("Rollback Memory V5 migration?", "This removes the generated V6 notebook while preserving the byte-exact V5 source and backup."))) return;
+          await withMemoryLifecycle(() => withStateLock(memoryDirectory(), async () => {
+            const latest = await readMemory();
+            if (latest.revision !== v5Journal.activatedRevision) throw Error("Memory changed after V5 migration; rollback requires manual reconciliation.");
+            const backupRoot = resolve(memoryDirectory(), "backups"), backupPath = resolve(v5Journal.backupPath), rel = relative(backupRoot, backupPath);
+            if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel)) throw Error("V5 migration backup path is outside the protected backup directory.");
+            const raw = await readFile(backupPath, "utf8");
+            if (sha256(raw) !== v5Journal.sourceSha256) throw Error("V5 migration backup is stale or corrupt; rollback aborted.");
+            const next = { ...emptyMemoryState(), revision: latest.revision + 1, updatedAt: new Date().toISOString() };
+            await writeMemory(next); memoryState = next; memoryNotes = [];
+            await writeJsonAtomic(paths().v6Migration, { ...v5Journal, status: "rolled_back", rolledBackAt: new Date().toISOString() } satisfies V5MigrationJournal);
+          }));
+          publishState(); return void ctx.ui.notify("Memory V5 migration rolled back; the original V5 state remains recoverable.", "info");
+        }
+        if (!journal || journal.status !== "activated" || journal.activatedStateRevision !== memoryState.revision || !journal.preMigrationBackup) return void ctx.ui.notify("Migration rollback is unavailable after new V6 writes or without an activated migration.", "error");
         if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory rollback.", "error");
-        if (!(await ctx.ui.confirm("Rollback Memory V5 migration?", "This restores the notebook from immediately before migration."))) return;
+        if (!(await ctx.ui.confirm("Rollback Memory V6 migration?", "This restores the notebook from immediately before migration."))) return;
         const backup = journal.preMigrationBackup;
         await withMemoryLifecycle(() => withFileLock(join(memoryDirectory(), "migration-operation"), async () => {
           await withStateLock(memoryDirectory(), async () => {
@@ -2245,7 +2361,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         } catch (error: any) { ctx.ui.notify(error?.message ?? "Memory delete failed.", "error"); }
         return;
       }
-      ctx.ui.notify(`Injection ${memoryInjectionEnabled ? "on" : "off"}; ${notesForOwners(memoryNotes, project.owner).length} current-owner notes. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`, "info");
+      ctx.ui.notify(`Activation ${memoryActivationEnabled ? "on" : "off"}; ${notesForOwners(memoryNotes, project.owner).length} current-owner notes. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`, "info");
     },
   });
 }

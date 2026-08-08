@@ -10,7 +10,7 @@ test("earlier history preserves a stable transcript anchor", async () => {
   assert.match(source, /requestAnimationFrame\(\(\) => \{[\s\S]*?if \(preserveAnchor\)[\s\S]*?setTranscriptScrollTop[\s\S]*?finally \{\s*setHistoryLoading\(undefined\)/);
 });
 
-test("compaction history renders bounded structured context in native disclosures", async () => {
+test("compaction history renders structured context with a canonical-summary fallback", async () => {
   const source = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
 
   assert.match(source, /if \(block\.compaction\) return <CompactionDisclosure/);
@@ -25,7 +25,8 @@ test("compaction history renders bounded structured context in native disclosure
   assert.match(source, /records\.map\(\(record, index\)[\s\S]*?key=\{`\$\{record\.sourceEntryId\}:\$\{index\}`\}/);
   assert.match(source, /history\.modified[\s\S]*?history\.read[\s\S]*?Observed file activity/);
   const disclosure = source.slice(source.indexOf("function CompactionDisclosure"), source.indexOf("function SystemDisclosure"));
-  assert.doesNotMatch(disclosure, /MarkdownContent|dangerouslySetInnerHTML/);
+  assert.match(disclosure, /display \? <div className="compaction-display">[\s\S]*?: <MarkdownContent text=\{message\.text\} \/>/);
+  assert.doesNotMatch(disclosure, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(source, /<dt>Context before<\/dt>|<dt>Reduction<\/dt>|<dt>Reason<\/dt>/);
 });
 

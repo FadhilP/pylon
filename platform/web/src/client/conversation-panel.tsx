@@ -1874,7 +1874,7 @@ function CompactionDisclosure({ message }: { message: MessageReadModel }) {
         <div><dt>Context after</dt><dd>~{formatCompactNumber(compaction.contextAfterTokens)} tokens</dd></div>
         {compaction.sourceEntryCount !== undefined && <div><dt>Source entries</dt><dd>{compaction.sourceEntryCount.toLocaleString()}</dd></div>}
       </dl>
-      {display && <div className="compaction-display">
+      {display ? <div className="compaction-display">
         {display.records.map((record, index) => <article className={`compaction-record is-${record.role}`} key={`${record.sourceEntryId}:${record.role}:${index}`}>
           <header><strong>{record.role === "user" ? "User" : "Assistant"}</strong><code title={record.sourceEntryId}>{record.sourceEntryId}</code></header>
           <pre>{record.text}</pre>
@@ -1882,7 +1882,7 @@ function CompactionDisclosure({ message }: { message: MessageReadModel }) {
         <CompactionToolGroup title="Failed tool calls" records={display.failedTools} failed />
         <CompactionToolGroup title="Tool results" records={display.toolResults} />
         <CompactionFileActivity history={display.history} />
-      </div>}
+      </div> : <MarkdownContent text={message.text} />}
     </div>
   </details>;
 }

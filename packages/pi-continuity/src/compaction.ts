@@ -24,6 +24,11 @@ const MAX_GENERIC_RECORDS = 20;
 const MAX_GENERIC_RECORD_CHARS = 2_000;
 const MAX_SUPPLEMENTS = 8;
 const MAX_SUPPLEMENT_QUOTE_CHARS = 800;
+const RETRYABLE_READ_TOOLS = new Set([
+  "read", "rg", "grep", "fd", "find", "symbol_search", "code_search", "search_tools", "relationship_graph", "index_status",
+]);
+const SUPERSEDED_READ_ERROR = /\b(?:regex parse error|invalid regular expression|repetition operator missing expression|regex (?:syntax|parse) error|(?:query|pattern) must contain a non-whitespace token|no such file or directory|(?:file|path) (?:does not exist|not found)|cannot find the path specified|(?:offset|line) (?:is )?(?:outside|beyond|out of range))\b/i;
+const PROTECTED_TOOL_ERROR = /\b(?:401|403|429|permission denied|operation not permitted|access denied|unauthori[sz]ed|forbidden|authentication|credentials?|rate limit|quota|timed? out|timeout|cancel(?:led|ed)|aborted|connection (?:failed|refused|reset)|network error|no space left|disk full|read-only file system|out of memory|crash(?:ed)?|command not found|executable not found|package not found|not recognized as|cannot find module|module not found|dependency|unavailable|eacces|eperm|enospc|oom)\b/i;
 const SECTION_ORDER = ["Current Task", "Current Work", "Best-effort Observed File Activity"] as const;
 
 export type HistoryKind = "read" | "modified";
@@ -132,6 +137,7 @@ type BuiltDraft = {
   priorSupplements: CompactionSupplement[];
   sourceStart: number;
   firstKeptIndex: number;
+  excludedToolErrors: Set<string>;
 };
 
 export type ContinuityCompactionDraft = {
@@ -309,6 +315,54 @@ function toolCalls(entry: SessionEntry): any[] {
   return Array.isArray(content) ? content.filter((part: any) => part?.type === "toolCall") : [];
 }
 
+function toolErrorExclusions(entries: SessionEntry[], sourceStart: number) {
+  const calls = new Map<string, any | undefined>();
+  for (const entry of entries) {
+    for (const call of toolCalls(entry)) {
+      if (typeof call.id !== "string" || !call.id) continue;
+      calls.set(call.id, calls.has(call.id) ? undefined : call);
+    }
+  }
+
+  const outcomes = entries.slice(sourceStart).flatMap((entry, offset) => {
+    if (entry.type !== "message" || entry.message.role !== "toolResult" || typeof entry.id !== "string" || !entry.id) return [];
+    const message = entry.message as any;
+    const call = calls.get(message.toolCallId);
+    if (!call || call.name !== message.toolName || !RETRYABLE_READ_TOOLS.has(call.name)) return [];
+    const args = call.arguments && typeof call.arguments === "object" ? call.arguments : {};
+    const rawScope = ["path", "filePath", "file", "target", "cwd"].map((key) => args[key]).find((value) => typeof value === "string" && value.trim());
+    if (!rawScope && call.name === "read") return [];
+    const scope = typeof rawScope === "string"
+      ? rawScope.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "") || "."
+      : ".";
+    return [{
+      entryId: entry.id,
+      toolName: call.name as string,
+      scope,
+      text: textContent(message.content),
+      isError: message.isError === true,
+    }];
+  });
+
+  const excluded = new Set<string>();
+  const successfulScopes = new Set<string>();
+  const seenErrors = new Set<string>();
+  for (let index = outcomes.length - 1; index >= 0; index--) {
+    const outcome = outcomes[index];
+    const scopeKey = JSON.stringify([outcome.toolName, outcome.scope]);
+    if (!outcome.isError) {
+      successfulScopes.add(scopeKey);
+      continue;
+    }
+    if (PROTECTED_TOOL_ERROR.test(outcome.text)) continue;
+    const errorKey = JSON.stringify([outcome.toolName, outcome.scope, outcome.text]);
+    if (SUPERSEDED_READ_ERROR.test(outcome.text) && successfulScopes.has(scopeKey) || seenErrors.has(errorKey))
+      excluded.add(outcome.entryId);
+    seenErrors.add(errorKey);
+  }
+  return excluded;
+}
+
 function toolPath(call: any): string | undefined {
   const args = call?.arguments;
   if (!args || typeof args !== "object") return;
@@ -461,8 +515,9 @@ function sourceText(entry: SessionEntry): { role: CompactionReviewRole; content:
   }
 }
 
-function reviewSources(entries: SessionEntry[], sourceStart: number, firstKeptIndex: number) {
+function reviewSources(entries: SessionEntry[], sourceStart: number, firstKeptIndex: number, excludedToolErrors = toolErrorExclusions(entries, sourceStart)) {
   return entries.slice(sourceStart, firstKeptIndex).flatMap((entry) => {
+    if (typeof entry.id === "string" && excludedToolErrors.has(entry.id)) return [];
     const source = sourceText(entry);
     return source && typeof entry.id === "string" && entry.id
       ? [{ sourceEntryId: entry.id, ...source, sourceHash: sha256(source.content) }]
@@ -544,11 +599,12 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
     priorSupplements: retainedSupplements(previous, branchEntries),
     sourceStart,
     firstKeptIndex: selected.firstKeptIndex,
+    excludedToolErrors: toolErrorExclusions(branchEntries, sourceStart),
   };
 }
 
-function genericRecord(entry: SessionEntry): GenericCompactionRecord | undefined {
-  if (typeof entry.id !== "string" || !entry.id || entry.type !== "message") return;
+function genericRecord(entry: SessionEntry, excludedToolErrors: Set<string>): GenericCompactionRecord | undefined {
+  if (typeof entry.id !== "string" || !entry.id || excludedToolErrors.has(entry.id) || entry.type !== "message") return;
   const role = entry.message.role;
   const text = safe(textContent((entry.message as any).content), MAX_GENERIC_RECORD_CHARS);
   if (!text) return;
@@ -637,13 +693,14 @@ function buildGenericDraft({ branchEntries, preparation }: Omit<DraftInput, "wor
   const previousDetails = previous?.details;
   const previousCount = isContinuityCompactionDetails(previousDetails) ? previousDetails.sourceEntryCount : 0;
   const sourceEntryCount = previousCount + Math.max(0, sourceEnd - sourceStart);
+  const excludedToolErrors = toolErrorExclusions(branchEntries, 0);
   const priorRecords = isContinuityCompactionDetails(previousDetails) && previousDetails.version === 3 && previousDetails.mode === "generic"
-    ? previousDetails.records
+    ? previousDetails.records.filter((record) => !excludedToolErrors.has(record.sourceEntryId))
     : previous?.summary
       ? [{ sourceEntryId: previous.id, role: "summary" as const, text: safe(previous.summary, MAX_GENERIC_RECORD_CHARS) }]
       : [];
   const extracted = branchEntries.slice(sourceStart, sourceEnd).flatMap((entry) => {
-    const record = genericRecord(entry);
+    const record = genericRecord(entry, excludedToolErrors);
     return record ? [record] : [];
   });
   const records = fitGenericRecords(selectGenericRecords([...priorRecords, ...extracted]), history, sourceEntryCount);
@@ -665,6 +722,7 @@ function buildGenericDraft({ branchEntries, preparation }: Omit<DraftInput, "wor
     priorSupplements: retainedSupplements(previous, branchEntries),
     sourceStart,
     firstKeptIndex: selected.firstKeptIndex,
+    excludedToolErrors,
   };
 }
 
@@ -709,7 +767,7 @@ export function prepareContinuityCompaction(input: DraftInput): ContinuityCompac
   return {
     canonical: built.canonical,
     priorSupplements: built.priorSupplements,
-    reviewSources: reviewSources(input.branchEntries, built.sourceStart, built.firstKeptIndex),
+    reviewSources: reviewSources(input.branchEntries, built.sourceStart, built.firstKeptIndex, built.excludedToolErrors),
   };
 }
 

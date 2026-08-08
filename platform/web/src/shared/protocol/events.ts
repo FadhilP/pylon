@@ -381,6 +381,8 @@ export interface ContinuityMemoryNoteReadModel {
   guidance: string;
   authority: "user_instruction" | "project_contract" | "imported";
   origin: "user" | "agent" | "migration";
+  disposition?: "archival" | "eligible_advisory" | "eligible_enforced" | "quarantined" | "superseded" | "revoked";
+  enforcementAuthority?: "context_only" | "warning" | "validation" | "blocking_guard";
   relatedPaths?: string[];
   revision: number;
   updatedAt: string;

@@ -5,13 +5,15 @@ import { continuityStateSnapshot, CONTINUITY_STATE_VERSION } from "../src/state.
 import { fresh, setPlan } from "../src/active-work.ts";
 import type { NotebookNote } from "../src/memory.ts";
 
-test("continuity state publishes V5 scoped note models", () => {
-  const make = (scope: "user" | "project", owner: string): NotebookNote => ({ id: randomUUID(), scope, owner, trigger: "changing settings", guidance: "Restart after updates.", authority: scope === "user" ? "user_instruction" : "project_contract", origin: "agent", sourceRefs: [{ type: "direct_user_edit" }], relatedPaths: ["src/config.ts"], revision: 2, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-02T00:00:00Z" });
+test("continuity state publishes V6 scoped note models", () => {
+  const make = (scope: "user" | "project", owner: string): NotebookNote => ({ id: randomUUID(), scope, owner, trigger: "changing settings", guidance: "Restart after updates.", authority: scope === "user" ? "user_instruction" : "project_contract", origin: "agent", sourceRefs: [{ type: "direct_user_edit" }], relatedPaths: ["src/config.ts"], disposition: "archival", enforcementAuthority: "context_only", revision: 2, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-02T00:00:00Z" });
   const snapshot = continuityStateSnapshot("session", 3, undefined, true, [make("project", "o")], [make("user", "default")], true);
   assert.equal(snapshot.version, CONTINUITY_STATE_VERSION);
   assert.equal(snapshot.memory[0]?.scope, "project");
   assert.equal(snapshot.globalMemory[0]?.scope, "user");
   assert.equal(snapshot.memory[0]?.revision, 2);
+  assert.equal(snapshot.memory[0]?.disposition, "archival");
+  assert.equal(snapshot.memory[0]?.enforcementAuthority, "context_only");
   assert.equal(snapshot.v4MigrationAvailable, true);
   assert.equal("confidence" in snapshot.memory[0]!, false);
   assert.equal("kind" in snapshot.memory[0]!, false);

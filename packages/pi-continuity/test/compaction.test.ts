@@ -22,7 +22,10 @@ const entry = (value: Record<string, any>) => ({
 }) as any;
 const user = (content: string, id?: string) => entry({ id, type: "message", message: { role: "user", content, timestamp: Date.now() } });
 const assistant = (content: any, id?: string) => entry({ id, type: "message", message: { role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, timestamp: Date.now() } });
-const toolResult = (content: string, isError = false, id?: string) => entry({ id, type: "message", message: { role: "toolResult", toolCallId: `call-${sequence}`, toolName: "bash", content: [{ type: "text", text: content }], isError, timestamp: Date.now() } });
+const toolCall = (toolCallId: string, name: string, args: Record<string, unknown>, id?: string) =>
+  assistant([{ type: "toolCall", id: toolCallId, name, arguments: args }], id);
+const toolResult = (content: string, isError = false, id?: string, toolName = "bash", toolCallId = `call-${sequence}`) =>
+  entry({ id, type: "message", message: { role: "toolResult", toolCallId, toolName, content: [{ type: "text", text: content }], isError, timestamp: Date.now() } });
 const handoff = (runId = "run", timelineId = "timeline", id?: string) => entry({
   id,
   type: "custom_message",
@@ -448,6 +451,70 @@ test("generic compaction deterministically extracts discarded transcript records
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
 });
 
+test("generic compaction excludes superseded read and discovery errors from canonical and review context", () => {
+  const entries = [
+    user("Earlier request", "old"),
+    toolCall("fd-bad", "fd", { pattern: "*continuity*", path: "packages" }, "fd-bad-call"),
+    toolResult("fd failed (2): regex parse error: repetition operator missing expression", true, "fd-bad-result", "fd", "fd-bad"),
+    toolCall("fd-good", "fd", { pattern: "*continuity*", path: "packages", glob: true }, "fd-good-call"),
+    toolResult("packages/pi-continuity", false, "fd-good-result", "fd", "fd-good"),
+    toolCall("read-old", "read", { path: "missing.ts" }, "read-old-call"),
+    toolResult("No such file or directory", true, "read-old-result", "read", "read-old"),
+    toolCall("read-new", "read", { path: "missing.ts" }, "read-new-call"),
+    toolResult("export const recovered = true;", false, "read-new-result", "read", "read-new"),
+    toolCall("rg-protected", "rg", { pattern: "secret", path: "private" }, "rg-protected-call"),
+    toolResult("Permission denied", true, "rg-protected-result", "rg", "rg-protected"),
+    toolCall("rg-success", "rg", { pattern: "public", path: "private" }, "rg-success-call"),
+    toolResult("private/public.ts:1:ok", false, "rg-success-result", "rg", "rg-success"),
+    toolCall("rg-unresolved", "rg", { pattern: "*", path: "src" }, "rg-unresolved-call"),
+    toolResult("regex parse error: repetition operator missing expression", true, "rg-unresolved-result", "rg", "rg-unresolved"),
+    toolCall("rg-unknown", "rg", { pattern: "old", path: "runtime" }, "rg-unknown-call"),
+    toolResult("unexpected search engine failure", true, "rg-unknown-result", "rg", "rg-unknown"),
+    toolCall("rg-unknown-success", "rg", { pattern: "new", path: "runtime" }, "rg-unknown-success-call"),
+    toolResult("runtime/new.ts:1:ok", false, "rg-unknown-success-result", "rg", "rg-unknown-success"),
+    toolCall("edit-failed", "edit", { path: "src/file.ts" }, "edit-failed-call"),
+    toolResult("Exact text replacement did not match", true, "edit-failed-result", "edit", "edit-failed"),
+    user("Current request", "current"),
+    assistant("Retained response", "suffix"),
+  ];
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(draft);
+  assert.doesNotMatch(draft.canonical.summary, /fd failed \(2\)|No such file or directory/);
+  assert.match(draft.canonical.summary, /Permission denied|regex parse error|unexpected search engine failure|Exact text replacement did not match/);
+  const sourceIds = draft.reviewSources.map((source) => source.sourceEntryId);
+  assert.equal(sourceIds.includes("fd-bad-result"), false);
+  assert.equal(sourceIds.includes("read-old-result"), false);
+  assert.equal(sourceIds.includes("rg-protected-result"), true);
+  assert.equal(sourceIds.includes("rg-unresolved-result"), true);
+  assert.equal(sourceIds.includes("rg-unknown-result"), true);
+  assert.equal(sourceIds.includes("edit-failed-result"), true);
+});
+
+test("tool error filtering fails closed and keeps only the newest duplicate", () => {
+  const entries = [
+    user("Earlier request", "old"),
+    toolResult("regex parse error from an orphan result", true, "orphan", "fd", "missing-call"),
+    toolCall("fd-other", "fd", { pattern: "x", path: "missing" }, "fd-other-call"),
+    toolResult("The system cannot find the path specified", true, "path-error", "fd", "fd-other"),
+    toolCall("fd-success", "fd", { pattern: "x", path: "other" }, "fd-success-call"),
+    toolResult("other/x.ts", false, "path-success", "fd", "fd-success"),
+    toolCall("fd-duplicate-1", "fd", { pattern: "x", path: "src" }, "fd-duplicate-call-1"),
+    toolResult("temporary search backend error", true, "duplicate-old", "fd", "fd-duplicate-1"),
+    toolCall("fd-duplicate-2", "fd", { pattern: "x", path: "src" }, "fd-duplicate-call-2"),
+    toolResult("temporary search backend error", true, "duplicate-new", "fd", "fd-duplicate-2"),
+    user("Current request", "current"),
+    assistant("Retained response", "suffix"),
+  ];
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(draft);
+  const sourceIds = draft.reviewSources.map((source) => source.sourceEntryId);
+  assert.equal(sourceIds.includes("orphan"), true);
+  assert.equal(sourceIds.includes("path-error"), true);
+  assert.equal(sourceIds.includes("duplicate-old"), false);
+  assert.equal(sourceIds.includes("duplicate-new"), true);
+  assert.match(draft.canonical.summary, /regex parse error from an orphan result|cannot find the path|temporary search backend error/);
+});
+
 test("generic compaction carries structured records instead of parsing a poisoned summary", () => {
   const firstEntries = [user("Original constraint", "original"), assistant("Original decision", "decision"), user("Current", "current")];
   const first = buildGenericContinuityCompaction({ branchEntries: firstEntries, preparation: preparation(firstEntries, 1) });
@@ -474,6 +541,45 @@ test("draft review sources contain only sanitized entries discarded by the selec
   assert.deepEqual(draft.reviewSources.map((source) => source.sourceEntryId), ["old", "answer"]);
   assert.match(draft.reviewSources[0]!.content, /\[REDACTED CREDENTIAL\]/);
   assert.doesNotMatch(JSON.stringify(draft.reviewSources), new RegExp(credential));
+});
+
+test("a later recovery removes a carried generic error and its reviewer supplement", () => {
+  const firstEntries = [
+    user("Earlier request", "old"),
+    toolCall("read-old", "read", { path: "missing.ts" }, "read-old-call"),
+    toolResult("No such file or directory", true, "read-old-result", "read", "read-old"),
+    user("Current request", "current"),
+    assistant("Retained response", "suffix"),
+  ];
+  const draft = prepareContinuityCompaction({ branchEntries: firstEntries, preparation: preparation(firstEntries, 1) });
+  assert.ok(draft);
+  const source = draft.reviewSources.find((item) => item.sourceEntryId === "read-old-result")!;
+  const quote = "No such file or directory";
+  const first = finalizeContinuityCompaction(draft.canonical, [{
+    sourceEntryId: source.sourceEntryId,
+    role: "tool",
+    category: "error",
+    quote,
+    sourceHash: source.sourceHash,
+    quoteHash: createHash("sha256").update(quote).digest("hex"),
+  }]);
+  const prior = entry({
+    type: "compaction", summary: first.summary, firstKeptEntryId: first.firstKeptEntryId,
+    tokensBefore: first.tokensBefore, details: first.details,
+  });
+  const entries = [
+    ...firstEntries,
+    prior,
+    toolCall("read-new", "read", { path: "missing.ts" }, "read-new-call"),
+    toolResult("export const recovered = true;", false, "read-new-result", "read", "read-new"),
+    user("Latest request", "latest"),
+    assistant("Retained latest response", "latest-suffix"),
+  ];
+  const next = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
+  assert.ok(next);
+  assert.doesNotMatch(next.summary, /No such file or directory/);
+  assert.equal(next.details?.supplements.length, 0);
+  assert.equal(next.details?.mode === "generic" && next.details.records.some((record) => record.sourceEntryId === "read-old-result"), false);
 });
 
 test("supplements remain lower-authority, bounded, deduplicated, and provenance-carrying", () => {

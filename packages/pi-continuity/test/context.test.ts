@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { buildContext, buildMemoryInjection, promptQuery, retrievalQueries, shortlistNotes, shortlistResolvedNotes, shortlistResolvedQueries } from "../src/context.ts";
 import type { NotebookNote } from "../src/memory.ts";
 
-const note = (trigger: string, guidance: string, relatedPaths?: string[]): NotebookNote => ({ id: randomUUID(), scope: "project", owner: "o", trigger, guidance, authority: "project_contract", origin: "agent", sourceRefs: [], ...(relatedPaths ? { relatedPaths } : {}), revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" });
+const note = (trigger: string, guidance: string, relatedPaths?: string[]): NotebookNote => ({ id: randomUUID(), scope: "project", owner: "o", trigger, guidance, authority: "project_contract", origin: "agent", sourceRefs: [], ...(relatedPaths ? { relatedPaths } : {}), disposition: "archival", enforcementAuthority: "context_only", revision: 1, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" });
 
 test("retrieval matches trigger, guidance, paths, and identifiers", () => {
   const notes = [note("changing package settings", "Restart the runtime after updates.", ["src/config.ts"]), note("designing category filters", "Prefer a dropdown over free text.")];

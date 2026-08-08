@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import extension, { isReadOnlyBashInspection } from "../extensions/pi-continuity.ts";
+import extension from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
-import { emptyMemoryState, isMemoryState, isNotebookNote, isReviewRecord, serverNoteId, serverReviewId, type ReviewRecord } from "../src/memory.ts";
+import { archivalActivationDraft, emptyMemoryState, isMemoryState, isNotebookNote, isReviewRecord, serverNoteId, serverReviewId, sha256, type NotebookNote, type ReviewRecord } from "../src/memory.ts";
+import type { ActivationDraft } from "../src/memory-activation.ts";
 import { writeJsonAtomic } from "../src/storage.ts";
 import { projectContext, worktreeFingerprint } from "../src/worktree.ts";
 
@@ -28,19 +29,28 @@ async function waitFor(predicate: () => boolean) {
   assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
 }
 
-test("read-only Bash classification is conservative", () => {
-  for (const command of [
-    "pwd", "ls -la", "cat package.json", "rg needle packages && fd package.json .",
-    "git status --short && git diff --check", "git log -1", "git rev-parse HEAD",
-  ]) assert.equal(isReadOnlyBashInspection(command), true, command);
-
-  for (const command of [
-    "npm install useful-package", "cat package.json > copy.json", "pwd\nrm -rf build", "cat $(touch marker)",
-    "cat $FILE", "cat ${FILE}", "cat package.json | tee copy.json", "rg --pre 'touch marker' needle",
-    "rg --pre=helper needle", "rg ${IFS}--pre=helper needle", "fd -x rm {}", "fd -X rm",
-    "fd -Hx rm {}", "fd --exec rm {}", "fd --exec-batch=rm", "git diff --output=patch",
-    "git diff --ext-diff", "git log --textconv", "git status && rm -rf build", "pwd &&", "&& pwd",
-  ]) assert.equal(isReadOnlyBashInspection(command), false, command);
+const generatedWriteDraft = (): ActivationDraft => ({
+  classification: "grounded", subscriptions: ["before_tool_call"],
+  predicate: { all: [{ fact: "tool.name", op: "eq", value: "edit" }, { fact: "file.path", op: "matchesGlob", value: "src/generated/**" }] },
+  delivery: "warn", lifecycle: { activateUntil: "task_complete", rearmOn: ["context_compacted"] },
+  examples: {
+    positive: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" } }],
+    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/source/client.ts" } }],
+  },
+});
+const formatCommandDraft = (): ActivationDraft => ({
+  classification: "grounded", subscriptions: ["before_tool_call", "after_tool_result"],
+  predicate: { all: [{ fact: "tool.name", op: "eq", value: "bash" }, { fact: "tool.command", op: "startsWith", value: "dart format" }] },
+  delivery: "warn", lifecycle: { activateUntil: "event_complete", rearmOn: [] },
+  examples: {
+    positive: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "dart format lib" } }],
+    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "echo dart format" } }],
+  },
+});
+const activatedNote = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
+  id: serverNoteId(), scope: "user", owner: "default", trigger: "editing generated files", guidance: "Edit the generator instead.", authority: "user_instruction", origin: "agent", sourceRefs: [{ type: "direct_user_edit" }],
+  disposition: "eligible_advisory", enforcementAuthority: "warning", activationDraft: generatedWriteDraft(), rawProposal: { trigger: "editing generated files", guidance: "Edit the generator instead." }, rewriteCharacter: "format_only",
+  revision: 1, createdAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z", ...overrides,
 });
 
 function runtime(initialActive = ["read", "edit", "continuity_update"]) {
@@ -145,177 +155,139 @@ test("package settings disable durable memory while keeping planning and recall"
   }
 });
 
-test("memory retrieval uses the expanded prompt and outgoing context keeps only its newest injection", async () => {
+test("V5 notes migrate losslessly to archival V6 without prompt-similarity activation", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-memory-injection-"));
-  const cwd = join(root, "repo"), agentDir = join(root, "agent");
-  await mkdir(cwd);
-  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-v5-migration-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent"), now = new Date().toISOString();
+  await mkdir(cwd); process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await saveConfig({ version: 2, memoryEnabled: true });
-    const now = new Date().toISOString();
-    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
-      ...emptyMemoryState(), revision: 1, updatedAt: now,
-      notes: [{
-        id: serverNoteId(), scope: "user", owner: "default",
-        trigger: "package configuration changes", guidance: "Restart runtime services.",
-        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
-        revision: 1, createdAt: now, updatedAt: now,
-      }],
+    const v5Path = join(agentDir, "pi-continuity", "memory-v5", "state.json");
+    await writeJsonAtomic(v5Path, {
+      schemaVersion: 5, revision: 1, reviews: [], updatedAt: now,
+      notes: [{ id: serverNoteId(), scope: "user", owner: "default", trigger: "package configuration changes", guidance: "Restart runtime services.", authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }], revision: 1, createdAt: now, updatedAt: now }],
     });
-    const app = runtime();
-    const ctx: any = {
-      cwd, hasUI: false, mode: "json",
-      sessionManager: {
-        getSessionId: () => "memory-injection", getSessionFile: () => undefined,
-        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
-      },
-      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    const rawV5 = await readFile(v5Path, "utf8");
+    const app = runtime(), ctx: any = {
+      cwd, hasUI: true, mode: "json",
+      sessionManager: { getSessionId: () => "memory-migration", getSessionFile: () => undefined, getEntries: () => [], getBranch: () => [], buildContextEntries: () => [] },
+      ui: { notify: () => {}, confirm: async () => true, setStatus: () => {}, setWidget: () => {} },
     };
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "unrelated raw input" });
-
-    const injected = await app.handlers.get("before_agent_start")![0]({ prompt: "package configuration runtime" }, ctx);
-    assert.match(injected.message.content, /Restart runtime services/);
-
-    const oldMemory = { role: "custom", customType: "pi-continuity-memory", content: "old memory", display: false };
-    const currentMemory = { role: "custom", ...injected.message };
-    let result = await app.handlers.get("context")![0]({ messages: [oldMemory, { role: "user", content: "request" }, currentMemory] }, ctx);
-    assert.deepEqual(result.messages, [{ role: "user", content: "request" }, currentMemory]);
-
-    assert.equal(await app.handlers.get("before_agent_start")![0]({ prompt: "unrelated topic" }, ctx), undefined);
-    result = await app.handlers.get("context")![0]({ messages: [currentMemory, { role: "user", content: "unrelated topic" }] }, ctx);
-    assert.deepEqual(result.messages, [{ role: "user", content: "unrelated topic" }]);
+    const migrated = JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "state.json"), "utf8"));
+    assert.equal(migrated.schemaVersion, 6); assert.equal(migrated.notes[0].guidance, "Restart runtime services."); assert.equal(migrated.notes[0].disposition, "archival");
+    assert.equal(JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"), "utf8")).status, "activated");
+    assert.equal(await app.handlers.get("before_agent_start")![0]({ prompt: "package configuration runtime" }, ctx), undefined);
+    const oldMemory = { role: "custom", customType: "pi-continuity-memory", content: "legacy lexical injection", details: { version: 1 } };
+    const result = await app.handlers.get("context")![0]({ messages: [oldMemory, { role: "user", content: "request" }] }, ctx);
+    assert.deepEqual(result.messages.filter((message: any) => message.customType === "pi-continuity-memory"), []);
+    await app.commands.get("memory").handler("rollback", ctx);
+    assert.deepEqual(JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "state.json"), "utf8")).notes, []);
+    assert.equal(JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"), "utf8")).status, "rolled_back");
+    assert.equal(await readFile(v5Path, "utf8"), rawV5);
   } finally {
-    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("stored plan intent retrieves memory absent from the user prompt", async () => {
+test("grounded rules activate from typed tool events without interrupting the action", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-memory-plan-"));
-  const cwd = join(root, "repo"), agentDir = join(root, "agent");
-  await mkdir(cwd);
-  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-event-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent"), memory = activatedNote();
+  const commandMemory = activatedNote({ id: serverNoteId(), trigger: "running Dart formatting", guidance: "Do not run Dart format.", activationDraft: formatCommandDraft(), rawProposal: { trigger: "running Dart formatting", guidance: "Do not run Dart format." } });
+  await mkdir(cwd); process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await saveConfig({ version: 2, memoryEnabled: true });
-    const now = new Date().toISOString();
-    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
-      ...emptyMemoryState(), revision: 1, updatedAt: now,
-      notes: [{
-        id: serverNoteId(), scope: "user", owner: "default",
-        trigger: "running database migrations", guidance: "Create a backup before schema changes.",
-        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
-        revision: 1, createdAt: now, updatedAt: now,
-      }],
-    });
-    const app = runtime(["read", "edit", "continuity_update"]);
-    const ctx: any = {
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), { ...emptyMemoryState(), revision: 1, notes: [memory, commandMemory], updatedAt: new Date().toISOString() });
+    const app = runtime(["read", "edit", "continuity_update"]), ctx: any = {
       cwd, hasUI: false, mode: "json",
-      sessionManager: {
-        getSessionId: () => "memory-plan", getSessionFile: () => undefined,
-        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
-      },
-      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
-    };
-    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    const beforeAgentStart = app.handlers.get("before_agent_start")![0];
-    assert.equal(await beforeAgentStart({ prompt: "Add account history" }, ctx), undefined);
-
-    const plan = await app.tools.get("continuity_update").execute("plan", {
-      action: "set_plan", goal: "Add account history",
-      planSummary: "Inspect storage, then run the database migration",
-      todos: ["Inspect storage", "Apply schema migration"],
-    }, undefined, undefined, ctx);
-    assert.match(plan.content[0].text, /Relevant memory for the stored plan/);
-    assert.match(plan.content[0].text, /Create a backup before schema changes/);
-
-    for (const handler of app.handlers.get("input") ?? [])
-      handler({ source: "interactive", text: "Give me a progress update" });
-    const resumed = await beforeAgentStart({ prompt: "Give me a progress update" }, ctx);
-    assert.match(resumed.message.content, /Create a backup before schema changes/,
-      "active plan intent must participate even when the new prompt does not match");
-  } finally {
-    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("consequential actions surface memory once before execution and reset on new input", async () => {
-  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-memory-preflight-"));
-  const cwd = join(root, "repo"), agentDir = join(root, "agent");
-  await mkdir(cwd);
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  try {
-    await saveConfig({ version: 2, memoryEnabled: true });
-    const now = new Date().toISOString();
-    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v5", "state.json"), {
-      ...emptyMemoryState(), revision: 1, updatedAt: now,
-      notes: [{
-        id: serverNoteId(), scope: "user", owner: "default",
-        trigger: "adding package dependencies", guidance: "Use the approved registry for dependency installation.",
-        authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }],
-        revision: 1, createdAt: now, updatedAt: now,
-      }],
-    });
-    const app = runtime(["bash", "edit", "continuity_update"]);
-    const ctx: any = {
-      cwd, hasUI: false, mode: "json", signal: undefined,
-      sessionManager: {
-        getSessionId: () => "memory-preflight", getSessionFile: () => undefined,
-        getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
-      },
+      sessionManager: { getSessionId: () => "memory-event", getSessionFile: () => undefined, getEntries: () => [], getBranch: () => [], buildContextEntries: () => [] },
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const toolCall = app.handlers.get("tool_call")![0];
-    const toolResult = app.handlers.get("tool_result")![0];
-
-    const readOnly = await toolCall({
-      toolName: "bash", toolCallId: "inspect-1",
-      input: { command: "rg 'adding package dependencies' package.json && git status --short" },
-    }, ctx);
-    assert.equal(readOnly, undefined, "matching memory must not interrupt a clearly read-only Bash command");
-
-    const blocked = await toolCall({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
-    assert.equal(blocked.block, true);
-    assert.match(blocked.reason, /Use the approved registry/);
-    await toolResult({ toolName: "bash", toolCallId: "install-1", input: { command: "npm install useful-package" } }, ctx);
-
-    const siblingRead = await toolCall({
-      toolName: "bash", toolCallId: "inspect-sibling",
-      input: { command: "rg 'adding package dependencies' package.json" },
-    }, ctx);
-    assert.equal(siblingRead, undefined, "read-only inspection must proceed while consequential siblings remain deferred");
-
-    const sibling = await toolCall({ toolName: "edit", toolCallId: "sibling", input: { path: "package.json" } }, ctx);
-    assert.equal(sibling.block, true);
-    assert.match(sibling.reason, /sibling consequential action was deferred/i);
-    await toolResult({ toolName: "edit", toolCallId: "sibling", input: { path: "package.json" } }, ctx);
-
-    for (const handler of app.handlers.get("turn_end") ?? [])
-      await handler({ toolResults: [], message: { content: [] } }, ctx);
-    assert.equal(await toolCall({ toolName: "bash", toolCallId: "install-retry", input: { command: "npm install useful-package" } }, ctx), undefined,
-      "the reconsidered retry must proceed without another memory block");
-
-    for (const handler of app.handlers.get("input") ?? [])
-      handler({ source: "interactive", text: "Start another dependency task" });
-    const nextTask = await toolCall({ toolName: "bash", toolCallId: "install-next", input: { command: "npm install useful-package" } }, ctx);
-    assert.equal(nextTask.block, true);
-    assert.match(nextTask.reason, /Use the approved registry/);
-
-    for (const handler of app.handlers.get("agent_end") ?? []) await handler({}, ctx);
-    const afterAbortedBatch = await toolCall({ toolName: "bash", toolCallId: "install-after-abort", input: { command: "npm install useful-package" } }, ctx);
-    assert.equal(afterAbortedBatch.block, true);
-    assert.match(afterAbortedBatch.reason, /Use the approved registry/,
-      "an unfinished blocked batch must not consume the memory preflight");
+    assert.equal(await toolCall({ toolName: "edit", toolCallId: "source", input: { path: "src/source/client.ts" } }, ctx), undefined);
+    assert.equal(app.customMessages.length, 0, "hard negative produces no intervention");
+    assert.equal(await toolCall({ toolName: "edit", toolCallId: "generated", input: { path: "src/generated/client.ts" } }, ctx), undefined);
+    assert.equal(app.customMessages.length, 1); assert.match(app.customMessages[0]!.message.content, /Edit the generator instead/); assert.equal(app.customMessages[0]!.options.deliverAs, "steer");
+    assert.equal(await toolCall({ toolName: "edit", toolCallId: "generated-sibling", input: { path: "src/generated/other.ts" } }, ctx), undefined);
+    assert.equal(app.customMessages.length, 1, "a visible event-complete memory is not queued again for a sibling tool call");
+    assert.equal(await toolCall({ toolName: "read", toolCallId: "sibling", input: { path: "README.md" } }, ctx), undefined, "unrelated siblings are never blocked");
+    const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    assert.equal(await toolCall({ toolName: "bash", toolCallId: "format", input: { command: `dart format lib --token=${credential}` } }, ctx), undefined);
+    assert.equal(app.customMessages.length, 2); assert.match(app.customMessages[1]!.message.content, /Do not run Dart format/);
+    await app.handlers.get("tool_result")![0]({ toolName: "bash", toolCallId: "format", input: { command: `dart format lib --token=${credential}` }, content: [], details: { exitCode: 0 }, isError: false }, ctx);
+    assert.equal(app.customMessages.length, 2, "before/result hooks deduplicate by causal tool call");
+    assert.doesNotMatch(JSON.stringify({ appended: app.appended, messages: app.customMessages }), new RegExp(credential));
   } finally {
-    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("changed project evidence suppresses new activation and active reinjection", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-freshness-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent"), excerpt = "Generated files must be edited through the generator.";
+  await mkdir(cwd); await exec("git", ["init", "-q"], { cwd }); await writeFile(join(cwd, "README.md"), `${excerpt}\n`); process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    const owner = (await projectContext(cwd, "fallback")).owner, reviewId = serverReviewId(), excerptSha256 = sha256(excerpt);
+    const memory = activatedNote({ scope: "project", owner, authority: "project_contract", sourceRefs: [{ type: "repository", path: "README.md", excerptSha256 }], sourceReviewId: reviewId });
+    const operation = { operation: "add" as const, noteId: memory.id, scope: memory.scope, owner, trigger: memory.trigger, guidance: memory.guidance, authority: "project_contract" as const, sourceRefs: memory.sourceRefs, disposition: memory.disposition, enforcementAuthority: memory.enforcementAuthority, activationDraft: memory.activationDraft!, rawProposal: memory.rawProposal!, rewriteCharacter: memory.rewriteCharacter! };
+    const review: ReviewRecord = { reviewId, sessionId: "source", toolCallId: "source", projectOwner: owner, reviewedAt: memory.createdAt, status: "committed", verificationStatus: { status: "verified", verifiedAt: memory.createdAt, sourceSnapshotId: sha256(excerptSha256) }, operations: [operation], rejectionCounts: {}, generation: 1, taskGeneration: 1, evidenceBatches: [[{ path: "README.md", start: 1, end: 1, excerptSha256 }]], settledAt: memory.createdAt };
+    assert.equal(isReviewRecord(review), true);
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), { ...emptyMemoryState(), revision: 1, notes: [memory], reviews: [review], updatedAt: new Date().toISOString() });
+    const app = runtime(["edit", "continuity_update"]), ctx: any = {
+      cwd, hasUI: false, mode: "json",
+      sessionManager: { getSessionId: () => "memory-freshness", getSessionFile: () => undefined, getEntries: () => [], getBranch: () => [], buildContextEntries: () => [] },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const toolCall = app.handlers.get("tool_call")![0], toolResult = app.handlers.get("tool_result")![0];
+    await toolCall({ toolName: "edit", toolCallId: "first", input: { path: "src/generated/client.ts" } }, ctx); assert.equal(app.customMessages.length, 1);
+    await writeFile(join(cwd, "README.md"), "Contract changed.\n");
+    await toolResult({ toolName: "edit", toolCallId: "contract-change", input: { path: "README.md" }, content: [], details: {}, isError: false }, ctx);
+    for (const handler of app.handlers.get("session_compact") ?? []) await handler({}, ctx); assert.equal(app.customMessages.length, 1, "stale active rule is not reinjected");
+    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "new task" });
+    await toolCall({ toolName: "edit", toolCallId: "after-change", input: { path: "src/generated/new.ts" } }, ctx); assert.equal(app.customMessages.length, 1, "stale rule is removed from the runtime index");
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active advisory delivery rearms after compaction and resets at a new task", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-lifecycle-"));
+  const cwd = join(root, "repo"), agentDir = join(root, "agent"), memory = activatedNote();
+  await mkdir(cwd); process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), { ...emptyMemoryState(), revision: 1, notes: [memory], updatedAt: new Date().toISOString() });
+    let branch: any[] = [];
+    const app = runtime(["edit", "continuity_update"]), ctx: any = {
+      cwd, hasUI: false, mode: "json", signal: undefined,
+      sessionManager: { getSessionId: () => "memory-lifecycle", getSessionFile: () => undefined, getEntries: () => [], getBranch: () => branch, buildContextEntries: () => [] },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const toolCall = app.handlers.get("tool_call")![0];
+    await toolCall({ toolName: "edit", toolCallId: "first", input: { path: "src/generated/client.ts" } }, ctx);
+    assert.equal(app.customMessages.length, 1);
+    await toolCall({ toolName: "edit", toolCallId: "same-task", input: { path: "src/generated/other.ts" } }, ctx);
+    assert.equal(app.customMessages.length, 1, "visible active memory is not repeated");
+    branch = app.appended.map((entry) => ({ type: "custom", ...entry }));
+    for (const handler of app.handlers.get("session_tree") ?? []) await handler({}, ctx);
+    for (const handler of app.handlers.get("session_compact") ?? []) await handler({}, ctx);
+    assert.equal(app.customMessages.length, 2); assert.match(app.customMessages[1]!.message.content, /Edit the generator instead/);
+    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "new task" });
+    await toolCall({ toolName: "edit", toolCallId: "new-task", input: { path: "src/generated/new.ts" } }, ctx);
+    assert.equal(app.customMessages.length, 2, "a new task does not duplicate a rule that remains visible in the same context epoch");
+    assert.ok(app.appended.some((entry) => entry.customType === "pi-continuity-memory-ledger-v1"));
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -576,7 +548,7 @@ test("continuity and memory guidance stay dedicated", () => {
   assert.match(memoryGuidance, /intentional project conventions or contracts/i);
   assert.match(memoryGuidance, /could plausibly guide a future session/i);
   assert.match(memoryGuidance, /Do not require certainty of admission/i);
-  assert.match(memoryGuidance, /accept, rewrite, merge, or reject/i);
+  assert.match(memoryGuidance, /accept, rewrite, merge, defer, or reject/i);
   assert.match(memoryGuidance, /progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets/i);
   assert.match(memoryGuidance, /at most two proposals/i);
   assert.match(memoryGuidance, /exact quote/i);
@@ -619,6 +591,8 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     const recall = app.tools.get("continuity_recall");
     assert.equal(recall.executionMode, "sequential");
     assert.match(recall.description, /historical evidence/i);
+    assert.match(recall.description, /not an exact historical session-ID lookup.*search_sessions/i);
+    assert.match(recall.promptGuidelines.join("\n"), /Never use project_sessions to locate an exact historical session ID.*sessionId.*requested subject as query/i);
     assert.match(JSON.stringify(recall.parameters), /execution.*lineage.*all.*project_sessions.*text.*files.*touched.*since.*before/);
     for (const handler of app.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, ctx);
@@ -1212,6 +1186,18 @@ test("bulk todo completion is atomic and preserves the single-todo API", async (
       assert.match(rejected.content[0].text, /Unknown or invalid todo transition/);
       assert.equal(await snapshot(), before, "failed bulk validation must not mutate work");
     }
+
+    const continuityRoot = join(root, "agent", "pi-continuity");
+    const workspaces = JSON.parse(await readFile(join(continuityRoot, "workspaces.json"), "utf8"));
+    const workspaceId = workspaces.find((item: any) => item.canonicalPath === cwd).id;
+    const workPath = join(continuityRoot, "workspaces", workspaceId, "sessions", "bulk-todos-session.json");
+    const durableBefore = await readFile(workPath, "utf8");
+    await assert.rejects(tool.execute("unsafe", {
+      action: "todo", todoIds: ["todo_1", "todo_2"], status: "done", nextTodoId: "todo_3",
+      latestFailure: ["token", "unsafe-placeholder"].join("="),
+    }, undefined, undefined, ctx), /candidate rejected: possible credential/);
+    assert.equal(await snapshot(), before, "failed persistence must restore in-memory work");
+    assert.equal(await readFile(workPath, "utf8"), durableBefore, "failed persistence must not change durable work");
 
     const completed = await tool.execute("bulk", {
       action: "todo", todoIds: ["todo_1", "todo_2"], status: "done", nextTodoId: "todo_3",
@@ -2543,27 +2529,27 @@ test("duplicate continuity instance does not register stale planning handlers", 
 
 test("session startup safely reassociates a moved repository and retains a backup", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-v5-owner-startup-")), oldPath = join(root, "old"), cwd = join(root, "moved");
+  const root = await mkdtemp(join(tmpdir(), "continuity-v6-owner-startup-")), oldPath = join(root, "old"), cwd = join(root, "moved");
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
     await mkdir(oldPath); await exec("git", ["init", "-q"], { cwd: oldPath }); await exec("git", ["config", "user.email", "test@example.com"], { cwd: oldPath }); await exec("git", ["config", "user.name", "Test"], { cwd: oldPath });
     await writeFile(join(oldPath, "one.txt"), "one\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "one"], { cwd: oldPath }); const first = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
     await writeFile(join(oldPath, "two.txt"), "two\n"); await exec("git", ["add", "."], { cwd: oldPath }); await exec("git", ["commit", "-m", "two"], { cwd: oldPath }); const second = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
-    const oldOwner = (await projectContext(oldPath, "fallback")).owner, id = serverNoteId(), continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity"), statePath = join(continuityRoot, "memory-v5", "state.json");
+    const oldOwner = (await projectContext(oldPath, "fallback")).owner, id = serverNoteId(), continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity"), statePath = join(continuityRoot, "memory-v6", "state.json");
     await writeJsonAtomic(join(continuityRoot, "workspaces.json"), [{ id: "old-workspace", canonicalPath: oldPath, projectOwner: oldOwner, createdAt: "2020-01-01T00:00:00Z", lastSeenAt: "2020-01-01T00:00:00Z" }]);
-    await writeJsonAtomic(statePath, { ...emptyMemoryState(), revision: 1, updatedAt: new Date().toISOString(), notes: [{ id, scope: "project", owner: oldOwner, trigger: "changing the boundary", guidance: "Preserve it.", authority: "project_contract", origin: "agent", sourceRefs: [{ type: "repository", path: "one.txt", excerptSha256: "a".repeat(64), captureCommit: first }, { type: "repository", path: "two.txt", excerptSha256: "b".repeat(64), captureCommit: second }], revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }] });
+    await writeJsonAtomic(statePath, { ...emptyMemoryState(), revision: 1, updatedAt: new Date().toISOString(), notes: [{ id, scope: "project", owner: oldOwner, trigger: "changing the boundary", guidance: "Preserve it.", authority: "project_contract", origin: "agent", sourceRefs: [{ type: "repository", path: "one.txt", excerptSha256: "a".repeat(64), captureCommit: first }, { type: "repository", path: "two.txt", excerptSha256: "b".repeat(64), captureCommit: second }], disposition: "archival", enforcementAuthority: "context_only", revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }] });
     await rename(oldPath, cwd);
     const ctx: any = { cwd, hasUI: false, mode: "json", sessionManager: { getSessionId: () => "owner-move-session", getEntries: () => [] }, ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} } };
     const app = runtime(); for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const currentOwner = (await projectContext(cwd, "fallback")).owner, state = JSON.parse(await readFile(statePath, "utf8"));
     assert.equal(state.notes[0]?.owner, currentOwner); assert.equal(state.notes[0]?.revision, 2); assert.equal(state.audits?.at(-1)?.type, "owner_reassociation"); assert.equal(isMemoryState(state), true);
-    const backups = await readdir(join(continuityRoot, "memory-v5", "backups")); assert.ok(backups.some((name) => name.startsWith("owner-reassociation-")));
+    const backups = await readdir(join(continuityRoot, "memory-v6", "backups")); assert.ok(backups.some((name) => name.startsWith("owner-reassociation-")));
   } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
 });
 
 test("explicit V4 migration command requires UI confirmation and a reviewer", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-v5-migrate-command-")), cwd = join(root, "repo");
+  const root = await mkdtemp(join(tmpdir(), "continuity-v6-migrate-command-")), cwd = join(root, "repo");
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
     await mkdir(cwd); await exec("git", ["init", "-q"], { cwd });
@@ -2584,22 +2570,22 @@ test("explicit V4 migration command requires UI confirmation and a reviewer", as
     await command("migrate-v4", ctx); assert.match(notices.at(-1) ?? "", /Interactive UI required/);
     ctx.hasUI = true; await command("migrate-v4", ctx); assert.doesNotMatch(notices.at(-1) ?? "", /migration failed/i);
     confirmed = true; await command("migrate-v4", ctx); assert.match(notices.at(-1) ?? "", /Memory Reviewer is not configured/);
-    assert.equal(JSON.parse(await readFile(join(continuityRoot, "memory-v5", "migration.json"), "utf8")).status, "pending");
+    assert.equal(JSON.parse(await readFile(join(continuityRoot, "memory-v6", "migration.json"), "utf8")).status, "pending");
   } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
 });
 
-test("interactive memory edit, forget, project purge, and rollback persist V5 state and audit", async () => {
+test("interactive memory edit, forget, project purge, and rollback persist V6 state and audit", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(join(tmpdir(), "continuity-v5-memory-commands-")), cwd = join(root, "repo");
+  const root = await mkdtemp(join(tmpdir(), "continuity-v6-memory-commands-")), cwd = join(root, "repo");
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   const userId = "00000000-0000-4000-8000-000000000001", projectId = "00000000-0000-4000-8000-000000000002", foreignId = "00000000-0000-4000-8000-000000000003";
   try {
     await mkdir(cwd); await exec("git", ["init", "-q"], { cwd });
     const owner = (await projectContext(cwd, "fallback")).owner;
-    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "state.json");
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "state.json");
     const note = (id: string, scope: "user" | "project", noteOwner: string) => ({
       id, scope, owner: noteOwner, trigger: "replying to a request", guidance: "Keep replies concise.", authority: scope === "user" ? "user_instruction" : "project_contract", origin: "user",
-      sourceRefs: [{ type: "direct_user_edit" as const }], revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      sourceRefs: [{ type: "direct_user_edit" as const }], disposition: "archival" as const, enforcementAuthority: "context_only" as const, revision: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
     });
     await writeJsonAtomic(statePath, { ...emptyMemoryState(), revision: 1, updatedAt: new Date().toISOString(), notes: [note(userId, "user", "default"), note(projectId, "project", owner), note(foreignId, "project", "other-owner")] });
     const notices: string[] = [], confirmations: string[] = []; let editorCalls = 0;
@@ -2621,18 +2607,18 @@ test("interactive memory edit, forget, project purge, and rollback persist V5 st
     await command(`forget user ${userId}`, ctx); await command("forget project", ctx);
     state = JSON.parse(await readFile(statePath, "utf8"));
     assert.equal(state.notes.some((item: any) => item.id === userId), false); assert.equal(state.notes.some((item: any) => item.id === projectId), false); assert.equal(state.notes.some((item: any) => item.id === foreignId), true);
-    const backupPath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "backups", "pre-migration.json");
+    const backupPath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "backups", "pre-migration.json");
     await writeJsonAtomic(backupPath, emptyMemoryState());
-    await writeJsonAtomic(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "migration.json"), { version: 1, sourceHashes: {}, status: "activated", completedRecordIds: [], reviewerBatchIds: [], activatedStateRevision: state.revision, preMigrationBackup: backupPath, retryCount: 0, diagnostics: [] });
+    await writeJsonAtomic(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "migration.json"), { version: 1, sourceHashes: {}, status: "activated", completedRecordIds: [], reviewerBatchIds: [], activatedStateRevision: state.revision, preMigrationBackup: backupPath, retryCount: 0, diagnostics: [] });
     await command("rollback", ctx);
     state = JSON.parse(await readFile(statePath, "utf8")); assert.equal(isMemoryState(state), true); assert.deepEqual(state.notes, []);
-    const journal = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "migration.json"), "utf8")); assert.equal(journal.status, "rolled_back");
-    assert.deepEqual(confirmations, ["Save user memory?", "Save user memory?", "Forget user memory?", "Forget all project memory?", "Rollback Memory V5 migration?"]);
+    const journal = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "migration.json"), "utf8")); assert.equal(journal.status, "rolled_back");
+    assert.deepEqual(confirmations, ["Save user memory?", "Save user memory?", "Forget user memory?", "Forget all project memory?", "Rollback Memory V6 migration?"]);
   } finally { if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir; await rm(root, { recursive: true, force: true }); }
 });
 
-test("review settlement uses Verify-compatible identity and rejects stale generations", async () => {
-  const oldAgentDir = process.env.PI_CODING_AGENT_DIR, root = await mkdtemp(join(tmpdir(), "continuity-v5-settlement-")), cwd = join(root, "repo");
+test("review settlement rechecks provenance and rejects stale generations", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR, root = await mkdtemp(join(tmpdir(), "continuity-v6-settlement-")), cwd = join(root, "repo");
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
     await mkdir(cwd); await exec("git", ["init"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
@@ -2644,15 +2630,14 @@ test("review settlement uses Verify-compatible identity and rejects stale genera
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    const owner = (await projectContext(cwd, "fallback")).owner, identity = await worktreeFingerprint(cwd), created = serverNoteId();
-    const review: ReviewRecord = { reviewId: serverReviewId(), sessionId: "settlement-session", toolCallId: "memory-call", projectOwner: owner, reviewedAt: new Date().toISOString(), status: "approved_pending", requiresVerification: true, generation: 1, taskGeneration: 1, worktreeIdentity: identity, operations: [{ operation: "add", noteId: created, scope: "project", owner, trigger: "changing the boundary", guidance: "Preserve the documented boundary.", authority: "project_contract", sourceRefs: [] }], rejectionCounts: {} };
-    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5", "state.json");
+    const owner = (await projectContext(cwd, "fallback")).owner, created = serverNoteId(), activationDraft = archivalActivationDraft();
+    const review: ReviewRecord = { reviewId: serverReviewId(), sessionId: "settlement-session", toolCallId: "memory-call", projectOwner: owner, reviewedAt: new Date().toISOString(), status: "approved_pending", verificationStatus: { status: "verified", verifiedAt: new Date().toISOString(), sourceSnapshotId: "a".repeat(64) }, generation: 1, taskGeneration: 1, operations: [{ operation: "add", noteId: created, scope: "project", owner, trigger: "changing the boundary", guidance: "Preserve the documented boundary.", authority: "project_contract", sourceRefs: [], disposition: "archival", enforcementAuthority: "context_only", activationDraft, rawProposal: { trigger: "changing the boundary", guidance: "Preserve the documented boundary." }, rewriteCharacter: "format_only" }], rejectionCounts: {} };
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "state.json");
     const pendingState = { ...emptyMemoryState(), revision: 1, reviews: [review], updatedAt: new Date().toISOString() };
     assert.equal(isMemoryState(pendingState), true);
     await writeJsonAtomic(statePath, pendingState);
-    app.emit("pi-verify:result", { version: 1, sessionId: "settlement-session", cwd, state: "passed", runId: "verify-run", worktreeId: identity, results: [] });
     for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
-    const stateEntries = await readdir(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v5"));
+    const stateEntries = await readdir(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6"));
     assert.ok(stateEntries.includes("state.json"), `state entries: ${stateEntries.join(", ")}`);
     const committed = JSON.parse(await readFile(statePath, "utf8")); assert.equal(committed.notes[0]?.id, created); assert.equal(committed.reviews[0]?.status, "committed");
     const stale = { ...review, reviewId: serverReviewId(), toolCallId: "stale-call", generation: 0, status: "approved_pending" as const, operations: [] };

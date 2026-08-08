@@ -8,4 +8,8 @@ test("advisor prompt fixes structure and review role", () => {
   assert.match(ADVISOR_PROMPT, /tentative judgments/i);
   assert.match(ADVISOR_PROMPT, /unsupported conclusions/i);
   assert.match(ADVISOR_PROMPT, /what remains unknown/i);
+  assert.match(ADVISOR_PROMPT, /minimum sufficient solution/i);
+  assert.match(ADVISOR_PROMPT, /narrowest shared boundary/i);
+  assert.match(ADVISOR_PROMPT, /never simplify away security/i);
+  assert.match(ADVISOR_PROMPT, /condition for revisiting/i);
 });

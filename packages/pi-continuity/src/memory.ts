@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { validateActivationDraft, type ActivationDraft } from "./memory-activation.ts";
 import { assertSafe } from "./secrets.ts";
 import { serializedJson } from "./storage.ts";
 
-export const MEMORY_SCHEMA_VERSION = 5 as const;
+export const MEMORY_SCHEMA_VERSION = 6 as const;
 export const MEMORY_MAX_NOTES_PER_OWNER = 1_000;
 export const MEMORY_MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MEMORY_MAX_REVIEWS = 200;
@@ -10,6 +11,13 @@ export type MemoryScope = "user" | "project";
 export type Scope = MemoryScope;
 export type MemoryAuthority = "user_instruction" | "project_contract" | "imported";
 export type MemoryOrigin = "user" | "agent" | "migration";
+export type MemoryDisposition = "archival" | "eligible_advisory" | "eligible_enforced" | "quarantined" | "superseded" | "revoked";
+export type EnforcementAuthority = "context_only" | "warning" | "validation" | "blocking_guard";
+export type RewriteCharacter = "format_only" | "clarified_without_broadening";
+export type RawProposal = { trigger: string; guidance: string };
+export type VerificationStatus =
+  | { status: "verified"; verifiedAt: string; sourceSnapshotId: string }
+  | { status: "failed"; reason: "entry_hash_mismatch" | "excerpt_hash_mismatch" | "file_changed" | "source_missing" | "source_out_of_scope" };
 
 export type MemorySourceRef =
   | { type: "user_message"; sessionId: string; entryId: string; quoteSha256: string }
@@ -27,6 +35,11 @@ export type NotebookNote = {
   origin: MemoryOrigin;
   sourceRefs: MemorySourceRef[];
   relatedPaths?: string[];
+  disposition: MemoryDisposition;
+  enforcementAuthority: EnforcementAuthority;
+  activationDraft?: ActivationDraft;
+  rawProposal?: RawProposal;
+  rewriteCharacter?: RewriteCharacter;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -42,17 +55,29 @@ export type MemoryProposal =
   | { operation: "replace"; scope: MemoryScope; targetId: string; expectedRevision: number; trigger: string; guidance: string; basis: ProposalBasis }
   | { operation: "remove"; scope: MemoryScope; targetId: string; expectedRevision: number; reason: string; basis: ProposalBasis };
 
+type AcceptedRuleDecision = {
+  proposalIndex: number;
+  operation: "add" | "replace";
+  scope: MemoryScope;
+  trigger: string;
+  guidance: string;
+  authority: Exclude<MemoryAuthority, "imported">;
+  activationDraft: ActivationDraft;
+  targetId?: string;
+  expectedRevision?: number;
+};
 export type ReviewerDecision =
-  | { proposalIndex: number; verdict: "accept"; operation: "add" | "replace"; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; reasonCode: "durable_rule" }
-  | { proposalIndex: number; verdict: "accept"; operation: "remove"; targetId: string; expectedRevision: number; reasonCode: "revoked_rule" | "contradicted_rule" }
-  | { proposalIndex: number; verdict: "rewrite"; operation: "add" | "replace"; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; reasonCode: "normalized_rule" }
-  | { proposalIndex: number; verdict: "merge"; operation: "add" | "replace"; targetId: string; expectedRevision: number; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; reasonCode: "existing_rule" }
+  | (AcceptedRuleDecision & { verdict: "accept"; reasonCode: "durable_rule" })
+  | (AcceptedRuleDecision & { verdict: "rewrite"; rewriteCharacter: RewriteCharacter; reasonCode: "normalized_rule" })
+  | (AcceptedRuleDecision & { verdict: "merge"; targetId: string; expectedRevision: number; rewriteCharacter: RewriteCharacter; reasonCode: "existing_rule" })
+  | { proposalIndex: number; verdict: "accept"; operation: "remove"; scope: MemoryScope; targetId: string; expectedRevision: number; reasonCode: "revoked_rule" | "contradicted_rule" }
+  | { proposalIndex: number; verdict: "defer"; reasonCode: "ambiguous_instruction" | "insufficient_context" | "evidence_unverifiable" | "conflict_unresolvable" | "material_rewrite_required" }
   | { proposalIndex: number; verdict: "reject"; reasonCode: "not_durable" | "descriptive_only" | "task_local" | "speculative" | "unsupported" | "duplicate" | "wrong_scope" | "conflict" | "unsafe" };
-export type ReviewerOutput = { version: 1; decisions: ReviewerDecision[] };
+export type ReviewerOutput = { version: 2; decisions: ReviewerDecision[] };
 
 export type ReviewedOperation =
-  | { operation: "add"; noteId: string; scope: MemoryScope; owner: string; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; sourceRefs: MemorySourceRef[]; relatedPaths?: string[] }
-  | { operation: "replace"; targetId: string; expectedRevision: number; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; sourceRefs: MemorySourceRef[]; relatedPaths?: string[] }
+  | { operation: "add"; noteId: string; scope: MemoryScope; owner: string; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; sourceRefs: MemorySourceRef[]; relatedPaths?: string[]; disposition: MemoryDisposition; enforcementAuthority: EnforcementAuthority; activationDraft: ActivationDraft; rawProposal: RawProposal; rewriteCharacter: RewriteCharacter }
+  | { operation: "replace"; targetId: string; expectedRevision: number; trigger: string; guidance: string; authority: Exclude<MemoryAuthority, "imported">; sourceRefs: MemorySourceRef[]; relatedPaths?: string[]; disposition: MemoryDisposition; enforcementAuthority: EnforcementAuthority; activationDraft: ActivationDraft; rawProposal: RawProposal; rewriteCharacter: RewriteCharacter }
   | { operation: "remove"; targetId: string; expectedRevision: number };
 export type ReviewRecord = {
   reviewId: string;
@@ -61,10 +86,10 @@ export type ReviewRecord = {
   projectOwner: string;
   reviewedAt: string;
   status: "approved_pending" | "committed" | "discarded";
-  requiresVerification: boolean;
-  verificationRevision?: string;
+  verificationStatus: Extract<VerificationStatus, { status: "verified" }>;
   operations: ReviewedOperation[];
   rejectionCounts: Record<string, number>;
+  deferredCounts?: Record<string, number>;
   settledAt?: string;
   discardReason?: string;
   generation: number;
@@ -78,7 +103,7 @@ export type MemoryAuditEvent =
   | { type: "direct_edit"; noteId: string; scope: MemoryScope; owner: string; at: string; previousSourceRefs: MemorySourceRef[]; previousSourceReviewId?: string }
   | { type: "owner_reassociation"; migrationId: string; oldOwner: string; owner: string; at: string; movedNoteIds: string[]; suppressedNoteIds: string[]; fromRevision: number };
 export type MemoryStateFile = {
-  schemaVersion: 5;
+  schemaVersion: 6;
   revision: number;
   notes: NotebookNote[];
   reviews: ReviewRecord[];
@@ -89,8 +114,12 @@ export type MemoryStateFile = {
 const scopes = new Set<MemoryScope>(["user", "project"]);
 const authorities = new Set<MemoryAuthority>(["user_instruction", "project_contract", "imported"]);
 const origins = new Set<MemoryOrigin>(["user", "agent", "migration"]);
+const dispositions = new Set<MemoryDisposition>(["archival", "eligible_advisory", "eligible_enforced", "quarantined", "superseded", "revoked"]);
+const enforcementAuthorities = new Set<EnforcementAuthority>(["context_only", "warning", "validation", "blocking_guard"]);
+const rewriteCharacters = new Set<RewriteCharacter>(["format_only", "clarified_without_broadening"]);
 const reviewStatuses = new Set(["approved_pending", "committed", "discarded"]);
 const rejectReasons = new Set(["not_durable", "descriptive_only", "task_local", "speculative", "unsupported", "duplicate", "wrong_scope", "conflict", "unsafe"]);
+const deferReasons = new Set(["ambiguous_instruction", "insufficient_context", "evidence_unverifiable", "conflict_unresolvable", "material_rewrite_required"]);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hash = /^[0-9a-f]{64}$/;
 const commit = /^[0-9a-f]{40,64}$/;
@@ -105,6 +134,18 @@ export const normalizeRuleText = (value: string) => value.trim().replace(/\s+/g,
 export const semanticIdentity = (trigger: string, guidance: string) => `${normalizeRuleText(trigger).toLowerCase()}\0${normalizeRuleText(guidance).toLowerCase()}`;
 export const noteIdentity = (note: Pick<NotebookNote, "scope" | "owner" | "trigger" | "guidance">) => `${note.scope}\0${note.owner}\0${semanticIdentity(note.trigger, note.guidance)}`;
 
+function activationDraft(value: unknown): value is ActivationDraft {
+  try { validateActivationDraft(value); return true; } catch { return false; }
+}
+function verificationStatus(value: any): value is Extract<VerificationStatus, { status: "verified" }> {
+  return exactKeys(value, ["status", "verifiedAt", "sourceSnapshotId"]) && value.status === "verified"
+    && timestamp(value.verifiedAt) && hash.test(value.sourceSnapshotId);
+}
+function rawProposal(value: any): value is RawProposal {
+  return exactKeys(value, ["trigger", "guidance"]) && text(value.trigger, 240) && text(value.guidance, 800)
+    && value.trigger.trim().length + value.guidance.trim().length <= 1_000 && safe(value.trigger, value.guidance);
+}
+
 function sourceRef(value: any): value is MemorySourceRef {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (value.type === "user_message") return exactKeys(value, ["type", "sessionId", "entryId", "quoteSha256"]) && text(value.sessionId, 200) && text(value.entryId, 200) && hash.test(value.quoteSha256) && safe(value.sessionId, value.entryId);
@@ -116,12 +157,17 @@ function sourceRef(value: any): value is MemorySourceRef {
 }
 
 export function isNotebookNote(value: any): value is NotebookNote {
-  return exactKeys(value, ["id", "scope", "owner", "trigger", "guidance", "authority", "origin", "sourceRefs", "relatedPaths", "revision", "createdAt", "updatedAt", "sourceReviewId"])
+  return exactKeys(value, ["id", "scope", "owner", "trigger", "guidance", "authority", "origin", "sourceRefs", "relatedPaths", "disposition", "enforcementAuthority", "activationDraft", "rawProposal", "rewriteCharacter", "revision", "createdAt", "updatedAt", "sourceReviewId"])
     && uuid.test(value.id) && scopes.has(value.scope) && text(value.owner, 200) && (value.scope !== "user" || value.owner === "default")
     && text(value.trigger, 240) && text(value.guidance, 800) && value.trigger.trim().length + value.guidance.trim().length <= 1_000
     && authorities.has(value.authority) && origins.has(value.origin)
     && Array.isArray(value.sourceRefs) && value.sourceRefs.length <= 5 && value.sourceRefs.every(sourceRef)
     && (value.relatedPaths === undefined || Array.isArray(value.relatedPaths) && value.relatedPaths.length <= 5 && value.relatedPaths.every(safeRelativePath))
+    && dispositions.has(value.disposition) && enforcementAuthorities.has(value.enforcementAuthority)
+    && (value.activationDraft === undefined || activationDraft(value.activationDraft))
+    && (value.rawProposal === undefined || rawProposal(value.rawProposal))
+    && (value.rewriteCharacter === undefined || rewriteCharacters.has(value.rewriteCharacter))
+    && (value.activationDraft !== undefined || value.disposition === "archival" || value.disposition === "quarantined" || value.disposition === "superseded" || value.disposition === "revoked")
     && integer(value.revision, 1) && timestamp(value.createdAt) && timestamp(value.updatedAt)
     && (value.sourceReviewId === undefined || uuid.test(value.sourceReviewId))
     && safe(value.trigger, value.guidance, ...(value.relatedPaths ?? []));
@@ -130,28 +176,31 @@ export function isNotebookNote(value: any): value is NotebookNote {
 function reviewedOperation(value: any): value is ReviewedOperation {
   if (!value || typeof value !== "object") return false;
   if (value.operation === "remove") return exactKeys(value, ["operation", "targetId", "expectedRevision"]) && uuid.test(value.targetId) && integer(value.expectedRevision, 1);
+  const shared = ["trigger", "guidance", "authority", "sourceRefs", "relatedPaths", "disposition", "enforcementAuthority", "activationDraft", "rawProposal", "rewriteCharacter"];
   const common = exactKeys(value, value.operation === "add"
-    ? ["operation", "noteId", "scope", "owner", "trigger", "guidance", "authority", "sourceRefs", "relatedPaths"]
-    : ["operation", "targetId", "expectedRevision", "trigger", "guidance", "authority", "sourceRefs", "relatedPaths"])
+    ? ["operation", "noteId", "scope", "owner", ...shared]
+    : ["operation", "targetId", "expectedRevision", ...shared])
     && text(value.trigger, 240) && text(value.guidance, 800) && value.trigger.trim().length + value.guidance.trim().length <= 1_000
     && (value.authority === "user_instruction" || value.authority === "project_contract")
     && Array.isArray(value.sourceRefs) && value.sourceRefs.length <= 5 && value.sourceRefs.every(sourceRef)
-    && (value.relatedPaths === undefined || Array.isArray(value.relatedPaths) && value.relatedPaths.length <= 5 && value.relatedPaths.every(safeRelativePath));
+    && (value.relatedPaths === undefined || Array.isArray(value.relatedPaths) && value.relatedPaths.length <= 5 && value.relatedPaths.every(safeRelativePath))
+    && dispositions.has(value.disposition) && enforcementAuthorities.has(value.enforcementAuthority)
+    && activationDraft(value.activationDraft) && rawProposal(value.rawProposal) && rewriteCharacters.has(value.rewriteCharacter);
   if (!common || !safe(value.trigger, value.guidance, ...(value.relatedPaths ?? []))) return false;
   if (value.operation === "add") return uuid.test(value.noteId) && scopes.has(value.scope) && text(value.owner, 200) && (value.scope !== "user" || value.owner === "default");
   return value.operation === "replace" && uuid.test(value.targetId) && integer(value.expectedRevision, 1);
 }
 
 export function isReviewRecord(value: any): value is ReviewRecord {
-  return exactKeys(value, ["reviewId", "sessionId", "toolCallId", "projectOwner", "reviewedAt", "status", "requiresVerification", "verificationRevision", "operations", "rejectionCounts", "settledAt", "discardReason", "generation", "taskGeneration", "worktreeIdentity", "evidenceBatches", "quoteRefs"])
+  return exactKeys(value, ["reviewId", "sessionId", "toolCallId", "projectOwner", "reviewedAt", "status", "verificationStatus", "operations", "rejectionCounts", "deferredCounts", "settledAt", "discardReason", "generation", "taskGeneration", "evidenceBatches", "quoteRefs"])
     && uuid.test(value.reviewId) && text(value.sessionId, 200) && text(value.toolCallId, 200) && text(value.projectOwner, 200)
-    && timestamp(value.reviewedAt) && reviewStatuses.has(value.status) && typeof value.requiresVerification === "boolean"
-    && (value.verificationRevision === undefined || text(value.verificationRevision, 500))
+    && timestamp(value.reviewedAt) && reviewStatuses.has(value.status) && verificationStatus(value.verificationStatus)
     && Array.isArray(value.operations) && value.operations.length <= 2 && value.operations.every(reviewedOperation)
     && value.rejectionCounts && typeof value.rejectionCounts === "object" && !Array.isArray(value.rejectionCounts)
     && Object.entries(value.rejectionCounts).every(([key, count]) => text(key, 60) && integer(count))
+    && (value.deferredCounts === undefined || value.deferredCounts && typeof value.deferredCounts === "object" && !Array.isArray(value.deferredCounts) && Object.entries(value.deferredCounts).every(([key, count]) => text(key, 60) && integer(count)))
     && (value.settledAt === undefined || timestamp(value.settledAt)) && (value.discardReason === undefined || text(value.discardReason, 240))
-    && integer(value.generation) && integer(value.taskGeneration) && (value.worktreeIdentity === undefined || /^[0-9a-f]{16}$/.test(value.worktreeIdentity))
+    && integer(value.generation) && integer(value.taskGeneration)
     && (value.evidenceBatches === undefined || Array.isArray(value.evidenceBatches) && value.evidenceBatches.length <= 2 && value.evidenceBatches.every((batch: any) => Array.isArray(batch) && batch.length <= 3 && batch.every((range: any) => exactKeys(range, ["path", "start", "end", "excerptSha256"]) && safeRelativePath(range.path) && integer(range.start, 1) && integer(range.end, range.start) && hash.test(range.excerptSha256))))
     && (value.quoteRefs === undefined || Array.isArray(value.quoteRefs) && value.quoteRefs.length <= 2 && value.quoteRefs.every((ref: any) => exactKeys(ref, ["entryId", "entrySha256", "quoteSha256"]) && text(ref.entryId, 200) && hash.test(ref.entrySha256) && hash.test(ref.quoteSha256)));
 }
@@ -168,9 +217,9 @@ function auditEvent(value: any): value is MemoryAuditEvent {
     && (value.previousSourceReviewId === undefined || uuid.test(value.previousSourceReviewId));
 }
 
-export const emptyMemoryState = (): MemoryStateFile => ({ schemaVersion: 5, revision: 0, notes: [], reviews: [], updatedAt: new Date(0).toISOString() });
+export const emptyMemoryState = (): MemoryStateFile => ({ schemaVersion: 6, revision: 0, notes: [], reviews: [], updatedAt: new Date(0).toISOString() });
 export function normalizeMemoryState(value: any): MemoryStateFile | undefined {
-  if (!exactKeys(value, ["schemaVersion", "revision", "notes", "reviews", "updatedAt", "audits"]) || value.schemaVersion !== 5
+  if (!exactKeys(value, ["schemaVersion", "revision", "notes", "reviews", "updatedAt", "audits"]) || value.schemaVersion !== 6
     || !integer(value.revision) || !Array.isArray(value.notes) || !value.notes.every(isNotebookNote)
     || !Array.isArray(value.reviews) || value.reviews.length > MEMORY_MAX_REVIEWS || !value.reviews.every(isReviewRecord)
     || !timestamp(value.updatedAt) || (value.audits !== undefined && (!Array.isArray(value.audits) || value.audits.length > 100 || !value.audits.every(auditEvent)))) return;
@@ -181,6 +230,73 @@ export function normalizeMemoryState(value: any): MemoryStateFile | undefined {
   return value;
 }
 export const isMemoryState = (value: any): value is MemoryStateFile => normalizeMemoryState(value) !== undefined;
+
+export const archivalActivationDraft = (): ActivationDraft => ({
+  classification: "archival",
+  subscriptions: [],
+  delivery: "inject_once",
+  lifecycle: { activateUntil: "explicit_revocation", rearmOn: [] },
+  examples: { positive: [], hardNegative: [] },
+});
+
+/** Lossless structural migration. V5 prose/provenance are preserved but never made executable. */
+export function migrateV5MemoryState(value: any, now = new Date().toISOString()): MemoryStateFile | undefined {
+  if (!exactKeys(value, ["schemaVersion", "revision", "notes", "reviews", "updatedAt", "audits"]) || value.schemaVersion !== 5
+    || !integer(value.revision) || !Array.isArray(value.notes) || !Array.isArray(value.reviews) || !timestamp(value.updatedAt)) return;
+  const notes: NotebookNote[] = [];
+  for (const legacy of value.notes) {
+    if (!exactKeys(legacy, ["id", "scope", "owner", "trigger", "guidance", "authority", "origin", "sourceRefs", "relatedPaths", "revision", "createdAt", "updatedAt", "sourceReviewId"])) return;
+    const migrated = { ...legacy, disposition: "archival" as const, enforcementAuthority: "context_only" as const };
+    if (!isNotebookNote(migrated)) return;
+    notes.push(migrated);
+  }
+  const reviews: ReviewRecord[] = [];
+  for (const legacy of value.reviews) {
+    if (!legacy || typeof legacy !== "object" || !Array.isArray(legacy.operations) || !reviewStatuses.has(legacy.status)) return;
+    const operations: ReviewedOperation[] = [];
+    for (const operation of legacy.operations) {
+      if (operation?.operation === "remove") operations.push({ operation: "remove", targetId: operation.targetId, expectedRevision: operation.expectedRevision });
+      else if (operation?.operation === "add" || operation?.operation === "replace") {
+        const draft = archivalActivationDraft(), shared = {
+          trigger: operation.trigger,
+          guidance: operation.guidance,
+          authority: operation.authority,
+          sourceRefs: operation.sourceRefs,
+          ...(operation.relatedPaths ? { relatedPaths: operation.relatedPaths } : {}),
+          disposition: "archival" as const,
+          enforcementAuthority: "context_only" as const,
+          activationDraft: draft,
+          rawProposal: { trigger: operation.trigger, guidance: operation.guidance },
+          rewriteCharacter: "format_only" as const,
+        };
+        if (operation.operation === "add") operations.push({ operation: "add", noteId: operation.noteId, scope: operation.scope, owner: operation.owner, ...shared });
+        else operations.push({ operation: "replace", targetId: operation.targetId, expectedRevision: operation.expectedRevision, ...shared });
+      } else return;
+    }
+    const pending = legacy.status === "approved_pending";
+    const migrated: ReviewRecord = {
+      reviewId: legacy.reviewId,
+      sessionId: legacy.sessionId,
+      toolCallId: legacy.toolCallId,
+      projectOwner: legacy.projectOwner,
+      reviewedAt: legacy.reviewedAt,
+      status: pending ? "discarded" : legacy.status,
+      verificationStatus: { status: "verified", verifiedAt: now, sourceSnapshotId: sha256(JSON.stringify(legacy)) },
+      operations,
+      rejectionCounts: legacy.rejectionCounts ?? {},
+      ...(legacy.settledAt || pending ? { settledAt: legacy.settledAt ?? now } : {}),
+      ...(legacy.discardReason || pending ? { discardReason: legacy.discardReason ?? "V5 pending review archived during V6 migration" } : {}),
+      generation: legacy.generation,
+      taskGeneration: legacy.taskGeneration,
+      ...(legacy.evidenceBatches ? { evidenceBatches: legacy.evidenceBatches } : {}),
+      ...(legacy.quoteRefs ? { quoteRefs: legacy.quoteRefs } : {}),
+    };
+    if (!isReviewRecord(migrated)) return;
+    reviews.push(migrated);
+  }
+  const migrated = { schemaVersion: 6 as const, revision: value.revision + 1, notes, reviews, updatedAt: now, ...(value.audits ? { audits: value.audits } : {}) };
+  return normalizeMemoryState(migrated);
+}
 
 function evidenceRange(value: any): value is EvidenceRange {
   return exactKeys(value, ["path", "start", "end"]) && safeRelativePath(value.path) && integer(value.start, 1) && integer(value.end, 1) && value.end >= value.start;
@@ -215,28 +331,37 @@ export function normalizeProposalBatch(value: unknown): MemoryProposal[] {
   return value.map(normalizeProposal);
 }
 
+function parseRuleDecision(value: any): ReviewerDecision | undefined {
+  if (!scopes.has(value.scope) || !["add", "replace"].includes(value.operation)
+    || !text(value.trigger, 240) || !text(value.guidance, 800) || value.trigger.trim().length + value.guidance.trim().length > 1_000
+    || (value.authority !== "user_instruction" && value.authority !== "project_contract") || !safe(value.trigger, value.guidance)) return;
+  const targetKeys = value.operation === "replace" || value.verdict === "merge" ? ["targetId", "expectedRevision"] : [];
+  const rewriteKeys = value.verdict === "rewrite" || value.verdict === "merge" ? ["rewriteCharacter"] : [];
+  const activationKeys = Object.hasOwn(value, "activationDraft") ? ["activationDraft"] : [];
+  if (!exactKeys(value, ["proposalIndex", "verdict", "operation", "scope", ...targetKeys, "trigger", "guidance", "authority", ...activationKeys, ...rewriteKeys, "reasonCode"])) return;
+  if (targetKeys.length && (!uuid.test(value.targetId) || !integer(value.expectedRevision, 1))) return;
+  if (rewriteKeys.length && !rewriteCharacters.has(value.rewriteCharacter)) return;
+  if (value.verdict === "accept" && value.reasonCode !== "durable_rule") return;
+  if (value.verdict === "rewrite" && value.reasonCode !== "normalized_rule") return;
+  if (value.verdict === "merge" && (value.reasonCode !== "existing_rule" || value.operation !== "replace")) return;
+  const fallback = archivalActivationDraft();
+  return { ...value, trigger: normalizeRuleText(value.trigger), guidance: normalizeRuleText(value.guidance), activationDraft: activationDraft(value.activationDraft) ? validateActivationDraft(value.activationDraft) : fallback } as ReviewerDecision;
+}
 function parseDecision(value: any): ReviewerDecision | undefined {
   if (!value || !integer(value.proposalIndex)) return;
   if (value.verdict === "reject") return exactKeys(value, ["proposalIndex", "verdict", "reasonCode"]) && rejectReasons.has(value.reasonCode) ? value : undefined;
-  if (value.verdict === "accept" && value.operation === "remove") return exactKeys(value, ["proposalIndex", "verdict", "operation", "targetId", "expectedRevision", "reasonCode"])
-    && uuid.test(value.targetId) && integer(value.expectedRevision, 1) && (value.reasonCode === "revoked_rule" || value.reasonCode === "contradicted_rule") ? value : undefined;
-  if (value.verdict === "merge") {
-    if (!exactKeys(value, ["proposalIndex", "verdict", "operation", "targetId", "expectedRevision", "trigger", "guidance", "authority", "reasonCode"]) || !["add", "replace"].includes(value.operation)
-      || !uuid.test(value.targetId) || !integer(value.expectedRevision, 1) || value.reasonCode !== "existing_rule") return;
-  } else if (value.verdict === "accept" || value.verdict === "rewrite") {
-    if (!exactKeys(value, ["proposalIndex", "verdict", "operation", "trigger", "guidance", "authority", "reasonCode"]) || !["add", "replace"].includes(value.operation)
-      || value.reasonCode !== (value.verdict === "accept" ? "durable_rule" : "normalized_rule")) return;
-  } else return;
-  if (!text(value.trigger, 240) || !text(value.guidance, 800) || value.trigger.trim().length + value.guidance.trim().length > 1_000
-    || (value.authority !== "user_instruction" && value.authority !== "project_contract") || !safe(value.trigger, value.guidance)) return;
-  return { ...value, trigger: normalizeRuleText(value.trigger), guidance: normalizeRuleText(value.guidance) };
+  if (value.verdict === "defer") return exactKeys(value, ["proposalIndex", "verdict", "reasonCode"]) && deferReasons.has(value.reasonCode) ? value : undefined;
+  if (value.verdict === "accept" && value.operation === "remove") return exactKeys(value, ["proposalIndex", "verdict", "operation", "scope", "targetId", "expectedRevision", "reasonCode"])
+    && scopes.has(value.scope) && uuid.test(value.targetId) && integer(value.expectedRevision, 1) && (value.reasonCode === "revoked_rule" || value.reasonCode === "contradicted_rule") ? value : undefined;
+  if (value.verdict === "accept" || value.verdict === "rewrite" || value.verdict === "merge") return parseRuleDecision(value);
+  return;
 }
 export function parseReviewerOutput(raw: string, proposalCount: number): ReviewerOutput {
   let value: any;
   try { value = JSON.parse(raw); } catch { throw Error("memory reviewer returned malformed JSON"); }
-  if (!exactKeys(value, ["version", "decisions"]) || value.version !== 1 || !Array.isArray(value.decisions) || value.decisions.length !== proposalCount) {
+  if (!exactKeys(value, ["version", "decisions"]) || value.version !== 2 || !Array.isArray(value.decisions) || value.decisions.length !== proposalCount) {
     const object = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-    const version = !object || !("version" in object) ? "missing" : object.version === 1 ? "ok" : "invalid";
+    const version = !object || !("version" in object) ? "missing" : object.version === 2 ? "ok" : "invalid";
     const decisions = !object || !("decisions" in object) ? "missing" : Array.isArray(object.decisions) ? `count:${object.decisions.length}` : "not-array";
     const unexpectedFields = object ? Object.keys(object).filter((key) => key !== "version" && key !== "decisions").length : 0;
     throw Error(`memory reviewer returned an invalid envelope (version:${version}; decisions:${decisions}; unexpected-fields:${unexpectedFields})`);
@@ -246,7 +371,7 @@ export function parseReviewerOutput(raw: string, proposalCount: number): Reviewe
   if (invalidIndexes.length) throw Error(`memory reviewer returned invalid decisions (count:${invalidIndexes.length}; first-output-indexes:${invalidIndexes.slice(0, 10).join(",")})`);
   const indexes = new Set<number>(decisions.map((item: ReviewerDecision) => item.proposalIndex));
   if (indexes.size !== proposalCount || [...indexes].some((index) => index < 0 || index >= proposalCount)) throw Error("memory reviewer returned duplicate or unknown proposal indexes");
-  return { version: 1, decisions: decisions as ReviewerDecision[] };
+  return { version: 2, decisions: (decisions as ReviewerDecision[]).sort((a, b) => a.proposalIndex - b.proposalIndex) };
 }
 
 export function notesForOwners(notes: NotebookNote[], projectOwner: string) {
@@ -276,6 +401,8 @@ export function enforceMemoryLimits(state: MemoryStateFile): void {
   if (Buffer.byteLength(serializedJson(state), "utf8") > MEMORY_MAX_FILE_BYTES) throw Error("memory notebook exceeds 2 MiB safety ceiling");
 }
 export const renderNote = (note: Pick<NotebookNote, "trigger" | "guidance">) => `Memory: When ${normalizeRuleText(note.trigger).replace(/[.!?]+$/, "")}, ${normalizeRuleText(note.guidance)}`;
+export const dispositionForActivation = (draft: ActivationDraft): MemoryDisposition => draft.classification === "archival" ? "archival" : "eligible_advisory";
+export const enforcementForActivation = (draft: ActivationDraft): EnforcementAuthority => draft.classification === "archival" || draft.delivery === "inject_once" ? "context_only" : "warning";
 
 function boundedReviews(reviews: ReviewRecord[]) {
   const pending = reviews.filter((item) => item.status === "approved_pending");
@@ -291,8 +418,8 @@ export function applyReview(state: MemoryStateFile, review: ReviewRecord, now = 
   for (const operation of review.operations) {
     if (operation.operation === "add") {
       if (!((operation.scope === "user" && operation.owner === "default") || (operation.scope === "project" && operation.owner === review.projectOwner))) throw Error("memory review add crosses owner boundary");
-      if (strongDuplicate(notes, operation.scope, operation.owner, operation.trigger, operation.guidance)) throw Error("memory review conflicts with an existing rule");
-      notes.push({ id: operation.noteId, scope: operation.scope, owner: operation.owner, trigger: operation.trigger, guidance: operation.guidance, authority: operation.authority, origin: "agent", sourceRefs: operation.sourceRefs, ...(operation.relatedPaths?.length ? { relatedPaths: operation.relatedPaths } : {}), revision: 1, createdAt: now, updatedAt: now, sourceReviewId: review.reviewId });
+      if (exactDuplicate(notes, operation.scope, operation.owner, operation.trigger, operation.guidance)) throw Error("memory review conflicts with an existing rule");
+      notes.push({ id: operation.noteId, scope: operation.scope, owner: operation.owner, trigger: operation.trigger, guidance: operation.guidance, authority: operation.authority, origin: "agent", sourceRefs: operation.sourceRefs, ...(operation.relatedPaths?.length ? { relatedPaths: operation.relatedPaths } : {}), disposition: operation.disposition, enforcementAuthority: operation.enforcementAuthority, activationDraft: operation.activationDraft, rawProposal: operation.rawProposal, rewriteCharacter: operation.rewriteCharacter, revision: 1, createdAt: now, updatedAt: now, sourceReviewId: review.reviewId });
       continue;
     }
     const index = notes.findIndex((note) => note.id === operation.targetId);
@@ -302,8 +429,8 @@ export function applyReview(state: MemoryStateFile, review: ReviewRecord, now = 
     if (operation.operation === "remove") notes.splice(index, 1);
     else {
       const existing = notes[index]!;
-      if (strongDuplicate(notes, existing.scope, existing.owner, operation.trigger, operation.guidance, existing.id)) throw Error("memory review creates a duplicate rule");
-      notes[index] = { ...existing, trigger: operation.trigger, guidance: operation.guidance, authority: operation.authority, origin: "agent", sourceRefs: operation.sourceRefs, ...(operation.relatedPaths?.length ? { relatedPaths: operation.relatedPaths } : { relatedPaths: undefined }), revision: existing.revision + 1, updatedAt: now, sourceReviewId: review.reviewId };
+      if (exactDuplicate(notes, existing.scope, existing.owner, operation.trigger, operation.guidance, existing.id)) throw Error("memory review creates a duplicate rule");
+      notes[index] = { ...existing, trigger: operation.trigger, guidance: operation.guidance, authority: operation.authority, origin: "agent", sourceRefs: operation.sourceRefs, ...(operation.relatedPaths?.length ? { relatedPaths: operation.relatedPaths } : { relatedPaths: undefined }), disposition: operation.disposition, enforcementAuthority: operation.enforcementAuthority, activationDraft: operation.activationDraft, rawProposal: operation.rawProposal, rewriteCharacter: operation.rewriteCharacter, revision: existing.revision + 1, updatedAt: now, sourceReviewId: review.reviewId };
     }
   }
   const reviews = state.reviews.map((item) => item.reviewId === review.reviewId ? { ...item, status: "committed" as const, settledAt: now } : item);
@@ -321,7 +448,7 @@ export function directEdit(state: MemoryStateFile, scope: MemoryScope, owner: st
   if (existing.revision !== expectedRevision) throw Error("memory note changed; review the latest value");
   if (strongDuplicate(state.notes, scope, owner, trigger, guidance, id)) throw Error("memory note duplicates an existing rule");
   const notes = [...state.notes];
-  notes[index] = { ...existing, trigger, guidance, authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }], revision: existing.revision + 1, updatedAt: now, sourceReviewId: undefined };
+  notes[index] = { ...existing, trigger, guidance, authority: "user_instruction", origin: "user", sourceRefs: [{ type: "direct_user_edit" }], disposition: "archival", enforcementAuthority: "context_only", activationDraft: undefined, rawProposal: undefined, rewriteCharacter: undefined, revision: existing.revision + 1, updatedAt: now, sourceReviewId: undefined };
   const audits = [...(state.audits ?? []), { type: "direct_edit" as const, noteId: id, scope, owner, at: now, previousSourceRefs: existing.sourceRefs, ...(existing.sourceReviewId ? { previousSourceReviewId: existing.sourceReviewId } : {}) }].slice(-100);
   const next = { ...state, revision: state.revision + 1, notes, audits, updatedAt: now };
   enforceMemoryLimits(next);

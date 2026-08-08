@@ -18,6 +18,8 @@ const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
 const memoryScopes = new Set(["user", "project"]);
 const memoryAuthorities = new Set(["user_instruction", "project_contract", "imported"]);
 const memoryOrigins = new Set(["user", "agent", "migration"]);
+const memoryDispositions = new Set(["archival", "eligible_advisory", "eligible_enforced", "quarantined", "superseded", "revoked"]);
+const memoryEnforcementAuthorities = new Set(["context_only", "warning", "validation", "blocking_guard"]);
 const memoryNoteId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
@@ -970,6 +972,8 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && typeof note.guidance === "string" && note.guidance.length >= 1 && note.guidance.length <= 800 && note.guidance === note.guidance.trim()
     && note.trigger.length + note.guidance.length <= 1_000
     && memoryAuthorities.has(String(note.authority)) && memoryOrigins.has(String(note.origin))
+    && (note.disposition === undefined || memoryDispositions.has(String(note.disposition)))
+    && (note.enforcementAuthority === undefined || memoryEnforcementAuthorities.has(String(note.enforcementAuthority)))
     && (note.relatedPaths === undefined || Array.isArray(note.relatedPaths) && note.relatedPaths.length <= 5 && note.relatedPaths.every(safeMemoryPath))
     && Number.isSafeInteger(note.revision) && (note.revision as number) >= 1
     && typeof note.updatedAt === "string" && !Number.isNaN(Date.parse(note.updatedAt))
@@ -1094,6 +1098,8 @@ function operationalValidationIssue(value: unknown): { area: string; detail: str
         if (note.trigger.length + note.guidance.length > 1_000) return issue(notePath, "trigger and guidance must total at most 1000 characters");
         if (!memoryAuthorities.has(String(note.authority))) return issue(`${notePath}.authority`, "is invalid");
         if (!memoryOrigins.has(String(note.origin))) return issue(`${notePath}.origin`, "is invalid");
+        if (note.disposition !== undefined && !memoryDispositions.has(String(note.disposition))) return issue(`${notePath}.disposition`, "is invalid");
+        if (note.enforcementAuthority !== undefined && !memoryEnforcementAuthorities.has(String(note.enforcementAuthority))) return issue(`${notePath}.enforcementAuthority`, "is invalid");
         if (note.relatedPaths !== undefined && (!Array.isArray(note.relatedPaths) || note.relatedPaths.length > 5 || !note.relatedPaths.every(safePath))) return issue(`${notePath}.relatedPaths`, "must contain at most 5 safe relative paths");
         if (!Number.isSafeInteger(note.revision) || (note.revision as number) < 1) return issue(`${notePath}.revision`, "must be a positive safe integer");
         if (typeof note.updatedAt !== "string" || Number.isNaN(Date.parse(note.updatedAt))) return issue(`${notePath}.updatedAt`, "must be a valid timestamp");

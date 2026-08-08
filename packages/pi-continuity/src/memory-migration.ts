@@ -109,7 +109,7 @@ async function reviewBatch(input: { items: LegacyFact[]; model: any; auth: any; 
 }
 
 async function recordPendingV4MigrationUnlocked(root: string, reason: string): Promise<boolean> {
-  const v5 = join(root, "memory-v5"), backups = join(v5, "backups"), journalPath = join(v5, "migration.json");
+  const v5 = join(root, "memory-v6"), backups = join(v5, "backups"), journalPath = join(v5, "migration.json");
   await mkdir(backups, { recursive: true, mode: 0o700 });
   const memory = await rawSource(join(root, "memory-v4", "memory.json"), backups, "memory-v4"), candidates = await rawSource(join(root, "memory-v4", "candidates.json"), backups, "candidates-v4");
   if (!memory && !candidates) return false;
@@ -133,7 +133,7 @@ type MigrateV4Input = {
   onTelemetry?(value: { durationMs: number; proposalCount: number; verdicts: string[]; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } }): void;
 };
 async function migrateV4Unlocked(input: MigrateV4Input): Promise<{ migrated: boolean; rejected: number }> {
-  const v5 = join(input.root, "memory-v5"), backups = join(v5, "backups"), journalPath = join(v5, "migration.json");
+  const v5 = join(input.root, "memory-v6"), backups = join(v5, "backups"), journalPath = join(v5, "migration.json");
   await mkdir(backups, { recursive: true, mode: 0o700 });
   const memory = await rawSource(join(input.root, "memory-v4", "memory.json"), backups, "memory-v4"), candidates = await rawSource(join(input.root, "memory-v4", "candidates.json"), backups, "candidates-v4");
   if (!memory && !candidates) return { migrated: false, rejected: 0 };
@@ -180,7 +180,7 @@ async function migrateV4Unlocked(input: MigrateV4Input): Promise<{ migrated: boo
         if (decision.verdict === "reject") { prepared.diagnostics.push({ scope: item.scope, owner: item.owner, legacyKey: item.key, reason: decision.reasonCode }); continue; }
         const now = new Date().toISOString(), trigger = normalizeRuleText(decision.trigger!), guidance = normalizeRuleText(decision.guidance!);
         assertSafe(trigger, guidance, item.key);
-        const note: NotebookNote = { id: deterministicId(`${item.scope}:${item.owner}:${item.recordId}:${item.key}:${item.text}`), scope: item.scope, owner: item.scope === "user" ? "default" : item.owner, trigger, guidance, authority: "imported", origin: "migration", sourceRefs: [{ type: "migration", legacyKey: item.key, ...(item.captureCommit ? { captureCommit: item.captureCommit } : {}) }], ...(item.evidencePaths.length ? { relatedPaths: item.evidencePaths.map((entry) => entry.path).slice(0, 5) } : {}), revision: 1, createdAt: now, updatedAt: now };
+        const note: NotebookNote = { id: deterministicId(`${item.scope}:${item.owner}:${item.recordId}:${item.key}:${item.text}`), scope: item.scope, owner: item.scope === "user" ? "default" : item.owner, trigger, guidance, authority: "imported", origin: "migration", sourceRefs: [{ type: "migration", legacyKey: item.key, ...(item.captureCommit ? { captureCommit: item.captureCommit } : {}) }], ...(item.evidencePaths.length ? { relatedPaths: item.evidencePaths.map((entry) => entry.path).slice(0, 5) } : {}), disposition: "archival", enforcementAuthority: "context_only", revision: 1, createdAt: now, updatedAt: now };
         if (!isNotebookNote(note)) throw Error("migration reviewer produced an invalid imported note");
         if (strongDuplicate(prepared.notes, note.scope, note.owner, note.trigger, note.guidance)) { prepared.diagnostics.push({ scope: note.scope, owner: note.owner, legacyKey: item.key, reason: "duplicate imported rule" }); continue; }
         prepared.notes.push(note);
@@ -188,7 +188,7 @@ async function migrateV4Unlocked(input: MigrateV4Input): Promise<{ migrated: boo
       prepared.diagnostics = prepared.diagnostics.slice(-5_000); await writeMigrationJson(preparedPath, prepared);
       journal.completedRecordIds = [...new Set(prepared.completedRecordIds)]; journal.diagnostics = prepared.diagnostics; await writeMigrationJson(journalPath, journal);
     }
-    const probe: MemoryStateFile = { schemaVersion: 5, revision: 0, notes: prepared.notes, reviews: [], updatedAt: new Date().toISOString() }; enforceMemoryLimits(probe);
+    const probe: MemoryStateFile = { schemaVersion: 6, revision: 0, notes: prepared.notes, reviews: [], updatedAt: new Date().toISOString() }; enforceMemoryLimits(probe);
     const previous = await rawSource(join(v5, "state.json"), backups, "state-v5-pre-migration");
     journal = { ...journal, status: "prepared", preMigrationBackup: previous?.backup ?? "empty" }; await writeMigrationJson(journalPath, journal);
     const revision = await input.commitAll(prepared.notes, hashes);
@@ -203,15 +203,15 @@ export async function hasPendingV4Migration(root: string): Promise<boolean> {
   const sourceExists = await Promise.all(["memory.json", "candidates.json"].map((name) => stat(join(root, "memory-v4", name)).then((info) => info.isFile()).catch(() => false)));
   if (!sourceExists.some(Boolean)) return false;
   try {
-    const journal = JSON.parse(await readFile(join(root, "memory-v5", "migration.json"), "utf8"));
+    const journal = JSON.parse(await readFile(join(root, "memory-v6", "migration.json"), "utf8"));
     return !isMigrationJournal(journal) || journal.status !== "activated" && journal.status !== "rolled_back";
   } catch (error: any) { return error?.code === "ENOENT" || error instanceof SyntaxError; }
 }
 
 export async function recordPendingV4Migration(root: string, reason: string): Promise<boolean> {
-  return withFileLock(join(root, "memory-v5", "migration-operation"), () => recordPendingV4MigrationUnlocked(root, reason));
+  return withFileLock(join(root, "memory-v6", "migration-operation"), () => recordPendingV4MigrationUnlocked(root, reason));
 }
 
 export async function migrateV4(input: MigrateV4Input): Promise<{ migrated: boolean; rejected: number }> {
-  return withFileLock(join(input.root, "memory-v5", "migration-operation"), () => migrateV4Unlocked(input));
+  return withFileLock(join(input.root, "memory-v6", "migration-operation"), () => migrateV4Unlocked(input));
 }

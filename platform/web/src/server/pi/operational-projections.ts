@@ -359,6 +359,7 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
   if (!input || input.version !== 4 || (expectedSessionId && input.sessionId !== expectedSessionId) || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 4 ? old : { availability: "unavailable", revision: old.revision, memory: old.memory, globalMemory: old.globalMemory, v4MigrationAvailable: false };
   if (input.available !== true) return { availability: "unavailable", revision: input.revision as number, memory: [], globalMemory: [], v4MigrationAvailable: false };
   const scopes = new Set(["user", "project"]), authorities = new Set(["user_instruction", "project_contract", "imported"]), origins = new Set(["user", "agent", "migration"]);
+  const dispositions = new Set(["archival", "eligible_advisory", "eligible_enforced", "quarantined", "superseded", "revoked"]), enforcementAuthorities = new Set(["context_only", "warning", "validation", "blocking_guard"]);
   const safePath = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 240 && !value.startsWith("/") && !value.startsWith("\\") && !/^[a-z]:/i.test(value) && !value.split(/[\\/]+/).some((part) => !part || part === "." || part === "..");
   const parseMemory = (value: unknown, expectedScope: "user" | "project") => {
     if (!Array.isArray(value) || value.length > 1_000) return;
@@ -369,8 +370,9 @@ function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?
       if (!note || !id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) || note.scope !== expectedScope
         || !trigger || trigger !== trigger.trim() || !guidance || guidance !== guidance.trim() || trigger.length + guidance.length > 1_000
         || sourceSummary === undefined || !updatedAt || !scopes.has(String(note.scope)) || !authorities.has(String(note.authority)) || !origins.has(String(note.origin))
+        || note.disposition !== undefined && !dispositions.has(String(note.disposition)) || note.enforcementAuthority !== undefined && !enforcementAuthorities.has(String(note.enforcementAuthority))
         || !Number.isSafeInteger(note.revision) || Number(note.revision) < 1 || note.relatedPaths !== undefined && (!Array.isArray(note.relatedPaths) || note.relatedPaths.length > 5 || !note.relatedPaths.every(safePath))) return;
-      output.push({ id, scope: expectedScope, trigger, guidance, authority: note.authority as "user_instruction" | "project_contract" | "imported", origin: note.origin as "user" | "agent" | "migration", revision: Number(note.revision), updatedAt, sourceSummary, ...(note.relatedPaths?.length ? { relatedPaths: [...note.relatedPaths] as string[] } : {}) });
+      output.push({ id, scope: expectedScope, trigger, guidance, authority: note.authority as "user_instruction" | "project_contract" | "imported", origin: note.origin as "user" | "agent" | "migration", revision: Number(note.revision), updatedAt, sourceSummary, ...(note.disposition !== undefined ? { disposition: note.disposition as NonNullable<ContinuityReadModel["memory"][number]["disposition"]> } : {}), ...(note.enforcementAuthority !== undefined ? { enforcementAuthority: note.enforcementAuthority as NonNullable<ContinuityReadModel["memory"][number]["enforcementAuthority"]> } : {}), ...(note.relatedPaths?.length ? { relatedPaths: [...note.relatedPaths] as string[] } : {}) });
     }
     return output;
   };
