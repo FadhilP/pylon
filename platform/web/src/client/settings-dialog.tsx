@@ -415,6 +415,12 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   disabled: boolean;
   onUpdate: (settings: PackageSettingsReadModel) => void;
 }) {
+  if (settings.kind === "pylon-core") {
+    return <div className="package-fields">
+      <label className="checkbox-field"><input type="checkbox" checked={settings.lineEditEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, lineEditEnabled: event.target.checked })} />Revision-guarded numbered edits</label>
+      <p className="settings-policy-note">Overrides read and edit with numbered ranges and compact file-revision tags. Existing tools remain unchanged when disabled.</p>
+    </div>;
+  }
   if (settings.kind === "advisor" || settings.kind === "scout") {
     const levels = thinkingLevels(settings.mode === "model" ? settings.model : undefined, models, sessionThinkingLevels);
     return <div className="package-fields">

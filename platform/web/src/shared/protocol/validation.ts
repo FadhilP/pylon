@@ -124,6 +124,7 @@ export function validHookSettings(value: unknown): value is HookSettingsReadMode
 
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "pylon-core") return typeof value.lineEditEnabled === "boolean";
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
   const model = value.model === undefined || boundedString(value.model, 400);
   const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));

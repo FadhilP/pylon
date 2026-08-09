@@ -21,8 +21,10 @@
   "pi": {
     "extensions": ["./extensions/pylon-core.ts"]
   },
+  "pylon": { "settings": "./src/web-settings.ts" },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

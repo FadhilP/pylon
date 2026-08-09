@@ -384,6 +384,10 @@ export type PackageModelMode = "disabled" | "session" | "model";
 
 export type PackageSettingsReadModel =
   | {
+      kind: "pylon-core";
+      lineEditEnabled: boolean;
+    }
+  | {
       kind: "advisor" | "scout";
       mode: PackageModelMode;
       model?: string;

@@ -687,6 +687,35 @@ test("uses truncation metadata when deciding whether a newer read covers an old 
   assert.equal(uncovered.messages[2], messages[2]);
 });
 
+test("uses numbered-read coverage and line-edit operations for stale-read safety", () => {
+  const source = "50:old context\n".repeat(100);
+  const messages: any[] = [
+    user("update"),
+    { role: "assistant", content: [{ type: "toolCall", id: "old", name: "read", arguments: { path: "file.ts", offset: 50, limit: 25 } }] },
+    textResult("read", `[file.ts#abc123def456]\n${source}`, {
+      toolCallId: "old", isError: false,
+      details: { lineEdit: { version: 1, revision: "abc123def456", startLine: 50, endLine: 74 } },
+    }),
+    { role: "assistant", content: [{
+      type: "toolCall", id: "edit", name: "edit",
+      arguments: { path: "file.ts", revision: "abc123def456", edits: [{ operation: "replace", startLine: 60, endLine: 60, newText: "updated" }] },
+    }] },
+    textResult("edit", "edited", { toolCallId: "edit", isError: false }),
+    { role: "assistant", content: [{ type: "toolCall", id: "new", name: "read", arguments: { path: "file.ts", offset: 40, limit: 40 } }] },
+    textResult("read", "numbered current context\n".repeat(100), {
+      toolCallId: "new", isError: false,
+      details: { lineEdit: { version: 1, revision: "def456abc123", startLine: 40, endLine: 79 } },
+    }),
+  ];
+  const cwd = resolve("numbered-stale-read");
+  const preserved = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.match((preserved.messages[2] as any).content[0].text, /stale read/);
+
+  messages[3].content[0].arguments.edits[0] = { operation: "insert_after", line: 60, newText: "inserted" };
+  const shifted = sieveMessages(messages, SIEVE_THRESHOLD, { cwd });
+  assert.equal(shifted.messages[2], messages[2]);
+});
+
 test("keeps read output, including giant successes and errors, fully preserved", () => {
   const giant = "x".repeat(40_001);
   const readSuccess = textResult("read", giant);

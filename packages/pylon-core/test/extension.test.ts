@@ -28,6 +28,7 @@ function harness() {
     failReconcile = false;
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
   const entries: Array<{ customType: string; data: unknown }> = [];
   const pi = {
     events,
@@ -40,6 +41,7 @@ function harness() {
     },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerTool: (tool: any) => tools.set(tool.name, tool),
     appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
     exec: async (command: string) => ({ code: command === "git" ? 0 : 1, stdout: "", stderr: "" }),
   };
@@ -48,11 +50,35 @@ function harness() {
     events,
     handlers,
     commands,
+    tools,
     entries,
     active: () => active,
     fail: (value: boolean) => { failReconcile = value; },
   };
 }
+
+test("numbered line tools register only when the core setting is enabled", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "pylon-core-toggle-"));
+  process.env.PI_CODING_AGENT_DIR = root;
+  try {
+    const disabled = harness();
+    for (const handler of disabled.handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
+    assert.equal(disabled.tools.size, 0);
+
+    await mkdir(join(root, "pylon-core"), { recursive: true });
+    await writeFile(join(root, "pylon-core", "config.json"), JSON.stringify({ version: 1, lineEditEnabled: true }));
+    const enabled = harness();
+    for (const handler of enabled.handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
+    assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "read"]);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("Memory reviewer telemetry is persisted without proposal text", () => {
   const runtime = harness();

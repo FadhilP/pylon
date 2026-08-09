@@ -755,20 +755,36 @@ function editPreservesLineNumbers(argumentsValue: JsonObject): boolean {
       : undefined;
   return !!edits?.length && edits.every((value) => {
     const edit = jsonObject(value);
-    if (typeof edit?.oldText !== "string" || typeof edit.newText !== "string") return false;
-    const oldLines = edit.oldText.match(/\r\n|\r|\n/g)?.length ?? 0;
-    const newLines = edit.newText.match(/\r\n|\r|\n/g)?.length ?? 0;
-    return oldLines === newLines;
+    if (!edit) return false;
+    if (typeof edit.oldText === "string" && typeof edit.newText === "string") {
+      const oldLines = edit.oldText.match(/\r\n|\r|\n/g)?.length ?? 0;
+      const newLines = edit.newText.match(/\r\n|\r|\n/g)?.length ?? 0;
+      return oldLines === newLines;
+    }
+    if (edit.operation !== "replace" || typeof edit.newText !== "string") return false;
+    const start = positiveInteger(edit.startLine);
+    const end = positiveInteger(edit.endLine);
+    if (start === undefined || end === undefined || end < start) return false;
+    const replacementLines = edit.newText === "" ? 0 : edit.newText.split(/\r\n|\r|\n/).length;
+    return replacementLines === end - start + 1;
   });
 }
 
 function readCoverage(argumentsValue: JsonObject, details: unknown, blocks: TextBlock[]): ReadCoverage | undefined {
   if (blocks.length !== 1) return undefined;
+  const detailFields = jsonObject(details);
+  const lineEdit = jsonObject(detailFields?.lineEdit);
+  if (lineEdit?.version === 1) {
+    const startLine = positiveInteger(lineEdit.startLine);
+    const endLine = positiveInteger(lineEdit.endLine);
+    if (startLine !== undefined && endLine !== undefined && endLine >= startLine)
+      return { start: startLine, end: endLine };
+    return undefined;
+  }
   const start = argumentsValue.offset === undefined ? 1 : positiveInteger(argumentsValue.offset);
   const limit = argumentsValue.limit === undefined ? undefined : positiveInteger(argumentsValue.limit);
   if (start === undefined || (argumentsValue.limit !== undefined && limit === undefined)) return undefined;
 
-  const detailFields = jsonObject(details);
   const rawTruncation = detailFields?.truncation;
   const truncation = rawTruncation === undefined ? undefined : jsonObject(rawTruncation);
   if (rawTruncation !== undefined && !truncation) return undefined;

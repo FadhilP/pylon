@@ -23,6 +23,8 @@ import {
   worktreeSnapshot,
   type WorktreeSnapshot,
 } from "../src/worktree.ts";
+import { defaultConfig, loadConfig } from "../src/config.ts";
+import { registerLineEditTools } from "../src/line-edit.ts";
 
 export default function pylonCoreExtension(pi: ExtensionAPI) {
   const baseline = new Set<string>();
@@ -43,6 +45,12 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   let runCwd = "";
   const delegateNames = new Map<string, string>();
   const delegateCounts = { A: 0, G: 0, S: 0 };
+  let lineToolsRegistered = false;
+  let lineEditConfigError: string | undefined;
+  const coreConfig = loadConfig().catch((error) => {
+    lineEditConfigError = error instanceof Error ? error.message : String(error);
+    return defaultConfig();
+  });
 
   const rebuildDelegateNames = (ctx: any) => {
     delegateNames.clear();
@@ -349,7 +357,12 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const rebuildTokenMeter = (ctx: any) => {
     tokenMeter = meterFromBranch(ctx.sessionManager?.getBranch?.() ?? []);
   };
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const config = await coreConfig;
+    if (config.lineEditEnabled && !lineToolsRegistered) {
+      registerLineEditTools(pi);
+      lineToolsRegistered = true;
+    }
     selectedTools.clear();
     shellBaseline = undefined;
     shellCwd = "";
@@ -561,6 +574,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         "Executables:",
         ...executables.map(({ label, required, available }) => `${label}: ${available ? "available" : `missing${required ? "" : " (optional)"}`}`),
         `State root: ${agentDir} (${stateStatus})`,
+        `Numbered line edit: ${lineToolsRegistered ? "enabled" : "disabled"}${lineEditConfigError ? ` (config error: ${lineEditConfigError.slice(0, 200)})` : ""}`,
         `Locks older than 30s: ${oldLocks.join(", ") || "none"}`,
         `Quarantined state: ${quarantined.join(", ") || "none"}`,
         "Configured child models:",
