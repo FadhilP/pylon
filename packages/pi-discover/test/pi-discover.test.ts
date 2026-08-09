@@ -1194,14 +1194,20 @@ test("relationship_graph preserves parseable grouped shape at small byte caps", 
   assert.ok(Array.isArray(JSON.parse(result.content[0].text).files));
 });
 
-test("relationship_graph returns a valid empty graph and confines paths", async () => {
-  const { tools } = setup(async () => ({ code: 1, stdout: "", stderr: "" }));
+test("relationship_graph returns a valid empty graph and confines paths without probing after rg reports no matches", async () => {
+  const tools = new Map<string, any>();
+  let probes = 0;
+  registerRelationshipGraph({
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+  } as any, undefined, async () => { probes++; return false; });
   const result = await tools.get("relationship_graph").execute(
     "id", { query: "missing" }, undefined, undefined, { cwd: process.cwd() },
   );
   const graph = JSON.parse(result.content[0].text);
   assert.equal(graph.metadata.observedMatchCount, 0);
   assert.deepEqual(graph.files, []);
+  assert.equal(probes, 0);
   await assert.rejects(() => tools.get("relationship_graph").execute(
     "id", { query: "missing", path: "../outside" }, undefined, undefined, { cwd: process.cwd() },
   ), /stay within workspace/);

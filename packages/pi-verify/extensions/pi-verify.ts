@@ -66,9 +66,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
       })),
     };
   };
-  const publishCatalog = async () => {
-    if (!currentCwd) return;
-    pi.events.emit("pi-verify:catalog", await catalog(currentCwd));
+  const publishCatalog = async (cwd: string, sessionId: string) => {
+    const value = await catalog(cwd);
+    if (!cwd || currentCwd !== cwd || currentSessionId !== sessionId) return;
+    pi.events.emit("pi-verify:catalog", value);
   };
   const disposePolicy = pi.events.on?.("pylon:runtime-policy", (value: any) => {
     if (value?.version !== 1 || value.sessionId !== currentSessionId) return;
@@ -194,7 +195,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       managedTools: ["verify"],
       enabledTools: ["verify"],
     });
-    void publishCatalog();
+    void publishCatalog(currentCwd, currentSessionId).catch(() => undefined);
   });
   pi.on("session_shutdown", () => {
     disposePolicy?.();

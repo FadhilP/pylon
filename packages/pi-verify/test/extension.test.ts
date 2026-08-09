@@ -274,35 +274,57 @@ test("verify reports live elapsed runtime while a check runs", async () => {
   const tools = new Map<string, any>();
   const statuses: string[] = [];
   const updates: any[] = [];
+  let releaseCheck!: () => void;
+  const checkGate = new Promise<void>((resolve) => { releaseCheck = resolve; });
+  let reportHeartbeat!: () => void;
+  const heartbeatSeen = new Promise<void>((resolve) => { reportHeartbeat = resolve; });
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
     exec: async (command: string, args: string[]) => {
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git") return { code: 0, stdout: "", stderr: "" };
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await checkGate;
       return { code: 0, stdout: "ok\n", stderr: "" };
     },
   };
   extension(pi);
-  const result = await tools.get("verify").execute(
-    "call", { scope: "project" }, undefined, (update: any) => updates.push(update),
+  const running = tools.get("verify").execute(
+    "call", { scope: "project" }, undefined, (update: any) => {
+      updates.push(update);
+      if (update.details.durationMs >= 1_000) reportHeartbeat();
+    },
     { cwd, hasUI: true, ui: { setStatus: (_id: string, status: string) => statuses.push(status) } },
   );
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatError: unknown;
+  try {
+    await Promise.race([
+      heartbeatSeen,
+      new Promise<never>((_, reject) => { watchdog = setTimeout(() => reject(new Error("Verify heartbeat was not reported within 10 seconds")), 10_000); }),
+    ]);
+  } catch (error) {
+    heartbeatError = error;
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    releaseCheck();
+  }
+  const result = await running;
+  if (heartbeatError) throw heartbeatError;
   assert.equal(result.details.state, "passed");
   assert.ok(result.details.durationMs >= 1_000);
-  assert.ok(updates.some((update) => /^1s$/.test(update.content[0].text)));
+  assert.ok(updates.some((update) => /^\d+s$/.test(update.content[0].text)));
   const runtimeUpdate = updates.find((update) => update.details.durationMs >= 1_000);
   assert.ok(runtimeUpdate);
-  assert.ok(statuses.some((status) => /Running 1\/1 · 1s/.test(status)));
+  assert.ok(statuses.some((status) => /Running 1\/1 · \d+s/.test(status)));
   const theme = { fg: (_color: string, text: string) => text };
   assert.match(
     tools.get("verify").renderResult(runtimeUpdate, { expanded: false }, theme).render(80).join("\n"),
-    /Verification running · \d+ check\(s\) · 1s/,
+    /Verification running · \d+ check\(s\) · \d+s/,
   );
   assert.match(
     tools.get("verify").renderResult(result, { expanded: false }, theme).render(80).join("\n"),
-    /Verification passed · 1 check\(s\) · 1\.\d+s/,
+    /Verification passed · 1 check\(s\) · \d+\.\d+s/,
   );
 });
 

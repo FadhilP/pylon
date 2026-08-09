@@ -173,7 +173,6 @@ export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_M
       };
       const fileResult = await runRg(addQuery([...common, "--files-with-matches", "--null"], [path]));
       if (!fileResult) return unavailableResult();
-      if (fileResult.code === 1 && !await probe("rg", signal)) return unavailableResult();
       if (fileResult.code !== 0 && fileResult.code !== 1) {
         if (!await probe("rg", signal)) return unavailableResult();
         throw new Error(`ripgrep failed (${fileResult.code}): ${boundedError(fileResult.stderr)}`);
@@ -188,7 +187,6 @@ export function registerRelationshipGraph(pi: ExtensionAPI, maxBytes = DEFAULT_M
         ], files);
         const result = await runRg(args);
         if (!result) return unavailableResult();
-        if (result.code === 1 && !await probe("rg", signal)) return unavailableResult();
         if (result.code !== 0 && result.code !== 1) {
           if (!await probe("rg", signal)) return unavailableResult();
           throw new Error(`ripgrep failed (${result.code}): ${boundedError(result.stderr)}`);
