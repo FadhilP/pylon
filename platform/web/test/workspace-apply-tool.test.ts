@@ -92,6 +92,7 @@ test("workspace apply tool is discoverable and activates through pylon core", as
     registerCommand: () => {},
     appendEntry: () => {},
     exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+    registerTool: (tool: any) => tools.set(tool.name, tool),
   };
   pylonCoreExtension({
     ...common,
@@ -110,7 +111,7 @@ test("workspace apply tool is discoverable and activates through pylon core", as
     },
   } as any);
 
-  for (const handler of coreHandlers.get("session_start") ?? []) handler({}, { sessionManager: { getBranch: () => [] } });
+  for (const handler of coreHandlers.get("session_start") ?? []) await handler({}, { sessionManager: { getBranch: () => [] } });
   for (const handler of workspaceHandlers.get("session_start") ?? []) handler({}, {});
   assert.ok(!activeTools.includes("apply_session_changes"));
 
