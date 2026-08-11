@@ -71,16 +71,26 @@ test("metrics projection retains bounded per-tool usage", () => {
   assert.deepEqual(projection.snapshot().metrics.toolUsage, [{ name: "read", calls: 3, inputTokens: 72, outputTokens: 8, tokens: 80 }]);
 });
 
-test("session status projects completion as a separate pulse", () => {
+test("session status retains background completion until that session is selected", () => {
   const published: Array<{ type: string; payload: unknown }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
   const workStartedAt = "2026-07-30T10:00:00.000Z";
   projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "idle", workStartedAt: null, completed: true, cue: "turn-complete" });
-  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "running", workStartedAt });
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 1, state: "sleeping", workStartedAt: null });
+  projection.apply({ type: "session.status", sessionId: "external", sessionGeneration: 1, state: "sleeping", completed: true });
+  assert.deepEqual(projection.unseenCompletionSessionIds(), ["background", "external"]);
   assert.deepEqual(published, [
     { type: "session.status", payload: { sessionId: "background", state: "idle", workStartedAt: null, completed: true, cue: "turn-complete" } },
-    { type: "session.status", payload: { sessionId: "background", state: "running", workStartedAt } },
+    { type: "session.status", payload: { sessionId: "background", state: "sleeping", workStartedAt: null } },
+    { type: "session.status", payload: { sessionId: "external", state: "sleeping", completed: true } },
   ]);
+
+  const replacement = runtime();
+  replacement.sessionId = "background";
+  replacement.sessionGeneration = 2;
+  projection.apply({ type: "session.replaced", sessionId: "background", sessionGeneration: 2, runtime: replacement });
+  projection.apply({ type: "session.status", sessionId: "background", sessionGeneration: 2, state: "idle", completed: true });
+  assert.deepEqual(projection.unseenCompletionSessionIds(), ["external"]);
 });
 
 test("correlated user starts reuse the optimistic pending message ID", () => {
@@ -195,6 +205,7 @@ test("history projection retains bounded structured compaction display data", ()
     timestamp: "2026-08-05T09:00:00.000Z",
     compaction: {
       contextAfterTokens: 12_345,
+      contextBeforeTokens: 52_000,
       sourceEntryCount: 77,
       display: {
         ...display,
@@ -210,7 +221,7 @@ test("history projection retains bounded structured compaction display data", ()
     streaming: false,
     createdAt: "2026-08-05T09:00:00.000Z",
     systemSource: "pylon-compaction",
-    compaction: { contextAfterTokens: 12_345, sourceEntryCount: 77, display },
+    compaction: { contextAfterTokens: 12_345, contextBeforeTokens: 52_000, sourceEntryCount: 77, display },
   }]);
 
   const malformed = projectMessages([{

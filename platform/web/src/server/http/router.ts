@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import { URL } from "node:url";
 import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
 import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
+import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
@@ -92,7 +93,10 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/hooks") return await this.hookSettings(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/stateql") return await this.stateqlSnapshot(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/stateql/rows") return await this.stateqlRows(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/papercuts") return await this.papercutList(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/papercuts/mutate") return await this.papercutMutation(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-browser") return await this.heliosBrowser(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/helios-android-tooling") return await this.heliosAndroidTooling(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands") return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/")) return await this.uiResponse(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)));
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-ownership/")) return await this.uiOwnership(request, response, decodeURIComponent(url.pathname.slice("/api/v1/ui-ownership/".length)));
@@ -129,7 +133,14 @@ export class ServerTransport {
     const runtimeIssue = describeRuntimeSnapshotIssue(runtime);
     if (runtimeIssue) throw httpError(503, runtimeIssue);
     const pending = this.pendingFor(tabId);
-    const body: BootstrapSnapshot = { protocolVersion: runtime.protocolVersion, sequence: this.journal.sequence, csrfToken: session.csrfToken, runtime, ...(pending ? { pendingUi: pending } : {}) };
+    const body: BootstrapSnapshot = {
+      protocolVersion: runtime.protocolVersion,
+      sequence: this.journal.sequence,
+      csrfToken: session.csrfToken,
+      runtime,
+      unseenCompletionSessionIds: this.projection.unseenCompletionSessionIds(),
+      ...(pending ? { pendingUi: pending } : {}),
+    };
     this.send(response, 200, body);
   }
 
@@ -183,6 +194,22 @@ export class ServerTransport {
     this.renew(tabId);
     const result = await this.driver.heliosBrowser({ ...input, owner: `web:${tabId}` });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while controlling Helios browser");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
+  private async heliosAndroidTooling(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = validateHeliosAndroidToolingCommand(await readJson(request));
+    if (!input) throw httpError(400, "invalid Helios Android tooling request");
+    if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (![...this.clients].some((client) => client.tabId === tabId)) throw httpError(409, "the browser tab must have an SSE connection");
+    if (!this.driver.heliosAndroidTooling) throw httpError(409, "Helios Android tooling is unavailable");
+    this.renew(tabId);
+    const result = await this.driver.heliosAndroidTooling(input);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while controlling Helios Android tooling");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }
@@ -295,6 +322,58 @@ export class ServerTransport {
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading StateQL rows");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
+  }
+
+  private async papercutList(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = await readJson(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw httpError(400, "invalid papercut list request");
+    const body = input as Record<string, unknown>;
+    if (!Number.isSafeInteger(body.generation) || body.generation !== this.journal.sessionGeneration
+      || !["open", "resolved", "dismissed", "all"].includes(String(body.status))
+      || typeof body.query !== "string" || body.query.length > 200
+      || !Number.isSafeInteger(body.offset) || (body.offset as number) < 0 || (body.offset as number) > 1_000
+      || !Number.isSafeInteger(body.limit) || (body.limit as number) < 1 || (body.limit as number) > 50) throw httpError(400, "invalid papercut list request");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.papercutList) throw httpError(409, "Papercuts are unavailable");
+    this.renew(tabId);
+    const result = await this.driver.papercutList(body.status as "open" | "resolved" | "dismissed" | "all", body.query, body.offset as number, body.limit as number);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading papercuts");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
+  private async papercutMutation(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = await readJson(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw httpError(400, "invalid papercut mutation request");
+    const body = input as Record<string, unknown>;
+    if (!Number.isSafeInteger(body.generation) || body.generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!["edit", "delete"].includes(String(body.action))
+      || typeof body.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.id)
+      || typeof body.expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(body.expectedUpdatedAt))
+      || body.action === "edit" && (typeof body.message !== "string" || !body.message.trim() || body.message.length > 500)
+      || body.action === "delete" && body.message !== undefined) throw httpError(400, "invalid papercut mutation request");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.papercutMutation) throw httpError(409, "Papercut mutations are unavailable");
+    this.renew(tabId);
+    try {
+      const mutation = body.action === "edit"
+        ? { action: "edit" as const, id: body.id, expectedUpdatedAt: body.expectedUpdatedAt, message: body.message as string }
+        : { action: "delete" as const, id: body.id, expectedUpdatedAt: body.expectedUpdatedAt };
+      const result = await this.driver.papercutMutation(mutation);
+      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while updating papercut");
+      response.setHeader("cache-control", "no-store");
+      this.send(response, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update papercut";
+      if (/changed or was removed/i.test(message)) throw httpError(409, message);
+      if (/already uses this message/i.test(message)) throw httpError(409, message);
+      if (/message is invalid/i.test(message)) throw httpError(400, message);
+      throw error;
+    }
   }
 
   private async conversationHistory(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {

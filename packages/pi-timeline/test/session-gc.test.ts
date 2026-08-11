@@ -10,6 +10,7 @@ import { capture } from "../src/snapshot.ts";
 import {
   cleanupTimelineSession,
   recordTimelineOwner,
+  readLockOwner,
   startSessionGc,
 } from "../src/session-gc.ts";
 
@@ -31,6 +32,18 @@ async function refs(git: (...args: string[]) => Promise<string>) {
   return (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline"))
     .split(/\r?\n/).filter(Boolean);
 }
+
+test("timeline lock reads retry transient failures and reject persistent corruption", async () => {
+  let attempts = 0;
+  const owner = await readLockOwner("unused", async () => {
+    attempts++;
+    if (attempts < 3) throw Object.assign(new Error("busy"), { code: "EPERM" });
+    return JSON.stringify({ version: 1, pid: process.pid, token: "ready" });
+  });
+  assert.equal(attempts, 3);
+  assert.equal(owner?.token, "ready");
+  await assert.rejects(readLockOwner("unused", async () => "not json"), /Unreadable timeline session-artifact lock/);
+});
 
 test("timeline GC removes deleted-session refs and preserves persisted or leased sessions", async () => {
   const { root: repo, git } = await repository();

@@ -38,6 +38,15 @@ node --experimental-transform-types --test-concurrency=2 --test --test-name-patt
 node --experimental-transform-types --input-type=module --eval "import { SessionIndex } from './src/server/pi/session-index.ts'; console.log(SessionIndex.name)"
 ```
 
+Node's native transform does not load `.tsx`. Tests that need a client module can use the already-installed Vite transform, which handles TSX and extensionless production imports:
+
+```ts
+```ts
+import { createServer } from "vite";
+const vite = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+try { const module = await vite.ssrLoadModule("/src/client/example.tsx"); }
+finally { await vite.close(); }
+```
 ## Session workspaces
 
 New sessions use the project's explicit workspace policy. Local works directly in the registered folder without changing branches, Project folder uses a Pylon session branch in that checkout, and Session worktree creates a linked worktree under the agent directory. Project setup commands run only inside newly created worktrees.

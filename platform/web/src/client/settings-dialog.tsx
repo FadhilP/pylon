@@ -2,6 +2,7 @@ import { IconChevronRight, IconExternalLink, IconKey, IconLogout, IconSettings, 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS } from "../shared/guard-policy";
 import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, ToolPolicyReadModel, UiRequestReadModel } from "../shared/protocol/events";
+import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel, ToolExposureMode } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { HookSettingsFields } from "./hook-settings-fields";
@@ -29,6 +30,8 @@ interface SettingsDialogProps {
   hookLoading: boolean;
   busy: string;
   hookBusy: boolean;
+  androidTooling?: HeliosAndroidToolingResult;
+  androidToolingBusy: "" | "install" | "remove";
   providerLogoutDisabled: boolean;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
@@ -40,12 +43,13 @@ interface SettingsDialogProps {
   onProviderCancel: () => void;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
+  onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
   onUpdateGlobalPolicy: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
   onUpdateGlobalToolPolicy: (tool: string, mode: ToolExposureMode | "inherit", expectedRevision: number) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", initialPackageQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", initialPackageQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, androidTooling, androidToolingBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onAndroidTooling, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
@@ -223,6 +227,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                     ? <PackageFields settings={selectedPackage.settings} models={models} sessionThinkingLevels={sessionThinkingLevels} disabled={Boolean(busy)} onUpdate={(settings) => onUpdate(selectedPackage, settings)} />
                     : <p className="workbench-empty">This package has no configurable defaults.</p>}
                 </section>
+                {selectedPackage.id === "pi-helios" && <AndroidToolingSettings status={androidTooling} busy={androidToolingBusy} onAction={onAndroidTooling} />}
                 <section className="workbench-section">
                   <header><div><h4>Tool exposure</h4><p>Defaults used when a project or session does not override them.</p></div><span>Global</span></header>
                   {selectedTools.length ? <div className="workbench-tool-list">{selectedTools.map((tool) => {
@@ -283,6 +288,45 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
       <footer><span>Changes save immediately</span><button type="button" onClick={onClose}>Done</button></footer>
     </div>
   </div>;
+}
+
+
+function AndroidToolingSettings({ status, busy, onAction }: {
+  status?: HeliosAndroidToolingResult;
+  busy: "" | "install" | "remove";
+  onAction: (action: "status" | "install" | "remove") => Promise<void>;
+}) {
+  const [confirmation, setConfirmation] = useState<"install" | "remove">();
+  const [error, setError] = useState("");
+  const working = Boolean(busy) || status?.state === "busy";
+  const apply = async (action: "status" | "install" | "remove") => {
+    setError("");
+    try { await onAction(action); setConfirmation(undefined); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Android tooling operation failed"); }
+  };
+  const setupLabel = status?.state === "ready" || status?.state === "invalid" ? "Repair" : "Install";
+  const versionLabel = (value: string | undefined, fallback: string) => status?.state === "ready" ? value ?? fallback : `target ${value ?? fallback}`;
+  return <section className="workbench-section android-tooling-settings" aria-labelledby="android-tooling-title">
+    <header><div><h4 id="android-tooling-title">Android tooling</h4><p>Managed Appium and UiAutomator2 for Helios. Android SDK, Java, and an AVD are still required.</p></div><span className={`android-tooling-state is-${status?.state ?? "unknown"}`}>{status?.state ?? "checking"}</span></header>
+    <div className="android-tooling-summary">
+      <span><strong>Appium</strong><small>{versionLabel(status?.appiumVersion, "3.6.0")}</small></span>
+      <span><strong>UiAutomator2</strong><small>{versionLabel(status?.driverVersion, "8.2.2")}</small></span>
+    </div>
+    {status?.message && <p className="android-tooling-message">{status.message}</p>}
+    <div className="android-tooling-actions">
+      <button type="button" disabled={working} onClick={() => void apply("status")}>Refresh</button>
+      <button type="button" disabled={working} onClick={() => setConfirmation("install")}>{busy === "install" ? "Setting up…" : setupLabel}</button>
+      {(status?.state === "ready" || status?.state === "invalid") && <button className="is-danger" type="button" disabled={working} onClick={() => setConfirmation("remove")}>{busy === "remove" ? "Removing…" : "Remove"}</button>}
+    </div>
+    {confirmation && <div className="android-tooling-confirm" role="alertdialog" aria-modal="true" aria-labelledby="android-tooling-confirm-title" aria-describedby="android-tooling-confirm-description">
+      <strong id="android-tooling-confirm-title">{confirmation === "install" ? `${setupLabel} Android tooling?` : "Remove managed Android tooling?"}</strong>
+      <p id="android-tooling-confirm-description">{confirmation === "install"
+        ? "Pylon will download and execute repository-pinned npm packages in its local data directory. No global packages or emulator data are changed."
+        : "Pylon will delete only its managed Appium installation. Active Android sessions must be closed first."}</p>
+      <div><button type="button" disabled={Boolean(busy)} onClick={() => setConfirmation(undefined)}>Cancel</button><button autoFocus type="button" disabled={Boolean(busy)} className={confirmation === "remove" ? "is-danger" : ""} onClick={() => void apply(confirmation)}>Confirm</button></div>
+    </div>}
+    {error && <p className="settings-policy-error" role="alert">{error}</p>}
+  </section>;
 }
 
 const defaultGlobalPolicy: RuntimePolicyReadModel["global"] = {
@@ -418,7 +462,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   if (settings.kind === "pylon-core") {
     return <div className="package-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.lineEditEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, lineEditEnabled: event.target.checked })} />Revision-guarded numbered edits</label>
-      <p className="settings-policy-note">Overrides read and edit with numbered ranges and compact file-revision tags. Existing tools remain unchanged when disabled.</p>
+      <p className="settings-policy-note">Overrides read and edit with numbered ranges and compact file-revision tags. A 50-session simulation broke even when output tokens cost ~2.9× input; at 6×, read/edit payload cost was ~5.3% lower despite ~4.9% more raw tokens. Existing tools remain unchanged when disabled.</p>
     </div>;
   }
   if (settings.kind === "advisor" || settings.kind === "scout") {

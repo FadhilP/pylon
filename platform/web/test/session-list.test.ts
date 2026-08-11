@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { showSessionRuntimeState } from "../src/shared/session-completions.ts";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT } from "../src/shared/session-list.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { SessionListQuery, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../src/shared/protocol/snapshots.ts";
@@ -62,10 +63,9 @@ test("session list refresh drops expanded pages missing from fresh project list"
 });
 
 test("expanded project sessions can collapse to the initial three", async () => {
-  const [app, sidebar, styles] = await Promise.all([
+  const [app, sidebar] = await Promise.all([
     readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
   ]);
   const collapse = app.slice(app.indexOf("const showLessSessions"), app.indexOf("const archiveProject"));
 
@@ -75,6 +75,17 @@ test("expanded project sessions can collapse to the initial three", async () => 
   assert.match(sidebar, /working \? 1_000 : 60_000/);
   assert.match(sidebar, /formatSessionActivity\(session\.modifiedAt, session\.workStartedAt, now\)/);
 });
+
+test("a completed sleeping session renders the new-response orb", async () => {
+  const sidebar = await readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8");
+
+  assert.equal(showSessionRuntimeState("sleeping", true), true);
+  assert.equal(showSessionRuntimeState("sleeping", false), false);
+  assert.match(sidebar, /showSessionRuntimeState\(session\.runtimeState, completed\) && <span/);
+  assert.match(sidebar, /completed \? "is-complete"/);
+  assert.match(sidebar, /completed \? "New response"/);
+});
+
 
 test("pin and activation updates do not show a current-session transition", async () => {
   const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");

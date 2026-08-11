@@ -30,7 +30,7 @@ function runtime(pi: Record<string, unknown> = {}, configPath = SETTINGS_PATH) {
     registerTool(value: any) { tools.set(value.name, value); },
     registerCommand(name: string, value: any) { commands.set(name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any, { configPath });
+  } as any, { configPath, persistentClient: false });
   return { tools, commands, handlers, eventHandlers };
 }
 
@@ -63,7 +63,8 @@ test("registers native capture and constrained browser and Android tools", () =>
   const { tools } = runtime();
   assert.deepEqual([...tools.keys()].sort(), ["helios_android", "helios_browser", "helios_capture"]);
   const android = tools.get("helios_android");
-  assert.match(android.description, /Start one owned Android AVD/);
+  assert.match(android.description, /start one owned Android AVD/i);
+  assert.match(android.description, /installed package IDs/i);
   assert.match(android.description, /consented existing Android emulator/);
   assert.match(android.description, /returned Android element refs/);
   assert.match(android.description, /never guess selectors/i);
@@ -81,9 +82,10 @@ test("registers native capture and constrained browser and Android tools", () =>
   assert.match(browser.description, /user supervision/);
   assert.match(browser.description, /returned element refs/);
   assert.match(browser.description, /continuation cursors/);
-  assert.match(browser.description, /Batch only predetermined non-consequential actions/);
+  assert.match(browser.description, /bounded semantic plan/);
   assert.equal(browser.parameters.anyOf, undefined);
   assert.ok(browser.parameters.properties.actions);
+  assert.ok(browser.parameters.properties.plan);
   const targetPattern = new RegExp(browser.parameters.properties.target.pattern);
   assert.equal(targetPattern.test("f1e12"), true);
   assert.equal(targetPattern.test("f1f2e12"), false);
@@ -92,9 +94,9 @@ test("registers native capture and constrained browser and Android tools", () =>
   assert.match(guidance, /Never monitor/i);
   assert.match(guidance, /never guess selectors/i);
   assert.match(guidance, /continuation cursors/i);
-  assert.match(guidance, /Reuse snapshots returned by helios_browser actions/i);
+  assert.match(guidance, /Reuse returned snapshots/i);
   assert.match(guidance, /Prefer targeted screenshots; use fullPage only/i);
-  assert.match(guidance, /Batch only predetermined, non-consequential actions/i);
+  assert.match(guidance, /Use plan only for deterministic, non-consequential steps/i);
   assert.match(guidance, /User must supervise purchases/i);
 });
 
@@ -106,8 +108,9 @@ test("advertises compact deferred browser usages to Pylon", async () => {
   assert.deepEqual(policy.deferredToolUsage, {
     helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
     helios_capture: "capture a consented Windows window for visual debugging",
-    helios_android: "start or attach to an Android emulator and navigate one app through constrained Appium actions",
+    helios_android: "list packages on, start, or attach to an Android emulator and navigate one app with constrained Appium actions",
   });
+  assert.ok(Object.values(policy.deferredToolUsage).every((value: any) => value.length <= 120));
 });
 
 test("Android start and attachment require visible consent before SDK or Appium access", async () => {
@@ -117,6 +120,15 @@ test("Android start and attachment require visible consent before SDK or Appium 
     action: "start", avd: "Pixel_Test", appPackage: "com.example.app",
   }, undefined, undefined, context({ ui: { async confirm() { return false; }, notify() {} } }));
   assert.equal(declined.details.declined, true);
+  assert.equal(executions, 0);
+  const declinedPackages = await tools.get("helios_android").execute("android-packages", {
+    action: "packages", serial: "emulator-5554",
+  }, undefined, undefined, context({ ui: { async confirm() { return false; }, notify() {} } }));
+  assert.equal(declinedPackages.details.declined, true);
+  assert.equal(executions, 0);
+  await assert.rejects(tools.get("helios_android").execute("android-packages-no-ui", {
+    action: "packages", serial: "emulator-5554",
+  }, undefined, undefined, context({ hasUI: false })), /requires interactive confirmation/);
   assert.equal(executions, 0);
   await assert.rejects(tools.get("helios_android").execute("android-attach", {
     action: "attach", serial: "emulator-5554", appPackage: "com.example.app",
@@ -137,6 +149,12 @@ test("Android tool rejects cross-action fields and unsupported screenshots befor
   await assert.rejects(tools.get("helios_android").execute("missing-package", {
     action: "start", avd: "Pixel_Test",
   }, undefined, undefined, ctx), /requires appPackage/);
+  await assert.rejects(tools.get("helios_android").execute("invalid-packages", {
+    action: "packages", serial: "emulator-5554", appPackage: "com.example.app",
+  }, undefined, undefined, ctx), /does not accept appPackage/);
+  await assert.rejects(tools.get("helios_android").execute("invalid-package-serial", {
+    action: "packages", serial: "emulator-5555",
+  }, undefined, undefined, ctx), /even console port/);
   await assert.rejects(tools.get("helios_android").execute("invalid-find", {
     action: "find", text: "Next", avd: "Pixel_Test",
   }, undefined, undefined, ctx), /does not accept avd/);
@@ -293,6 +311,27 @@ test("health diagnostics share cached work while doctor stays fresh", async () =
   assert.equal(calls, 2);
 });
 
+
+test("Helios exposes fixed Android tooling status through the runtime bridge", async () => {
+  const { eventHandlers } = runtime();
+  const handler = eventHandlers.get("pylon:helios-android-tooling-request")![0];
+  let claimed = false;
+  let response: Promise<any> | undefined;
+  handler({
+    version: 1,
+    action: "status",
+    claim() { if (claimed) return false; claimed = true; return true; },
+    respond(value: Promise<unknown>) { response = value; },
+  });
+  assert.ok(response);
+  const result = await response;
+  assert.ok(["missing", "ready", "invalid", "busy"].includes(result.state));
+  assert.equal(typeof result.appiumVersion, "string");
+  let invalidClaimed = false;
+  handler({ version: 1, action: "arbitrary", claim() { invalidClaimed = true; return true; }, respond() {} });
+  assert.equal(invalidClaimed, false);
+});
+
 test("Helios advertises one-use Web Scout child capability", async () => {
   const { eventHandlers } = runtime();
   const capabilities: any[] = [];
@@ -314,14 +353,14 @@ test("Web Scout child extension requires and consumes issued grant", async () =>
     exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
     registerTool(value: any) { tools.set(value.name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any);
+  } as any, { persistentClient: false });
   assert.deepEqual([...tools.keys()], ["scout_browser"]);
   const targetPattern = new RegExp(tools.get("scout_browser").parameters.properties.target.pattern);
   assert.equal(targetPattern.test("f1e12"), true);
   assert.equal(targetPattern.test("f1f2e12"), false);
   assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
-  await assert.rejects(webScoutBrowser({} as any), /grant is missing/);
+  await assert.rejects(webScoutBrowser({} as any, { persistentClient: false }), /grant is missing/);
 });
 
 test("Web Scout reuses navigation snapshots without extra snapshot subprocesses", async () => {
@@ -341,7 +380,7 @@ test("Web Scout reuses navigation snapshots without extra snapshot subprocesses"
     },
     registerTool(value: any) { tools.set(value.name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any);
+  } as any, { persistentClient: false });
   const browser = tools.get("scout_browser");
   const navigated = await browser.execute("navigate", { action: "navigate", url: "https://1.1.1.1" });
   assert.match(navigated.content[0].text, /ref=f1e1/);
@@ -370,7 +409,7 @@ test("Web Scout child cleans proxy after browser start failure", async () => {
     },
     registerTool(value: any) { tools.set(value.name, value); },
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  } as any);
+  } as any, { persistentClient: false });
   await assert.rejects(tools.get("scout_browser").execute("id", { action: "navigate", url: "https://example.com" }), /command failed/i);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
 });
@@ -439,6 +478,112 @@ test("browser find returns targeted refs usable by later actions", async () => {
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });
 
+test("browser semantic plan resolves unique elements and hides intermediate find output", async () => {
+  const calls: string[][] = [];
+  let finds = 0;
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    calls.push(args);
+    const command = args.find((value) => ["open", "find", "fill", "click", "tab-list", "close"].includes(value)) ?? "unknown";
+    if (command === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Form](https://example.com/)" }), stderr: "", killed: false };
+    if (command === "find") {
+      const result = ++finds === 1
+        ? 'Found 1 match for "Email":\n\n- generic [ref=e1]:\n  - textbox "Email" [ref=e2]'
+        : 'Found 1 match for "Continue":\n\n- button "Continue" [ref=e3]';
+      return { code: 0, stdout: JSON.stringify({ result }), stderr: "", killed: false };
+    }
+    if (command === "fill") return { code: 0, stdout: JSON.stringify({ snapshot: '- button "Continue" [ref=e3]' }), stderr: "", killed: false };
+    if (command === "click") return { code: 0, stdout: JSON.stringify({ snapshot: '- heading "Done" [ref=e4]' }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+  const result = await browser.execute("plan", { plan: [
+    { action: "fill", match: "Email", text: "person@example.com" },
+    { action: "click", match: "Continue" },
+  ] }, undefined, undefined, ctx);
+  assert.equal(result.details.completed, 2);
+  assert.match(result.content[0].text, /Step 1 \(fill e2\): completed/);
+  assert.match(result.content[0].text, /Step 2 \(click e3\): completed/);
+  assert.match(result.content[0].text, /heading "Done" \[ref=e4\]/);
+  assert.doesNotMatch(result.content[0].text, /Found 1 match|textbox "Email"/);
+  assert.ok(calls.some((args) => args.includes("fill") && args.includes("e2") && args.includes("person@example.com")));
+  assert.ok(calls.some((args) => args.includes("click") && args.includes("e3")));
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+});
+
+test("browser semantic plan stops on ambiguity and page change", async () => {
+  let mode: "ambiguous" | "page-change" = "ambiguous";
+  let tabLists = 0;
+  let finds = 0;
+  const commands: string[] = [];
+  const { tools } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "find", "click", "tab-list", "close"].includes(value)) ?? "unknown";
+    commands.push(command);
+    if (command === "tab-list") {
+      const changed = mode === "page-change" && ++tabLists >= 1;
+      return { code: 0, stdout: JSON.stringify({ result: `- 0: (current) [${changed ? "Next" : "Form"}](https://example.com/${changed ? "next" : ""})` }), stderr: "", killed: false };
+    }
+    if (command === "find") {
+      finds++;
+      const result = mode === "ambiguous"
+        ? 'Found 2 matches for "Save":\n\n- button "Save" [ref=e1]\n- button "Save copy" [ref=e2]'
+        : 'Found 1 match for "Continue":\n\n- button "Continue" [ref=e3]';
+      return { code: 0, stdout: JSON.stringify({ result }), stderr: "", killed: false };
+    }
+    if (command === "click") return { code: 0, stdout: JSON.stringify({ snapshot: '- heading "Next" [ref=e4]' }), stderr: "", killed: false };
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+  const ambiguous = await browser.execute("ambiguous", { plan: [{ action: "click", match: "Save" }] }, undefined, undefined, ctx);
+  assert.equal(ambiguous.details.reason, "ambiguous");
+  assert.equal(ambiguous.details.completed, 0);
+  assert.match(ambiguous.content[0].text, /Found 2 matches/);
+  assert.equal(commands.includes("click"), false);
+
+  mode = "page-change";
+  tabLists = 0;
+  finds = 0;
+  const changed = await browser.execute("changed", { plan: [
+    { action: "click", match: "Continue" },
+    { action: "click", match: "Continue" },
+  ] }, undefined, undefined, ctx);
+  assert.equal(changed.details.reason, "page-changed");
+  assert.equal(changed.details.completed, 1);
+  assert.equal(finds, 1, "the next semantic step must not run across a page change");
+  await assert.rejects(browser.execute("mixed", { action: "snapshot", plan: [{ action: "click", match: "Continue" }] }, undefined, undefined, ctx), /only plan/);
+});
+
+
+test("browser semantic plan stops when post-action page metadata is unavailable", async () => {
+  let tabLists = 0;
+  let finds = 0;
+  const { tools } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "find", "fill", "tab-list", "close"].includes(value)) ?? "unknown";
+    if (command === "tab-list") return ++tabLists === 1
+      ? { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Form](https://example.com/)" }), stderr: "", killed: false }
+      : { code: 0, stdout: "{}", stderr: "", killed: false };
+    if (command === "find") {
+      finds++;
+      return { code: 0, stdout: JSON.stringify({ result: 'Found 1 match for "Email":\n\n- textbox "Email" [ref=e2]' }), stderr: "", killed: false };
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
+  const result = await browser.execute("uncertain", { plan: [
+    { action: "fill", match: "Email", text: "person@example.com" },
+    { action: "fill", match: "Email", text: "other@example.com" },
+  ] }, undefined, undefined, ctx);
+  assert.equal(result.details.reason, "page-uncertain");
+  assert.equal(result.details.completed, 1);
+  assert.equal(finds, 1);
+});
+
+
 test("browser continue pages cached output without another CLI command and replaces refs", async () => {
   const raw = Array.from({ length: 205 }, (_, index) => `- button Item ${index} [ref=e${index}]`).join("\n");
   const commands: string[] = [];
@@ -454,6 +599,7 @@ test("browser continue pages cached output without another CLI command and repla
   await browser.execute("start", { action: "start" }, undefined, undefined, ctx);
   const first = await browser.execute("snapshot", { action: "snapshot" }, undefined, undefined, ctx);
   assert.match(first.content[0].text, /Continuation: hc_/);
+  assert.equal(first.details.snapshot, undefined, "snapshot text is not duplicated in persisted details");
   const before = commands.length;
   const continued = await browser.execute("continue", { action: "continue", cursor: first.details.snapshotContinuation }, undefined, undefined, ctx);
   assert.equal(commands.length, before);
@@ -526,6 +672,10 @@ test("browser batch compacts intermediate snapshots and metadata but keeps final
   assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list", "reload", "tab-list", "screenshot", "snapshot"]);
   assert.deepEqual(result.details.steps.map((step: any) => step.action), ["start", "navigate", "reload", "screenshot", "snapshot"]);
   assert.equal(result.details.completed, 5);
+  for (const step of result.details.steps) {
+    assert.equal(step.details.snapshot, undefined);
+    assert.equal(step.details.artifactPath, undefined);
+  }
   const text = result.content.filter((item: any) => item.type === "text").map((item: any) => item.text);
   assert.match(text[0], /^Step 1 \(start\): completed \(owned\)\./);
   assert.match(text[0], /Page: Example/);
@@ -562,9 +712,32 @@ test("browser batch keeps intermediate warnings while omitting truncated snapsho
   }, undefined, undefined, context());
   assert.match(result.content[1].text, /Page metadata may be stale/);
   assert.match(result.content[1].text, /Redactions: 1/);
-  assert.match(result.content[1].text, /Intermediate snapshot omitted and truncated; 1 lines \/ [1-9][0-9]* bytes remain/);
+  assert.match(result.content[1].text, /Intermediate snapshot omitted and truncated; [1-9][0-9]* lines \/ [1-9][0-9]* bytes remain/);
   assert.match(result.content[1].text, /Request a new snapshot if needed/);
   assert.doesNotMatch(result.content[1].text, /Continuation:|hunter2|button Item/);
+});
+
+test("browser tab-list bounds model output and compact details", async () => {
+  let tabLists = 0;
+  const { tools, handlers } = runtime({ exec: async (_command: string, args: string[]) => {
+    const command = args.find((value) => ["open", "tab-list", "close"].includes(value));
+    if (command === "tab-list") {
+      if (++tabLists === 1) return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+      const tabs = Array.from({ length: 25 }, (_, index) => `- ${index}: ${index === 24 ? "(current) " : ""}[${"T".repeat(200)}](https://example.com/${"u".repeat(900)})`).join("\n");
+      return { code: 0, stdout: JSON.stringify({ result: tabs }), stderr: "", killed: false };
+    }
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  } });
+  const ctx = context();
+  const browser = tools.get("helios_browser");
+  await browser.execute("start-tabs", { action: "start" }, undefined, undefined, ctx);
+  const result = await browser.execute("list-tabs", { action: "tabs", tabAction: "list" }, undefined, undefined, ctx);
+  assert.equal(result.details.tabs.length, 20);
+  assert.equal(result.details.tabsOmitted, 5);
+  assert.equal(result.details.tabs.at(-1).index, 24);
+  assert.match(result.content[0].text, /5 more omitted\./);
+  assert.ok(result.content[0].text.length < 20_000);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 });
 
 test("browser single-action result remains unwrapped", async () => {
@@ -585,7 +758,7 @@ test("browser batch rejects mixed input and stops after declined attachment", as
   let calls = 0;
   const { tools } = runtime({ exec: async () => { calls++; return successfulLookup(); } });
   const browser = tools.get("helios_browser");
-  await assert.rejects(browser.execute("missing", {}, undefined, undefined, context()), /requires action or actions/);
+  await assert.rejects(browser.execute("missing", {}, undefined, undefined, context()), /requires action, actions, or plan/);
   await assert.rejects(browser.execute("mixed", { action: "start", actions: [{ action: "start" }] }, undefined, undefined, context()), /only actions/);
   const declined = await browser.execute("declined", {
     actions: [{ action: "attach", attachMode: "cdp", endpoint: "http://127.0.0.1:9222" }, { action: "navigate", url: "https://example.com" }],
@@ -680,6 +853,8 @@ test("owned browser screenshot uses Playwright CLI, attaches image, and cleans a
   await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
   const result = await browser.execute("shot", { action: "screenshot" }, undefined, undefined, ctx);
   assert.ok(result.content.some((item: any) => item.type === "image" && item.data.length > 0));
+  assert.equal(result.details.snapshot, undefined);
+  assert.equal(result.details.artifactPath, undefined);
   assert.ok(commands.includes("screenshot"));
   for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
   assert.ok(commands.includes("close"));

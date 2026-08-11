@@ -1,4 +1,4 @@
-import { IconArchive, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArchive, IconLoader2, IconSearch, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { ArchiveListSnapshot } from "../shared/protocol/snapshots";
 import { runtimeStore } from "./runtime/event-store";
@@ -113,19 +113,19 @@ export function ArchiveDialog({ revision, onClose, onError }: ArchiveDialogProps
           <h2>Projects</h2>
           {snapshot!.projects.map((project) => <article className="archive-row" key={project.id}>
             <div><strong>{project.label}</strong><small>{project.sessionCount} saved session{project.sessionCount === 1 ? "" : "s"} · Archived {new Date(project.archivedAt).toLocaleDateString()}</small></div>
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void restoreProject(project.id)}>{busy === project.id ? "Restoring…" : "Restore"}</button>
+            <button className="secondary-button" type="button" disabled={Boolean(busy)} aria-busy={busy === project.id} onClick={() => void restoreProject(project.id)}>{busy === project.id && <IconLoader2 className="feedback-spinner" size={14} />}{busy === project.id ? "Restoring…" : "Restore"}</button>
           </article>)}
         </section>}
         {Boolean(snapshot?.sessions.length) && <section>
           <h2>Sessions</h2>
           {snapshot!.sessions.map((session) => <article className="archive-row" key={session.id}>
             <div><strong>{sessionTitle(session)}</strong><small>{session.cwdLabel} · Archived {new Date(session.archivedAt).toLocaleDateString()}</small></div>
-            <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void restoreSession(session.id)}>{busy === session.id ? "Restoring…" : "Restore"}</button>
+            <button className="secondary-button" type="button" disabled={Boolean(busy)} aria-busy={busy === session.id} onClick={() => void restoreSession(session.id)}>{busy === session.id && <IconLoader2 className="feedback-spinner" size={14} />}{busy === session.id ? "Restoring…" : "Restore"}</button>
           </article>)}
-          {snapshot?.nextCursor && <button className="archive-more" type="button" disabled={loading} onClick={() => {
+          {snapshot?.nextCursor && <button className="archive-more" type="button" disabled={loading} aria-busy={loading} onClick={() => {
             setLoading(true);
             void load(snapshot.nextCursor).catch((error) => onError(error, "Unable to load more archived sessions")).finally(() => setLoading(false));
-          }}>{loading ? "Loading…" : `Show ${Math.min(20, snapshot.totalSessionCount - snapshot.sessions.length)} more`}</button>}
+          }}>{loading && <IconLoader2 className="feedback-spinner" size={14} />}{loading ? "Loading…" : `Show ${Math.min(20, snapshot.totalSessionCount - snapshot.sessions.length)} more`}</button>}
         </section>}
         {empty && <div className="archive-empty"><IconArchive size={22} /><strong>No archived items</strong><span>{query ? "No archived items match this search." : "Archived projects and sessions will appear here."}</span></div>}
       </div>

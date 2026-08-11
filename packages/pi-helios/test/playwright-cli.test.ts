@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { validatePngFile } from "../src/capture.ts";
 import { elementReferences, isElementReference } from "../src/element-ref.ts";
 import { compactSnapshotLines, PlaywrightCli, HeliosCliError, validateNavigationUrl } from "../src/playwright-cli.ts";
+import { PlaywrightClient, PlaywrightClientError } from "../src/playwright-client.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const SESSION = "helios-0123456789ab-0123456789ab";
@@ -49,7 +50,7 @@ test("snapshot compactor flattens only exact anonymous generic wrappers", () => 
   ]) assert.deepEqual(compactSnapshotLines(malformed), malformed);
 });
 
-test("adapter invokes pinned CLI with argument array and private cwd", async () => {
+test("adapter invokes thin pinned CLI launcher with argument array and private cwd", async () => {
   let call: { command: string; args: string[]; options: any } | undefined;
   const cli = await PlaywrightCli.create(async (command, args, options) => {
     call = { command, args, options };
@@ -58,12 +59,81 @@ test("adapter invokes pinned CLI with argument array and private cwd", async () 
   try {
     const result = await cli.run(SESSION, { kind: "snapshot", depth: 3 });
     assert.equal(call!.command, process.execPath);
-    assert.match(call!.args[0], /@playwright[\\/]cli[\\/]playwright-cli\.js$/);
-    assert.deepEqual(call!.args.slice(1), ["--json", `-s=${SESSION}`, "snapshot", "--depth=3"]);
+    assert.match(call!.args[0], /pi-helios[\\/]src[\\/]playwright-thin-cli\.mjs$/);
+    assert.deepEqual(call!.args.slice(1), ["--json", `-s=${SESSION}`, "snapshot", "--depth=3", "--filename=<auto>"]);
     assert.equal(call!.options.cwd, cli.directory);
     assert.equal(result.snapshot, "- heading [ref=e1]");
     assert.equal(result.value.snapshot, undefined);
   } finally { await cli.dispose(); }
+});
+
+test("persistent client handles hot actions while lifecycle stays on thin launcher", async () => {
+  const thinCalls: string[][] = [];
+  const helperCalls: string[] = [];
+  let disposed = false;
+  const cli = await PlaywrightCli.create(async (_command, args) => {
+    thinCalls.push(args);
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  }, {
+    persistentClient: true,
+    clientFactory: async () => ({
+      async run(_sessionName, command) {
+        helperCalls.push(command);
+        return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+      },
+      async dispose() { disposed = true; },
+    }),
+  });
+  await cli.run(SESSION, { kind: "tab-list" });
+  await cli.run(SESSION, { kind: "open", profileDirectory: cli.directory, headed: false });
+  assert.deepEqual(helperCalls, ["tab-list"]);
+  assert.equal(thinCalls.length, 1);
+  assert.ok(thinCalls[0].includes("open"));
+  await cli.dispose();
+  assert.equal(disposed, true);
+});
+
+test("persistent client falls back only before dispatch", async () => {
+  let thinCalls = 0;
+  const exec = async () => {
+    thinCalls++;
+    return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
+  };
+  const before = await PlaywrightCli.create(exec, {
+    persistentClient: true,
+    clientFactory: async () => ({
+      async run() { throw new PlaywrightClientError("unavailable", false, "not dispatched"); },
+      async dispose() {},
+    }),
+  });
+  await before.run(SESSION, { kind: "tab-list" });
+  assert.equal(thinCalls, 1);
+  await before.dispose();
+
+  const after = await PlaywrightCli.create(exec, {
+    persistentClient: true,
+    clientFactory: async () => ({
+      async run() { throw new PlaywrightClientError("unavailable", true, "uncertain"); },
+      async dispose() {},
+    }),
+  });
+  await assert.rejects(after.run(SESSION, { kind: "tab-list" }), (error: unknown) =>
+    error instanceof HeliosCliError && error.uncertainOutcome && /outcome is uncertain/.test(error.message));
+  assert.equal(thinCalls, 1, "an uncertain action must not be replayed through the launcher");
+  await after.dispose();
+});
+
+test("persistent helper performs a versioned missing-session probe", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "helios-helper-test-"));
+  const client = await PlaywrightClient.create(directory);
+  try {
+    const result = await client.run(OTHER_SESSION, "tab-list", [], undefined, 5_000);
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /not open, please run open first/);
+  } finally {
+    await client.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("adapter consumes file-backed action snapshots from top-level and nested results", async () => {
@@ -257,8 +327,26 @@ test("owned visibility controls config and headed CLI flag", async () => {
   } finally { await cli.dispose(); }
 });
 
+test("navigation permits local HTML file URLs only", () => {
+  assert.equal(validateNavigationUrl("about:blank"), "about:blank");
+  assert.equal(validateNavigationUrl("http://example.com"), "http://example.com/");
+  assert.equal(validateNavigationUrl("https://example.com/prototype"), "https://example.com/prototype");
+  assert.equal(validateNavigationUrl("file:///tmp/prototype.html"), "file:///tmp/prototype.html");
+  assert.equal(validateNavigationUrl("file:///C:/work/prototype.HTML?theme=dark#preview"), "file:///C:/work/prototype.HTML?theme=dark#preview");
+  assert.equal(validateNavigationUrl("file://localhost/tmp/prototype.%68tml"), "file:///tmp/prototype.%68tml");
+  assert.equal(validateNavigationUrl("file:///tmp/prototype.htm"), "file:///tmp/prototype.htm");
+  assert.throws(() => validateNavigationUrl("file://server/share/prototype.html"), /remote hosts/);
+  assert.throws(() => validateNavigationUrl("file:////server/share/prototype.html"), /network paths/);
+  assert.throws(() => validateNavigationUrl("file:///%5C%5Cserver/share/prototype.html"), /network paths/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype.html.txt"), /HTML file/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype.html/"), /HTML file/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype%zz.html"), /percent-encoding/);
+  assert.throws(() => validateNavigationUrl("C:\\work\\prototype.html"), /local HTML file URLs/);
+  assert.throws(() => validateNavigationUrl(`file:///tmp/${"x".repeat(4096)}.html`), /4096/);
+  assert.throws(() => validateNavigationUrl("about:srcdoc"), /local HTML file URLs/);
+});
+
 test("adapter rejects unsafe inputs and malformed or oversized output", async () => {
-  assert.throws(() => validateNavigationUrl("file:///secret"), /HTTP/);
   assert.throws(() => validateNavigationUrl("http://user:pass@localhost"), /credentials/);
   const malformed = await PlaywrightCli.create(async () => ({ code: 0, stdout: "not json", stderr: "", killed: false }));
   await assert.rejects(malformed.run(SESSION, { kind: "tab-list" }), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
@@ -291,7 +379,7 @@ test("adapter safely identifies missing browser stderr", async () => {
 
   for (const stderr of ["", "Error: launch failed for token=secret-value", 'Browser "firefox" may not be installed', 'Error: Browser "firefox" is not installed. Run `playwright-cli install-browser chrome` to install']) {
     const unknown = await PlaywrightCli.create(async () => ({ code: 1, stdout: "", stderr, killed: false }));
-    await assert.rejects(unknown.run(SESSION, { kind: "tab-list" }), (error: any) => error.message === "Playwright CLI command failed");
+    await assert.rejects(unknown.run(SESSION, { kind: "tab-list" }), (error: any) => error.message === "Playwright CLI command failed; run /helios-doctor for diagnostics");
     await unknown.dispose();
   }
 
@@ -327,7 +415,7 @@ test("adapter maps timeout and cancellation without leaking subprocess details",
 test("adapter validates screenshot and redacts credentials in bounded snapshots", async () => {
   const cli = await PlaywrightCli.create(async (_command, args) => {
     const filename = args.find((arg) => arg.startsWith("--filename="))?.slice("--filename=".length);
-    if (filename) await writeFile(filename, PNG);
+    if (filename && filename !== "<auto>") await writeFile(filename, PNG);
     return { code: 0, stdout: JSON.stringify({ snapshot: '- textbox "Password" [ref=f1e7]: hunter2\r\n- searchbox "Search" [ref=f2e8]: private query\r\n- combobox "Plan" [ref=f3e9]: Enterprise\r\n- spinbutton "Seats" [ref=f4e10]: 10\r\n- button "Keep" [ref=f4e11]: visible\r\n- text: token=ghp_abcdefghijklmnopqrstuvwxyz\r\n- text: Authorization: Bearer secret-value' }), stderr: "", killed: false };
   });
   try {
@@ -387,8 +475,8 @@ test("action-specific snapshot limits report deterministic omitted counts", asyn
     assert.equal(snapshot.snapshot?.split("\n").length, 200);
 
     const action = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
-    assert.equal(action.snapshotOmittedLines, 405);
-    assert.equal(action.snapshot?.split("\n").length, 100);
+    assert.equal(action.snapshotOmittedLines, 445);
+    assert.equal(action.snapshot?.split("\n").length, 60);
   } finally { await cli.dispose(); }
 });
 
@@ -485,8 +573,8 @@ test("find has a smaller cap and preserves total match count", async () => {
     const result = await cli.run(SESSION, { kind: "find", regex: "/item/" });
     assert.equal(result.findMatches, 140);
     assert.equal(result.snapshotTruncated, true);
-    assert.equal(result.snapshot?.split("\n").length, 120);
-    assert.equal(result.snapshotOmittedLines, 22);
+    assert.equal(result.snapshot?.split("\n").length, 80);
+    assert.equal(result.snapshotOmittedLines, 62);
     assert.equal(result.value.result, undefined);
   } finally { await cli.dispose(); }
 });

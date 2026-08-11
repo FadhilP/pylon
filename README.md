@@ -25,6 +25,8 @@ Recommended configuration for OpenAI subscriptions:
 
 The server binds only to loopback and uses the directory where you ran `pylon` as the initial project. Set `PYLON_CWD` to override that directory or `PYLON_PORT` to change the default port (`3141`).
 
+Pylon Web stores sessions, settings, and package state in `~/.pylon/agent` by default. Set `PI_CODING_AGENT_DIR` to override it. Existing `~/.pi/agent` data is copied non-destructively on first run; run `pylon migrate` to retry migration.
+
 Before startup, Pylon checks npm for a newer stable release. Interactive terminals ask before updating; non-interactive sessions only print the update command. After an approved update attempt, run `pylon` again. Set `PYLON_NO_UPDATE_CHECK=1` to disable the check.
 
 ## Terminal Setup (Alternative)
@@ -75,7 +77,7 @@ Run `/pylon doctor` to check model availability, credentials, dependencies, tool
 ## Bundled Packages
 
 - **[pi-advisor](./packages/pi-advisor)** — Consults a selected tool-free model for difficult planning, architecture review, and failure recovery using bounded, redacted context.
-- **[pylon-core](./packages/pylon-core)** — Coordinates package tool policies, offers opt-in revision-guarded numbered read/edit tools, deduplicates shell worktree observation, and reports per-tool estimated session payload tokens.
+- **[pylon-core](./packages/pylon-core)** — Coordinates package tool policies, provides revision-guarded numbered read/edit tools by default, deduplicates shell worktree observation, and reports per-tool estimated session payload tokens.
 - **[pi-continuity](./packages/pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
 - **[pi-papercut](./packages/pi-papercut)** — Captures small non-blocking workflow frictions in a durable project backlog and supports listing, resolving, dismissing, and reopening them.
 - **[pi-focus](./packages/pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
@@ -118,3 +120,5 @@ npm run web
 ```
 
 For development without a production build, run `npm run dev --workspace @pylon/web`.
+
+On Windows, use workspace-relative temporary files when passing paths between Git Bash and native Node/Pylon tools; MSYS paths such as `/tmp/...` are not native Windows paths. Stop a running Pylon process or use a separate worktree/copy before `npm ci`, because Windows cannot replace native addons loaded by the active process.

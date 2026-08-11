@@ -10,7 +10,7 @@ import {
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "../src/compaction.ts";
-import { assertSafe } from "../src/secrets.ts";
+import { assertSafe, redactSecrets } from "../src/secrets.ts";
 import type { Work } from "../src/active-work.ts";
 
 let sequence = 0;
@@ -24,6 +24,18 @@ const user = (content: string, id?: string) => entry({ id, type: "message", mess
 const assistant = (content: any, id?: string) => entry({ id, type: "message", message: { role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, timestamp: Date.now() } });
 const toolCall = (toolCallId: string, name: string, args: Record<string, unknown>, id?: string) =>
   assistant([{ type: "toolCall", id: toolCallId, name, arguments: args }], id);
+
+test("credential heuristic ignores long alphabetic identifiers", () => {
+  const javaBasename = `${"LongDescriptive".repeat(5)}Validator.java`;
+  assert.doesNotThrow(() => assertSafe(javaBasename));
+  assert.equal(redactSecrets(javaBasename), javaBasename);
+
+  for (const signal of ["0", "+", "/", "_", "-", "="])
+    assert.equal(redactSecrets(`${"A".repeat(49)}${signal}`), "[REDACTED CREDENTIAL]");
+  assert.equal(redactSecrets(`${"A".repeat(48)}0`), `${"A".repeat(48)}0`);
+  assert.throws(() => assertSafe(`${"A".repeat(49)}0`), /possible credential/);
+  assert.throws(() => assertSafe(`token=${"A".repeat(60)}`), /possible credential/);
+});
 const toolResult = (content: string, isError = false, id?: string, toolName = "bash", toolCallId = `call-${sequence}`) =>
   entry({ id, type: "message", message: { role: "toolResult", toolCallId, toolName, content: [{ type: "text", text: content }], isError, timestamp: Date.now() } });
 const handoff = (runId = "run", timelineId = "timeline", id?: string) => entry({
@@ -264,6 +276,40 @@ test("fails closed for a malformed latest handoff or active Work identity mismat
     preparation: preparation(mismatchEntries),
     work: work({ runId: "other-run", timelineId: "other-timeline" }),
   }), undefined);
+});
+
+test("a prior compaction for replaced Work falls back to the current Work identity", () => {
+  const prior = entry({
+    type: "compaction",
+    summary: "OLD WORK SUMMARY MUST NOT RETURN",
+    firstKeptEntryId: "old-kept",
+    tokensBefore: 1,
+    details: {
+      type: CONTINUITY_COMPACTION_TYPE,
+      version: 3,
+      mode: "active-work",
+      runId: "old-run",
+      timelineId: "old-timeline",
+      sourceEntryCount: 1,
+      history: { read: [], modified: [] },
+      supplements: [],
+    },
+  });
+  const entries = [
+    user("Old request", "old-user"),
+    toolCall("old-read", "read", { path: "old/work.ts" }, "old-read-call"),
+    prior,
+    user("New request", "new-user"),
+    toolCall("new-read", "read", { path: "new/work.ts" }, "new-read-call"),
+    assistant("Retained suffix", "suffix"),
+  ];
+  const result = build(entries, work({ runId: "new-run", timelineId: "new-timeline" }), 1);
+
+  assert.equal(result.details?.runId, "new-run");
+  assert.equal(result.details?.timelineId, "new-timeline");
+  assert.equal(result.firstKeptEntryId, "suffix");
+  assert.doesNotMatch(result.summary, /OLD WORK SUMMARY MUST NOT RETURN|old\/work\.ts/);
+  assert.match(result.summary, /new\/work\.ts/);
 });
 
 test("a new handoff rejects a previous summary from another boundary", () => {

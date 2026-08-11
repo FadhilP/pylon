@@ -31,7 +31,13 @@ test("hook settings use safe defaults, validate persisted values, and persist at
     assert.equal(defaults.sessionStart.enabled, true);
     assert.match(defaults.sessionStart.sources[0]?.content ?? "", /^---\nname: ponytail\n/);
     assert.equal(defaults.sessionStart.sources[0]?.reinjectOnCompaction, true);
+    assert.equal(defaults.sessionStart.sources[1]?.id, "tool-retry-policy");
+    assert.equal(defaults.sessionStart.sources[1]?.reinjectOnCompaction, true);
+    assert.match(defaults.sessionStart.sources[1]?.content ?? "", /Retry transient failures at most twice\./);
+    assert.match(defaults.sessionStart.sources[1]?.content ?? "", /Never retry user denial or cancellation/);
+    assert.match(defaults.sessionStart.sources[1]?.content ?? "", /Verify result that is failed, stale, cancelled, or error/);
     assert.equal(defaults.beforeAgentStart.enabled, true);
+    assert.equal(defaults.beforeAgentStart.sources.length, 1);
     assert.match(defaults.beforeAgentStart.sources[0]?.content ?? "", /ponytail: full intensity for coding decisions\.$/);
     await store.update(settings);
     const normalized = await store.read();

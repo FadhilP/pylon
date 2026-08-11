@@ -41,6 +41,19 @@ async function readJson(path: string): Promise<any> {
   }
 }
 
+export async function readLockOwner(path: string, read: (path: string) => Promise<string> = (value) => readFile(value, "utf8")): Promise<LockOwner | undefined> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const owner: unknown = JSON.parse(await read(path));
+      if (isLockOwner(owner)) return owner;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return;
+    }
+    if (attempt < 2) await delay(10);
+  }
+  throw Error("Unreadable timeline session-artifact lock.");
+}
+
 async function withLock<T>(root: string, task: () => Promise<T>): Promise<T> {
   const lock = join(root, "session-artifacts.lock"), recoveryLock = `${lock}.recovery`,
     token = randomUUID(), claim = join(root, `.session-artifacts-claim-${process.pid}-${token}`),
@@ -55,14 +68,8 @@ async function withLock<T>(root: string, task: () => Promise<T>): Promise<T> {
       throw error;
     }
     try {
-      let active: unknown;
-      try {
-        active = JSON.parse(await readFile(lock, "utf8"));
-      } catch (error: any) {
-        if (error?.code === "ENOENT") return true;
-        throw Error("Unreadable timeline session-artifact lock.");
-      }
-      if (!isLockOwner(active)) throw Error("Unreadable timeline session-artifact lock.");
+      const active = await readLockOwner(lock);
+      if (!active) return true;
       if (processIsAlive(active.pid)) return false;
       await rm(lock, { force: true });
       return true;

@@ -8,7 +8,7 @@ Consent-gated browser and Android-emulator automation plus named Windows-window 
 pi install git:github.com/FadhilP/pylon
 ```
 
-Run `/reload` after installation. `@playwright/cli@0.1.17` is pinned as runtime dependency. In the Pylon bundle, browser, Android, and capture schemas stay deferred until `search_tools` activates them; standalone Helios keeps all three tools active.
+Run `/reload` after installation. `@playwright/cli@0.1.18` is pinned as runtime dependency. Helios uses a persistent pinned Playwright client for active-session commands and a thin one-shot launcher for lifecycle and compatibility fallback. In the Pylon bundle, browser, Android, and capture schemas stay deferred until `search_tools` activates them; standalone Helios keeps all three tools active.
 
 ## Browser Setup
 
@@ -37,24 +37,19 @@ chrome --remote-debugging-port=9222 --user-data-dir=C:\temp\pi-helios-cdp
 
 ## Android Emulator Setup
 
-Helios can launch one existing Android Virtual Device (owned mode) or attach to one running Android emulator. Android support requires user-installed prerequisites; Helios never installs SDK components, Appium drivers, apps, system images, or AVDs.
+Helios can launch one existing Android Virtual Device (owned mode) or attach to one running Android emulator. Android SDK components, apps, system images, and AVDs remain user-managed.
 
 1. Install an Android SDK with `platform-tools`, `emulator`, and at least one configured AVD.
 2. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Platform-default SDK directories are also detected (`%LOCALAPPDATA%\\Android\\Sdk`, `~/Library/Android/sdk`, or `~/Android/Sdk`).
-3. Install Appium and UiAutomator2 explicitly:
+3. In Pylon Settings, select the Helios package and use **Android tooling → Install**. After explicit confirmation, Pylon installs repository-pinned Appium and UiAutomator2 versions into its own data directory. Setup never changes global npm packages and a failed repair preserves the previous valid installation.
 
-```sh
-npm install -g appium
-appium driver install uiautomator2
-```
-
-Run `/helios-android-doctor` to check SDK tools, installed AVDs, Appium, and UiAutomator2. If Appium is not installed globally, `APPIUM_PATH` may name its absolute, non-symlink CLI JavaScript entrypoint. Helios starts a private Appium server bound to a reserved random loopback port; it never enables relaxed security.
+A manually managed global Appium installation or an absolute, non-symlink `APPIUM_PATH` remains supported when managed tooling is absent. Run `/helios-android-doctor` to check SDK tools, installed AVDs, Appium, and UiAutomator2. Helios starts a private Appium server bound to a reserved random loopback port; it never enables relaxed security.
 
 ### Android Usage
 
 `helios_android` exposes constrained actions:
 
-- `avds`, `status`
+- `avds`, `packages`, `status`
 - `start`, `attach`, `close`, `detach`
 - `snapshot`, `find`, `screenshot`
 - `tap`, `fill`, `back`, `swipe`
@@ -66,6 +61,14 @@ Start an owned existing AVD:
 ```
 
 Owned starts are visible by default. Set `headless: true` only when a native emulator window is unnecessary. `close` deletes the Appium session, stops Helios's Appium server, revalidates emulator identity, and stops only the emulator process Helios launched.
+
+List every package ID visible to Android's default/current-user package-manager view on an already-running emulator without creating an Appium session:
+
+```text
+{ action: "packages", serial: "emulator-5554" }
+```
+
+Package inventory requires fresh visible confirmation because system and user-installed package IDs may reveal sensitive apps and the returned list may enter model/session history. Helios verifies the emulator identity, runs one fixed internal package-manager query, and returns the complete validated list or fails without partial output if its 128 KB / 4,096-package safety bound is exceeded.
 
 Attach to an already-running emulator by its even-port ADB serial:
 
@@ -79,7 +82,7 @@ Snapshots expose bounded refs such as `a1`; `tap` and `fill` accept only refs fr
 
 Android source is limited to 1 MB, 5,000 nodes, and bounded model output. Every editable-field value, password-like value, and common credential pattern is redacted from text snapshots. Screenshots cannot be redacted. Mixed-package actionable trees, permission controllers, launchers, settings, keyboards presented as separate UI trees, installers, and other system UI are outside the expected package and are refused.
 
-Helios uses only fixed internal SDK operations for device listing, AVD identity, boot readiness, and owned-emulator shutdown. Starts reserve session identity and ports before asynchronous work; close and shutdown wait for in-flight startup cleanup. Cleanup remains retryable until the tracked process exits and the Appium endpoint or emulator serial disappears. Helios does not expose raw ADB/Appium commands, shell access, selectors, scripts, arbitrary capabilities, APK installation, file transfer, physical-device control, AVD creation/deletion, or unknown-process cleanup.
+Helios uses only fixed internal SDK operations for device listing, package inventory, AVD identity, boot readiness, and owned-emulator shutdown. Confirmed Settings setup uses a committed lockfile to install fixed Appium and UiAutomator2 versions into a Pylon-owned directory, with shell-free subprocesses, a restricted child environment, private extension state, staging, verification, rollback, and cross-process leases that block changes during Android sessions. Starts reserve session identity and ports before asynchronous work; close and shutdown wait for in-flight startup cleanup. Helios does not expose raw ADB/Appium commands, caller-controlled shell access, selectors, scripts, arbitrary capabilities, APK installation, file transfer, physical-device control, AVD creation/deletion, or unknown-process cleanup.
 
 An opt-in local contract test is available with `PI_HELIOS_ANDROID_LIVE=1`, `PI_HELIOS_ANDROID_AVD`, `PI_HELIOS_ANDROID_PACKAGE`, and optional `PI_HELIOS_ANDROID_ACTIVITY`. Set `PI_HELIOS_ANDROID_ATTACH_SERIAL` as well to exercise attach/snapshot/screenshot/detach against an already-running emulator. Live tests are skipped by default.
 
@@ -103,6 +106,14 @@ Ordered actions can be sent in one batch (up to 20 steps):
 
 Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead. Batch output keeps compact intermediate status, page changes, warnings, and images; the final step keeps full text and snapshot output.
 
+For deterministic form work, a semantic plan can resolve one unique visible text or accessible name before each step (up to five steps):
+
+```text
+{ plan: [{ action: "fill", match: "Email", text: "person@example.com" }, { action: "click", match: "Continue" }] }
+```
+
+Plans fail closed on no match or ambiguity and stop before the next step after an observed page change. Successful intermediate find output is kept out of model context. Use plans only for non-consequential work; purchases, messages, publishing, destructive actions, permissions, and secret entry remain directly supervised.
+
 ### Search, Snapshots, and Screenshots
 
 Prefer targeted search over a full snapshot when the element text is known:
@@ -118,9 +129,9 @@ Browser actions may already return a usable snapshot. Request another only when 
 
 Snapshots compact exact unnamed `generic` accessibility wrappers by default while preserving their children, named or interactive generics, semantic roles, states, and other attributes. Use `snapshotMode: "full"` on an explicit `snapshot` only when an unnamed container ref is needed for a targeted snapshot or screenshot. Full snapshots remain redacted and bounded.
 
-Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 120 lines / 12 KB, and snapshots emitted by other actions up to 100 lines / 10 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser subprocess. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
+Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 80 lines / 8 KB, and snapshots emitted by other actions up to 60 lines / 6 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser command. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
 
-Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S) and `about:blank`, not credentials or local files. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.
+Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S), `about:blank`, and explicit local `file:` URLs ending in `.html` or `.htm`; raw filesystem paths, remote file hosts, credentials, and other local file types are rejected. Local prototypes are trusted content and may load other local resources. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.
 
 ### Pylon Web
 

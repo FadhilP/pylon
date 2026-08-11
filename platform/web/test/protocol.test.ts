@@ -4,7 +4,36 @@ import { ACTIVE_FRAME_INTERVAL_MS, IDLE_FRAME_INTERVAL_MS, framePollingDelay } f
 import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { validateHeliosBrowserCommand } from "../src/shared/protocol/helios.ts";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isRuntimeSnapshot, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+import { validateHeliosAndroidToolingCommand } from "../src/shared/protocol/helios-android-tooling.ts";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isRuntimeSnapshot, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue, validateCommand } from "../src/shared/protocol/validation.ts";
+
+test("papercut pages require bounded coherent records", () => {
+  const record = {
+    id: "00000000-0000-4000-8000-000000000001",
+    message: "Setup needed an undocumented retry.",
+    status: "open",
+    occurrences: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastSeenAt: "2026-01-01T00:00:00.000Z",
+  };
+  const page = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration: 1,
+    revision: 2,
+    status: "open",
+    query: "retry",
+    offset: 0,
+    limit: 25,
+    total: 1,
+    records: [record],
+    nextOffset: null,
+  };
+  assert.equal(isPapercutListPage(page), true);
+  assert.equal(isPapercutListPage({ ...page, records: Array.from({ length: 26 }, () => record), total: 26, nextOffset: 26 }), false);
+  assert.equal(isPapercutListPage({ ...page, records: [{ ...record, message: "x".repeat(501) }] }), false);
+});
+
 
 test("StateQL rows pages require coherent bounded JSON-safe data", () => {
   const page = {
@@ -180,6 +209,16 @@ test("command and memory validation allowlists bounded v28 commands and attachme
   assert.equal(validateCommand({ type: "prompt", commandId: "image", expectedGeneration: 1, message: "", images: Array(5).fill(image) }).ok, false);
 });
 
+test("Helios Android tooling validation allowlists fixed operations", () => {
+  assert.deepEqual(validateHeliosAndroidToolingCommand({ action: "status", expectedGeneration: 1 }), { action: "status", expectedGeneration: 1 });
+  assert.deepEqual(validateHeliosAndroidToolingCommand({ action: "install", expectedGeneration: 1, confirmed: true }), { action: "install", expectedGeneration: 1, confirmed: true });
+  assert.deepEqual(validateHeliosAndroidToolingCommand({ action: "remove", expectedGeneration: 1, confirmed: true }), { action: "remove", expectedGeneration: 1, confirmed: true });
+  assert.equal(validateHeliosAndroidToolingCommand({ action: "install", expectedGeneration: 1 }), undefined);
+  assert.equal(validateHeliosAndroidToolingCommand({ action: "remove", expectedGeneration: 1, confirmed: false }), undefined);
+  assert.equal(validateHeliosAndroidToolingCommand({ action: "status", expectedGeneration: 1, confirmed: true }), undefined);
+  assert.equal(validateHeliosAndroidToolingCommand({ action: "status", expectedGeneration: 1, package: "arbitrary" }), undefined);
+});
+
 test("embedded Helios browser validation allowlists bounded direct controls", () => {
   assert.ok(validateHeliosBrowserCommand({ action: "status", expectedGeneration: 1 }));
   assert.ok(validateHeliosBrowserCommand({ action: "start", expectedGeneration: 1, url: "https://example.com", width: 900, height: 650 }));
@@ -244,6 +283,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     operational: {
       verification: { availability: "available", checks: [] }, jobs: { availability: "unavailable", items: [] },
       guard: { availability: "available", blocked: 0, confirmed: 0 }, continuity: { availability: "available", revision: 0, memory: [], globalMemory: [] },
+      papercuts: { availability: "available", revision: 1, counts: { open: 1, resolved: 0, dismissed: 0, total: 1 } },
       timeline: { availability: "available", revision: 0, checkpoints: [] }, tools: { availability: "available", policies: [] },
       sieve: { availability: "unavailable" },
       health: { status: "degraded", issues: ["jobs unavailable"] },
@@ -466,6 +506,7 @@ test("event and snapshot validators reject incompatible versions", () => {
       streaming: false,
       compaction: {
         contextAfterTokens: 1_000,
+        contextBeforeTokens: 8_000,
         display: {
           records: [{ sourceEntryId: "user-source", role: "user", text: "Exact context" }],
           failedTools: [{ sourceEntryId: "failed-source", text: "Exact failure" }],
@@ -484,6 +525,7 @@ test("event and snapshot validators reject incompatible versions", () => {
     history: { read: [{ path: "p".repeat(540), sourceEntryId: "" }], modified: [] },
   };
   assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, display: exactLimitDisplay } }] }), true);
+  assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], compaction: { contextAfterTokens: 1, contextBeforeTokens: -1 } }] }), false);
   assert.equal(isConversationHistoryPage({ ...history, messages: [{ ...history.messages[0], entryId: "" }] }), false);
   assert.equal(isConversationHistoryPage({ ...history, messages: Array(101).fill(history.messages[0]) }), false);
   assert.equal(isConversationHistoryPage({ ...history, remaining: -1 }), false);

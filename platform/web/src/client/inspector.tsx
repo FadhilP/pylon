@@ -28,7 +28,7 @@ import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../
 import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS, mergeGuardRules, resolveGuardRule, type GuardAction, type GuardRuleOverrides } from "../shared/guard-policy";
 import { highlightSource } from "../shared/markdown";
 import type { ContinuityMemoryNoteReadModel, JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
-import type { DialogTimeoutSeconds, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type { DialogTimeoutSeconds, PapercutListPage, PapercutRecordReadModel, PapercutStatusReadModel, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
 import { ActionDialog } from "./action-dialog";
@@ -52,7 +52,7 @@ const viewDescriptions: Record<ViewId, string> = {
   overview: "Live state for the active Pylon session.",
   policy: "Project and session behavior. Global defaults live in Settings.",
   timeline: "Recoverable checkpoints across the current run.",
-  memory: "Durable facts Continuity keeps for this project.",
+  memory: "Durable project context and workflow friction.",
   tools: "Project and session overrides for registered tools.",
 };
 
@@ -62,6 +62,8 @@ interface InspectorProps {
   availableViews: Set<ViewId>;
   timelineEnabled: boolean;
   memoryReviewerConfigured?: boolean;
+  memoryEnabled: boolean;
+  papercutEnabled: boolean;
   overlay: boolean;
   onClose: () => void;
   onNavigate: (view: ViewId) => void;
@@ -69,7 +71,7 @@ interface InspectorProps {
   onOpenMemoryReviewerSettings: () => void;
 }
 
-export function Inspector({ current, live, availableViews, timelineEnabled, memoryReviewerConfigured, overlay, onClose, onNavigate, onOpenGlobalPolicy, onOpenMemoryReviewerSettings }: InspectorProps) {
+export function Inspector({ current, live, availableViews, timelineEnabled, memoryReviewerConfigured, memoryEnabled, papercutEnabled, overlay, onClose, onNavigate, onOpenGlobalPolicy, onOpenMemoryReviewerSettings }: InspectorProps) {
   const items = navigation.filter((item) => availableViews.has(item.id));
   return (
     <aside id="session-inspector" className="inspector" aria-label="Session inspector">
@@ -90,7 +92,7 @@ export function Inspector({ current, live, availableViews, timelineEnabled, memo
         {current === "overview" && <Overview live={live} />}
         {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
         {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
-        {current === "memory" && <Memory live={live} reviewerConfigured={memoryReviewerConfigured} onOpenReviewerSettings={onOpenMemoryReviewerSettings} />}
+        {current === "memory" && <Memory live={live} memoryEnabled={memoryEnabled} papercutEnabled={papercutEnabled} reviewerConfigured={memoryReviewerConfigured} onOpenReviewerSettings={onOpenMemoryReviewerSettings} />}
         {current === "tools" && <Tools live={live} />}
       </div>
     </aside>
@@ -481,7 +483,159 @@ function PolicySelectField({ label, description, value, inheritedLabel, stateLab
   </div>;
 }
 
-function Memory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: RuntimeStoreSnapshot; reviewerConfigured?: boolean; onOpenReviewerSettings: () => void }) {
+function Memory({ live, memoryEnabled, papercutEnabled, reviewerConfigured, onOpenReviewerSettings }: {
+  live: RuntimeStoreSnapshot;
+  memoryEnabled: boolean;
+  papercutEnabled: boolean;
+  reviewerConfigured?: boolean;
+  onOpenReviewerSettings: () => void;
+}) {
+  const [view, setView] = useState<"memory" | "papercuts">(memoryEnabled ? "memory" : "papercuts");
+  useEffect(() => {
+    if (view === "memory" && !memoryEnabled && papercutEnabled) setView("papercuts");
+    if (view === "papercuts" && !papercutEnabled && memoryEnabled) setView("memory");
+  }, [memoryEnabled, papercutEnabled, view]);
+  return <div className="memory-page">
+    {memoryEnabled && papercutEnabled && <div className="policy-scope memory-view-scope" role="group" aria-label="Memory view">
+      <button type="button" aria-pressed={view === "memory"} className={view === "memory" ? "is-active" : ""} onClick={() => setView("memory")}>Memory</button>
+      <button type="button" aria-pressed={view === "papercuts"} className={view === "papercuts" ? "is-active" : ""} onClick={() => setView("papercuts")}>Papercuts</button>
+    </div>}
+    {view === "memory" && memoryEnabled && <ContinuityMemory live={live} reviewerConfigured={reviewerConfigured} onOpenReviewerSettings={onOpenReviewerSettings} />}
+    {view === "papercuts" && papercutEnabled && <Papercuts live={live} />}
+  </div>;
+}
+
+function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
+  const summary = live.runtime?.operational.papercuts;
+  const [status, setStatus] = useState<PapercutStatusReadModel | "all">("open");
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState<PapercutListPage>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [editing, setEditing] = useState("");
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState("");
+  const [deleting, setDeleting] = useState<PapercutRecordReadModel>();
+  const [mutationError, setMutationError] = useState("");
+  const generation = live.runtime?.sessionGeneration;
+  const requestVersion = useRef(0);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setQuery(search.trim()), 250);
+    return () => clearTimeout(timeout);
+  }, [search]);
+  useEffect(() => {
+    const request = ++requestVersion.current;
+    if (live.connection !== "connected" || !live.runtime?.ready) { setPage(undefined); setLoading(false); return; }
+    const controller = new AbortController();
+    setPage(undefined); setLoading(true); setLoadingMore(false); setError("");
+    void runtimeStore.papercuts(status, query, 0, 25, controller.signal)
+      .then((result) => { if (requestVersion.current === request) setPage(result); })
+      .catch((cause) => { if (!controller.signal.aborted && requestVersion.current === request) setError(cause instanceof Error ? cause.message : "Unable to load papercuts"); })
+      .finally(() => { if (!controller.signal.aborted && requestVersion.current === request) setLoading(false); });
+    return () => controller.abort();
+  }, [generation, live.connection, live.runtime?.ready, query, refresh, status, summary?.revision]);
+
+  const loadMore = async () => {
+    if (page?.nextOffset === null || page?.nextOffset === undefined || loadingMore) return;
+    setLoadingMore(true); setError("");
+    const request = requestVersion.current;
+    try {
+      const next = await runtimeStore.papercuts(status, query, page.nextOffset, page.limit);
+      if (requestVersion.current !== request) return;
+      if (next.revision !== page.revision) { setRefresh((value) => value + 1); return; }
+      setPage({ ...next, offset: 0, records: [...page.records, ...next.records] });
+    } catch (cause) { if (requestVersion.current === request) setError(cause instanceof Error ? cause.message : "Unable to load more papercuts"); }
+    finally { setLoadingMore(false); }
+  };
+  const count = (value: PapercutStatusReadModel | "all") => value === "all" ? summary?.counts.total : summary?.counts[value];
+  const outcome = (record: PapercutRecordReadModel) => record.status === "resolved" ? record.resolution : record.status === "dismissed" ? record.dismissal : undefined;
+  const canMutate = live.connection === "connected" && live.runtime?.ready === true && !busy;
+  const beginEdit = (record: PapercutRecordReadModel) => { setEditing(record.id); setDraft(record.message); setMutationError(""); };
+  const save = async (record: PapercutRecordReadModel) => {
+    if (!canMutate || !draft.trim()) return;
+    setBusy(record.id); setMutationError("");
+    try {
+      await runtimeStore.updatePapercut(record, draft.trim());
+      setEditing("");
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Unable to update papercut";
+      setMutationError(message);
+      if (/changed or was removed/i.test(message)) setRefresh((value) => value + 1);
+    } finally { setBusy(""); }
+  };
+  const remove = async (record: PapercutRecordReadModel) => {
+    if (!canMutate) return;
+    setBusy(record.id); setMutationError("");
+    try {
+      await runtimeStore.deletePapercut(record);
+      setEditing(""); setDeleting(undefined);
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Unable to delete papercut";
+      setMutationError(message); setDeleting(undefined);
+      if (/changed or was removed/i.test(message)) setRefresh((value) => value + 1);
+    } finally { setBusy(""); }
+  };
+
+  return <div className="memory-ledger papercut-ledger">
+    <div className="papercut-toolbar">
+      <div className="papercut-status" role="group" aria-label="Papercut status">
+        {(["open", "resolved", "dismissed", "all"] as const).map((value) => <button type="button" aria-pressed={status === value} className={status === value ? "is-active" : ""} key={value} onClick={() => setStatus(value)}>
+          {value}<span className="mono">{count(value) ?? "–"}</span>
+        </button>)}
+      </div>
+      <button className="icon-button" type="button" aria-label="Refresh papercuts" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><IconRefresh size={14} /></button>
+    </div>
+    <label className="memory-ledger-search">
+      <IconSearch size={13} /><span className="sr-only">Search papercuts</span>
+      <input type="search" value={search} maxLength={200} placeholder="Search papercuts" onChange={(event) => setSearch(event.target.value)} />
+      <span className="mono">{page?.total ?? 0}</span>
+    </label>
+    {loading && !page && <div className="memory-ledger-no-results"><IconLoader2 className="spin" size={18} /><strong>Loading papercuts</strong></div>}
+    {!loading && error && !page && <div className="memory-ledger-no-results"><IconAlertTriangle size={18} /><strong>Papercuts unavailable</strong><span>{error}</span></div>}
+    {!loading && !error && page?.records.length === 0 && <div className="memory-ledger-empty"><strong>{query ? "No matching papercuts" : `No ${status === "all" ? "stored" : status} papercuts`}</strong><span>{query ? "Try a different search." : "Captured workflow friction will appear here."}</span></div>}
+    {page && page.records.length > 0 && <div className="memory-ledger-list">{page.records.map((record) => {
+      const isEditing = editing === record.id;
+      return <details className="memory-ledger-row papercut-row" key={record.id} open={isEditing || undefined}>
+        <summary>
+          <div><strong>{record.message}</strong><span>{record.status}</span>{record.occurrences > 1 && <span>seen {record.occurrences}×</span>}</div>
+          <IconChevronDown className="memory-ledger-chevron" size={13} />
+          <p>{outcome(record) ?? `Last seen ${displayTime(record.lastSeenAt)}`}</p>
+        </summary>
+        <div className="memory-ledger-detail">{isEditing ? <div className="memory-editor">
+          <label>Message<textarea value={draft} maxLength={500} rows={4} disabled={Boolean(busy)} onChange={(event) => setDraft(event.target.value)} /></label>
+          <div><button className="primary-button" type="button" disabled={!canMutate || !draft.trim()} onClick={() => void save(record)}>{busy === record.id ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
+        </div> : <>
+          <dl>
+            <div><dt>ID</dt><dd title={record.id}>{record.id.slice(0, 8)}</dd></div>
+            <div><dt>Created</dt><dd><time dateTime={record.createdAt}>{displayTime(record.createdAt)}</time></dd></div>
+            <div><dt>Last seen</dt><dd><time dateTime={record.lastSeenAt}>{displayTime(record.lastSeenAt)}</time></dd></div>
+            <div><dt>Occurrences</dt><dd>{record.occurrences}</dd></div>
+            {outcome(record) && <div><dt>{record.status === "resolved" ? "Resolution" : "Dismissal"}</dt><dd title={outcome(record)}>{outcome(record)}</dd></div>}
+          </dl>
+          <footer><button className="text-button" type="button" disabled={!canMutate} onClick={() => beginEdit(record)}>Edit</button><button className="text-button danger" type="button" disabled={!canMutate} onClick={() => { setMutationError(""); setDeleting(record); }}><IconTrash size={13} />Delete</button></footer>
+        </>}</div>
+      </details>;
+    })}</div>}
+    {page?.nextOffset !== null && page?.nextOffset !== undefined && <button className="session-usage-expand" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : `Load more · ${page.records.length}/${page.total}`}</button>}
+    {error && page && <p className="ui-request-error" role="alert">{error}</p>}
+    {mutationError && <p className="ui-request-error" role="alert">{mutationError}</p>}
+    {deleting && <ActionDialog
+      title="Delete papercut?"
+      description="This papercut will be permanently removed from the project backlog."
+      confirmLabel="Delete papercut" busyLabel="Deleting…" busy={busy === deleting.id} danger
+      onCancel={() => setDeleting(undefined)} onConfirm={() => void remove(deleting)}
+    />}
+  </div>;
+}
+
+
+function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: RuntimeStoreSnapshot; reviewerConfigured?: boolean; onOpenReviewerSettings: () => void }) {
   const continuity = live.runtime?.operational.continuity;
   const memory = continuity?.memory ?? [];
   const globalMemory = live.runtime?.operational.continuity.globalMemory ?? [];
@@ -562,7 +716,7 @@ function Memory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: Ru
     </details>;
   });
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
-  return <div className="memory-page memory-ledger">
+  return <div className="memory-ledger">
     {reviewerConfigured === false && <div className="memory-reviewer-warning" role="status">
       <IconAlertTriangle size={15} />
       <span><strong>Memory Reviewer is not configured.</strong> New memories proposed by the model will not be stored.</span>
@@ -745,7 +899,7 @@ function StateQLLedgerItem({ item, expanded, rowsScope, onExpandedChange }: { it
     <tr className={`stateql-ledger-row is-${kind} ${expanded ? "is-expanded" : ""}`} onClick={() => onExpandedChange(!expanded)}>
       <td><button type="button" aria-expanded={expanded} aria-controls={detailId} aria-label={`${expanded ? "Collapse" : "Expand"} ${item.command}`} onClick={(event) => { event.stopPropagation(); onExpandedChange(!expanded); }}><IconChevronDown size={15} /></button></td>
       <th scope="row"><span className="stateql-ledger-command"><span className="stateql-ledger-marker" aria-hidden="true">{marker}</span><span>{item.command}</span></span></th>
-      <td className="mono" title={item.handle}>{item.handle ?? "N/A"}</td>
+      <td className="mono" title={item.result?.alias ?? item.handle}>{item.result?.alias ?? item.handle ?? "N/A"}</td>
       <td className="mono" title={item.actorId}>{item.actorId ?? "N/A"}</td>
       <td><Status tone={status.tone}>{status.label}</Status></td>
       <td className="mono">{item.timestamp ? <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time> : "No time"}</td>

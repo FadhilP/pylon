@@ -149,7 +149,7 @@ export type ContinuityCompactionDraft = {
 export type ContinuityBoundaryIdentity = { runId: string; timelineId: string; handoffEntryId?: string };
 export type ContinuityBoundaryResolution =
   | { proof: "handoff"; identity: ContinuityBoundaryIdentity; handoffIndex: number }
-  | { proof: "identity"; source: "compaction" | "work"; identity: ContinuityBoundaryIdentity }
+  | { proof: "identity"; source: "compaction" | "work"; identity: ContinuityBoundaryIdentity; boundaryIndex?: number }
   | { proof: "unproven"; reason: string };
 
 const emptyHistory = (): CompactionHistory => ({ read: [], modified: [] });
@@ -466,6 +466,7 @@ export function resolveContinuityBoundary(entries: SessionEntry[], work: Work): 
       ? { proof: "handoff", identity, handoffIndex: index }
       : { proof: "unproven", reason: "latest Continuity handoff is malformed or does not match active Work" };
   }
+  let boundaryIndex = -1;
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (entry.type !== "compaction") continue;
@@ -476,11 +477,16 @@ export function resolveContinuityBoundary(entries: SessionEntry[], work: Work): 
     }
     if (!activeDetails(entry.details)) continue;
     const identity = { runId: entry.details.runId, timelineId: entry.details.timelineId, handoffEntryId: entry.details.handoffEntryId };
-    return matchesWork(identity, work)
-      ? { proof: "identity", source: "compaction", identity }
-      : { proof: "unproven", reason: "latest Continuity compaction does not match active Work" };
+    if (matchesWork(identity, work)) return { proof: "identity", source: "compaction", identity };
+    boundaryIndex = index;
+    break;
   }
-  if (work.runId && work.timelineId) return { proof: "identity", source: "work", identity: { runId: work.runId, timelineId: work.timelineId } };
+  if (work.runId && work.timelineId) return {
+    proof: "identity",
+    source: "work",
+    identity: { runId: work.runId, timelineId: work.timelineId },
+    ...(boundaryIndex >= 0 ? { boundaryIndex } : {}),
+  };
   return { proof: "unproven", reason: "active Continuity identity is unavailable" };
 }
 
@@ -538,7 +544,9 @@ function retainedSupplements(previous: Extract<SessionEntry, { type: "compaction
 function buildActiveDraft({ branchEntries, preparation, work, verification }: BuildInput): BuiltDraft | undefined {
   const resolution = resolveContinuityBoundary(branchEntries, work);
   if (resolution.proof === "unproven") return;
-  const boundary = resolution.proof === "handoff" ? resolution : { identity: resolution.identity, handoffIndex: -1 };
+  const boundary = resolution.proof === "handoff"
+    ? resolution
+    : { identity: resolution.identity, handoffIndex: resolution.boundaryIndex ?? -1 };
 
   let previousIndex = -1;
   let previous: Extract<SessionEntry, { type: "compaction" }> | undefined;

@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { AppiumClient, resolveAppium } from "../src/appium.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AppiumClient, resolveAppium, resolveManagedAppium } from "../src/appium.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 
@@ -75,4 +78,62 @@ test("Appium resolution rejects cancellation before invoking subprocesses", asyn
   let calls = 0;
   await assert.rejects(resolveAppium(async () => { calls++; return { code: 0, stdout: "", stderr: "", killed: false }; }, controller.signal), /cancelled/);
   assert.equal(calls, 0);
+});
+
+
+test("Windows Appium resolution invokes npm-cli.js through Node without npm.cmd", { skip: process.platform !== "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "helios-appium-resolution-"));
+  const npmCli = join(root, "npm-cli.js");
+  const globalRoot = join(root, "global", "node_modules");
+  const appiumDirectory = join(globalRoot, "appium");
+  const appiumCli = join(appiumDirectory, "build", "main.js");
+  try {
+    await mkdir(join(appiumDirectory, "build"), { recursive: true });
+    await writeFile(npmCli, "// npm fixture");
+    await writeFile(join(appiumDirectory, "package.json"), JSON.stringify({ bin: { appium: "build/main.js" } }));
+    await writeFile(appiumCli, "// appium fixture");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const exec = async (command: string, args: string[]) => {
+      calls.push({ command, args });
+      if (args[0] === npmCli) return { code: 0, stdout: `${globalRoot}\n`, stderr: "", killed: false };
+      if (args.includes("--version")) return { code: 0, stdout: "3.2.0\n", stderr: "", killed: false };
+      return { code: 0, stdout: "uiautomator2@5.0.0 [installed]\n", stderr: "", killed: false };
+    };
+    const invocation = await resolveAppium(exec, undefined, { npm_execpath: npmCli, PATH: "" });
+    assert.deepEqual(calls[0], { command: process.execPath, args: [npmCli, "root", "-g"] });
+    assert.ok(calls.every(({ command }) => command.toLowerCase() !== "npm.cmd"));
+    assert.deepEqual(invocation, { command: process.execPath, args: [appiumCli], version: "3.2.0" });
+    await assert.rejects(resolveAppium(exec, undefined, { npm_execpath: join(root, "npm.cmd") }), /absolute npm-cli\.js/);
+    await assert.rejects(resolveAppium(async (_command, args) => args[0] === npmCli
+      ? { code: 0, stdout: `${join(root, "missing")}\n`, stderr: "", killed: false }
+      : { code: 1, stdout: "", stderr: "", killed: false }, undefined, { npm_execpath: npmCli }), /Appium is unavailable/);
+    await writeFile(join(appiumDirectory, "package.json"), JSON.stringify({ bin: { appium: "../escape.js" } }));
+    await assert.rejects(resolveAppium(exec, undefined, { npm_execpath: npmCli, PATH: "" }), /entrypoint is invalid/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("explicit APPIUM_PATH bypasses npm discovery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "helios-appium-path-"));
+  const cli = join(root, "appium.js");
+  try {
+    await writeFile(cli, "// appium fixture");
+    const calls: string[][] = [];
+    const invocation = await resolveAppium(async (command, args) => {
+      assert.equal(command, process.execPath);
+      calls.push(args);
+      return args.includes("--version")
+        ? { code: 0, stdout: "3.2.0\n", stderr: "", killed: false }
+        : { code: 0, stdout: "uiautomator2 [installed]\n", stderr: "", killed: false };
+    }, undefined, { APPIUM_PATH: cli });
+    assert.deepEqual(calls, [[cli, "--version"], [cli, "driver", "list", "--installed"]]);
+    assert.deepEqual(invocation, { command: process.execPath, args: [cli], version: "3.2.0" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("managed Appium refuses to fall back while recovery is incomplete", async () => {
+  const root = await mkdtemp(join(tmpdir(), "helios-appium-recovery-"));
+  try {
+    await mkdir(join(root, "pi-helios", "android-tooling", "previous"), { recursive: true });
+    await assert.rejects(resolveManagedAppium(root), /recovery is incomplete/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

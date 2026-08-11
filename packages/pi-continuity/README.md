@@ -12,6 +12,10 @@ pi install git:github.com/FadhilP/pylon
 
 This installs the complete Pylon bundle, including pi-continuity. Run `/reload` after installation.
 
+## Development
+
+`npm test -- --test-name-pattern="pattern"` runs a focused test with runner options in the correct position and removes inherited autonomous-spawn markers so clarification tests stay deterministic.
+
 ## Command Reference
 
 Commands:

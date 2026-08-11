@@ -15,7 +15,7 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
     const vite: ViteDevServer = await createServer({ root: webRoot, appType: "spa", server: { middlewareMode: true } });
     return {
       handle: (request, response) => new Promise<void>((done) => {
-        applySecurityHeaders(response);
+        applySecurityHeaders(response, true);
         vite.middlewares(request, response, (error?: unknown) => {
           if (error && !response.writableEnded) { response.statusCode = 500; response.end("Development asset error"); }
           else if (!response.writableEnded) { response.statusCode = 404; response.end("Not found"); }

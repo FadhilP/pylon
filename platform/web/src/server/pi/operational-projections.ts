@@ -3,6 +3,7 @@ import type {
   GuardReadModel,
   JobsReadModel,
   OperationalReadModel,
+  PapercutSummaryReadModel,
   SieveReadModel,
   SieveTransformStatsReadModel,
   TimelineReadModel,
@@ -52,6 +53,7 @@ export function initialOperational(availableTools: Iterable<string>, loadedExten
     jobs: { availability: tools.has("heartbeat_start") ? "available" : "unavailable", items: [] },
     guard: { availability: loaded.has("pi-guard.ts") ? "available" : "unavailable", blocked: 0, confirmed: 0 },
     continuity: { availability: "unavailable", revision: 0, memory: [], globalMemory: [], v4MigrationAvailable: false },
+    papercuts: { availability: "unavailable", revision: 0, counts: { open: 0, resolved: 0, dismissed: 0, total: 0 } },
     timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
     tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
     sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
@@ -67,6 +69,7 @@ export function withOperationalCapabilities(current: OperationalReadModel, avail
     jobs: current.jobs.items.length ? { ...current.jobs, availability: fresh.jobs.availability } : fresh.jobs,
     guard: current.guard.decision ? { ...current.guard, availability: fresh.guard.availability } : { ...fresh.guard, blocked: current.guard.blocked, confirmed: current.guard.confirmed },
     continuity: current.continuity.revision ? current.continuity : fresh.continuity,
+    papercuts: current.papercuts.revision ? current.papercuts : fresh.papercuts,
     timeline: current.timeline.revision ? current.timeline : fresh.timeline,
     tools: current.tools.policies.length ? { ...current.tools, availability: fresh.tools.availability } : fresh.tools,
     sieve: current.sieve.mode ? { ...current.sieve, availability: fresh.sieve.availability } : fresh.sieve,
@@ -86,6 +89,7 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
       globalMemory: value.continuity.globalMemory.map((note) => ({ ...note, relatedPaths: note.relatedPaths ? [...note.relatedPaths] : undefined })),
       work: value.continuity.work ? { ...value.continuity.work, todos: value.continuity.work.todos.map((item) => ({ ...item })) } : undefined,
     },
+    papercuts: { ...value.papercuts, counts: { ...value.papercuts.counts } },
     timeline: { ...value.timeline, checkpoints: value.timeline.checkpoints.map((item) => ({ ...item })) },
     tools: { ...value.tools, policies: value.tools.policies.map((item) => ({ ...item, managedTools: [...item.managedTools], enabledTools: [...item.enabledTools], deferredTools: [...item.deferredTools], allowOnly: item.allowOnly ? [...item.allowOnly] : undefined })) },
     sieve: {
@@ -130,6 +134,10 @@ export function applyOperationalEvent(
     const continuityState = continuity(current.continuity, value, expectedSessionId);
     if (continuityState === current.continuity) return current;
     next = { ...current, continuity: continuityState };
+  } else if (channel === "pi-papercut:state-change") {
+    const papercutState = papercuts(current.papercuts, value, expectedSessionId);
+    if (papercutState === current.papercuts) return current;
+    next = { ...current, papercuts: papercutState };
   } else if (channel === "pi-timeline:state-change") {
     const timelineState = timeline(current.timeline, value, expectedSessionId);
     if (timelineState === current.timeline) return current;
@@ -353,6 +361,19 @@ function guard(old: GuardReadModel, value: unknown): GuardReadModel {
   if (!input || input.version !== 1 || typeof input.decision !== "string") return { availability: "unavailable", blocked: old.blocked, confirmed: old.confirmed };
   return { availability: "available", decision: input.decision.slice(0, 100), reason: string(input.reason, 500), blocked: Math.max(0, number(input.blocked)), confirmed: Math.max(0, number(input.confirmed)) };
 }
+
+function papercuts(old: PapercutSummaryReadModel, value: unknown, expectedSessionId?: string): PapercutSummaryReadModel {
+  const input = record(value);
+  if (!input || input.version !== 1 || expectedSessionId && input.sessionId !== expectedSessionId
+    || !Number.isSafeInteger(input.revision) || (input.revision as number) <= old.revision) return input?.version === 1 ? old : { ...old, availability: "unavailable" };
+  const rawCounts = record(input.counts);
+  const values = rawCounts && ["open", "resolved", "dismissed", "total"].map((key) => rawCounts[key]);
+  if (!values || !values.every((item) => Number.isSafeInteger(item) && Number(item) >= 0 && Number(item) <= 1_000)
+    || Number(values[0]) + Number(values[1]) + Number(values[2]) !== Number(values[3])) return old;
+  const counts = { open: Number(values[0]), resolved: Number(values[1]), dismissed: Number(values[2]), total: Number(values[3]) };
+  return { availability: input.available === true ? "available" : "unavailable", revision: input.revision as number, counts };
+}
+
 
 function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?: string): ContinuityReadModel {
   const input = record(value);

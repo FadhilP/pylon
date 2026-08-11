@@ -474,23 +474,37 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     assert.equal(compactCalls.length, 1);
     for (const handler of app.handlers.get("input") ?? [])
       await handler({ source: "interactive", text: "Stop and reconsider" }, ctx);
+    await finishToolTurn("after-newer-input");
+    assert.equal(compactCalls.length, 2, "accepted new input invalidates stale request bookkeeping before later tool work");
     compactCalls[0].onComplete();
     assert.equal(app.customMessages.length, 0);
 
+    await finishToolTurn("terminating-after-request", true);
+    compactCalls[1].onComplete();
+    assert.equal(app.customMessages.length, 0, "a later terminating batch invalidates the superseded continuation");
+
     await finishToolTurn("failed-compaction");
-    assert.equal(compactCalls.length, 2);
-    compactCalls[1].onError(new Error("failed"));
+    assert.equal(compactCalls.length, 3);
+    compactCalls[2].onError(new Error("failed"));
     assert.equal(app.customMessages.length, 0);
 
     compactThrows = true;
     await finishToolTurn("synchronous-failure");
     compactThrows = false;
-    assert.equal(compactCalls.length, 2);
+    assert.equal(compactCalls.length, 3);
+
+    await finishToolTurn("pending-request");
+    assert.equal(compactCalls.length, 4);
+    pending = true;
+    await finishToolTurn("pending-invalidates-request");
+    pending = false;
+    compactCalls[3].onComplete();
+    assert.equal(app.customMessages.length, 0, "queued input invalidates the superseded continuation");
 
     await finishToolTurn("shutdown");
-    assert.equal(compactCalls.length, 3);
+    assert.equal(compactCalls.length, 5);
     for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
-    compactCalls[2].onComplete();
+    compactCalls[4].onComplete();
     assert.equal(app.customMessages.length, 0);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1101,7 +1115,7 @@ test("circuit breaker ignores distinct or expired calls", async () => {
   }
 });
 
-test("set_plan canonicalizes invented IDs and creates executing todos without explicit plan mode", async () => {
+test("set_plan accepts ordinary workingSet paths, canonicalizes invented IDs, and preserves credential rejection", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-todos-"));
   const cwd = join(root, "repo");
@@ -1122,6 +1136,11 @@ test("set_plan canonicalizes invented IDs and creates executing todos without ex
         goal: "Ship change",
         planSummary: "Implement safely, then run checks",
         constraints: [" Keep API stable ", "  "],
+        workingSet: [
+          `${"LongDescriptive".repeat(5)}Validator.java`,
+          "platform/web/src/shared/protocol/helios-android-tooling.ts",
+          String.raw`platform\web\src\shared\protocol\helios-android-tooling.ts`,
+        ],
         planTodos: [
           { id: "todo_1", text: "Implement" },
           { id: "todo_1", text: "Verify" },
@@ -1134,6 +1153,20 @@ test("set_plan canonicalizes invented IDs and creates executing todos without ex
     assert.match(context.messages.at(-1).content, /Work: executing/);
     assert.match(context.messages.at(-1).content, /Current todo_1 \[in_progress\]: Implement/);
     assert.match(context.messages.at(-1).content, /Todo todo_2 \[pending\]: Verify/);
+
+    const beforeUnsafe = context.messages.at(-1).content;
+    for (const unsafePath of [
+      `packages/${["ghp_", "abcdefghijklmnopqrstuvwxyz123456"].join("")}/config.ts`,
+      `packages/${"A".repeat(49)}0/config.ts`,
+    ]) {
+      await assert.rejects(app.tools.get("continuity_update").execute(
+        "unsafe-path", {
+          action: "set_plan", goal: "Unsafe replacement", workingSet: [unsafePath], planTodos: [{ text: "Replace" }],
+        }, undefined, undefined, ctx,
+      ), /candidate rejected: possible credential/);
+      const restored = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+      assert.equal(restored.messages.at(-1).content, beforeUnsafe);
+    }
 
     const advanced = await app.tools.get("continuity_update").execute(
       "advance", {

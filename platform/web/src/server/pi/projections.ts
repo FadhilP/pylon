@@ -7,6 +7,7 @@ import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
 import { PROMPT_FILES_CUSTOM_TYPE } from "./prompt-attachments.ts";
 import { settleRunningActivities, terminalActivityStatus } from "../../shared/transcript.ts";
+import { MAX_UNSEEN_COMPLETIONS, validCompletionSessionId } from "../../shared/session-completions.ts";
 
 const MAX_TEXT = 60 * 1024;
 const MAX_MESSAGES = 100;
@@ -134,12 +135,13 @@ function compactionDisplay(value: unknown): CompactionDisplayReadModel | undefin
 function compactionMessage(value: unknown): MessageReadModel["compaction"] {
   const raw = object(value);
   if (!Number.isSafeInteger(raw.contextAfterTokens) || Number(raw.contextAfterTokens) < 0) return undefined;
-  const sourceEntryCount = Number.isSafeInteger(raw.sourceEntryCount) && Number(raw.sourceEntryCount) >= 0
-    ? Number(raw.sourceEntryCount)
-    : undefined;
+  const optionalCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+  const contextBeforeTokens = optionalCount(raw.contextBeforeTokens);
+  const sourceEntryCount = optionalCount(raw.sourceEntryCount);
   const display = compactionDisplay(raw.display);
   return {
     contextAfterTokens: Number(raw.contextAfterTokens),
+    ...(contextBeforeTokens === undefined ? {} : { contextBeforeTokens }),
     ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
     ...(display ? { display } : {}),
   };
@@ -563,6 +565,7 @@ export class RuntimeProjection {
   private latestAssistantMessageId?: string;
   private messageCounter = 0;
   private readonly turnMessages = new Map<string, string>();
+  private readonly unseenCompletions = new Set<string>();
   pendingUi?: UiRequestReadModel;
 
   constructor(private runtime: RuntimeSnapshot, private readonly publish: Publish) {
@@ -590,6 +593,8 @@ export class RuntimeProjection {
       },
     };
   }
+
+  unseenCompletionSessionIds(): string[] { return [...this.unseenCompletions]; }
 
   refresh(runtime: RuntimeSnapshot): void {
     const finalAssistant = [...runtime.conversation.messages].reverse()
@@ -670,8 +675,16 @@ export class RuntimeProjection {
       return;
     }
     if (event.type === "session.status") {
+      const sessionId = event.sessionId.slice(0, 128);
+      if (event.completed && validCompletionSessionId(sessionId) && sessionId !== this.runtime.sessionId) {
+        this.unseenCompletions.delete(sessionId);
+        this.unseenCompletions.add(sessionId);
+        while (this.unseenCompletions.size > MAX_UNSEEN_COMPLETIONS) {
+          this.unseenCompletions.delete(this.unseenCompletions.values().next().value!);
+        }
+      }
       this.publish("session.status", {
-        sessionId: event.sessionId.slice(0, 128),
+        sessionId,
         state: event.state,
         ...(Object.hasOwn(event, "workStartedAt") ? { workStartedAt: event.workStartedAt } : {}),
         ...(event.completed ? { completed: true } : {}),
@@ -748,6 +761,7 @@ export class RuntimeProjection {
     }
     if (event.type === "session.replaced" || event.type === "session.unavailable") {
       const sessionId = event.sessionId.slice(0, 128);
+      this.unseenCompletions.delete(sessionId);
       this.replaceRuntime(structuredClone(event.runtime));
       this.runtime.sessionId = sessionId;
       this.runtime.sessionGeneration = event.sessionGeneration;

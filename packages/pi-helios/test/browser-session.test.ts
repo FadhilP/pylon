@@ -25,10 +25,39 @@ test("session names are opaque and endpoints are strict loopback origins", () =>
   assert.equal(validateCdpEndpoint("http://127.0.0.1:9222"), "http://127.0.0.1:9222");
   assert.throws(() => validateCdpEndpoint("http://example.com:9222"), /loopback/);
   assert.throws(() => validateCdpEndpoint("http://127.0.0.1:9222/json"), /origin/);
-  assert.deepEqual(parseTabs("- 0: [One](https://one.test/)\n- 1: (current) [Two](https://two.test/)"), [
+  assert.deepEqual(parseTabs("- 0: [One](https://one.test/)\n- 1: (current) [Two](https://two.test/)\n- 1: [Duplicate](https://duplicate.test/)\n- 999999999999999999999: [Unsafe](https://unsafe.test/)"), [
     { index: 0, title: "One", url: "https://one.test/" },
     { index: 1, title: "Two", url: "https://two.test/" },
   ]);
+});
+
+test("tab-list bounds fields and returned count while retaining the current tab", async () => {
+  const log: string[] = [];
+  let tabLists = 0;
+  const cli = fakeCli(log);
+  cli.run = async (_session: string, action: any) => {
+    log.push(action.kind);
+    if (action.kind !== "tab-list") return { value: {} };
+    if (++tabLists === 1) return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    const result = Array.from({ length: 25 }, (_, index) => {
+      const current = index === 24 ? "(current) " : "";
+      const title = index === 0 ? "False (current) marker" : "T".repeat(200);
+      return `- ${index}: ${current}[${title}](https://example.com/${"u".repeat(900)})`;
+    }).join("\n");
+    return { value: { result } };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("bounded-tabs");
+  const result = await manager.operate("bounded-tabs", { kind: "tab-list" });
+  assert.equal(result.tabs?.length, 20);
+  assert.equal(result.tabsOmitted, 5);
+  assert.deepEqual(result.tabs?.map((tab) => tab.index), [...Array.from({ length: 19 }, (_, index) => index), 24]);
+  assert.equal(result.tabs?.at(-1)?.title.length, 160);
+  assert.equal(result.tabs?.at(-1)?.url.length, 768);
+  assert.match(result.tabs?.at(-1)?.title ?? "", /…$/);
+  assert.match(result.tabs?.at(-1)?.url ?? "", /…$/);
+  assert.equal(manager.state("bounded-tabs").tabs?.length, 25, "field-bounded internal tabs remain available for index control");
+  await manager.close("bounded-tabs", "close");
 });
 
 test("start action snapshots expose current references without another snapshot", async () => {
@@ -402,4 +431,21 @@ test("close rejects later operations and duplicate cleanup while preserving earl
   await earlier;
   await closing;
   assert.equal(manager.get("queue-close"), undefined);
+});
+
+
+test("uncertain dispatched failures invalidate all element references", async () => {
+  const cli = fakeCli([]);
+  cli.run = async (session: string, action: any) => {
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "open") return { value: {}, snapshot: "- button Go [ref=e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "screenshot") throw new HeliosCliError("timeout", "outcome uncertain", true);
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("uncertain-references");
+  await assert.rejects(manager.operate("uncertain-references", { kind: "screenshot" }), /uncertain/);
+  await assert.rejects(manager.operate("uncertain-references", { kind: "click", target: "e1" }), /stale or was not/);
+  await manager.close("uncertain-references", "close");
 });

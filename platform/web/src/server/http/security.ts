@@ -40,8 +40,9 @@ export class SessionStore {
   }
 }
 
-export function applySecurityHeaders(response: ServerResponse): void {
-  response.setHeader("content-security-policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'");
+export function applySecurityHeaders(response: ServerResponse, development = false): void {
+  const scripts = development ? "; script-src 'self' 'unsafe-inline'" : "";
+  response.setHeader("content-security-policy", `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'${scripts}`);
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("cache-control", "no-store");

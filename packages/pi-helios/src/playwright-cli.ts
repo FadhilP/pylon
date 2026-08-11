@@ -8,16 +8,18 @@ import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { validatePngFile, type Exec } from "./capture.ts";
 import { ELEMENT_REF_FRAGMENT, isElementReference } from "./element-ref.ts";
+import { PlaywrightClient, PlaywrightClientError } from "./playwright-client.ts";
 
-const CLI_PATH = fileURLToPath(import.meta.resolve("@playwright/cli/playwright-cli.js"));
+const CLI_PATH = fileURLToPath(new URL("./playwright-thin-cli.mjs", import.meta.url));
+const PINNED_CLI_PATH = fileURLToPath(import.meta.resolve("@playwright/cli/playwright-cli.js"));
 const MAX_STDOUT_BYTES = 256 * 1024;
 const MAX_STDERR_BYTES = 16 * 1024;
 const MAX_SNAPSHOT_LINES = 200;
 const MAX_SNAPSHOT_BYTES = 20 * 1024;
-const MAX_FIND_LINES = 120;
-const MAX_FIND_BYTES = 12 * 1024;
-const MAX_ACTION_SNAPSHOT_LINES = 100;
-const MAX_ACTION_SNAPSHOT_BYTES = 10 * 1024;
+const MAX_FIND_LINES = 80;
+const MAX_FIND_BYTES = 8 * 1024;
+const MAX_ACTION_SNAPSHOT_LINES = 60;
+const MAX_ACTION_SNAPSHOT_BYTES = 6 * 1024;
 const SNAPSHOT_FILE_SETTLE_ATTEMPTS = 20;
 const SNAPSHOT_FILE_SETTLE_MS = 25;
 const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
@@ -68,10 +70,12 @@ export type HeliosCliErrorCategory = "cancelled" | "timeout" | "unavailable" | "
 
 export class HeliosCliError extends Error {
   readonly category: HeliosCliErrorCategory;
+  readonly uncertainOutcome: boolean;
 
-  constructor(category: HeliosCliErrorCategory, message: string) {
+  constructor(category: HeliosCliErrorCategory, message: string, uncertainOutcome = false) {
     super(message);
     this.category = category;
+    this.uncertainOutcome = uncertainOutcome;
     this.name = "HeliosCliError";
   }
 }
@@ -87,11 +91,18 @@ export async function diagnosePlaywrightCli(exec: Exec): Promise<string> {
 }
 
 export function validateNavigationUrl(value: string): string {
+  if (value.length > 4096) throw new Error("Browser URL exceeds 4096 character limit");
   if (value === "about:blank") return value;
   const url = new URL(value);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Helios browser navigation permits only HTTP(S) URLs or about:blank");
   if (url.username || url.password) throw new Error("Helios browser URLs must not contain credentials");
-  if (value.length > 4096) throw new Error("Browser URL exceeds 4096 character limit");
+  if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+  if (url.protocol !== "file:") throw new Error("Helios browser navigation permits only HTTP(S) URLs, local HTML file URLs, or about:blank");
+  if (url.hostname) throw new Error("Helios browser local files must not use remote hosts");
+  let pathname: string;
+  try { pathname = decodeURIComponent(url.pathname); }
+  catch { throw new Error("Helios browser local HTML file URL has invalid percent-encoding"); }
+  if (/^[\\/]{2}/u.test(pathname)) throw new Error("Helios browser local files must not use network paths");
+  if (!/\.html?$/iu.test(pathname)) throw new Error("Helios browser local file URLs must point to an HTML file");
   return url.href;
 }
 
@@ -127,20 +138,29 @@ interface PendingContinuation {
   limits: { lines: number; bytes: number };
 }
 
+interface PersistentClient {
+  run(sessionName: string, command: string, args: string[], signal: AbortSignal | undefined, timeoutMs: number): Promise<ExecResult>;
+  dispose(): Promise<void>;
+}
+
 export interface PlaywrightCliOptions {
   maxSnapshotLines?: number;
   maxSnapshotBytes?: number;
   maxActionSnapshotLines?: number;
   maxActionSnapshotBytes?: number;
+  persistentClient?: boolean;
+  clientFactory?: (directory: string) => Promise<PersistentClient>;
 }
 
 function validateOptions(options: PlaywrightCliOptions): void {
-  for (const [name, value] of Object.entries(options)) {
+  for (const name of ["maxSnapshotLines", "maxSnapshotBytes", "maxActionSnapshotLines", "maxActionSnapshotBytes"] as const) {
+    const value = options[name];
     if (value === undefined) continue;
     if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
     const minimum = name.endsWith("Lines") ? 1 : 4;
     if (value < minimum) throw new Error(`${name} must be at least ${minimum}`);
   }
+  if (options.persistentClient !== undefined && typeof options.persistentClient !== "boolean") throw new Error("persistentClient must be a boolean");
 }
 
 function snapshotLimits(action: BrowserAction, options: PlaywrightCliOptions): { lines: number; bytes: number } {
@@ -254,7 +274,7 @@ function commandFailureMessage(stderr: string): string {
   if (/\bBrowser "(chrome|chromium|firefox|webkit|msedge)" is not installed\. Run `playwright-cli install-browser \1` to install\b/.test(stderr)) {
     return "Playwright browser is not installed; run the matching `playwright-cli install-browser` setup command";
   }
-  return "Playwright CLI command failed";
+  return "Playwright CLI command failed; run /helios-doctor for diagnostics";
 }
 
 type SnapshotSource = string | { file: string };
@@ -294,6 +314,8 @@ export class PlaywrightCli {
   private readonly options: PlaywrightCliOptions;
   private readonly continuations = new Map<string, PendingContinuation>();
   private configReady?: Promise<void>;
+  private client?: Promise<PersistentClient | undefined>;
+  private clientUnavailable = false;
 
   private constructor(exec: Exec, directory: string, configPath: string, options: PlaywrightCliOptions) {
     this.exec = exec;
@@ -304,7 +326,10 @@ export class PlaywrightCli {
 
   static async create(exec: Exec, options: PlaywrightCliOptions = {}): Promise<PlaywrightCli> {
     validateOptions(options);
-    await access(CLI_PATH).catch(() => { throw new HeliosCliError("unavailable", "Pinned @playwright/cli executable is unavailable; reinstall pi-helios"); });
+    await Promise.all([
+      access(CLI_PATH),
+      access(PINNED_CLI_PATH),
+    ]).catch(() => { throw new HeliosCliError("unavailable", "Pinned @playwright/cli executable is unavailable; reinstall pi-helios"); });
     const directory = await mkdtemp(join(tmpdir(), "pi-helios-browser-"));
     await chmod(directory, 0o700).catch(() => {});
     const outputDirectory = join(directory, "artifacts");
@@ -314,6 +339,9 @@ export class PlaywrightCli {
 
   async dispose(): Promise<void> {
     this.continuations.clear();
+    const client = await this.client?.catch(() => undefined);
+    await client?.dispose().catch(() => {});
+    this.client = undefined;
     await rm(this.directory, { recursive: true, force: true });
   }
 
@@ -354,6 +382,7 @@ export class PlaywrightCli {
     catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact"); }
     try {
       let previousSize = -1;
+      let emptyObservations = 0;
       for (let attempt = 0; attempt < SNAPSHOT_FILE_SETTLE_ATTEMPTS; attempt++) {
         let info;
         try { info = await lstat(path); }
@@ -362,10 +391,15 @@ export class PlaywrightCli {
         }
         if (info) {
           if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_STDOUT_BYTES) throw new Error("Invalid snapshot artifact");
-          if (info.size > 0 && info.size === previousSize) {
-            const data = await this.readArtifact(path, MAX_STDOUT_BYTES);
-            try { return new TextDecoder("utf-8", { fatal: true }).decode(data); }
-            catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact"); }
+          if (info.size === 0) {
+            if (++emptyObservations >= 3) return "";
+          } else {
+            emptyObservations = 0;
+            if (info.size === previousSize) {
+              const data = await this.readArtifact(path, MAX_STDOUT_BYTES);
+              try { return new TextDecoder("utf-8", { fatal: true }).decode(data); }
+              catch { throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot artifact"); }
+            }
           }
           previousSize = info.size;
         }
@@ -412,14 +446,7 @@ export class PlaywrightCli {
     if (INVALIDATES_CONTINUATION.has(action.kind) || action.kind === "snapshot" || action.kind === "find") this.continuations.delete(sessionName);
     await this.ensureConfig();
     const { command, args, artifactPath, timeout } = this.arguments(action);
-    const invocation = [CLI_PATH, "--json", `-s=${sessionName}`, command, ...args];
-    let result: ExecResult;
-    try {
-      result = await this.exec(process.execPath, invocation, { signal, timeout, cwd: this.directory });
-    } catch (error) {
-      if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
-      throw new HeliosCliError("unavailable", error instanceof Error ? error.message.slice(0, 300) : "Could not start Playwright CLI");
-    }
+    const result = await this.execute(action, sessionName, command, args, timeout, signal);
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
     const value = parseJson(result, this.directory, sessionName);
     const nested = value.result && typeof value.result === "object" ? value.result as Record<string, unknown> : undefined;
@@ -481,6 +508,62 @@ export class PlaywrightCli {
     return token;
   }
 
+  private usesPersistentClient(action: BrowserAction): boolean {
+    return !["open", "attach-cdp", "attach-extension", "close", "detach", "list"].includes(action.kind);
+  }
+
+  private async persistentClient(): Promise<PersistentClient | undefined> {
+    if (!this.options.persistentClient || this.clientUnavailable) return undefined;
+    if (!this.client) {
+      const factory = this.options.clientFactory ?? PlaywrightClient.create;
+      const pending = factory(this.directory).catch(() => {
+        if (this.client === pending) this.client = undefined;
+        this.clientUnavailable = true;
+        return undefined;
+      });
+      this.client = pending;
+    }
+    return this.client;
+  }
+
+  private async execute(action: BrowserAction, sessionName: string, command: string, args: string[], timeout: number, signal?: AbortSignal): Promise<ExecResult> {
+    if (this.usesPersistentClient(action)) {
+      const client = await this.persistentClient();
+      if (client) {
+        try {
+          return await client.run(sessionName, command, args, signal, timeout);
+        } catch (error) {
+          this.client = undefined;
+          await client.dispose().catch(() => {});
+          if (error instanceof PlaywrightClientError) {
+            if (!error.dispatched) {
+              if (error.reason === "cancelled") throw new HeliosCliError("cancelled", "Browser action cancelled");
+              if (error.reason === "timeout") throw new HeliosCliError("timeout", "Playwright persistent client command timed out");
+              return this.executeThin(sessionName, command, args, timeout, signal);
+            }
+            this.continuations.delete(sessionName);
+            if (error.reason === "cancelled") throw new HeliosCliError("cancelled", "Browser action cancelled after dispatch; outcome is uncertain, request a fresh snapshot", true);
+            if (error.reason === "timeout") throw new HeliosCliError("timeout", "Playwright command timed out after dispatch; outcome is uncertain, request a fresh snapshot", true);
+          }
+          this.continuations.delete(sessionName);
+          throw new HeliosCliError("unavailable", "Playwright persistent client failed after dispatch; browser action outcome is uncertain, request a fresh snapshot", true);
+        }
+      }
+    }
+    return this.executeThin(sessionName, command, args, timeout, signal);
+  }
+
+  private async executeThin(sessionName: string, command: string, args: string[], timeout: number, signal?: AbortSignal): Promise<ExecResult> {
+    const invocation = [CLI_PATH, "--json", `-s=${sessionName}`, command, ...args];
+    try {
+      return await this.exec(process.execPath, invocation, { signal, timeout, cwd: this.directory });
+    } catch (error) {
+      if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
+      throw new HeliosCliError("unavailable", error instanceof Error ? error.message.slice(0, 300) : "Could not start Playwright CLI");
+    }
+  }
+
+
   private ensureConfig(): Promise<void> {
     return this.configReady ?? this.writeConfig({ outputDir: join(this.directory, "artifacts"), outputMode: "stdout", codegen: "none" });
   }
@@ -501,7 +584,7 @@ export class PlaywrightCli {
       case "link-url": return { command: "eval", args: ["el => el instanceof HTMLAnchorElement ? el.href : ''", target(action.target)], timeout: normal };
       case "snapshot": {
         if (action.depth !== undefined && (!Number.isInteger(action.depth) || action.depth < 1 || action.depth > 20)) throw new Error("Snapshot depth must be an integer from 1 to 20");
-        return { command: "snapshot", args: [...(action.target ? [target(action.target)] : []), ...(action.depth ? [`--depth=${action.depth}`] : [])], timeout: normal };
+        return { command: "snapshot", args: [...(action.target ? [target(action.target)] : []), ...(action.depth ? [`--depth=${action.depth}`] : []), "--filename=<auto>"], timeout: normal };
       }
       case "continue": throw new Error("Browser continuation must not invoke Playwright CLI");
       case "find": {

@@ -11,9 +11,13 @@ import { reserveHeliosPort, type PortReservation } from "./port-reservation.ts";
 
 const EMULATOR_SERIAL = /^emulator-(\d{4,5})$/;
 const START_TIMEOUT_MS = 180_000;
+const MAX_PACKAGE_OUTPUT_BYTES = 128 * 1024;
+const MAX_INSTALLED_PACKAGES = 4_096;
+const PACKAGE_ID = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
 
 export interface AndroidDevice { serial: string; state: string }
 export interface AndroidSdkPaths { root: string; adb: string; emulator: string }
+export interface AndroidPackageInventory { serial: string; avd: string; packages: string[] }
 
 function platformDefaultRoot(env: NodeJS.ProcessEnv): string {
   if (process.platform === "win32") {
@@ -54,8 +58,31 @@ function commandError(command: string, stderr: string): Error {
 }
 
 function appendTail(current: string, data: Buffer): string {
-  const next = current + data.toString("utf8");
-  return Buffer.byteLength(next) <= 8_192 ? next : Buffer.from(next).subarray(-8_192).toString("utf8");
+  if (data.length >= 8_192) return data.subarray(-8_192).toString("utf8");
+  const prior = Buffer.from(current);
+  const next = Buffer.concat([prior, data], prior.length + data.length);
+  return next.length <= 8_192 ? next.toString("utf8") : next.subarray(-8_192).toString("utf8");
+}
+
+export function validateEmulatorSerial(serial: string): number {
+  const match = serial.match(EMULATOR_SERIAL);
+  const port = Number(match?.[1]);
+  if (!match || !Number.isInteger(port) || port < 5554 || port > 5682 || port % 2) throw new Error("Android attachment requires an emulator serial with an even console port, such as emulator-5554");
+  return port;
+}
+
+export function parseInstalledPackages(output: string): string[] {
+  if (Buffer.byteLength(output) > MAX_PACKAGE_OUTPUT_BYTES) throw new Error("Android package inventory exceeds 128KB limit");
+  const lines = output.split(/\r?\n/);
+  while (lines.at(-1) === "") lines.pop();
+  const packages = new Set<string>();
+  for (const line of lines) {
+    const match = line.match(/^package:(.+)$/);
+    if (!match || match[1].length > 255 || !PACKAGE_ID.test(match[1])) throw new Error("Android package manager returned malformed inventory");
+    packages.add(match[1]);
+    if (packages.size > MAX_INSTALLED_PACKAGES) throw new Error(`Android package inventory exceeds ${MAX_INSTALLED_PACKAGES} packages`);
+  }
+  return [...packages].sort();
 }
 
 async function portsAvailable(...ports: number[]): Promise<boolean> {
@@ -120,11 +147,13 @@ export class AndroidSdk {
   readonly paths: AndroidSdkPaths;
   private readonly exec: Exec;
   private readonly spawnProcess: SpawnProcess;
+  private readonly terminateProcess: typeof terminateProcessTree;
 
-  constructor(paths: AndroidSdkPaths, exec: Exec, spawnProcess: SpawnProcess = spawn) {
+  constructor(paths: AndroidSdkPaths, exec: Exec, spawnProcess: SpawnProcess = spawn, terminateProcess: typeof terminateProcessTree = terminateProcessTree) {
     this.paths = paths;
     this.exec = exec;
     this.spawnProcess = spawnProcess;
+    this.terminateProcess = terminateProcess;
   }
 
   static async create(exec: Exec, env: NodeJS.ProcessEnv = process.env, spawnProcess: SpawnProcess = spawn): Promise<AndroidSdk> {
@@ -135,6 +164,70 @@ export class AndroidSdk {
     const result = await this.exec(this.paths.adb, args, { timeout, signal });
     if (result.code !== 0) throw commandError("adb", result.stderr);
     return result.stdout;
+  }
+
+
+  private async runAdbBounded(args: string[], maxBytes: number, timeout: number, signal?: AbortSignal): Promise<string> {
+    if (signal?.aborted) throw new Error("Android package listing cancelled");
+    const child = this.spawnProcess(this.paths.adb, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let stderr = "";
+    let overflow = false;
+    let spawnError: Error | undefined;
+    let stopReason: "cancelled" | "overflow" | "spawn-error" | undefined;
+    let requestStop!: () => void;
+    const stopped = new Promise<void>((resolve) => { requestStop = resolve; });
+    const stop = (reason: NonNullable<typeof stopReason>) => {
+      if (stopReason) return;
+      stopReason = reason;
+      requestStop();
+    };
+    child.stdout?.on("data", (value: Buffer | string) => {
+      if (stopReason) return;
+      const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      if (bytes + data.length > maxBytes) {
+        overflow = true;
+        child.stdout?.destroy();
+        stop("overflow");
+        return;
+      }
+      bytes += data.length;
+      chunks.push(data);
+    });
+    child.stderr?.on("data", (value: Buffer | string) => { stderr = appendTail(stderr, Buffer.isBuffer(value) ? value : Buffer.from(value)); });
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    child.once("error", (error) => { spawnError = error; stop("spawn-error"); });
+    const cancel = () => stop("cancelled");
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const outcome: "closed" | "stop" | "timeout" = await Promise.race([
+      closed.then(() => "closed" as const),
+      stopped.then(() => "stop" as const),
+      delay(timeout, "timeout" as const, { ref: false }),
+    ]);
+    let terminationError: unknown;
+    if (outcome !== "closed" && child.pid) {
+      try { await this.terminateProcess(child, "adb package listing", 500, 5_000); }
+      catch (error) { terminationError = error; }
+    }
+    signal?.removeEventListener("abort", cancel);
+    if (terminationError) throw new Error("adb package listing could not be terminated safely");
+    if (stopReason === "cancelled") throw new Error("Android package listing cancelled");
+    if (overflow) throw new Error("Android package inventory exceeds 128KB limit");
+    if (outcome === "timeout") throw new Error("Android package listing timed out");
+    if (spawnError) throw new Error("adb package listing is unavailable");
+    if (outcome !== "closed") throw new Error("adb package listing stopped unexpectedly");
+    if (child.exitCode !== 0) throw commandError("adb", stderr);
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes)); }
+    catch { throw new Error("Android package manager returned invalid UTF-8"); }
+  }
+
+  async listInstalledPackages(serial: string, signal?: AbortSignal): Promise<AndroidPackageInventory> {
+    if (signal?.aborted) throw new Error("Android package listing cancelled");
+    const identity = await this.verifyAttached(serial, signal);
+    const output = await this.runAdbBounded(["-s", identity.serial, "shell", "pm", "list", "packages"], MAX_PACKAGE_OUTPUT_BYTES, 30_000, signal);
+    return { ...identity, packages: parseInstalledPackages(output) };
   }
 
   async listAvds(signal?: AbortSignal): Promise<string[]> {
@@ -154,10 +247,7 @@ export class AndroidSdk {
   }
 
   validateSerial(serial: string): number {
-    const match = serial.match(EMULATOR_SERIAL);
-    const port = Number(match?.[1]);
-    if (!match || !Number.isInteger(port) || port < 5554 || port > 5682 || port % 2) throw new Error("Android attachment requires an emulator serial with an even console port, such as emulator-5554");
-    return port;
+    return validateEmulatorSerial(serial);
   }
 
   async avdName(serial: string, signal?: AbortSignal): Promise<string> {

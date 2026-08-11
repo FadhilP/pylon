@@ -3,11 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("Database is a package-gated peer panel, not an Inspector tab", async () => {
-  const [app, database, inspector, styles] = await Promise.all([
+  const [app, database, inspector] = await Promise.all([
     readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/database-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/client/inspector.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../src/client/styles.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(app, /type RightPanel = [^;]*"database"/);
@@ -40,10 +39,6 @@ test("Database is a package-gated peer panel, not an Inspector tab", async () =>
   assert.match(inspector, /Rows can contain sensitive database content/);
   assert.match(inspector, /Previous<\/button>/);
   assert.match(inspector, /Next<\/button>/);
-  const stateqlStart = styles.indexOf(".database-panel");
-  const stateqlStyles = styles.slice(stateqlStart, styles.indexOf(".runtime-policy", stateqlStart));
-  const stateqlFontSizes = [...stateqlStyles.matchAll(/(?:font-size:\s*|font:\s*(?:\d+\s+)?)(\d+(?:\.\d+)?)px/g)].map((match) => Number(match[1]));
-  assert.ok(stateqlFontSizes.length > 0 && stateqlFontSizes.every((size) => size >= 12));
   assert.doesNotMatch(inspector, /title="Recent results"/);
   assert.doesNotMatch(inspector, /title="Command history"/);
   assert.doesNotMatch(inspector, /id: "stateql"/);

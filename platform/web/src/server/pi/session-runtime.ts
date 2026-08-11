@@ -35,10 +35,11 @@ import { DEFAULT_GUARD_RULES } from "../../shared/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
+import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
 import type { ChangedFileReadModel, CompactionDisplayReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
-import { isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import { isPapercutListPage, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -52,6 +53,7 @@ import type {
   ForkInput,
   NewSessionInput,
   PiDriver,
+  PapercutMutationInput,
   ProjectInput,
   ProjectArchiveInput,
   PromptInput,
@@ -229,11 +231,12 @@ function compactionDisplay(details: unknown): CompactionDisplayReadModel | undef
 }
 
 function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEntry): Record<string, unknown> {
-  const estimatedContextAfter = buildSessionContext(branch, entry.id).messages
-    .reduce((total, message) => total + estimateTokens(message), 0);
+  const contextAfter = buildSessionContext(branch, entry.id).messages;
+  const estimatedContextAfter = contextAfter.reduce((total, message) => total + estimateTokens(message), 0);
   const contextAfterTokens = Number.isFinite(estimatedContextAfter)
     ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, estimatedContextAfter))
     : 0;
+  const contextBeforeTokens = Number.isSafeInteger(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined;
   const sourceEntryCount = compactionSourceEntryCount(entry.details);
   const display = compactionDisplay(entry.details);
   return {
@@ -245,6 +248,7 @@ function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEn
     timestamp: entry.timestamp,
     compaction: {
       contextAfterTokens,
+      ...(contextBeforeTokens === undefined ? {} : { contextBeforeTokens }),
       ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
       ...(display ? { display } : {}),
     },
@@ -392,6 +396,69 @@ function stateqlRowsResult(value: unknown, handle: string, offset: number, limit
   const page = candidate as StateQLRowsPage;
   if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
   return page;
+}
+
+function papercutListResult(
+  value: unknown,
+  status: PapercutStatusReadModel | "all",
+  query: string,
+  offset: number,
+  limit: number,
+  sessionId: string,
+  sessionGeneration: number,
+  sanitize: (value: string) => string,
+): PapercutListPage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Papercut returned an invalid list");
+  const raw = value as Record<string, any>;
+  if (raw.version !== 1 || raw.sessionId !== sessionId || raw.status !== status || raw.query !== query
+    || raw.offset !== offset || raw.limit !== limit || !Array.isArray(raw.records)) throw new Error("Papercut returned an invalid list");
+  const candidate = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration,
+    revision: raw.revision,
+    status,
+    query,
+    offset,
+    limit,
+    total: raw.total,
+    records: raw.records,
+    nextOffset: Number.isSafeInteger(raw.total) && offset + raw.records.length < raw.total ? offset + raw.records.length : null,
+  };
+  if (!isPapercutListPage(candidate)) throw new Error("Papercut returned an invalid list");
+  const source = candidate as PapercutListPage;
+  const result: PapercutListPage = {
+    ...source,
+    records: source.records.map((record) => ({
+      ...record,
+      message: sanitize(record.message),
+      ...(record.resolution !== undefined ? { resolution: sanitize(record.resolution) } : {}),
+      ...(record.dismissal !== undefined ? { dismissal: sanitize(record.dismissal) } : {}),
+    })),
+  };
+  if (!isPapercutListPage(result)) throw new Error("Papercut returned an invalid list");
+  return result;
+}
+
+function heliosAndroidToolingResult(value: unknown, sessionGeneration: number): HeliosAndroidToolingResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Helios returned an invalid Android tooling response");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["state", "appiumVersion", "driverVersion", "message"]);
+  const version = (item: unknown) => typeof item === "string" && /^[0-9A-Za-z.+-]{1,50}$/.test(item);
+  if (Object.keys(raw).some((key) => !allowed.has(key))
+    || typeof raw.state !== "string" || !["missing", "ready", "invalid", "busy"].includes(raw.state)
+    || !version(raw.appiumVersion)
+    || !version(raw.driverVersion)
+    || raw.message !== undefined && (typeof raw.message !== "string" || !raw.message || raw.message.length > 300 || /[\u0000-\u001f\u007f-\u009f]/u.test(raw.message))) {
+    throw new Error("Helios returned an invalid Android tooling response");
+  }
+  return {
+    version: 1,
+    sessionGeneration,
+    state: raw.state as HeliosAndroidToolingResult["state"],
+    appiumVersion: raw.appiumVersion as string,
+    driverVersion: raw.driverVersion as string,
+    ...(raw.message === undefined ? {} : { message: raw.message as string }),
+  };
 }
 
 function heliosResult(value: unknown, sessionGeneration: number): HeliosBrowserResult {
@@ -1273,6 +1340,99 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
+  async papercutList(status: PapercutStatusReadModel | "all", query: string, offset: number, limit: number): Promise<PapercutListPage> {
+    if (!["open", "resolved", "dismissed", "all"].includes(status) || query.length > 200
+      || !Number.isSafeInteger(offset) || offset < 0 || offset > 1_000
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error("Papercut list request is invalid");
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:papercut-list-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      status,
+      query,
+      offset,
+      limit,
+      signal: controller.signal,
+      claim: () => claimed ? false : (claimed = true),
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("Papercuts are unavailable");
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Papercut list request timed out")), { once: true })),
+      ]);
+      return papercutListResult(value, status, query, offset, limit, runtime.session.sessionId, this.gate.generation, (text) => this.sanitizeOperationalText(text));
+    } catch (error) {
+      this.recordError(error);
+      throw new Error(controller.signal.aborted ? "Papercut list request timed out" : "Unable to load papercuts");
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
+  }
+
+  async papercutMutation(input: PapercutMutationInput): Promise<PapercutMutationResult> {
+    if (!["edit", "delete"].includes(input.action)
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id)
+      || Number.isNaN(Date.parse(input.expectedUpdatedAt))
+      || input.action === "edit" && (!input.message.trim() || input.message.length > 500)) throw new Error("Papercut mutation request is invalid");
+    const runtime = this.requireRuntime();
+    const generation = this.gate.generation;
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:papercut-mutation-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      ...input,
+      signal: controller.signal,
+      claim: () => claimed ? false : (claimed = true),
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("Papercut mutations are unavailable");
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    timeout.unref?.();
+    let value: unknown;
+    try {
+      value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Papercut mutation request timed out")), { once: true })),
+      ]);
+    } catch (error) {
+      this.recordError(error);
+      throw new Error(controller.signal.aborted ? "Papercut mutation request timed out" : "Unable to update papercut");
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    if (!raw || raw.version !== 1 || raw.sessionId !== runtime.session.sessionId || typeof raw.ok !== "boolean") throw new Error("Papercut returned an invalid mutation result");
+    if (raw.ok === false) {
+      if (raw.error === "stale") throw new Error("Papercut changed or was removed. Your draft was kept.");
+      if (raw.error === "duplicate") throw new Error("Another open papercut already uses this message.");
+      if (raw.error === "invalid") throw new Error("Papercut message is invalid.");
+      throw new Error("Papercut returned an invalid mutation result");
+    }
+    if (!Number.isSafeInteger(raw.revision) || Number(raw.revision) < 0) throw new Error("Papercut returned an invalid mutation result");
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, revision: Number(raw.revision) };
+  }
+
   async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
     if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
     const runtime = this.requireRuntime();
@@ -1306,6 +1466,45 @@ export class SessionRuntime implements PiDriver {
       ]);
       if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
       return heliosResult(value, this.gate.generation);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
+  }
+
+  async heliosAndroidTooling(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult> {
+    if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:helios-android-tooling-request", {
+      version: 1,
+      ...input,
+      sessionId: runtime.session.sessionId,
+      signal: controller.signal,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("Helios Android tooling is unavailable");
+    const timeout = setTimeout(() => controller.abort(), input.action === "install" ? 12 * 60_000 : 60_000);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Helios Android tooling request timed out")), { once: true })),
+      ]);
+      if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
+      return heliosAndroidToolingResult(value, this.gate.generation);
     } finally {
       clearTimeout(timeout);
       controller.abort();
@@ -2731,7 +2930,7 @@ export class SessionRuntime implements PiDriver {
         timeoutSeconds: policy.guardTimeoutSeconds,
       });
     }));
-    for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-timeline:state-change", "pi-sieve:state-change"]) {
+    for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-papercut:state-change", "pi-timeline:state-change", "pi-sieve:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {
         const active = this.gate.accepts(generation);
         const replacing = this.replacementInvalidated && this.replacementGeneration === generation;
@@ -2919,11 +3118,11 @@ export class SessionRuntime implements PiDriver {
   }
 
   private requestPackageStates(sessionId: string): void {
-    for (const channel of ["pi-continuity:state-request", "pi-timeline:state-request", "pi-sieve:state-request"]) {
+    for (const channel of ["pi-continuity:state-request", "pi-papercut:state-request", "pi-timeline:state-request", "pi-sieve:state-request"]) {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" ? 1 : 4,
+          version: channel === "pi-timeline:state-request" ? 4 : channel === "pi-sieve:state-request" || channel === "pi-papercut:state-request" ? 1 : 4,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;

@@ -7,7 +7,7 @@ import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
-import type { CompactionDisplayReadModel, CompactionDisplaySourceReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
+import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -80,6 +80,7 @@ export function ConversationPanel({
   onSelectAgent,
   agentColors,
   onOpenLogin,
+  onOpenCompaction,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
@@ -92,6 +93,7 @@ export function ConversationPanel({
   onSelectAgent?: (id: string) => void;
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
+  onOpenCompaction: (message: MessageReadModel) => void;
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -688,7 +690,7 @@ export function ConversationPanel({
             return <ToolTurnGroup key={block.id} tools={block.tools} running={block.id === activeToolGroupId} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
           }
           if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
-          if (block.compaction) return <CompactionDisclosure key={block.id} message={block} />;
+          if (block.compaction) return <CompactionDisclosure key={block.id} message={block} onOpen={onOpenCompaction} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
           const editing = edit?.messageId === block.id;
           const pending = pendingById.get(block.id);
@@ -1855,67 +1857,23 @@ function TranscriptActivity({
   </section>;
 }
 
-function CompactionDisclosure({ message }: { message: MessageReadModel }) {
+function CompactionDisclosure({ message, onOpen }: { message: MessageReadModel; onOpen: (message: MessageReadModel) => void }) {
   const compaction = message.compaction!;
-  const display = compaction.display;
   const timestamp = formatMessageTime(message.createdAt);
-  return <details className="compaction-disclosure">
-    <summary>
-      <span className="compaction-disclosure-chevron" aria-hidden="true"><IconChevronDown size={14} /></span>
-      <span className="compaction-disclosure-title">
-        <strong>Context compacted</strong>
-        <span className="when-closed">View compacted context</span>
-        <span className="when-open">Hide compacted context</span>
-      </span>
-      {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
-    </summary>
-    <div className="compaction-disclosure-body">
-      <dl>
-        <div><dt>Context after</dt><dd>~{formatCompactNumber(compaction.contextAfterTokens)} tokens</dd></div>
-        {compaction.sourceEntryCount !== undefined && <div><dt>Source entries</dt><dd>{compaction.sourceEntryCount.toLocaleString()}</dd></div>}
-      </dl>
-      {display ? <div className="compaction-display">
-        {display.records.map((record, index) => <article className={`compaction-record is-${record.role}`} key={`${record.sourceEntryId}:${record.role}:${index}`}>
-          <header><strong>{record.role === "user" ? "User" : "Assistant"}</strong><code title={record.sourceEntryId}>{record.sourceEntryId}</code></header>
-          <pre>{record.text}</pre>
-        </article>)}
-        <CompactionToolGroup title="Failed tool calls" records={display.failedTools} failed />
-        <CompactionToolGroup title="Tool results" records={display.toolResults} />
-        <CompactionFileActivity history={display.history} />
-      </div> : <MarkdownContent text={message.text} />}
-    </div>
-  </details>;
+  const facts = [
+    `~${formatCompactNumber(compaction.contextAfterTokens)} tokens after`,
+    compaction.sourceEntryCount !== undefined ? `${compaction.sourceEntryCount.toLocaleString()} source entries` : "",
+  ].filter(Boolean).join(" · ");
+  return <button className="compaction-disclosure" type="button" onClick={() => onOpen(message)}>
+    <span className="compaction-disclosure-chevron" aria-hidden="true"><IconChevronDown size={14} /></span>
+    <span className="compaction-disclosure-title">
+      <strong>Context compacted</strong>
+      <span>{facts} · View details</span>
+    </span>
+    {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
+  </button>;
 }
 
-function CompactionToolGroup({ title, records, failed = false }: {
-  title: string;
-  records: CompactionDisplaySourceReadModel[];
-  failed?: boolean;
-}) {
-  if (!records.length) return null;
-  return <details className={`compaction-tool-group${failed ? " is-failed" : ""}`}>
-    <summary><strong>{title} ({records.length})</strong><IconChevronDown size={14} aria-hidden="true" /></summary>
-    <div>{records.map((record, index) => <article key={`${record.sourceEntryId}:${index}`}>
-      <code title={record.sourceEntryId}>{record.sourceEntryId}</code>
-      <pre>{record.text}</pre>
-    </article>)}</div>
-  </details>;
-}
-
-function CompactionFileActivity({ history }: { history: CompactionDisplayReadModel["history"] }) {
-  const items = [
-    ...history.modified.map((record) => ({ ...record, label: "Modified" })),
-    ...history.read.map((record) => ({ ...record, label: "Read" })),
-  ];
-  if (!items.length) return null;
-  return <section className="compaction-file-activity">
-    <strong>Observed file activity</strong>
-    <ul>{items.map((item, index) => <li key={`${item.label}:${item.path}:${item.sourceEntryId ?? index}`}>
-      <span>{item.label}</span><code title={item.path}>{item.path}</code>
-      {item.sourceEntryId && <small title={item.sourceEntryId}>Entry {item.sourceEntryId}</small>}
-    </li>)}</ul>
-  </section>;
-}
 
 function SystemDisclosure({ message }: { message: MessageReadModel }) {
   return <details className="system-disclosure">

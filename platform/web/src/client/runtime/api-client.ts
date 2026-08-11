@@ -1,6 +1,7 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -185,6 +186,25 @@ export class ApiClient {
     }));
   }
 
+  async papercuts(generation: number, status: PapercutStatusReadModel | "all", query: string, offset: number, limit: number, signal?: AbortSignal): Promise<PapercutListPage> {
+    return json<PapercutListPage>(await fetch("/api/v1/papercuts", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify({ generation, status, query, offset, limit }),
+      signal,
+    }));
+  }
+
+  async mutatePapercut(generation: number, input: { action: "edit" | "delete"; id: string; expectedUpdatedAt: string; message?: string }): Promise<PapercutMutationResult> {
+    return json<PapercutMutationResult>(await fetch("/api/v1/papercuts/mutate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify({ generation, ...input }),
+    }));
+  }
+
   async archives(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
     const query = new URLSearchParams();
     if (input.cursor) query.set("cursor", input.cursor);
@@ -198,6 +218,16 @@ export class ApiClient {
 
   async heliosBrowser(command: HeliosBrowserCommand, signal?: AbortSignal): Promise<HeliosBrowserResult> {
     return json<HeliosBrowserResult>(await fetch("/api/v1/helios-browser", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify(command),
+      signal,
+    }));
+  }
+
+  async heliosAndroidTooling(command: HeliosAndroidToolingCommand, signal?: AbortSignal): Promise<HeliosAndroidToolingResult> {
+    return json<HeliosAndroidToolingResult>(await fetch("/api/v1/helios-android-tooling", {
       method: "POST",
       credentials: "same-origin",
       headers: this.headers(),

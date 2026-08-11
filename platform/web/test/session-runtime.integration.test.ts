@@ -1195,6 +1195,7 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     assert.equal(compaction?.text, "## Compact summary");
     assert.equal(compaction?.systemSource, "pylon-compaction");
     assert.equal(compaction?.compaction?.sourceEntryCount, 135);
+    assert.equal(compaction?.compaction?.contextBeforeTokens, 1_000);
     assert.deepEqual(compaction?.compaction?.display, {
       records: [
         { sourceEntryId: "user-source", role: "user", text: "Original request" },

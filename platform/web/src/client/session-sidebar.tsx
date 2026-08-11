@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
 import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { showSessionRuntimeState } from "../shared/session-completions";
 import { ChangelogDialog } from "./changelog-dialog";
+import { copyText } from "./clipboard";
 import { displayDate, displayTime } from "./format";
 
 export interface SessionProject {
@@ -72,6 +74,12 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
   const visibleActiveSessions = useMemo(() => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined), [activeSessions, preview]);
   const working = activeSessions.some((session) => session.workStartedAt)
     || projects.some((project) => project.sessions.some((session) => session.workStartedAt));
+  const announceCopy = (value: string, label: string) => {
+    setAnnouncement("");
+    void copyText(value).then((copied) => {
+      setAnnouncement(copied ? `${label} copied` : `Copying ${label.toLowerCase()} failed`);
+    });
+  };
 
   useEffect(() => {
     setNow(Date.now());
@@ -249,6 +257,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
                 onSetPinned={onSetSessionPinned}
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
+                onCopySessionId={(id) => announceCopy(id, "Session ID")}
                 reorderKind="active"
                 dragging={preview?.kind === "active" && preview.id === session.id}
                 onPointerDown={(event) => startPointerReorder(event, "active", session.id, visibleActiveSessions.map((item) => item.id))}
@@ -305,13 +314,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
                   }}><IconPencil size={14} />Rename</button>
                   <button type="button" onClick={() => {
                     closeMenu(true);
-                    try {
-                      void navigator.clipboard.writeText(project.cwd)
-                        .then(() => setAnnouncement("Project path copied"))
-                        .catch(() => setAnnouncement("Copying project path failed"));
-                    } catch {
-                      setAnnouncement("Copying project path failed");
-                    }
+                    announceCopy(project.cwd, "Project path");
                   }}><IconCopy size={14} />Copy path</button>
                   <button type="button" disabled={Boolean(projectBusy || busy || deleting)} onClick={() => {
                     closeMenu(true);
@@ -346,6 +349,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
                 onSetPinned={onSetSessionPinned}
                 onToggleMenu={toggleMenu}
                 onCloseMenu={() => closeMenu(true)}
+                onCopySessionId={(id) => announceCopy(id, "Session ID")}
               />)}
               {page && (page.sessions.length > SESSION_LIST_INITIAL_LIMIT || page.nextCursor) && <div className="session-list-controls">
                 {page.nextCursor && <button className="session-list-button" type="button" onClick={() => onLoadMore(project)} disabled={projectLoading === project.id}>
@@ -371,7 +375,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
   </>;
 }
 
-function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu }: {
+function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now, showProject = false, reorderKind, dragging = false, onPointerDown, onKeyDown, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onToggleMenu, onCloseMenu, onCopySessionId }: {
   session: SessionSummary;
   menuId: string;
   menuOpen: boolean;
@@ -392,6 +396,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
   onSetPinned: (session: SessionSummary, pinned: boolean) => void;
   onToggleMenu: (menuId: string, trigger: HTMLElement) => void;
   onCloseMenu: () => void;
+  onCopySessionId: (sessionId: string) => void;
 }) {
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
@@ -426,7 +431,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       </span>
       {(busy === session.id || deleting === session.id)
         ? <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
-        : !sleeping && <span
+        : showSessionRuntimeState(session.runtimeState, completed) && <span
             className={`session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
             aria-label={completed ? "New response" : session.runtimeState}
             title={completed ? "New response" : session.runtimeState}
@@ -444,7 +449,7 @@ function SessionRow({ session, menuId, menuOpen, busy, deleting, completed, now,
       ><IconDots size={15} /></summary>
       <div className="session-menu-popover">
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onRename(session); }}><IconPencil size={14} />Rename</button>
-        <button type="button" onClick={() => { void navigator.clipboard.writeText(session.id); onCloseMenu(); }}><IconCopy size={14} />Copy session ID</button>
+        <button type="button" onClick={() => { onCloseMenu(); onCopySessionId(session.id); }}><IconCopy size={14} />Copy session ID</button>
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onSetPinned(session, !session.pinned); }}><IconPin size={14} />{session.pinned ? "Unpin" : "Pin"}</button>
         <button type="button" disabled={unavailable} onClick={() => { onCloseMenu(); onArchive(session); }}><IconArchive size={14} />Archive</button>
         <button

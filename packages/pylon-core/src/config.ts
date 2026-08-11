@@ -8,7 +8,7 @@ export type PylonCoreConfig = {
   lineEditEnabled: boolean;
 };
 
-export const defaultConfig = (): PylonCoreConfig => ({ version: 1, lineEditEnabled: false });
+export const defaultConfig = (): PylonCoreConfig => ({ version: 1, lineEditEnabled: true });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pylon-core", "config.json");
 
 export async function loadConfig(path = configPath()): Promise<PylonCoreConfig> {

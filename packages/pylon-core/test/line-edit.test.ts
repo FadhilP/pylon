@@ -76,6 +76,7 @@ test("one edit call resolves disjoint operations against the original snapshot",
 
     assert.equal(await readFile(path, "utf8"), "ONE\ntwo\nthree\nfour\n");
     assert.match(result.content[0].text, /\[sample\.txt#[0-9a-f]{12}\]/);
+    assert.doesNotMatch(result.content[0].text, /\n\d+:/);
     assert.ok(result.details.diff);
     assert.ok(result.details.patch);
     assert.equal(typeof result.details.firstChangedLine, "number");
@@ -96,17 +97,21 @@ test("new revisions carry unchanged seen lines and remap them after insertions",
     const before = await invoke(read, { path: "sample.txt" }, cwd);
     const first = await invoke(edit, {
       path: "sample.txt", revision: revision(before),
-      edits: [{ operation: "replace", startLine: 1, endLine: 1, newText: "LINE-1" }],
+      edits: [
+        { operation: "replace", startLine: 1, endLine: 1, newText: "LINE-1" },
+        { operation: "replace", startLine: 15, endLine: 15, newText: "LINE-15" },
+      ],
     }, cwd);
+    assert.doesNotMatch(first.content[0].text, /\n\d+:/);
     const second = await invoke(edit, {
       path: "sample.txt", revision: revision(first),
       edits: [{ operation: "insert_before", line: 10, newText: "inserted" }],
     }, cwd);
     await invoke(edit, {
       path: "sample.txt", revision: revision(second),
-      edits: [{ operation: "replace", startLine: 16, endLine: 16, newText: "LINE-15" }],
+      edits: [{ operation: "replace", startLine: 16, endLine: 16, newText: "LINE-15-AGAIN" }],
     }, cwd);
-    assert.equal((await readFile(path, "utf8")).split("\n")[15], "LINE-15");
+    assert.equal((await readFile(path, "utf8")).split("\n")[15], "LINE-15-AGAIN");
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

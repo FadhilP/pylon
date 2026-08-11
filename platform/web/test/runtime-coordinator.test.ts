@@ -1195,6 +1195,36 @@ test("session status publishes work timer changes even when runtime state is unc
   ]);
 });
 
+test("terminal completion is not discarded while other runtime work remains active", () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: any[] = [];
+  coordinator.subscribe((event) => events.push(event));
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.selectedId = "selected";
+  internal.slots.set("background", {
+    driver: {
+      runtimeState: () => "running",
+      runtimeDetails: () => ({ workStartedAt: "2026-07-30T10:00:00.000Z" }),
+    },
+    lastState: "running",
+    lastWorkStartedAt: "2026-07-30T10:00:00.000Z",
+  });
+
+  internal.publishStatus("background", true, "turn-complete");
+
+  assert.deepEqual(events.at(-1), {
+    type: "session.status",
+    sessionId: "background",
+    sessionGeneration: 1,
+    state: "running",
+    workStartedAt: "2026-07-30T10:00:00.000Z",
+    completed: true,
+    cue: "turn-complete",
+  });
+});
+
+
 test("background completion preserves its sound cue when selection changes during settlement", async () => {
   const coordinator = new RuntimeCoordinator();
   const events: any[] = [];

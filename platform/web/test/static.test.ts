@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssetHost } from "../src/server/http/static.ts";
+import { applySecurityHeaders } from "../src/server/http/security.ts";
 
 test("production asset host serves SPA safely and rejects missing assets", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-static-"));
@@ -36,4 +37,13 @@ test("production asset host serves SPA safely and rejects missing assets", async
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("development CSP permits Vite bootstrap scripts without weakening production", () => {
+  const headers = new Map<string, string>();
+  applySecurityHeaders({ setHeader: (name: string, value: string) => headers.set(name, value) } as any, true);
+  const policy = headers.get("content-security-policy") ?? "";
+  assert.match(policy, /script-src 'self' 'unsafe-inline'/);
+  assert.match(policy, /object-src 'none'/);
+  assert.match(policy, /frame-ancestors 'none'/);
 });

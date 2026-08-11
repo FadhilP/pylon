@@ -39,6 +39,25 @@ test("operational projections structurally share unchanged branches and ignore s
   }, [], "session"), continuity);
 });
 
+test("papercut summaries are session scoped and reject stale revisions", () => {
+  const initial = initialOperational([], []);
+  const current = applyOperationalEvent(initial, "pi-papercut:state-change", {
+    version: 1, sessionId: "session", available: true, revision: 1,
+    counts: { open: 2, resolved: 1, dismissed: 0, total: 3 },
+  }, [], "session");
+  assert.equal(current.papercuts.availability, "available");
+  assert.deepEqual(current.papercuts.counts, { open: 2, resolved: 1, dismissed: 0, total: 3 });
+  assert.strictEqual(applyOperationalEvent(current, "pi-papercut:state-change", {
+    version: 1, sessionId: "session", available: false, revision: 1,
+    counts: { open: 0, resolved: 0, dismissed: 0, total: 0 },
+  }, [], "session"), current);
+  assert.strictEqual(applyOperationalEvent(current, "pi-papercut:state-change", {
+    version: 1, sessionId: "other", available: false, revision: 2,
+    counts: { open: 0, resolved: 0, dismissed: 0, total: 0 },
+  }, [], "session"), current);
+});
+
+
 test("Memory V6 projections fail closed for missing, malformed, or cross-scope notes", () => {
   const initial = initialOperational(["continuity_update"], []);
   const missing = applyOperationalEvent(initial, "pi-continuity:state-change", { version: 4, revision: 1, sessionId: "s", available: true }, [], "s");

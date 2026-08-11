@@ -1,8 +1,9 @@
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
+import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -64,6 +65,10 @@ export interface TimelineCheckpointInput {
 export interface TimelineCheckpointDiffInput extends TimelineCheckpointInput {
   path: string;
 }
+
+export type PapercutMutationInput =
+  | { action: "edit"; id: string; expectedUpdatedAt: string; message: string }
+  | { action: "delete"; id: string; expectedUpdatedAt: string };
 
 export interface NewSessionInput {
   parentSessionId?: string;
@@ -312,7 +317,10 @@ export interface PiDriver {
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
   stateqlRows?(handle: string, offset: number, limit: number): Promise<StateQLRowsPage>;
+  papercutList?(status: PapercutStatusReadModel | "all", query: string, offset: number, limit: number): Promise<PapercutListPage>;
+  papercutMutation?(input: PapercutMutationInput): Promise<PapercutMutationResult>;
   heliosBrowser?(input: HeliosBrowserInput): Promise<HeliosBrowserResult>;
+  heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;

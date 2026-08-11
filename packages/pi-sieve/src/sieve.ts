@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 export const SIEVE_THRESHOLD = 8_192;
-export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd", "heartbeat_status", "memory"] as const;
+export const HELIOS_BROWSER_TOOL_NAME = "helios_browser";
+export const PLAIN_ELIGIBLE_TOOL_NAMES = ["bash", "grep", "find", "ls", "rg", "fd", "heartbeat_status", "memory", HELIOS_BROWSER_TOOL_NAME] as const;
 export const RANKED_SEARCH_TOOL_NAMES = ["symbol_search", "code_search"] as const;
 export const RELATIONSHIP_GRAPH_TOOL_NAME = "relationship_graph";
 export const ELIGIBLE_TOOL_NAMES = [
@@ -337,6 +338,7 @@ function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource
   const fields = message as Record<string, unknown>;
   if (fields.role !== "toolResult" || typeof fields.toolName !== "string") return undefined;
   if (eligibleTools.has(fields.toolName)) {
+    if (fields.toolName === HELIOS_BROWSER_TOOL_NAME && !textOnlyBlocks(fields.content)) return undefined;
     const details = fields.details;
     if (fields.toolName === "memory"
       && (!details || typeof details !== "object" || Array.isArray(details) || (details as Record<string, unknown>).memoryList !== true)) return undefined;
@@ -350,7 +352,8 @@ function sieveSource(message: ContextMessage, allowRecall: boolean): SieveSource
     recall.found !== true ||
     typeof recall.sourceToolName !== "string" ||
     !eligibleTools.has(recall.sourceToolName) ||
-    typeof recall.sourceIsError !== "boolean"
+    typeof recall.sourceIsError !== "boolean" ||
+    (recall.sourceToolName === HELIOS_BROWSER_TOOL_NAME && !textOnlyBlocks(fields.content))
   ) return undefined;
   return {
     toolName: recall.sourceToolName,
@@ -939,7 +942,8 @@ function exactDuplicateReplacements<T extends ContextMessage>(
   const earlierGeneric: typeof candidates = [];
   const fingerprintBuckets = new Map<string, typeof candidates>();
   for (const candidate of candidates) {
-    if (candidate.call.name === READ_TOOL_NAME || duplicateExcludedTools.has(candidate.call.name) || replaced.has(candidate.result.messageIndex)) continue;
+    const nonTextHelios = candidate.call.name === HELIOS_BROWSER_TOOL_NAME && !textOnlyBlocks(candidate.result.fields.content);
+    if (candidate.call.name === READ_TOOL_NAME || duplicateExcludedTools.has(candidate.call.name) || nonTextHelios || replaced.has(candidate.result.messageIndex)) continue;
     const fingerprint = genericDuplicateFingerprint(candidate.call, candidate.result);
     const bucketKey = fingerprint ? `${candidate.call.name}\0${fingerprint}` : undefined;
     const pool = bucketKey ? fingerprintBuckets.get(bucketKey) ?? [] : earlierGeneric;

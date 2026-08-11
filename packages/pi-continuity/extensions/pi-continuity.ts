@@ -604,7 +604,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.goal,
         work.planSummary,
         ...work.constraints,
-        ...(work.handoff?.workingSet ?? []),
+        ...(work.handoff?.workingSet ?? []).flatMap((value) => value.split(/[\\/]/)),
         ...(work.handoff?.assumptions ?? []),
         ...(work.handoff?.acceptanceCriteria ?? []),
         work.revisionFeedback?.text,
@@ -1107,6 +1107,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("input", (event) => {
     if (event.source !== "extension") {
+      automaticCompaction = undefined;
       lastPrompt = event.text;
       memoryTaskGeneration++;
       memoryLedger = { ...memoryLedger, taskGeneration: memoryTaskGeneration };
@@ -1121,7 +1122,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (!toolResults.length || !hasToolCalls) return;
     const allTerminating = toolResults.every((result: any) => terminatingToolCalls.has(result.toolCallId));
     for (const result of toolResults as any[]) terminatingToolCalls.delete(result.toolCallId);
-    if (allTerminating || automaticCompaction || ctx.signal?.aborted || ctx.hasPendingMessages()) return;
+    if (allTerminating || ctx.signal?.aborted || ctx.hasPendingMessages()) {
+      automaticCompaction = undefined;
+      return;
+    }
+    if (automaticCompaction) return;
 
     const usage = ctx.getContextUsage();
     if (usage?.tokens == null || !Number.isFinite(usage.tokens) || !Number.isFinite(usage.contextWindow) || usage.contextWindow <= 0) return;

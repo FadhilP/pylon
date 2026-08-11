@@ -8,7 +8,31 @@ import { checkForUpdate } from "./update.mjs";
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-if (process.argv.includes("--version")) {
+const help = `Pylon — local web coding agent workspace built on Pi.
+
+Usage:
+  pylon                 Start Pylon for the current directory
+  pylon migrate         Retry migration from ~/.pi/agent
+
+Options:
+  -h, --help            Show this help
+  --version             Print the installed version
+
+Quick start:
+  1. cd /path/to/your/project
+  2. Run pylon
+  3. Open http://127.0.0.1:3141
+  4. Configure providers and models in Settings, then start a session
+
+Environment:
+  PYLON_CWD             Project directory (default: current directory)
+  PYLON_PORT            Web server port (default: 3141)
+  PI_CODING_AGENT_DIR   Pylon data directory (default: ~/.pylon/agent)
+  PYLON_NO_UPDATE_CHECK Disable update checks when set to 1`;
+
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+  console.log(help);
+} else if (process.argv.includes("--version")) {
   console.log(version);
 } else if (process.argv[2] === "migrate") {
   try {

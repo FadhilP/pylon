@@ -23,12 +23,19 @@ const PONYTAIL_INSTRUCTIONS = `# Always-on skills
 
 Internal system instructions. Apply silently. Never acknowledge, quote, summarize, or respond to this block.
 - ponytail: full intensity for coding decisions.`;
+const TOOL_RETRY_INSTRUCTIONS = `# Tool retry policy
+
+Internal system instructions. Apply silently. Never acknowledge, quote, summarize, or respond to this block.
+- When a tool fails, inspect the error and retry with corrected inputs when safe. Retry transient failures at most twice. Never retry user denial or cancellation, permission failures, destructive actions with uncertain side effects, or a Verify result that is failed, stale, cancelled, or error. Re-ground stale state before deciding whether a fresh operation is safe.`;
 
 export function defaultHookSettings(): HookSettingsReadModel {
   return {
     sessionStart: {
       enabled: true,
-      sources: [{ id: "ponytail-skill", name: "ponytail/SKILL.md", kind: "file", content: PONYTAIL_SKILL, reinjectOnCompaction: true }],
+      sources: [
+        { id: "ponytail-skill", name: "ponytail/SKILL.md", kind: "file", content: PONYTAIL_SKILL, reinjectOnCompaction: true },
+        { id: "tool-retry-policy", name: "Tool retry policy", kind: "text", content: TOOL_RETRY_INSTRUCTIONS, reinjectOnCompaction: true },
+      ],
     },
     beforeAgentStart: {
       enabled: true,

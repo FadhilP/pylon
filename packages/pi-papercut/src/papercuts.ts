@@ -182,9 +182,63 @@ export function updatePapercuts(
   return { state: next, records: selected };
 }
 
+export type PapercutMutation =
+  | { action: "edit"; id: string; expectedUpdatedAt: string; message: string }
+  | { action: "delete"; id: string; expectedUpdatedAt: string };
+export type PapercutMutationErrorCode = "stale" | "duplicate" | "invalid";
+
+export class PapercutMutationError extends Error {
+  readonly code: PapercutMutationErrorCode;
+  constructor(code: PapercutMutationErrorCode, message: string) {
+    super(message);
+    this.name = "PapercutMutationError";
+    this.code = code;
+  }
+}
+export function mutatePapercut(state: PapercutState, input: PapercutMutation, now = new Date().toISOString()) {
+  const next = structuredClone(state);
+  const index = next.records.findIndex((record) => record.id === input.id);
+  const record = next.records[index];
+  if (!record || record.updatedAt !== input.expectedUpdatedAt)
+    throw new PapercutMutationError("stale", "Papercut changed or was removed");
+  const mutationAt = new Date(Math.max(Date.parse(now), Date.parse(record.updatedAt) + 1)).toISOString();
+  if (input.action === "delete") {
+    next.records.splice(index, 1);
+    next.updatedAt = mutationAt;
+    return { state: next };
+  }
+  let message: string;
+  try { message = cleanText(input.message, MAX_MESSAGE_LENGTH, "message"); }
+  catch { throw new PapercutMutationError("invalid", "Papercut message is invalid"); }
+  if (record.status === "open" && next.records.some((item, itemIndex) => itemIndex !== index
+    && item.status === "open" && normalizedMessage(item.message) === normalizedMessage(message))) {
+    throw new PapercutMutationError("duplicate", "Another open papercut already uses this message");
+  }
+  record.message = message;
+  record.updatedAt = mutationAt;
+  next.updatedAt = mutationAt;
+  return { state: next, record };
+}
+
 export function listPapercuts(state: PapercutState, status: PapercutStatus | "all" = "open", limit = 50) {
-  return state.records
+  return [...state.records]
     .filter((record) => status === "all" || record.status === status)
-    .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+    .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt) || left.id.localeCompare(right.id))
     .slice(0, limit);
+}
+
+export function queryPapercuts(
+  state: PapercutState,
+  status: PapercutStatus | "all" = "open",
+  query = "",
+  offset = 0,
+  limit = 25,
+) {
+  const needle = normalizedMessage(query);
+  const records = [...state.records]
+    .filter((record) => status === "all" || record.status === status)
+    .filter((record) => !needle || [record.message, record.resolution, record.dismissal]
+      .some((value) => value && normalizedMessage(value).includes(needle)))
+    .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt) || left.id.localeCompare(right.id));
+  return { records: records.slice(offset, offset + limit), total: records.length };
 }

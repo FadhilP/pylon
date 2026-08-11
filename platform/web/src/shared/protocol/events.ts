@@ -30,6 +30,7 @@ export interface CompactionDisplayReadModel {
 
 export interface CompactionMessageReadModel {
   contextAfterTokens: number;
+  contextBeforeTokens?: number;
   sourceEntryCount?: number;
   display?: CompactionDisplayReadModel;
 }
@@ -374,6 +375,13 @@ export interface ContinuityWorkReadModel {
   todos: ContinuityTodoReadModel[];
 }
 
+export interface PapercutSummaryReadModel {
+  availability: FeatureState;
+  revision: number;
+  counts: { open: number; resolved: number; dismissed: number; total: number };
+}
+
+
 export interface ContinuityMemoryNoteReadModel {
   id: string;
   scope: "user" | "project";
@@ -510,6 +518,7 @@ export interface OperationalReadModel {
   jobs: JobsReadModel;
   guard: GuardReadModel;
   continuity: ContinuityReadModel;
+  papercuts: PapercutSummaryReadModel;
   timeline: TimelineReadModel;
   tools: ToolsReadModel;
   sieve: SieveReadModel;

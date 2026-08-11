@@ -18,15 +18,25 @@ function runtime() {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
+  const eventHandlers = new Map<string, Function[]>();
   const emitted: Array<{ channel: string; value: any }> = [];
   const pi: any = {
-    events: { emit: (channel: string, value: any) => emitted.push({ channel, value }) },
+    events: {
+      emit: (channel: string, value: any) => {
+        emitted.push({ channel, value });
+        for (const handler of eventHandlers.get(channel) ?? []) handler(value);
+      },
+      on: (channel: string, handler: Function) => {
+        eventHandlers.set(channel, [...(eventHandlers.get(channel) ?? []), handler]);
+        return () => eventHandlers.set(channel, (eventHandlers.get(channel) ?? []).filter((item) => item !== handler));
+      },
+    },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
   };
   extension(pi);
-  return { tools, commands, handlers, emitted };
+  return { tools, commands, handlers, eventHandlers, emitted, pi };
 }
 
 function context(cwd: string, notifications: Array<{ text: string; level: string }> = []) {
@@ -54,8 +64,8 @@ test("one tool exposes capture and lifecycle actions without session review", as
   assert.deepEqual(tool.parameters.properties.action.enum, ["capture", "list", "resolve", "dismiss", "reopen"]);
   assert.equal(app.commands.has("papercut-review"), false);
 
-  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, {});
-  assert.deepEqual(app.emitted.at(-1), {
+  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, context(root));
+  assert.deepEqual(app.emitted.find((item) => item.channel === "pylon:tool-policy"), {
     channel: "pylon:tool-policy",
     value: {
       version: 1,
@@ -65,6 +75,7 @@ test("one tool exposes capture and lifecycle actions without session review", as
       enabledTools: ["papercut"],
     },
   });
+  assert.equal(app.emitted.some((item) => item.channel === "pi-papercut:state-change" && item.value.available === true), true);
   for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, {});
   assert.deepEqual(app.emitted.at(-1), {
     channel: "pylon:tool-policy",
@@ -95,6 +106,24 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   const closed = await tool.execute("closed", { action: "list", status: "resolved" }, undefined, undefined, ctx);
   assert.match(closed.content[0].text, /Documented setup and added a regression test/);
 
+
+  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+  let response: Promise<any> | undefined;
+  app.pi.events.emit("pylon:papercut-list-request", {
+    version: 1,
+    sessionId: "session-1",
+    status: "resolved",
+    query: "regression",
+    offset: 0,
+    limit: 25,
+    claim: () => true,
+    respond: (value: Promise<any>) => { response = value; },
+  });
+  const page = await response;
+  assert.equal(page.total, 1);
+  assert.equal(page.records[0].resolution, "Documented setup and added a regression test.");
+  assert.equal(page.records[0].source, undefined);
+  assert.equal(page.records[0].lastSource, undefined);
   await assert.rejects(
     tool.execute("invalid", { action: "list", ids: [id] }, undefined, undefined, ctx),
     /not valid when listing/,
@@ -128,4 +157,26 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   assert.match(notifications[2].text, /Papercuts \(all, 1\)/i);
   assert.match(notifications[3].text, /usage: \/papercuts/i);
   assert.equal(notifications[3].level, "error");
+
+  const request = <T>(channel: string, value: Record<string, unknown>) => new Promise<T>((resolve, reject) => {
+    app.pi.events.emit(channel, {
+      version: 1, sessionId: "session-1", ...value, claim: () => true,
+      respond: (result: Promise<T>) => { void result.then(resolve, reject); },
+    });
+  });
+  const editResult = await request<any>("pylon:papercut-mutation-request", {
+    action: "edit", id, expectedUpdatedAt: page.records[0].updatedAt, message: "Setup retry is now documented.",
+  });
+  assert.equal(editResult.ok, true);
+
+  const editedPage = await request<any>("pylon:papercut-list-request", {
+    status: "all", query: "documented", offset: 0, limit: 25,
+  });
+  assert.equal(editedPage.records[0].message, "Setup retry is now documented.");
+
+  const deleteResult = await request<any>("pylon:papercut-mutation-request", {
+    action: "delete", id, expectedUpdatedAt: editedPage.records[0].updatedAt,
+  });
+  assert.equal(deleteResult.ok, true);
+  assert.equal(app.emitted.some((item) => item.channel === "pi-papercut:state-change" && item.value.counts.total === 0), true);
 });

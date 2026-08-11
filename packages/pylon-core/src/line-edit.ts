@@ -247,6 +247,21 @@ function carrySeenLines(seen: Interval[], operations: ParsedOperation[]): Interv
   return carried;
 }
 
+function authoredSeenLines(operations: ParsedOperation[]): Interval[] {
+  const authored: Interval[] = [];
+  for (const operation of operations) {
+    if (operation.replacement.length === 0) continue;
+    const base = operation.index + 1;
+    const shift = operations.reduce((sum, candidate) =>
+      candidate !== operation && base >= candidate.shiftAt ? sum + candidate.delta : sum, 0);
+    const start = base + shift;
+    const interval = { start, end: start + operation.replacement.length - 1 };
+    const merged = mergeIntervals(authored, interval);
+    authored.splice(0, authored.length, ...merged);
+  }
+  return authored;
+}
+
 function lineContext(text: string, firstChangedLine: number | undefined): { text: string; interval: Interval } {
   const lines = text.split("\n");
   const center = Math.max(1, Math.min(firstChangedLine ?? 1, lines.length));
@@ -377,14 +392,20 @@ export function registerLineEditTools(pi: ExtensionAPI): void {
           message += "\n\nThe persisted file encoding or line endings changed; read it again before another edit.";
         } else {
           const currentHash = hashBytes(afterBytes);
-          const context = lineContext(actual!, diff.firstChangedLine);
-          const next = recordSnapshot(snapshots, path, currentHash, context.interval, true);
-          for (const interval of carriedSeen) recordSnapshot(snapshots, path, currentHash, interval);
-          details.revision = next.tag;
-          details.coverage = context.interval;
-          message += `\n[${params.path}#${next.tag}]\n${context.text}`;
-          if (!persistedMatches)
-            message += "\n\n[The file was transformed while saving; the revision and context above describe what actually persisted.]";
+          if (persistedMatches) {
+            const next = recordSnapshot(snapshots, path, currentHash, undefined, true);
+            for (const interval of [...carriedSeen, ...authoredSeenLines(operations)])
+              recordSnapshot(snapshots, path, currentHash, interval);
+            details.revision = next.tag;
+            message += ` New revision: [${params.path}#${next.tag}].`;
+          } else {
+            const context = lineContext(actual!, diff.firstChangedLine);
+            const next = recordSnapshot(snapshots, path, currentHash, context.interval, true);
+            details.revision = next.tag;
+            details.coverage = context.interval;
+            message += `\n[${params.path}#${next.tag}]\n${context.text}`;
+            message += "\n\n[The revision and context above describe what actually persisted.]";
+          }
         }
         return { content: [{ type: "text", text: message }], details };
       });

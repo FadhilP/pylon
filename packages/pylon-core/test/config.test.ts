@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { configPath, loadConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
-test("numbered line editing is opt-in and persists through the settings adapter", async () => {
+test("numbered line editing defaults on and persists through the settings adapter", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pylon-core-settings-"));
   try {
-    assert.deepEqual(await readSettings({ agentDir }), { kind: "pylon-core", lineEditEnabled: false });
-    await updateSettings({ kind: "pylon-core", lineEditEnabled: true }, { agentDir });
-    assert.deepEqual(await loadConfig(configPath(agentDir)), { version: 1, lineEditEnabled: true });
-    assert.equal(JSON.parse(await readFile(configPath(agentDir), "utf8")).lineEditEnabled, true);
+    assert.deepEqual(await readSettings({ agentDir }), { kind: "pylon-core", lineEditEnabled: true });
+    await updateSettings({ kind: "pylon-core", lineEditEnabled: false }, { agentDir });
+    assert.deepEqual(await loadConfig(configPath(agentDir)), { version: 1, lineEditEnabled: false });
+    assert.equal(JSON.parse(await readFile(configPath(agentDir), "utf8")).lineEditEnabled, false);
     await assert.rejects(
       updateSettings({ kind: "pylon-core", lineEditEnabled: "yes" }, { agentDir }),
       /invalid Pylon Core settings/,

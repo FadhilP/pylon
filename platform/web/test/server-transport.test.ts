@@ -5,11 +5,12 @@ import type { AddressInfo } from "node:net";
 import { WebSocket } from "ws";
 import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protocol/commands.ts";
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
+import type { HeliosAndroidToolingCommand } from "../src/shared/protocol/helios-android-tooling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PapercutMutationResult, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
-import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
+import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PapercutMutationInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
 import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
@@ -77,8 +78,10 @@ class FakeDriver implements PiDriver {
   indexRebuilds = 0;
   newSessionParent?: string;
   heliosRequests: HeliosBrowserInput[] = [];
+  heliosAndroidToolingRequests: HeliosAndroidToolingCommand[] = [];
   stateqlHistoryLimits: number[] = [];
   stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
+  papercutMutations: PapercutMutationInput[] = [];
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   deferDialog = false;
   private pendingDialog?: DriverEvent;
@@ -115,6 +118,10 @@ class FakeDriver implements PiDriver {
     this.heliosRequests.push(input);
     return Promise.resolve({ version: 1 as const, sessionGeneration: this.current.sessionGeneration, active: true, ownership: "owned" as const, state: "ready" as const, controlled: true });
   }
+  heliosAndroidTooling(input: HeliosAndroidToolingCommand) {
+    this.heliosAndroidToolingRequests.push(input);
+    return Promise.resolve({ version: 1 as const, sessionGeneration: this.current.sessionGeneration, state: "ready" as const, appiumVersion: "3.6.0", driverVersion: "8.2.2" });
+  }
   stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
     this.stateqlHistoryLimits.push(historyLimit);
     return Promise.resolve({
@@ -146,6 +153,10 @@ class FakeDriver implements PiDriver {
       truncated: false,
       next_offset: null,
     });
+  }
+  papercutMutation(input: PapercutMutationInput): Promise<PapercutMutationResult> {
+    this.papercutMutations.push(input);
+    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, revision: this.papercutMutations.length });
   }
   prompt(input: PromptInput): Promise<AcceptedCommand> {
     this.prompts.push(input.message);
@@ -258,8 +269,8 @@ class FakeDriver implements PiDriver {
   emitRuntime(runtime: RuntimeSnapshot): void {
     this.emit({ type: "session.replaced", sessionId: runtime.sessionId, sessionGeneration: runtime.sessionGeneration, runtime });
   }
-  emitStatus(sessionId: string, state: "sleeping" | "idle" | "running" | "attention"): void {
-    this.emit({ type: "session.status", sessionId, sessionGeneration: this.current.sessionGeneration, state });
+  emitStatus(sessionId: string, state: "sleeping" | "idle" | "running" | "attention", completed = false): void {
+    this.emit({ type: "session.status", sessionId, sessionGeneration: this.current.sessionGeneration, state, ...(completed ? { completed: true } : {}) });
   }
   dispose(): Promise<void> { return Promise.resolve(); }
   private replace(sessionId: string, cwdLabel: string): ReplacementResult {
@@ -442,6 +453,44 @@ test("bootstrap rejects invalid runtime snapshots with a bounded diagnostic", as
   }
 });
 
+test("bootstrap snapshots completions at its cursor and later completions replay", async () => {
+  const driver = new FakeDriver();
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`] });
+  const tab = "completion-tab";
+  const stream = new AbortController();
+  try {
+    driver.emitStatus("before-bootstrap", "idle", true);
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";")[0];
+    const boot = await body(bootstrap);
+    assert.deepEqual(boot.unseenCompletionSessionIds, ["before-bootstrap"]);
+
+    driver.emitStatus("after-bootstrap", "sleeping", true);
+    const events = await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:${String(boot.sequence)}`, {
+      headers: { cookie },
+      signal: stream.signal,
+    });
+    const chunk = await events.body!.getReader().read();
+    assert.match(new TextDecoder().decode(chunk.value), /after-bootstrap[\s\S]+"completed":true/);
+
+    const current = await body(await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }));
+    assert.deepEqual(current.unseenCompletionSessionIds, ["before-bootstrap", "after-bootstrap"]);
+    driver.emitRuntime({ ...structuredClone(snapshot), sessionId: "before-bootstrap", sessionGeneration: 2 });
+    const selected = await body(await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }));
+    assert.deepEqual(selected.unseenCompletionSessionIds, ["after-bootstrap"]);
+  } finally {
+    stream.abort();
+    transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+
 test("transport enforces origin, CSRF, size, generation, readiness, idempotency, and dialog ownership", { timeout: 10_000 }, async () => {
   const driver = new FakeDriver();
   let transport: ServerTransport;
@@ -487,6 +536,8 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(noStream.status, 409);
     const noStreamBrowser = await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) });
     assert.equal(noStreamBrowser.status, 409);
+    const noStreamAndroidTooling = await fetch(`${origin}/api/v1/helios-android-tooling`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) });
+    assert.equal(noStreamAndroidTooling.status, 409);
     const badCsrf = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ type: "abort", commandId: "bad", expectedGeneration: 1 }) });
     assert.equal(badCsrf.status, 403);
     const stale = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "abort", commandId: "stale", expectedGeneration: 2 }) });
@@ -506,6 +557,21 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "pointer", expectedGeneration: 1, x: -1, y: 1, phase: "move" }) })).status, 400);
     assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 2 }) })).status, 409);
     assert.equal((await fetch(`${origin}/api/v1/helios-browser`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) })).status, 403);
+    const androidToolingStatus = await fetch(`${origin}/api/v1/helios-android-tooling`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "status", expectedGeneration: 1 }) });
+    assert.equal(androidToolingStatus.status, 200);
+    assert.equal(androidToolingStatus.headers.get("cache-control"), "no-store");
+    assert.equal((await body(androidToolingStatus)).appiumVersion, "3.6.0");
+    assert.deepEqual(driver.heliosAndroidToolingRequests.at(-1), { action: "status", expectedGeneration: 1 });
+    assert.equal((await fetch(`${origin}/api/v1/helios-android-tooling`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "install", expectedGeneration: 1 }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/helios-android-tooling`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ action: "install", expectedGeneration: 1, confirmed: true, package: "arbitrary" }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/helios-android-tooling`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ action: "remove", expectedGeneration: 1, confirmed: true }) })).status, 403);
+    const papercutId = "00000000-0000-4000-8000-000000000001";
+    const papercutEdit = await fetch(`${origin}/api/v1/papercuts/mutate`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ generation: 1, action: "edit", id: papercutId, expectedUpdatedAt: "2026-01-01T00:00:00.000Z", message: "Updated friction" }) });
+    assert.equal(papercutEdit.status, 200);
+    assert.equal(papercutEdit.headers.get("cache-control"), "no-store");
+    assert.deepEqual(driver.papercutMutations.at(-1), { action: "edit", id: papercutId, expectedUpdatedAt: "2026-01-01T00:00:00.000Z", message: "Updated friction" });
+    assert.equal((await fetch(`${origin}/api/v1/papercuts/mutate`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ generation: 1, action: "delete", id: papercutId, expectedUpdatedAt: "2026-01-01T00:00:00.000Z", message: "invalid" }) })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/papercuts/mutate`, { method: "POST", headers: { ...mutationHeaders, "x-pylon-csrf": "bad" }, body: JSON.stringify({ generation: 1, action: "delete", id: papercutId, expectedUpdatedAt: "2026-01-01T00:00:00.000Z" }) })).status, 403);
     const images = [{ mimeType: "image/png", data: "eA==" }] as const;
     const command = { type: "prompt", commandId: "once", expectedGeneration: 1, message: "hello", images };
     const accepted = await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(command) });

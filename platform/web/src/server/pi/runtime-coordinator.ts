@@ -1,6 +1,7 @@
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
+import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -28,7 +29,7 @@ import {
 } from "pylon-core/src/worktree.ts";
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -46,6 +47,7 @@ import type {
   NewSessionInput,
   PiDriver,
   ProjectInput,
+  PapercutMutationInput,
   ProjectArchiveInput,
   ProjectWorktreeSettingsInput,
   PromptInput,
@@ -375,6 +377,15 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: this.generation };
   }
 
+  async heliosAndroidTooling(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    if (!slot.driver.heliosAndroidTooling) throw new Error("Helios Android tooling is unavailable");
+    const result = await slot.driver.heliosAndroidTooling({ ...input, expectedGeneration: slot.innerGeneration });
+    this.assertSelected(slot, input.expectedGeneration, "controlling Helios Android tooling");
+    return { ...result, sessionGeneration: this.generation };
+  }
+
   async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
     const slot = this.selected();
     const generation = this.generation;
@@ -487,6 +498,24 @@ export class RuntimeCoordinator implements PiDriver {
     if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
     const result = await slot.driver.stateqlRows(handle, offset, limit);
     this.assertSelected(slot, generation, "loading StateQL rows");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async papercutList(status: PapercutStatusReadModel | "all", query: string, offset: number, limit: number): Promise<PapercutListPage> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.papercutList) throw new Error("Papercuts are unavailable");
+    const result = await slot.driver.papercutList(status, query, offset, limit);
+    this.assertSelected(slot, generation, "loading papercuts");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async papercutMutation(input: PapercutMutationInput): Promise<PapercutMutationResult> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.papercutMutation) throw new Error("Papercut mutations are unavailable");
+    const result = await slot.driver.papercutMutation(input);
+    this.assertSelected(slot, generation, "updating a papercut");
     return { ...result, sessionGeneration: generation };
   }
 
@@ -2340,7 +2369,6 @@ export class RuntimeCoordinator implements PiDriver {
     if (!slot) return;
     const state = slot.driver.runtimeState();
     const workStartedAt = slot.driver.runtimeDetails().workStartedAt;
-    completed = completed && state === "idle";
     if ((cue === "turn-complete" && !completed) || (cue === "attention" && state !== "attention")) cue = undefined;
     if (state === slot.lastState && workStartedAt === slot.lastWorkStartedAt && !completed && !cue) return;
     slot.lastState = state;

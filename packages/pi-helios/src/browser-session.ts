@@ -36,6 +36,7 @@ export interface BrowserOperationResult {
   page?: PageIdentity;
   tabs?: PageIdentity[];
   snapshot?: string;
+  tabsOmitted?: number;
   snapshotRedactions?: number;
   snapshotTruncated?: boolean;
   snapshotOmittedLines?: number;
@@ -80,6 +81,9 @@ export interface InteractiveBrowserState {
 
 const INTERACTIVE_LEASE_IDLE_MS = 5_000;
 const METADATA_ACTIONS = new Set(["start", "attach", "navigate", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
+const MAX_RESULT_TABS = 20;
+const MAX_TAB_TITLE_CHARS = 160;
+const MAX_TAB_URL_CHARS = 768;
 
 function sessionMissing(error: unknown): boolean {
   return error instanceof HeliosCliError && error.category === "session-missing";
@@ -107,20 +111,44 @@ function resultText(value: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function boundTabField(value: string, maximum: number): string {
+  return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
+}
+
 export function parseTabs(text: string | undefined): PageIdentity[] {
   if (!text) return [];
   const tabs: PageIdentity[] = [];
+  const indexes = new Set<number>();
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(/^- (\d+): (?:\(current\) )?\[(.*)\]\((.*)\)$/);
-    if (match) tabs.push({ index: Number(match[1]), title: match[2] || "Untitled tab", url: match[3] });
+    if (!match) continue;
+    const index = Number(match[1]);
+    if (!Number.isSafeInteger(index) || indexes.has(index)) continue;
+    indexes.add(index);
+    tabs.push({
+      index,
+      title: boundTabField(match[2] || "Untitled tab", MAX_TAB_TITLE_CHARS),
+      url: boundTabField(match[3], MAX_TAB_URL_CHARS),
+    });
   }
   return tabs;
 }
 
 function currentTab(text: string | undefined): PageIdentity | undefined {
   if (!text) return undefined;
-  const line = text.split(/\r?\n/).find((item) => item.includes("(current)"));
+  const line = text.split(/\r?\n/).find((item) => /^- \d+: \(current\) \[/.test(item));
   return parseTabs(line)[0];
+}
+
+function resultTabs(tabs: PageIdentity[] | undefined, currentIndex: number | undefined): PageIdentity[] | undefined {
+  if (!tabs) return undefined;
+  if (tabs.length <= MAX_RESULT_TABS) return tabs.slice();
+  const selected = tabs.slice(0, MAX_RESULT_TABS);
+  if (currentIndex !== undefined && !selected.some((tab) => tab.index === currentIndex)) {
+    const current = tabs.find((tab) => tab.index === currentIndex);
+    if (current) selected[selected.length - 1] = current;
+  }
+  return selected;
 }
 
 function listedBrowsers(value: Record<string, unknown>): Array<{ name: string; status: string }> | undefined {
@@ -141,7 +169,7 @@ export class BrowserSessionManager {
   private readonly createCli: CliFactory;
   private readonly interactiveLeaseIdleMs: number;
 
-  constructor(exec: Exec, createCli: CliFactory = PlaywrightCli.create, interactiveLeaseIdleMs = INTERACTIVE_LEASE_IDLE_MS) {
+  constructor(exec: Exec, createCli: CliFactory = (value) => PlaywrightCli.create(value, { persistentClient: true }), interactiveLeaseIdleMs = INTERACTIVE_LEASE_IDLE_MS) {
     this.exec = exec;
     this.createCli = createCli;
     this.interactiveLeaseIdleMs = interactiveLeaseIdleMs;
@@ -392,7 +420,7 @@ export class BrowserSessionManager {
         managed.references.clear();
         throw staleSessionError();
       }
-      if (this.invalidatesReferences(action)) managed.references.clear();
+      if (error instanceof HeliosCliError && error.uncertainOutcome || this.invalidatesReferences(action)) managed.references.clear();
       throw error;
     }
     this.updateReferences(managed, action, result.snapshot);
@@ -522,6 +550,10 @@ export class BrowserSessionManager {
       if (metadataAvailable) metadataStale = false;
       else metadataStale = managed.page !== undefined;
     }
+    const returnedTabs = includeTabs ? resultTabs(managed.tabs, managed.page?.index) : undefined;
+    const tabsOmitted = includeTabs && managed.tabs && returnedTabs && managed.tabs.length > returnedTabs.length
+      ? managed.tabs.length - returnedTabs.length
+      : undefined;
     return {
       action,
       ownership: managed.record.ownership,
@@ -530,7 +562,8 @@ export class BrowserSessionManager {
       metadataAvailable,
       metadataStale,
       page: managed.page,
-      tabs: includeTabs ? managed.tabs : undefined,
+      tabs: returnedTabs,
+      tabsOmitted,
       snapshot: result.snapshot,
       snapshotRedactions: result.snapshotRedactions,
       snapshotTruncated: result.snapshotTruncated,

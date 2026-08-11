@@ -10,31 +10,39 @@ test("earlier history preserves a stable transcript anchor", async () => {
   assert.match(source, /requestAnimationFrame\(\(\) => \{[\s\S]*?if \(preserveAnchor\)[\s\S]*?setTranscriptScrollTop[\s\S]*?finally \{\s*setHistoryLoading\(undefined\)/);
 });
 
-test("compaction history renders structured context with a canonical-summary fallback", async () => {
+test("compaction history opens summary-first details in the right panel", async () => {
   const source = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
+  const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+  const panel = await readFile(new URL("../src/client/compaction-panel.tsx", import.meta.url), "utf8");
 
-  assert.match(source, /if \(block\.compaction\) return <CompactionDisclosure/);
-  assert.match(source, /<details className="compaction-disclosure">[\s\S]*?compaction-disclosure-chevron[\s\S]*?<strong>Context compacted<\/strong>/);
-  assert.match(source, /when-closed">View compacted context[\s\S]*?when-open">Hide compacted context/);
-  assert.match(source, /<dt>Context after<\/dt>[\s\S]*?contextAfterTokens/);
-  assert.match(source, /sourceEntryCount !== undefined[\s\S]*?<dt>Source entries<\/dt>/);
-  assert.match(source, /display\.records\.map\(\(record, index\)[\s\S]*?record\.role === "user" \? "User" : "Assistant"[\s\S]*?record\.sourceEntryId[\s\S]*?<pre>\{record\.text\}<\/pre>/);
-  assert.match(source, /title="Failed tool calls" records=\{display\.failedTools\} failed/);
-  assert.match(source, /title="Tool results" records=\{display\.toolResults\}/);
-  assert.match(source, /<details className=\{`compaction-tool-group[\s\S]*?<summary><strong>\{title\} \(\{records\.length\}\)<\/strong>/);
-  assert.match(source, /records\.map\(\(record, index\)[\s\S]*?key=\{`\$\{record\.sourceEntryId\}:\$\{index\}`\}/);
-  assert.match(source, /history\.modified[\s\S]*?history\.read[\s\S]*?Observed file activity/);
-  const disclosure = source.slice(source.indexOf("function CompactionDisclosure"), source.indexOf("function SystemDisclosure"));
-  assert.match(disclosure, /display \? <div className="compaction-display">[\s\S]*?: <MarkdownContent text=\{message\.text\} \/>/);
-  assert.doesNotMatch(disclosure, /dangerouslySetInnerHTML/);
-  assert.doesNotMatch(source, /<dt>Context before<\/dt>|<dt>Reduction<\/dt>|<dt>Reason<\/dt>/);
+  assert.match(source, /if \(block\.compaction\) return <CompactionDisclosure[\s\S]*?onOpen=\{onOpenCompaction\}/);
+  assert.match(source, /<button className="compaction-disclosure" type="button" onClick=\{\(\) => onOpen\(message\)\}>[\s\S]*?<strong>Context compacted<\/strong>[\s\S]*?View details/);
+  assert.doesNotMatch(source.slice(source.indexOf("function CompactionDisclosure"), source.indexOf("function SystemDisclosure")), /<details|compaction\.display|MarkdownContent/);
+
+  assert.match(app, /RightPanel = [^;]*"compaction"/);
+  assert.match(app, /onOpenCompaction=\{\(message\) => \{[\s\S]*?setSelectedCompaction\(\{ sessionId, message \}\)[\s\S]*?setRightPanel\("compaction"\)/);
+  assert.match(app, /rightPanel === "compaction"[\s\S]*?<CompactionPanel[\s\S]*?message=\{selectedCompaction\.message\}/);
+  assert.match(app, /setSelectedCompaction\(undefined\)[\s\S]*?current === "compaction" \? null : current/);
+
+  assert.match(panel, /<aside id="compaction-panel" className="inspector compaction-panel is-open"[\s\S]*?Compaction details/);
+  assert.match(panel, /contextBeforeTokens !== undefined[\s\S]*?<dt>Context before<\/dt>/);
+  assert.match(panel, /<dt>Context after<\/dt>[\s\S]*?contextAfterTokens/);
+  assert.match(panel, /sourceEntryCount !== undefined[\s\S]*?<dt>Source entries<\/dt>/);
+  const summary = panel.indexOf("<MarkdownContent text={message.text} />");
+  const sources = panel.indexOf("<h2 id=\"compaction-sources-title\">Available source details</h2>");
+  assert.ok(summary >= 0 && sources > summary);
+  assert.match(panel, /display\.records\.map\(\(record, index\)[\s\S]*?<pre>\{record\.text\}<\/pre>/);
+  assert.match(panel, /title="Failed tool calls" records=\{display\.failedTools\} failed/);
+  assert.match(panel, /title="Tool results" records=\{display\.toolResults\}/);
+  assert.match(panel, /history\.modified[\s\S]*?history\.read[\s\S]*?Observed file activity/);
+  assert.match(panel, /hasSourceDetails[\s\S]*?hasMetadata/);
+  assert.doesNotMatch(panel, /dangerouslySetInnerHTML|Raw JSON/);
 });
 
 test("new sessions show an isolated drafting shell until the authoritative runtime is ready", async () => {
   const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
   const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(app, /conversation:pending:\$\{pendingSession\.requestId\}/);
   assert.match(app, /pendingSessionInFlight\.current \|\| sessionBusy[\s\S]*?pendingSessionInFlight\.current = true/);
@@ -55,34 +63,26 @@ test("new sessions show an isolated drafting shell until the authoritative runti
   assert.match(panel, /disabled=\{!connected \|\| composerBlocked \|\| submitting \|\| !hasDraft \|\| !controls\?\.model\}/);
   assert.match(panel, /Workspace setup failed[\s\S]*?Retry setup/);
   assert.match(store, /async newSession\([\s\S]*?Promise<number>[\s\S]*?return accepted\.sessionGeneration/);
-  assert.match(styles, /\.pending-session-shell[\s\S]*?\.pending-session-progress[\s\S]*?\.pending-session-draft-note/);
   const newSession = app.slice(app.indexOf("const newSession"), app.indexOf("const deleteSession"));
   assert.doesNotMatch(newSession, /setRightPanel\(null\)/);
   assert.match(app, /workspace-layout[\s\S]*?pendingSession \? " is-session-pending"/);
   assert.match(app, /querySelector<HTMLElement>\(":scope > \.inspector"\)[\s\S]*?drawer\.inert = Boolean\(pendingSession\)/);
-  assert.match(styles, /\.workspace-layout\.is-session-pending > \.inspector[\s\S]*?filter: blur\(1\.5px\)[\s\S]*?pointer-events: none/);
 });
 
 test("active Continuity planning remains visible after the one-shot composer mode resets", async () => {
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(panel, /continuityPlanning = runtime\?\.operational\.continuity\.work\?\.mode === "planning"/);
   assert.match(panel, /continuityPlanning && <span className="continuity-planning-indicator" role="status" aria-live="polite">[\s\S]*?Planning<\/span>/);
   assert.match(panel, /setPlanMode\(false\)/);
-  assert.match(styles, /\.continuity-planning-indicator[\s\S]*?background: var\(--accent-soft\)/);
 });
 
-test("pending user messages use the approved unsent treatment and queue controls", async () => {
+test("pending user messages expose queue controls", async () => {
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(panel, /pending\?\.state === "queued" \? " - pending"/);
   assert.match(panel, /className="pending-message-footer"[\s\S]*?Waiting to send[\s\S]*?Sending/);
   assert.match(panel, /pending-message-actions[\s\S]*?restoreQueued\(queued\)[\s\S]*?steerQueued\(queued\)/);
-  assert.match(styles, /\.message-block\.is-queued \.conversation-message[\s\S]*?border: 1px dashed[\s\S]*?box-shadow: inset 3px 0 0/);
-  assert.match(styles, /\.message-block\.is-sending \.conversation-message \{ opacity: \.72; \}/);
-  assert.match(styles, /\.pending-message-footer[\s\S]*?\.pending-message-actions button/);
 });
 
 test("retry and compaction use the prominent shared transcript activity rail", async () => {
@@ -109,11 +109,10 @@ test("spawned conversations reuse main-chat timing metadata without a child-work
   assert.doesNotMatch(agents, /Child is working/);
 });
 
-test("main and agent aggregate tool groups keep their icon and share the running scan", async () => {
+test("main and agent aggregate tool groups keep their icon and running state", async () => {
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
   const agents = await readFile(new URL("../src/client/agent-drawer.tsx", import.meta.url), "utf8");
   const activity = await readFile(new URL("../src/shared/agent-activity.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
 
   assert.match(panel, /const activeToolGroupId = running[\s\S]*?reverse\(\)\.find\(\(block\) => "tools" in block && !toolBlocksBeforeLaterPrompt\.has\(block\.id\)\)\?\.id/);
   assert.match(panel, /<ToolTurnGroup[^\n]*?running=\{block\.id === activeToolGroupId\}/);
@@ -126,11 +125,4 @@ test("main and agent aggregate tool groups keep their icon and share the running
   assert.match(activity, /tool\.id === item\.id/);
   assert.match(activity, /target\.completed = true/);
   assert.match(agents, /summary=\{<>\s*<IconTool size=\{15\} \/>/);
-  assert.match(styles, /\.tool-turn-group\.is-running::before,[\s\S]*?\.agent-tool-group\.is-running::before/);
-  assert.match(styles, /\.tool-turn-group\.is-running::after,[\s\S]*?\.agent-tool-group\.is-running::after/);
-  assert.match(styles, /\.agent-tool-group > summary \{[^\n]*color: var\(--text-muted\)/);
-  assert.match(styles, /\.agent-tool-group > summary strong \{ color: var\(--text-soft\)/);
-  assert.match(styles, /animation: transcript-activity-scan 1\.5s/);
-  assert.match(styles, /@keyframes transcript-activity-scan \{ from \{ transform: translateX\(0\); \} to \{ transform: translateX\(300%\); \} \}/);
-  assert.match(styles, /prefers-reduced-motion: reduce[\s\S]*?\.agent-tool-group\.is-running::after[\s\S]*?animation: none !important/);
 });

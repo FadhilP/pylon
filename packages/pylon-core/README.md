@@ -6,12 +6,12 @@ Pylon Web always loads pylon-core and does not expose a disable control because 
 
 ## Numbered line edits
 
-Pylon settings can opt into **Revision-guarded numbered edits**. Disabled is the default and leaves Pi's built-in `read` and `edit` unchanged. When enabled:
+**Revision-guarded numbered edits** are enabled by default. Disable the setting to leave Pi's built-in `read` and `edit` unchanged. When enabled:
 
 - `read` prefixes text with absolute line numbers and a compact file-version tag backed by a full internal SHA-256.
 - `edit` replaces or inserts complete numbered lines only when the tag still matches and the target lines were displayed.
 - Disjoint operations resolve against one snapshot, validate together, and write once through Pi's per-file mutation queue.
-- Successful edits return a new tag and context. Previously seen unchanged lines carry forward; shifted lines are remapped conservatively.
+- Successful edits return only the new tag during normal saves. Previously seen unchanged lines and model-authored lines carry forward; actual surrounding context is returned only when another process transforms the file while saving.
 
 The setting is stored in `<agent-dir>/pylon-core/config.json`. Pylon Web rebinds the runtime after changes; other Pi clients should run `/reload` after editing the config.
 

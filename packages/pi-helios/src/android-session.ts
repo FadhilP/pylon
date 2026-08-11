@@ -6,6 +6,7 @@ import { AndroidSdk, type OwnedEmulator } from "./android-sdk.ts";
 import { androidSnapshot, sameAndroidElement, type AndroidElementRef, type AndroidSnapshot } from "./android-source.ts";
 import { AppiumClient, AppiumServer, resolveAppium, type AppiumInvocation } from "./appium.ts";
 import type { Exec } from "./capture.ts";
+import { AndroidToolingManager } from "./android-tooling.ts";
 
 export type AndroidOwnership = "owned" | "attached";
 export type AndroidState = "starting" | "ready" | "cleanup-required" | "closing" | "closed";
@@ -82,16 +83,19 @@ interface Managed {
   references: Map<string, AndroidElementRef>;
   tail: Promise<void>;
   closingRequested: boolean;
+  releaseToolingLease?: () => Promise<void>;
 }
 
 export interface AndroidSessionDependencies {
   createSdk(exec: Exec): Promise<SdkLike>;
+  acquireToolingLease(): Promise<() => Promise<void>>;
   resolveAppium(exec: Exec, signal?: AbortSignal): Promise<AppiumInvocation>;
   startServer(invocation: AppiumInvocation, signal?: AbortSignal): Promise<ServerLike>;
   createClient(endpoint: string): ClientLike;
 }
 
 const DEFAULT_DEPENDENCIES: AndroidSessionDependencies = {
+  acquireToolingLease: () => new AndroidToolingManager().acquireUsageLease(),
   createSdk: (exec) => AndroidSdk.create(exec),
   resolveAppium,
   startServer: (invocation, signal) => AppiumServer.start(invocation, signal),
@@ -161,6 +165,7 @@ export class AndroidSessionManager {
     const managed = this.reserve(piSessionId, "owned", packageName);
     return this.serialized(managed, async () => {
       try {
+        managed.releaseToolingLease = await this.dependencies.acquireToolingLease();
         await this.prepare(managed);
         this.assertStartupActive(managed);
         managed.emulator = await managed.sdk!.start(avd, headless, signal);
@@ -182,6 +187,7 @@ export class AndroidSessionManager {
     const managed = this.reserve(piSessionId, "attached", packageName);
     return this.serialized(managed, async () => {
       try {
+        managed.releaseToolingLease = await this.dependencies.acquireToolingLease();
         await this.prepare(managed);
         this.assertStartupActive(managed);
         const attached = await managed.sdk!.verifyAttached(serial, signal);
@@ -369,6 +375,12 @@ export class AndroidSessionManager {
         throw error;
       }
     }
+    try { await this.releaseToolingLease(managed); }
+    catch (error) {
+      managed.record.state = "cleanup-required";
+      managed.closingRequested = false;
+      throw error;
+    }
     managed.record.state = "closed";
     if (this.sessions.get(managed.record.piSessionId) === managed) this.sessions.delete(managed.record.piSessionId);
     return { ...this.result(managed, action, undefined, startedAt), cleanupWarnings: warnings.length ? warnings : undefined };
@@ -392,6 +404,13 @@ export class AndroidSessionManager {
     return managed;
   }
 
+  private async releaseToolingLease(managed: Managed): Promise<void> {
+    const release = managed.releaseToolingLease;
+    if (!release) return;
+    await release();
+    managed.releaseToolingLease = undefined;
+  }
+
   private async cleanupFailedStart(managed: Managed): Promise<void> {
     const warnings: unknown[] = [];
     await managed.client?.deleteSession().catch((error) => warnings.push(error));
@@ -411,6 +430,11 @@ export class AndroidSessionManager {
         managed.record.state = "cleanup-required";
         return;
       }
+    }
+    try { await this.releaseToolingLease(managed); }
+    catch {
+      managed.record.state = "cleanup-required";
+      return;
     }
     managed.record.state = "closed";
     if (this.sessions.get(managed.record.piSessionId) === managed) this.sessions.delete(managed.record.piSessionId);

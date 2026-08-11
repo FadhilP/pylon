@@ -198,6 +198,42 @@ export interface StateQLRowsPage {
   next_offset: number | null;
 }
 
+export type PapercutStatusReadModel = "open" | "resolved" | "dismissed";
+
+export interface PapercutRecordReadModel {
+  id: string;
+  message: string;
+  status: PapercutStatusReadModel;
+  occurrences: number;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt: string;
+  resolution?: string;
+  resolvedAt?: string;
+  dismissal?: string;
+  dismissedAt?: string;
+}
+
+export interface PapercutListPage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  revision: number;
+  status: PapercutStatusReadModel | "all";
+  query: string;
+  offset: number;
+  limit: number;
+  total: number;
+  records: PapercutRecordReadModel[];
+  nextOffset: number | null;
+}
+
+export interface PapercutMutationResult {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  revision: number;
+}
+
+
 export interface StateQLSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
@@ -250,6 +286,7 @@ export interface BootstrapSnapshot {
   sequence: number;
   csrfToken: string;
   runtime: RuntimeSnapshot;
+  unseenCompletionSessionIds: string[];
   pendingUi?: UiRequestReadModel;
 }
 

@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomInt } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:net";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Exec } from "./capture.ts";
 import { terminateProcessTree } from "./process.ts";
 import { reserveHeliosPort, type PortReservation } from "./port-reservation.ts";
@@ -13,31 +14,135 @@ const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_SCREENSHOT_JSON_BYTES = 36 * 1024 * 1024;
 
+export const MANAGED_APPIUM_VERSION = "3.6.0";
+export const MANAGED_UIAUTOMATOR2_VERSION = "8.2.2";
 export type SpawnProcess = typeof spawn;
-export interface AppiumInvocation { command: string; args: string[]; version: string }
+export interface AppiumInvocation { command: string; args: string[]; version: string; driverVersion?: string; env?: NodeJS.ProcessEnv; managed?: boolean }
 
-async function regularCanonicalFile(path: string): Promise<string> {
+const MANAGED_ENVIRONMENT_KEYS = new Set([
+  "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+  "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+  "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+  "LANG", "LANGUAGE", "TZ", "TERM",
+  "ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_USER_HOME", "ADB_VENDOR_KEYS",
+  "JAVA_HOME", "GRADLE_HOME", "GRADLE_USER_HOME",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+  "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  "NPM_CONFIG_CACHE", "NPM_CONFIG_CAFILE", "NPM_CONFIG_STRICT_SSL",
+]);
+
+export function managedAppiumEnvironment(env: NodeJS.ProcessEnv, appiumHome: string): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    const normalized = key.toUpperCase();
+    if (value !== undefined && (MANAGED_ENVIRONMENT_KEYS.has(normalized) || normalized.startsWith("LC_"))) result[key] = value;
+  }
+  result.APPIUM_HOME = appiumHome;
+  return result;
+}
+
+async function regularCanonicalFile(path: string, label = "Appium CLI path"): Promise<string> {
   const original = await lstat(path);
-  if (!original.isFile() || original.isSymbolicLink()) throw new Error("Appium CLI path must be a non-symlink regular file");
+  if (!original.isFile() || original.isSymbolicLink()) throw new Error(`${label} must be a non-symlink regular file`);
   const canonical = await realpath(path);
   const info = await lstat(canonical);
-  if (!info.isFile()) throw new Error("Appium CLI path must be a regular file");
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
   return canonical;
+}
+
+export async function windowsNpmCli(env: NodeJS.ProcessEnv): Promise<string> {
+  const explicit = env.npm_execpath;
+  if (explicit) {
+    if (!isAbsolute(explicit) || basename(explicit).toLowerCase() !== "npm-cli.js") throw new Error("npm_execpath must be an absolute npm-cli.js path");
+    return regularCanonicalFile(explicit, "npm CLI path");
+  }
+  const candidates = [
+    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    ...((env.PATH ?? env.Path ?? "").split(delimiter)
+      .filter((directory) => directory && isAbsolute(directory))
+      .map((directory) => join(directory, "node_modules", "npm", "bin", "npm-cli.js"))),
+  ];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try { return await regularCanonicalFile(candidate, "npm CLI path"); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      throw new Error("npm CLI candidate exists but could not be validated");
+    }
+  }
+  throw new Error("npm CLI is unavailable; set APPIUM_PATH to Appium's CLI JavaScript file");
+}
+
+export function managedAndroidToolingDirectory(agentDir = getAgentDir()): string {
+  return join(agentDir, "pi-helios", "android-tooling", "current");
+}
+
+export async function resolveManagedAppiumAt(directory: string, env: NodeJS.ProcessEnv = process.env): Promise<AppiumInvocation | undefined> {
+  let info;
+  try { info = await lstat(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Managed Android tooling directory is invalid; repair it in Settings");
+  const root = await realpath(directory);
+  const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
+  if (manifest.dependencies?.appium !== MANAGED_APPIUM_VERSION || manifest.dependencies?.["appium-uiautomator2-driver"] !== MANAGED_UIAUTOMATOR2_VERSION) {
+    throw new Error("Managed Android tooling versions are invalid; repair them in Settings");
+  }
+  const appiumDirectory = await realpath(join(root, "node_modules", "appium"));
+  const driverDirectory = await realpath(join(root, "node_modules", "appium-uiautomator2-driver"));
+  for (const dependency of [appiumDirectory, driverDirectory]) {
+    const fromRoot = relative(root, dependency);
+    if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot)) throw new Error("Managed Android tooling dependency resolves outside its directory");
+  }
+  const appiumManifest = JSON.parse(await readFile(join(appiumDirectory, "package.json"), "utf8")) as { version?: string; bin?: string | Record<string, string> };
+  const driverManifest = JSON.parse(await readFile(join(driverDirectory, "package.json"), "utf8")) as { version?: string };
+  if (appiumManifest.version !== MANAGED_APPIUM_VERSION || driverManifest.version !== MANAGED_UIAUTOMATOR2_VERSION) throw new Error("Managed Android tooling package versions are invalid; repair them in Settings");
+  const binPath = typeof appiumManifest.bin === "string" ? appiumManifest.bin : appiumManifest.bin?.appium;
+  if (!binPath) throw new Error("Managed Appium has no CLI entrypoint");
+  const cli = await regularCanonicalFile(resolve(appiumDirectory, binPath));
+  const fromPackage = relative(appiumDirectory, cli);
+  if (!fromPackage || fromPackage.startsWith("..") || isAbsolute(fromPackage)) throw new Error("Managed Appium CLI resolves outside its package");
+  return { command: process.execPath, args: [cli], version: appiumManifest.version, driverVersion: driverManifest.version, env: managedAppiumEnvironment(env, root), managed: true };
+}
+
+
+export async function resolveManagedAppium(agentDir = getAgentDir(), env: NodeJS.ProcessEnv = process.env): Promise<AppiumInvocation | undefined> {
+  const current = managedAndroidToolingDirectory(agentDir);
+  const invocation = await resolveManagedAppiumAt(current, env);
+  if (invocation) return invocation;
+  try { await lstat(join(dirname(current), "previous")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  throw new Error("Managed Android tooling recovery is incomplete; repair it in Settings");
 }
 
 export async function resolveAppium(exec: Exec, signal?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Promise<AppiumInvocation> {
   const cancelled = () => { if (signal?.aborted) throw new Error("Appium diagnostic cancelled"); };
   cancelled();
+  if (!env.APPIUM_PATH) {
+    const managed = await resolveManagedAppium(getAgentDir(), env);
+    if (managed) return managed;
+  }
   let cli: string | undefined;
   if (env.APPIUM_PATH) {
     if (!isAbsolute(env.APPIUM_PATH)) throw new Error("APPIUM_PATH must be absolute");
     cli = await regularCanonicalFile(env.APPIUM_PATH);
   } else {
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    const root = await exec(npm, ["root", "-g"], { timeout: 10_000, signal });
+    const root = process.platform === "win32"
+      ? await exec(process.execPath, [await windowsNpmCli(env), "root", "-g"], { timeout: 10_000, signal })
+      : await exec("npm", ["root", "-g"], { timeout: 10_000, signal });
     cancelled();
     if (root.killed || root.code !== 0 || !root.stdout.trim()) throw new Error("Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file");
-    const packageDirectory = await realpath(resolve(root.stdout.trim(), "appium"));
+    const packageDirectory = await realpath(resolve(root.stdout.trim(), "appium")).catch(() => { throw new Error("Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file"); });
     const manifest = JSON.parse(await readFile(join(packageDirectory, "package.json"), "utf8")) as { bin?: string | Record<string, string> };
     const binPath = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.appium;
     if (!binPath) throw new Error("Installed Appium package has no CLI entrypoint");
@@ -101,7 +206,7 @@ export class AppiumServer {
       const { port } = reservation;
       const child = spawnProcess(invocation.command, [...invocation.args,
         "--address", "127.0.0.1", "--port", String(port), "--base-path", "/", "--log-level", "error",
-      ], { shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+      ], { shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], ...(invocation.env ? { env: invocation.env } : {}) });
       const server = new AppiumServer(child, port, invocation.version);
       try {
         await server.waitReady(signal);

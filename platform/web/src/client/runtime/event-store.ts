@@ -3,11 +3,12 @@ import type { GuardRuleOverrides } from "../../shared/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
+import type { HeliosAndroidToolingInput, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
 import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, DelegatedAgentRunUpdateReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -15,6 +16,7 @@ import { liveToolMessage, replaceConversationMessage, replaceDelegatedRun, repla
 import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
 import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
 import { pendingMessageId, reconcilePendingQueue, type PendingMessageReadModel } from "../../shared/pending-messages";
+import { completionRecord, recordCompletion, validCompletionSessionIds } from "../../shared/session-completions";
 
 export type { PendingMessageReadModel } from "../../shared/pending-messages";
 
@@ -49,7 +51,7 @@ export interface TranscriptWindowReadModel {
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0, pendingMessages: [], audioCues: [] };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "provider.auth", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "agent.error", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
+const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "provider.auth", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "agent.error", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-papercut:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
 const HISTORY_MUTATION_EVENTS = new Set(["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "turn.changes", "compaction.update", "agent.end", "agent.error"]);
 const MAX_CACHED_SESSIONS = 10;
 const MAX_SESSION_STATUSES = 200;
@@ -499,6 +501,28 @@ export class RuntimeEventStore {
     return result;
   }
 
+  async papercuts(status: PapercutStatusReadModel | "all", query: string, offset = 0, limit = 25, signal?: AbortSignal): Promise<PapercutListPage> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.papercuts(runtime.sessionGeneration, status, query, offset, limit, signal);
+    if (!isPapercutListPage(result) || result.sessionGeneration !== runtime.sessionGeneration
+      || result.status !== status || result.query !== query || result.offset !== offset || result.limit !== limit) throw new Error("Papercut returned an invalid list");
+    return result;
+  }
+
+  async updatePapercut(record: PapercutListPage["records"][number], message: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.mutatePapercut(runtime.sessionGeneration, { action: "edit", id: record.id, expectedUpdatedAt: record.updatedAt, message });
+    if (result.protocolVersion !== PROTOCOL_VERSION || result.sessionGeneration !== runtime.sessionGeneration || !Number.isSafeInteger(result.revision))
+      throw new Error("Papercut returned an invalid mutation result");
+  }
+
+  async deletePapercut(record: PapercutListPage["records"][number]): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.mutatePapercut(runtime.sessionGeneration, { action: "delete", id: record.id, expectedUpdatedAt: record.updatedAt });
+    if (result.protocolVersion !== PROTOCOL_VERSION || result.sessionGeneration !== runtime.sessionGeneration || !Number.isSafeInteger(result.revision))
+      throw new Error("Papercut returned an invalid mutation result");
+  }
+
   async handoffSession(destination: "checkout" | "worktree"): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "handoffSession", destination, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
@@ -687,6 +711,16 @@ export class RuntimeEventStore {
     const current = this.snapshot.runtime;
     if (!current || result.sessionGeneration !== current.sessionGeneration || current.sessionId !== runtime.sessionId) {
       throw new Error("Helios browser response is stale");
+    }
+    return result;
+  }
+
+  async heliosAndroidTooling(input: HeliosAndroidToolingInput, signal?: AbortSignal): Promise<HeliosAndroidToolingResult> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.heliosAndroidTooling({ ...input, expectedGeneration: runtime.sessionGeneration }, signal);
+    const current = this.snapshot.runtime;
+    if (!current || result.sessionGeneration !== current.sessionGeneration || current.sessionId !== runtime.sessionId) {
+      throw new Error("Helios Android tooling response is stale");
     }
     return result;
   }
@@ -1049,6 +1083,12 @@ export class RuntimeEventStore {
         error.name = boot.protocolVersion === PROTOCOL_VERSION ? "RuntimeSnapshotError" : "ProtocolMismatchError";
         throw error;
       }
+      const completionIds = boot.unseenCompletionSessionIds;
+      if (!validCompletionSessionIds(completionIds)) {
+        const error = new Error("Invalid bootstrap completion state.");
+        error.name = "RuntimeSnapshotError";
+        throw error;
+      }
       if (this.disposed || epoch !== this.bootstrapEpoch) return;
       this.resetting = false;
       this.bootstrapAttempts = 0;
@@ -1067,6 +1107,7 @@ export class RuntimeEventStore {
         runtime.sessionId,
         runtime.sessionGeneration,
       );
+      const unseenCompletions = completionRecord(completionIds);
       this.set({
         connection,
         runtime,
@@ -1075,7 +1116,7 @@ export class RuntimeEventStore {
         sequence: boot.sequence,
         generation: runtime.sessionGeneration,
         sessionStatuses: this.snapshot.sessionStatuses,
-        unseenCompletions: this.snapshot.unseenCompletions,
+        unseenCompletions,
         sessionWorkStartedAts: undefined,
         recovery: undefined,
         audioCues: [],
@@ -1158,7 +1199,7 @@ export class RuntimeEventStore {
     if (event.type === "session.status") {
       const status = asRecord(event.payload);
       if (typeof status.sessionId === "string" && ["sleeping", "idle", "running", "attention"].includes(String(status.state))) {
-        const unseenCompletions = { ...current.unseenCompletions };
+        const unseenCompletions = recordCompletion(current.unseenCompletions ?? {}, current.runtime?.sessionId, status as { sessionId: string; completed?: unknown });
         const sessionWorkStartedAts = { ...current.sessionWorkStartedAts };
         const sessionStatuses = { ...current.sessionStatuses };
         delete sessionStatuses[status.sessionId];
@@ -1168,13 +1209,10 @@ export class RuntimeEventStore {
         } else if (typeof status.workStartedAt === "string" && !Number.isNaN(Date.parse(status.workStartedAt))) {
           sessionWorkStartedAts[status.sessionId] = status.workStartedAt;
         }
-        if (status.state === "sleeping") delete unseenCompletions[status.sessionId];
-        else if (status.completed === true && current.runtime?.sessionId !== status.sessionId) unseenCompletions[status.sessionId] = true;
         while (Object.keys(sessionStatuses).length > MAX_SESSION_STATUSES) {
           const oldest = Object.keys(sessionStatuses)[0]!;
           delete sessionStatuses[oldest];
           delete sessionWorkStartedAts[oldest];
-          delete unseenCompletions[oldest];
         }
         this.set({
           ...current,

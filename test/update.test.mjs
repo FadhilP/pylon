@@ -22,6 +22,18 @@ test("prints the installed version", () => {
   assert.equal(result.stdout.trim(), version);
 });
 
+test("prints CLI help without starting Pylon", () => {
+  const cli = fileURLToPath(new URL("../bin/pylon.mjs", import.meta.url));
+  for (const flag of ["--help", "-h"]) {
+    const result = spawnSync(process.execPath, [cli, flag], { encoding: "utf8", timeout: 5_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Usage:\n  pylon/);
+    assert.match(result.stdout, /pylon migrate/);
+    assert.match(result.stdout, /Open http:\/\/127\.0\.0\.1:3141/);
+    assert.match(result.stdout, /Configure providers and models in Settings/);
+  }
+});
+
 test("compares stable npm versions", () => {
   assert.equal(isNewerVersion("2.0.0", "1.99.99"), true);
   assert.equal(isNewerVersion("1.3.0", "1.2.99"), true);

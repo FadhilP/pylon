@@ -1,5 +1,7 @@
 import {
+  IconAlertTriangle,
   IconArrowBackUp,
+  IconCheck,
   IconCopy,
   IconDatabase,
   IconFile,
@@ -25,6 +27,7 @@ import type {
   WorkspaceReadModel,
 } from "../shared/protocol/snapshots";
 import { displayTime } from "./format";
+import { copyText } from "./clipboard";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 type FileView = "current" | "base" | "diff";
@@ -49,7 +52,23 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
   const [applyOpen, setApplyOpen] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<{ path: string; state: "copied" | "error" }>();
+  const copyReset = useRef<number | undefined>(undefined);
+  const copyRevision = useRef(0);
   const requestRevision = useRef(0);
+
+  useEffect(() => () => {
+    copyRevision.current++;
+    if (copyReset.current !== undefined) window.clearTimeout(copyReset.current);
+  }, []);
+  useEffect(() => {
+    copyRevision.current++;
+    setCopyFeedback(undefined);
+    if (copyReset.current !== undefined) {
+      window.clearTimeout(copyReset.current);
+      copyReset.current = undefined;
+    }
+  }, [selectedPath]);
 
   useEffect(() => {
     if (live.connection !== "connected" || !runtime?.ready) {
@@ -134,6 +153,22 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     return () => { active = false; };
   }, [live.connection, selectedPath, view, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
 
+  const copySelectedPath = async () => {
+    if (!selectedPath) return;
+    const path = selectedPath;
+    const revision = ++copyRevision.current;
+    if (copyReset.current !== undefined) window.clearTimeout(copyReset.current);
+    copyReset.current = undefined;
+    const state = await copyText(path) ? "copied" : "error";
+    if (revision !== copyRevision.current) return;
+    setCopyFeedback({ path, state });
+    copyReset.current = window.setTimeout(() => {
+      if (revision !== copyRevision.current) return;
+      setCopyFeedback(undefined);
+      copyReset.current = undefined;
+    }, 1_500);
+  };
+
   const matchingFiles = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     return normalized
@@ -141,6 +176,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
       : files;
   }, [files, query]);
   const visible = tab === "changes" ? matchingFiles.filter((file) => file.status) : matchingFiles;
+  const fileCopyState = copyFeedback?.path === selectedPath ? copyFeedback?.state ?? "idle" : "idle";
   const workspace = runtime?.workspace;
   return <><aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
     <header>
@@ -228,7 +264,8 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
                 <button className={view === "base" ? "is-active" : ""} title="Show the file from the session baseline" onClick={() => setView("base")}><IconArrowBackUp size={14} />Baseline</button>
               </>}
               <button className={view === "current" ? "is-active" : ""} title="Show the current file on disk" onClick={() => setView("current")}>Working copy</button>
-              <button className="icon-button" onClick={() => void navigator.clipboard.writeText(selectedPath)} aria-label="Copy file path"><IconCopy size={14} /></button>
+              <button className={`icon-button copy-feedback${fileCopyState === "idle" ? "" : ` is-${fileCopyState}`}`} onClick={() => void copySelectedPath()} aria-label="Copy file path" title={fileCopyState === "copied" ? "Copied" : fileCopyState === "error" ? "Copy failed" : "Copy file path"}>{fileCopyState === "copied" ? <IconCheck size={14} /> : fileCopyState === "error" ? <IconAlertTriangle size={14} /> : <IconCopy size={14} />}</button>
+              <span className="sr-only" aria-live="polite">{fileCopyState === "copied" ? "File path copied" : fileCopyState === "error" ? "Copying file path failed" : ""}</span>
               <button className="icon-button" onClick={() => { setSelectedPath(undefined); setSelectedLine(undefined); }} aria-label="Close file"><IconX size={14} /></button>
             </span>
           </div>
@@ -308,8 +345,8 @@ function ApplyChangesDialog({
       </div>
       <footer>
         <button type="button" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button data-autofocus className="primary-button" type="button" onClick={onConfirm} disabled={busy}>
-          {busy ? "Applying…" : "Apply changes"}
+        <button data-autofocus className="primary-button" type="button" onClick={onConfirm} disabled={busy} aria-busy={busy}>
+          {busy && <IconLoader2 className="feedback-spinner" size={14} />}{busy ? "Applying…" : "Apply changes"}
         </button>
       </footer>
     </div>
@@ -319,6 +356,7 @@ function ApplyChangesDialog({
 function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {
   const [busy, setBusy] = useState(false);
   const index = live.runtime!.discoverIndex!;
+  const rebuilding = busy || index.state === "indexing";
   const idle = live.connection === "connected"
     && live.runtime?.ready === true
     && !live.runtime.conversation.workStartedAt
@@ -336,10 +374,10 @@ function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {
       <span>{index.symbols === undefined ? "—" : formatCompactNumber(index.symbols)} symbols</span>
       <span>{index.indexedAt ? displayTime(index.indexedAt) : "Not indexed"}</span>
     </div>
-    <button className="icon-button" type="button" disabled={!idle} aria-label="Rebuild Discover index" title="Rebuild Discover index" onClick={() => {
+    <button className="icon-button" type="button" disabled={!idle} aria-busy={rebuilding} aria-label={rebuilding ? "Rebuilding Discover index" : "Rebuild Discover index"} title={rebuilding ? "Rebuilding Discover index" : "Rebuild Discover index"} onClick={() => {
       setBusy(true);
       void runtimeStore.rebuildDiscoverIndex().catch(() => undefined).finally(() => setBusy(false));
-    }}><IconRefresh size={15} /></button>
+    }}><IconRefresh className={rebuilding ? "feedback-spinner" : undefined} size={15} /></button>
     {index.error && <p role="alert">{index.error}</p>}
   </section>;
 }

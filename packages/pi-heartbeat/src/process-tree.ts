@@ -1,12 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
-export function shellInvocation(command: string) {
-  return process.platform === "win32"
-    ? { command, args: [], shell: true }
-    : {
-        command: process.env.SHELL || "/bin/sh",
-        args: ["-lc", command],
-        shell: false,
-      };
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
+
+export function shellInvocation(command: string, shellPath?: string) {
+  const config = getShellConfig(shellPath);
+  const stdin = config.commandTransport === "stdin" ? command : undefined;
+  return {
+    command: config.shell,
+    args: stdin === undefined ? [...config.args, command] : config.args,
+    shell: false,
+    stdin,
+  };
 }
 export function killTree(child: ChildProcess, force = false) {
   if (!child.pid) return;

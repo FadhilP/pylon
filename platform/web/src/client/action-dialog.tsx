@@ -1,4 +1,4 @@
-import { IconX } from "@tabler/icons-react";
+import { IconLoader2, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 
 interface ActionDialogProps {
@@ -74,7 +74,7 @@ export function ActionDialog({ title, description, confirmLabel, busyLabel, busy
       </div>
       <footer>
         <button data-autofocus={!inputLabel ? "" : undefined} type="button" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className={danger ? "danger-button" : "primary-button"} type="submit" disabled={!valid || busy}>{busy ? busyLabel : confirmLabel}</button>
+        <button className={`${danger ? "danger-button" : "primary-button"} action-confirm-button`} type="submit" disabled={!valid || busy} aria-busy={busy}>{busy && <IconLoader2 className="feedback-spinner" size={14} />}{busy ? busyLabel : confirmLabel}</button>
       </footer>
     </form>
   </div>;

@@ -34,6 +34,7 @@ function harness() {
     async back() { log.push("back"); },
   };
   const manager = new AndroidSessionManager(exec as any, {
+    acquireToolingLease: async () => { log.push("tooling-acquire"); return async () => { log.push("tooling-release"); }; },
     createSdk: async () => sdk as any,
     resolveAppium: async () => ({ command: "node", args: ["appium.js"], version: "3.0.0" }),
     startServer: async () => server,
@@ -53,6 +54,8 @@ test("owned Android lifecycle starts, uses fresh refs, and stops emulator", asyn
   await manager.operate("owned", { kind: "fill", target: "a1", text: "hello" });
   await manager.close("owned", "close");
   assert.deepEqual(log.filter((item) => ["session-delete", "server-stop", "emulator-stop"].includes(item)), ["session-delete", "server-stop", "emulator-stop"]);
+  assert.equal(log[0], "tooling-acquire");
+  assert.equal(log.at(-1), "tooling-release");
 });
 
 test("attached Android lifecycle detaches without stopping emulator", async () => {

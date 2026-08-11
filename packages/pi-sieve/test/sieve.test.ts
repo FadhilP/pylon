@@ -392,6 +392,67 @@ test("prunes bulky Heartbeat status and Memory lists without covering short muta
   }
 });
 
+test("prunes recoverable text-only Helios output but leaves image results intact", () => {
+  const source = "snapshot\n" + "x".repeat(4_100);
+  const helios = textResult("helios_browser", source, {
+    toolCallId: "helios-text",
+    details: { action: "snapshot", snapshotContinuation: "hc_0123456789abcdef0123456789abcdef" },
+  });
+  const active = sieveMessages([user("current"), helios], 4_000, { pruneActive: true });
+  assert.equal(active.stats.transformedBy.activeThreshold, 1);
+  assert.match((active.messages[1] as any).content[0].text, /sieve_recall "helios-text"/);
+  assert.deepEqual((active.messages[1] as any).details, (helios as any).details);
+  assert.deepEqual(active.recoverableActiveResults[0], {
+    toolCallId: "helios-text", toolName: "helios_browser", isError: false,
+  });
+
+  const below = sieveMessages([user("current"), textResult("helios_browser", "x".repeat(4_000), { toolCallId: "helios-small" })], 4_000, { pruneActive: true });
+  assert.equal(below.stats.transformed, 0);
+  const aged = sieveMessages([user("before"), helios, user("second"), user("third")], 4_000);
+  assert.equal(aged.stats.transformedBy.ageThreshold, 1);
+  const standard = standardV2SieveMessages([user("current"), helios], 4_000, { pruneActive: true });
+  assert.equal(standard.stats.transformedBy.activeThreshold, 1);
+  const recalledText = recalledResult("helios_browser", source);
+  const agedRecalledText = sieveMessages([user("before"), recalledText, user("second"), user("third")], 4_000);
+  assert.equal(agedRecalledText.stats.transformedBy.ageThreshold, 1);
+
+  for (const content of [
+    [{ type: "text", text: source }, { type: "image", data: "abc", mimeType: "image/png" }],
+    [{ type: "image", data: "abc", mimeType: "image/png" }],
+  ]) {
+    const imageResult = textResult("helios_browser", "unused", { toolCallId: "helios-image", content });
+    const unchanged = sieveMessages([user("current"), imageResult], 4_000, { pruneActive: true });
+    assert.equal(unchanged.messages[1], imageResult);
+    assert.equal(unchanged.stats.transformed, 0);
+  }
+
+  const recalledImage = textResult("sieve_recall", "unused", {
+    content: [{ type: "text", text: source }, { type: "image", data: "abc", mimeType: "image/png" }],
+    details: { found: true, sourceToolName: "helios_browser", sourceIsError: false },
+  });
+  const agedRecall = sieveMessages([user("before"), recalledImage, user("second"), user("third")], 4_000);
+  assert.equal(agedRecall.messages[1], recalledImage);
+  assert.equal(agedRecall.stats.transformed, 0);
+
+  const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "helios_browser", arguments: { action: "screenshot" } }] });
+  const firstImage = textResult("helios_browser", "unused", {
+    toolCallId: "helios-image-1", isError: false,
+    content: [{ type: "text", text: source }, { type: "image", data: "abc", mimeType: "image/png" }],
+  });
+  const secondImage = structuredClone(firstImage);
+  secondImage.toolCallId = "helios-image-2";
+  const duplicates = sieveMessages([user("current"), call("helios-image-1"), firstImage, call("helios-image-2"), secondImage], 4_000, { pruneActive: true });
+  assert.equal(duplicates.messages[4], secondImage);
+  assert.equal(duplicates.stats.transformedBy.duplicate, 0);
+
+  const firstText = textResult("helios_browser", "small snapshot\n".repeat(50), { toolCallId: "helios-text-1", isError: false });
+  const secondText = textResult("helios_browser", "small snapshot\n".repeat(50), { toolCallId: "helios-text-2", isError: false });
+  const textDuplicates = sieveMessages([user("current"), call("helios-text-1"), firstText, call("helios-text-2"), secondText], 4_000, { pruneActive: true });
+  assert.equal(textDuplicates.messages[2], firstText);
+  assert.match((textDuplicates.messages[4] as any).content[0].text, /duplicate helios_browser/);
+  assert.equal(textDuplicates.stats.transformedBy.duplicate, 1);
+});
+
 test("enforces the retained successful-output budget at equality, overflow, and newest-first", () => {
   const budgetContext = (lengths: number[]) => [
     user("before"),

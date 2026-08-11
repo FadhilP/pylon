@@ -14,6 +14,8 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
+import type { MessageReadModel } from "../shared/protocol/events";
+import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
@@ -21,6 +23,7 @@ import { AgentPanel } from "./agent-drawer";
 import { useAgentColors } from "./agent-color";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
+import { CompactionPanel } from "./compaction-panel";
 import { BrowserPanel } from "./browser-panel";
 import { DatabasePanel } from "./database-panel";
 import { FilesPanel } from "./files-panel";
@@ -33,9 +36,10 @@ import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | null;
+type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
+type SelectedCompaction = { sessionId: string; message: MessageReadModel };
 type PendingSession = {
   requestId: number;
   project: SessionProject;
@@ -137,6 +141,7 @@ export function App() {
   const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
+  const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -161,6 +166,8 @@ export function App() {
   const [packages, setPackages] = useState<PackageSummary[]>([]);
   const [packagesLoading, setPackagesLoading] = useState(true);
   const [packageBusy, setPackageBusy] = useState("");
+  const [androidTooling, setAndroidTooling] = useState<HeliosAndroidToolingResult>();
+  const [androidToolingBusy, setAndroidToolingBusy] = useState<"" | "install" | "remove">("");
   const [hookSettings, setHookSettings] = useState<HookSettingsReadModel>();
   const [hooksLoading, setHooksLoading] = useState(true);
   const [hooksBusy, setHooksBusy] = useState(false);
@@ -216,6 +223,8 @@ export function App() {
     && (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
   const memoryEnabled = activePackages.has("pi-continuity")
     || live.runtime?.operational.continuity.availability === "available";
+  const papercutEnabled = activePackages.has("pi-papercut")
+    || live.runtime?.operational.papercuts.availability === "available";
   const continuitySettings = packages.find((item) => item.id === "pi-continuity")?.settings;
   const memoryReviewerConfigured = !packagesLoading && continuitySettings?.kind === "continuity"
     ? Boolean(continuitySettings.memoryReviewer?.model)
@@ -225,9 +234,9 @@ export function App() {
     "overview",
     "policy",
     ...(timelineEnabled ? ["timeline" as const] : []),
-    ...(memoryEnabled ? ["memory" as const] : []),
+    ...(memoryEnabled || papercutEnabled ? ["memory" as const] : []),
     "tools",
-  ]), [memoryEnabled, timelineEnabled]);
+  ]), [memoryEnabled, papercutEnabled, timelineEnabled]);
   const updateSessionPages = (update: (pages: SessionProjectPage[]) => SessionProjectPage[]) => {
     setSessionPages((current) => {
       const next = update(current);
@@ -283,6 +292,8 @@ export function App() {
   useEffect(() => { document.title = live.runtime?.extensionUi.title || "Pylon"; }, [live.runtime?.extensionUi.title]);
   useEffect(() => {
     setSelectedAgentId(undefined);
+    setSelectedCompaction(undefined);
+    setRightPanel((current) => current === "compaction" ? null : current);
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
   useEffect(() => {
@@ -464,6 +475,17 @@ export function App() {
     });
     return () => { active = false; };
   }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
+
+  useEffect(() => {
+    if (!settingsOpen || live.connection !== "connected" || !live.runtime?.ready || !packages.some((item) => item.id === "pi-helios" && item.active)) return;
+    let active = true;
+    void runtimeStore.heliosAndroidTooling({ action: "status" }).then((result) => {
+      if (active) setAndroidTooling(result);
+    }).catch((cause) => {
+      if (active) reportError(cause, "Unable to inspect Android tooling");
+    });
+    return () => { active = false; };
+  }, [settingsOpen, live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, packages]);
 
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
@@ -885,6 +907,20 @@ export function App() {
     }
   };
 
+  const manageAndroidTooling = async (action: "status" | "install" | "remove") => {
+    if (androidToolingBusy) throw new Error("Another Android tooling operation is still running");
+    if (action !== "status") setAndroidToolingBusy(action);
+    try {
+      const result = await runtimeStore.heliosAndroidTooling(action === "status" ? { action } : { action, confirmed: true });
+      setAndroidTooling(result);
+    } catch (cause) {
+      reportError(cause, `Unable to ${action === "install" ? "set up" : action} Android tooling`);
+      throw cause;
+    } finally {
+      if (action !== "status") setAndroidToolingBusy("");
+    }
+  };
+
   const updateHookSettings = async (settings: HookSettingsReadModel) => {
     if (hooksBusy) throw new Error("Another hook settings update is still saving");
     setHooksBusy(true);
@@ -1128,6 +1164,12 @@ export function App() {
               setSelectedAgentId(id);
               setRightPanel("agents");
             }}
+            onOpenCompaction={(message) => {
+              const sessionId = live.runtime?.sessionId;
+              if (!sessionId) return;
+              setSelectedCompaction({ sessionId, message });
+              setRightPanel("compaction");
+            }}
             agentColors={agentColors}
             onOpenLogin={(provider) => {
               setSettingsTab("providers");
@@ -1155,6 +1197,8 @@ export function App() {
               availableViews={availableViews}
               timelineEnabled={timelineEnabled}
               memoryReviewerConfigured={memoryReviewerConfigured}
+              memoryEnabled={memoryEnabled}
+              papercutEnabled={papercutEnabled}
               overlay={inspectorOverlay}
               onClose={() => setRightPanel(null)}
               onNavigate={selectView}
@@ -1185,6 +1229,11 @@ export function App() {
             colors={agentColors}
             selectedId={selectedAgentId}
             onSelect={setSelectedAgentId}
+            onClose={() => setRightPanel(null)}
+          />}
+          {rightPanel === "compaction" && selectedCompaction && selectedCompaction.sessionId === live.runtime?.sessionId && <CompactionPanel
+            key={`compaction:${selectedCompaction.message.id}`}
+            message={selectedCompaction.message}
             onClose={() => setRightPanel(null)}
           />}
           {rightPanel === "files" && <FilesPanel
@@ -1263,6 +1312,9 @@ export function App() {
         hookLoading={hooksLoading}
         busy={packageBusy}
         hookBusy={hooksBusy}
+        androidTooling={androidTooling}
+        androidToolingBusy={androidToolingBusy}
+        onAndroidTooling={manageAndroidTooling}
         providerLogoutDisabled={activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         models={live.runtime?.sessionControls.models ?? []}
         sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}

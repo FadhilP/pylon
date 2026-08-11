@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { JobManager, pruneStaleSessionDirs, STALE_SESSION_DIR_MS, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs, MIN_CHECK_INTERVAL_MS } from "../src/polling.ts";
+import { shellInvocation } from "../src/process-tree.ts";
 
 const closed = (job: Job) =>
   job.child.exitCode !== null
@@ -16,6 +17,17 @@ const logClosed = (job: Job) =>
   job.file.closed
     ? Promise.resolve()
     : new Promise<void>((resolve) => job.file.once("close", () => resolve()));
+
+test("shell invocation uses Pi-compatible Bash and honors configured paths", () => {
+  const command = "printf ok";
+  const resolved = shellInvocation(command);
+  assert.equal(resolved.shell, false);
+  assert.equal(resolved.stdin ?? resolved.args.at(-1), command);
+
+  const configured = shellInvocation(command, process.execPath);
+  assert.equal(configured.command, process.execPath);
+  assert.equal(configured.args.at(-1), command);
+});
 
 test("shutdown removes the current session directory", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));

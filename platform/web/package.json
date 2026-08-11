@@ -10,6 +10,7 @@
     "start": "node --experimental-transform-types src/server/start.ts --production",
     "preview": "npm run start",
     "test": "node --experimental-transform-types --test-concurrency=2 --test test/*.test.ts",
+    "check": "npm run typecheck",
     "typecheck": "tsc -b --pretty false",
     "verify": "npm test && npm run build"
   },

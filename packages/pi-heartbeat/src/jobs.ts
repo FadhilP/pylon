@@ -82,10 +82,12 @@ export class JobManager {
   readonly dir: string;
   readonly onChange: () => void;
   private readonly shutdownGraceMs: number;
-  constructor(dir: string, onChange: () => void = () => {}, shutdownGraceMs = 5_000) {
+  private readonly shellPath?: string;
+  constructor(dir: string, onChange: () => void = () => {}, shutdownGraceMs = 5_000, shellPath?: string) {
     this.dir = dir;
     this.onChange = onChange;
     this.shutdownGraceMs = shutdownGraceMs;
+    this.shellPath = shellPath;
   }
   async init() {
     await mkdir(this.dir, { recursive: true });
@@ -111,16 +113,20 @@ export class JobManager {
     do id = `job_${randomBytes(3).toString("hex")}`;
     while (this.jobs.has(id));
     const logPath = join(this.dir, `${id}.log`),
-      inv = shellInvocation(command),
+      inv = shellInvocation(command, this.shellPath),
       file = createWriteStream(logPath, { flags: "wx", mode: 0o600 });
     const child = spawn(inv.command, inv.args, {
       cwd,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [inv.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
       shell: inv.shell,
     });
+    if (inv.stdin !== undefined) {
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(inv.stdin);
+    }
     const startedAt = Date.now();
     const j: Job = {
       id,

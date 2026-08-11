@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import {
   getAgentDir,
+  SettingsManager,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -78,7 +79,8 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     const root = join(getAgentDir(), "pi-heartbeat", "tmp");
     const dir = join(root, ctx.sessionManager.getSessionId());
     await pruneStaleSessionDirs(root, dir);
-    manager = new JobManager(dir, refresh);
+    const shellPath = SettingsManager.create(ctx.cwd, getAgentDir()).getShellPath();
+    manager = new JobManager(dir, refresh, 5_000, shellPath);
     await manager.init();
     refresh();
   });

@@ -4,8 +4,12 @@ import { Type } from "typebox";
 import {
   capturePapercut,
   listPapercuts,
+  mutatePapercut,
+  PapercutMutationError,
+  queryPapercuts,
   updatePapercuts,
   type CaptureSource,
+  type PapercutState,
   type PapercutStatus,
 } from "../src/papercuts.ts";
 import { loadProjectState, updateProjectState } from "../src/storage.ts";
@@ -35,8 +39,95 @@ const formatList = (records: any[], status: string) => records.length
 export default function papercutExtension(pi: ExtensionAPI) {
   const agentDir = getAgentDir();
   const managedTools = ["papercut"];
+  let boundSessionId = "";
+  let boundCwd = "";
+  let stateRevision = 0;
+  let currentState: PapercutState | undefined;
 
-  pi.on("session_start", () => {
+  const counts = (state?: PapercutState) => ({
+    open: state?.records.filter((record) => record.status === "open").length ?? 0,
+    resolved: state?.records.filter((record) => record.status === "resolved").length ?? 0,
+    dismissed: state?.records.filter((record) => record.status === "dismissed").length ?? 0,
+    total: state?.records.length ?? 0,
+  });
+  const stateSnapshot = (available = Boolean(currentState)) => ({
+    version: 1,
+    sessionId: boundSessionId,
+    available,
+    revision: stateRevision,
+    counts: counts(currentState),
+  });
+  const adoptState = (state: PapercutState, publish = true, forceRevision = false) => {
+    const changed = forceRevision || currentState?.updatedAt !== state.updatedAt;
+    currentState = state;
+    if (changed) stateRevision++;
+    if (publish) pi.events.emit("pi-papercut:state-change", stateSnapshot());
+  };
+
+  const disposeStateRequest = pi.events.on("pi-papercut:state-request", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== boundSessionId || typeof request.respond !== "function") return;
+    try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Papercut. */ }
+  });
+  const disposeListRequest = pi.events.on("pylon:papercut-list-request", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== boundSessionId || typeof request.claim !== "function"
+      || typeof request.respond !== "function" || !request.claim()) return;
+    request.respond((async () => {
+      const status = request.status as PapercutStatus | "all";
+      if (!["open", "resolved", "dismissed", "all"].includes(status)
+        || typeof request.query !== "string" || request.query.length > 200
+        || !Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > 1_000
+        || !Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 50) {
+        throw new Error("invalid papercut list request");
+      }
+      const { state } = await loadProjectState(agentDir, boundCwd);
+      adoptState(state, state.updatedAt !== currentState?.updatedAt);
+      const page = queryPapercuts(state, status, request.query, request.offset, request.limit);
+      return {
+        version: 1,
+        sessionId: boundSessionId,
+        revision: stateRevision,
+        status,
+        query: request.query,
+        offset: request.offset,
+        limit: request.limit,
+        total: page.total,
+        records: page.records.map(({ source: _source, lastSource: _lastSource, ...record }) => record),
+      };
+    })());
+  });
+  const disposeMutationRequest = pi.events.on("pylon:papercut-mutation-request", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== boundSessionId || typeof request.claim !== "function"
+      || typeof request.respond !== "function" || !request.claim()) return;
+    const sessionId = boundSessionId;
+    const cwd = boundCwd;
+    request.respond((async () => {
+      if (!["edit", "delete"].includes(String(request.action))
+        || typeof request.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.id)
+        || typeof request.expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(request.expectedUpdatedAt))
+        || request.action === "edit" && (typeof request.message !== "string" || request.message.length > 500)
+        || request.action === "delete" && request.message !== undefined) throw new Error("invalid papercut mutation request");
+      try {
+        const saved = await updateProjectState(agentDir, cwd, (state) => {
+          const mutated = mutatePapercut(state, request.action === "edit"
+            ? { action: "edit", id: request.id, expectedUpdatedAt: request.expectedUpdatedAt, message: request.message }
+            : { action: "delete", id: request.id, expectedUpdatedAt: request.expectedUpdatedAt });
+          return { state: mutated.state, result: undefined };
+        });
+        if (boundSessionId === sessionId && boundCwd === cwd) adoptState(saved.state, true, true);
+        return { version: 1, sessionId, ok: true, revision: stateRevision };
+      } catch (error) {
+        if (error instanceof PapercutMutationError)
+          return { version: 1, sessionId, ok: false, error: error.code };
+        throw error;
+      }
+    })());
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const cwd = ctx.cwd;
+    boundSessionId = sessionId;
+    boundCwd = cwd;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -44,13 +135,29 @@ export default function papercutExtension(pi: ExtensionAPI) {
       managedTools,
       enabledTools: managedTools,
     });
+    try {
+      const { state } = await loadProjectState(agentDir, cwd);
+      if (boundSessionId === sessionId && boundCwd === cwd) adoptState(state);
+    } catch {
+      if (boundSessionId !== sessionId || boundCwd !== cwd) return;
+      stateRevision++;
+      pi.events.emit("pi-papercut:state-change", stateSnapshot(false));
+    }
   });
   pi.on("session_shutdown", () => {
+    stateRevision++;
+    pi.events.emit("pi-papercut:state-change", stateSnapshot(false));
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "unregister",
       owner: "pi-papercut",
     });
+    disposeStateRequest();
+    disposeListRequest();
+    disposeMutationRequest();
+    boundSessionId = "";
+    boundCwd = "";
+    currentState = undefined;
   });
 
   const capture = async (ctx: any, message: string) => {
@@ -58,9 +165,9 @@ export default function papercutExtension(pi: ExtensionAPI) {
       const captured = capturePapercut(state, message, sourceFor(ctx));
       return { state: captured.state, result: captured };
     });
+    if (ctx.sessionManager?.getSessionId?.() === boundSessionId) adoptState(saved.state, true, true);
     return saved.result;
   };
-
   const list = async (ctx: any, status: PapercutStatus | "all" = "open", limit = 50) => {
     const { state } = await loadProjectState(agentDir, ctx.cwd);
     return listPapercuts(state, status, limit);
@@ -76,6 +183,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
       const updated = updatePapercuts(state, action, ids, note);
       return { state: updated.state, result: updated.records };
     });
+    if (ctx.sessionManager?.getSessionId?.() === boundSessionId) adoptState(saved.state, true, true);
     return saved.result;
   };
 

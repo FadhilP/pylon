@@ -57,22 +57,22 @@ function harness() {
   };
 }
 
-test("numbered line tools register only when the core setting is enabled", async () => {
+test("numbered line tools default on and honor an explicit disable", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "pylon-core-toggle-"));
   process.env.PI_CODING_AGENT_DIR = root;
   try {
-    const disabled = harness();
-    for (const handler of disabled.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
-    assert.equal(disabled.tools.size, 0);
-
-    await mkdir(join(root, "pylon-core"), { recursive: true });
-    await writeFile(join(root, "pylon-core", "config.json"), JSON.stringify({ version: 1, lineEditEnabled: true }));
     const enabled = harness();
     for (const handler of enabled.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
     assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "read"]);
+
+    await mkdir(join(root, "pylon-core"), { recursive: true });
+    await writeFile(join(root, "pylon-core", "config.json"), JSON.stringify({ version: 1, lineEditEnabled: false }));
+    const disabled = harness();
+    for (const handler of disabled.handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
+    assert.equal(disabled.tools.size, 0);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;

@@ -2,7 +2,7 @@ import { validGuardRules } from "../guard-policy.ts";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "./events.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -473,6 +473,32 @@ function validJsonCell(value: unknown, depth = 0): boolean {
   return entries.length <= 100 && entries.every(([key, item]) => key.length <= 500 && validJsonCell(item, depth + 1));
 }
 
+export function isPapercutListPage(value: unknown): value is PapercutListPage {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || !Number.isSafeInteger(value.revision) || (value.revision as number) < 0
+    || !["open", "resolved", "dismissed", "all"].includes(String(value.status))
+    || typeof value.query !== "string" || value.query.length > 200
+    || !Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 1_000
+    || !Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 50
+    || !Number.isSafeInteger(value.total) || (value.total as number) < 0 || (value.total as number) > 1_000
+    || !Array.isArray(value.records) || value.records.length > (value.limit as number)
+    || value.records.length > Math.max(0, (value.total as number) - (value.offset as number))) return false;
+  const validTimestamp = (item: unknown) => typeof item === "string" && item.length <= 64 && !Number.isNaN(Date.parse(item));
+  if (!value.records.every((item) => record(item) && typeof item.id === "string" && memoryNoteId.test(item.id)
+    && typeof item.message === "string" && item.message.length >= 1 && item.message.length <= 500
+    && ["open", "resolved", "dismissed"].includes(String(item.status))
+    && Number.isSafeInteger(item.occurrences) && (item.occurrences as number) >= 1
+    && validTimestamp(item.createdAt) && validTimestamp(item.updatedAt) && validTimestamp(item.lastSeenAt)
+    && (item.resolution === undefined || typeof item.resolution === "string" && item.resolution.length <= 500)
+    && (item.resolvedAt === undefined || validTimestamp(item.resolvedAt))
+    && (item.dismissal === undefined || typeof item.dismissal === "string" && item.dismissal.length <= 500)
+    && (item.dismissedAt === undefined || validTimestamp(item.dismissedAt)))) return false;
+  const nextOffset = (value.offset as number) + value.records.length < (value.total as number)
+    ? (value.offset as number) + value.records.length : null;
+  return value.nextOffset === nextOffset;
+}
+
+
 export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
   if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
     || !identifier(value.actor_id) || !boundedString(value.handle, 200)
@@ -625,10 +651,12 @@ function validCompactionDisplay(value: unknown): boolean {
 }
 
 function validCompactionMessage(value: unknown): boolean {
+  const optionalCount = (count: unknown) => count === undefined
+    || Number.isSafeInteger(count) && (count as number) >= 0;
   return record(value)
     && Number.isSafeInteger(value.contextAfterTokens) && (value.contextAfterTokens as number) >= 0
-    && (value.sourceEntryCount === undefined
-      || Number.isSafeInteger(value.sourceEntryCount) && (value.sourceEntryCount as number) >= 0)
+    && optionalCount(value.contextBeforeTokens)
+    && optionalCount(value.sourceEntryCount)
     && (value.display === undefined || validCompactionDisplay(value.display));
 }
 
@@ -900,13 +928,17 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   }
   const operational = value.operational;
   if (!record(operational) || !record(operational.verification) || !record(operational.jobs) || !record(operational.guard)
-    || !record(operational.continuity) || !record(operational.timeline) || !record(operational.tools)
+    || !record(operational.continuity) || !record(operational.papercuts) || !record(operational.timeline) || !record(operational.tools)
     || !record(operational.sieve) || !record(operational.health)) return false;
   const available = (feature: Record<string, unknown>) => feature.availability === "available" || feature.availability === "unavailable";
+  const papercutCounts = record(operational.papercuts.counts) ? operational.papercuts.counts : undefined;
   if (!available(operational.verification) || !Array.isArray(operational.verification.checks) || operational.verification.checks.length > 20
     || !available(operational.jobs) || !Array.isArray(operational.jobs.items) || operational.jobs.items.length > 50
     || !available(operational.guard) || typeof operational.guard.blocked !== "number" || typeof operational.guard.confirmed !== "number"
     || !available(operational.continuity) || !Number.isSafeInteger(operational.continuity.revision)
+    || !available(operational.papercuts) || !Number.isSafeInteger(operational.papercuts.revision) || !papercutCounts
+    || !["open", "resolved", "dismissed", "total"].every((key) => Number.isSafeInteger(papercutCounts?.[key]) && (papercutCounts?.[key] as number) >= 0 && (papercutCounts?.[key] as number) <= 1_000)
+    || (papercutCounts?.open as number) + (papercutCounts?.resolved as number) + (papercutCounts?.dismissed as number) !== papercutCounts?.total
     || !available(operational.timeline) || !Number.isSafeInteger(operational.timeline.revision) || !Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100
     || !available(operational.tools) || !Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100
     || !available(operational.sieve)
@@ -1001,7 +1033,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
 function operationalValidationIssue(value: unknown): { area: string; detail: string } | undefined {
   const issue = (area: string, detail: string) => ({ area: `operational.${area}`, detail });
   if (!record(value)) return issue("data", "must be an object");
-  const names = ["verification", "jobs", "guard", "continuity", "timeline", "tools", "sieve", "health"] as const;
+  const names = ["verification", "jobs", "guard", "continuity", "papercuts", "timeline", "tools", "sieve", "health"] as const;
   for (const name of names) if (!record(value[name])) return issue(name, "must be an object");
   const operational = value as Record<typeof names[number], Record<string, unknown>>;
   const available = (feature: Record<string, unknown>) => feature.availability === "available" || feature.availability === "unavailable";
@@ -1010,6 +1042,8 @@ function operationalValidationIssue(value: unknown): { area: string; detail: str
   if (!Array.isArray(operational.jobs.items) || operational.jobs.items.length > 50) return issue("jobs.items", "must be an array with at most 50 items");
   for (const key of ["blocked", "confirmed"] as const) if (typeof operational.guard[key] !== "number") return issue(`guard.${key}`, "must be a number");
   if (!Number.isSafeInteger(operational.continuity.revision)) return issue("continuity.revision", "must be a safe integer");
+  if (!Number.isSafeInteger(operational.papercuts.revision)) return issue("papercuts.revision", "must be a safe integer");
+  if (!record(operational.papercuts.counts)) return issue("papercuts.counts", "must be an object");
   if (!Number.isSafeInteger(operational.timeline.revision)) return issue("timeline.revision", "must be a safe integer");
   if (!Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100) return issue("timeline.checkpoints", "must be an array with at most 100 items");
   if (!Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100) return issue("tools.policies", "must be an array with at most 100 items");
@@ -1173,6 +1207,7 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
           jobs: { availability: "unavailable", items: [] },
           guard: { availability: "unavailable", blocked: 0, confirmed: 0 },
           continuity: { availability: "unavailable", revision: 0 },
+          papercuts: { availability: "unavailable", revision: 0, counts: { open: 0, resolved: 0, dismissed: 0, total: 0 } },
           timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
           tools: { availability: "unavailable", policies: [] },
           sieve: { availability: "unavailable" },

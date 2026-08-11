@@ -5,6 +5,7 @@ import {
   cleanText,
   emptyState,
   listPapercuts,
+  mutatePapercut,
   updatePapercuts,
 } from "../src/papercuts.ts";
 
@@ -82,7 +83,46 @@ test("ambiguous prefixes identify the full matching IDs", () => {
   );
 });
 
+test("web mutations edit safely and delete only the expected record revision", () => {
+  let state = emptyState("/repo", at);
+  state = capturePapercut(state, "First friction", {}, at, "aaaaaaaa-1111-4111-8111-111111111111").state;
+  state = capturePapercut(state, "Second friction", {}, at, "bbbbbbbb-2222-4222-8222-222222222222").state;
+  const original = state.records[0];
+  const editedAt = "2026-01-02T00:00:00.000Z";
+  const edited = mutatePapercut(state, {
+    action: "edit", id: original.id, expectedUpdatedAt: original.updatedAt, message: "  Corrected   friction  ",
+  }, editedAt);
+  assert.equal(edited.record?.message, "Corrected friction");
+  assert.equal(edited.record?.updatedAt, editedAt);
+  assert.equal(edited.record?.createdAt, original.createdAt);
+  assert.equal(edited.record?.lastSeenAt, original.lastSeenAt);
+  assert.equal(edited.record?.occurrences, original.occurrences);
+  assert.equal(state.records[0].message, "First friction", "mutation must not modify its input");
+
+  assert.throws(() => mutatePapercut(edited.state, {
+    action: "edit", id: original.id, expectedUpdatedAt: original.updatedAt, message: "Stale edit",
+  }), (error: any) => error?.code === "stale");
+  assert.throws(() => mutatePapercut(edited.state, {
+    action: "edit", id: original.id, expectedUpdatedAt: editedAt, message: "second FRICTION",
+  }), (error: any) => error?.code === "duplicate");
+  assert.throws(() => mutatePapercut(edited.state, {
+    action: "edit", id: original.id, expectedUpdatedAt: editedAt, message: "token=super-secret-value",
+  }), (error: any) => error?.code === "invalid");
+
+  const removed = mutatePapercut(edited.state, { action: "delete", id: original.id, expectedUpdatedAt: editedAt }, "2026-01-03T00:00:00.000Z");
+  assert.deepEqual(removed.state.records.map((record) => record.id), ["bbbbbbbb-2222-4222-8222-222222222222"]);
+  assert.throws(() => mutatePapercut(removed.state, { action: "delete", id: original.id, expectedUpdatedAt: editedAt }), (error: any) => error?.code === "stale");
+});
+
+
 test("record limits fail visibly without eviction", () => {
+
+  const sameTimestampState = capturePapercut(emptyState("/repo", at), "Same timestamp", {}, at, "cccccccc-3333-4333-8333-333333333333").state;
+  const sameTimestampRecord = sameTimestampState.records[0];
+  const monotonic = mutatePapercut(sameTimestampState, {
+    action: "edit", id: sameTimestampRecord.id, expectedUpdatedAt: sameTimestampRecord.updatedAt, message: "Still monotonic",
+  }, sameTimestampRecord.updatedAt);
+  assert.ok(monotonic.record!.updatedAt > sameTimestampRecord.updatedAt);
   const template = capturePapercut(emptyState("/repo", at), "Template", {}, at).record;
   const full = {
     ...emptyState("/repo", at),

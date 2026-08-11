@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { reconcilePendingQueue, type PendingMessageReadModel } from "../src/shared/pending-messages.ts";
+import { MAX_UNSEEN_COMPLETIONS, completionRecord, recordCompletion, validCompletionSessionIds } from "../src/shared/session-completions.ts";
 
 test("expected session replacement clears stale runtime while staying loading", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
@@ -138,18 +139,30 @@ test("retryable agent events preserve active work while terminal errors settle i
   assert.match(source, /case "agent\.error":[\s\S]*?agentError: willRetry \|\| typeof info\.message !== "string"/);
 });
 
-test("completed background sessions stay unread until selected", async () => {
+test("completed background sessions survive sleeping and bootstrap authoritatively", async () => {
   const source = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
+  const completed = recordCompletion({}, "selected", { sessionId: "background", completed: true });
+  const sleeping = recordCompletion(completed, "selected", { sessionId: "background" });
 
-  assert.match(source, /status\.completed === true && current\.runtime\?\.sessionId !== status\.sessionId/);
-  assert.match(source, /unseenCompletions\[status\.sessionId\] = true/);
+  assert.deepEqual(sleeping, { background: true });
+  assert.deepEqual(recordCompletion(sleeping, "background", { sessionId: "background", completed: true }), sleeping);
+  assert.deepEqual(completionRecord(["from-server"]), { "from-server": true });
+  assert.equal(validCompletionSessionIds(["from-server"]), true);
+  assert.equal(validCompletionSessionIds(["duplicate", "duplicate"]), false);
+  const special = recordCompletion({}, "selected", { sessionId: "__proto__", completed: true });
+  assert.equal(Object.hasOwn(special, "__proto__"), true);
+  assert.equal(Object.getPrototypeOf(special), Object.prototype);
+  let bounded: Record<string, true> = {};
+  for (let index = 0; index <= MAX_UNSEEN_COMPLETIONS; index++) {
+    bounded = recordCompletion(bounded, "selected", { sessionId: `session-${index}`, completed: true });
+  }
+  assert.equal(Object.keys(bounded).length, MAX_UNSEEN_COMPLETIONS);
+  assert.equal(bounded["session-0"], undefined);
+  assert.equal(bounded["session-200"], true);
+  assert.match(source, /const unseenCompletions = completionRecord\(completionIds\)/);
+  assert.match(source, /recordCompletion\(current\.unseenCompletions \?\? \{\}, current\.runtime\?\.sessionId/);
+  assert.doesNotMatch(source, /status\.state === "sleeping"[\s\S]*?delete unseenCompletions/);
   assert.match(source, /markSessionSeen\(sessionId: string\)[\s\S]*?delete unseenCompletions\[sessionId\]/);
-  assert.match(source, /status\.state === "sleeping"[\s\S]*?delete unseenCompletions\[status\.sessionId\]/);
-  assert.match(source, /status\.workStartedAt === null[\s\S]*?sessionWorkStartedAts\[status\.sessionId\] = null/);
-  assert.match(source, /typeof status\.workStartedAt === "string"[\s\S]*?!Number\.isNaN\(Date\.parse\(status\.workStartedAt\)\)/);
-  assert.doesNotMatch(source, /else \{\s*sessionWorkStartedAts\[status\.sessionId\] = null/);
-  assert.match(source, /sessionStatuses: clearRuntime \? undefined : this\.snapshot\.sessionStatuses/);
-  assert.match(source, /sessionStatuses: this\.snapshot\.sessionStatuses,[\s\S]*?unseenCompletions: this\.snapshot\.unseenCompletions/);
 });
 
 test("session status retention is bounded", async () => {

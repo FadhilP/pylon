@@ -7,7 +7,7 @@
   "engines": { "node": ">=22.19.0" },
   "files": ["extensions", "src", "docs", "README.md", "LICENSE"],
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node test/run.mjs",
     "check": "tsc --noEmit"
   },
   "pi": { "extensions": ["./extensions/pi-continuity.ts"] },

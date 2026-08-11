@@ -4,7 +4,7 @@ const patterns = [
   /\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/,
   /\b(?:api[_-]?key|token|password|secret|cookie)\s*[:=]\s*\S+/i,
   /["'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|cookie)["']\s*:\s*["'][^"']{6,}/i,
-  /\b[A-Za-z0-9+/_=-]{50,}\b/,
+  /(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_=-]*[0-9+/_=-])[A-Za-z0-9+/_=-]{50,}(?![A-Za-z0-9+/_=-])/,
 ];
 export function assertSafe(...texts: (string | undefined)[]) {
   if (texts.some((t) => t && patterns.some((p) => p.test(t))))
