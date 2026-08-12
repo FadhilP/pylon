@@ -109,8 +109,8 @@ test("extension registers exactly the private-agent and standard-session tools",
   const f = await fixture();
   try {
     assert.deepEqual([...f.tools.keys()].sort(), ["spawn_agent", "spawn_session"]);
-    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.action.enum, ["create", "continue", "recent", "list"]);
-    assert.deepEqual(f.tools.get("spawn_session").parameters.properties.action.enum, ["create", "adopt", "continue", "list"]);
+    assert.deepEqual(f.tools.get("spawn_agent").parameters.properties.action.enum, ["create", "continue", "status", "cancel", "recent", "list"]);
+    assert.deepEqual(f.tools.get("spawn_session").parameters.properties.action.enum, ["create", "adopt", "continue", "status", "cancel", "list"]);
     assert.equal(f.tools.get("spawn_session").parameters.properties.path, undefined);
     assert.equal(f.tools.get("spawn_session").parameters.properties.systemPrompt, undefined);
     assert.ok(f.tools.get("spawn_session").parameters.properties.project);
@@ -118,6 +118,10 @@ test("extension registers exactly the private-agent and standard-session tools",
     assert.ok(f.tools.get("spawn_agent").parameters.properties.systemPrompt);
     assert.ok(f.tools.get("spawn_agent").parameters.properties.limit);
     assert.ok(f.tools.get("spawn_agent").parameters.properties.maxChars);
+    assert.ok(f.tools.get("spawn_agent").parameters.properties.background);
+    assert.ok(f.tools.get("spawn_agent").parameters.properties.runId);
+    assert.ok(f.tools.get("spawn_session").parameters.properties.background);
+    assert.ok(f.tools.get("spawn_session").parameters.properties.runId);
     assert.equal(f.tools.get("spawn_session").parameters.properties.limit, undefined);
     assert.equal(f.tools.get("spawn_session").parameters.properties.maxChars, undefined);
     assert.equal(f.tools.get("spawn_agent").promptSnippet, undefined);
@@ -128,8 +132,12 @@ test("extension registers exactly the private-agent and standard-session tools",
     const sessionDescription = f.tools.get("spawn_session").description;
     assert.match(agentDescription, /self-contained prompt/);
     assert.match(agentDescription, /continue the returned ID/);
+    assert.match(agentDescription, /background true/);
+    assert.match(agentDescription, /status or cancel/);
     assert.match(agentDescription, /Review child responses and workspace changes/);
     assert.match(sessionDescription, /continue the returned ID/);
+    assert.match(sessionDescription, /background true/);
+    assert.match(sessionDescription, /status or cancel/);
     assert.match(sessionDescription, /user's explicit request/);
     assert.match(sessionDescription, /immediately prompts that transcript/);
     assert.match(sessionDescription, /another Pi process/);
@@ -142,13 +150,15 @@ test("active spawn prompt guidelines explain tool selection and thread actions",
     assert.deepEqual(f.tools.get("spawn_agent").promptGuidelines, [
       "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
       "When using spawn_agent, create one thread with a self-contained prompt and the narrowest useful policy, then continue that thread by ID for follow-ups because its model, system prompt, thinking level, and tools are immutable.",
+      "Set background true only for independent work that should continue across parent turns; use status with the returned thread and run IDs to collect its result, or cancel to stop it.",
       "Use spawn_agent recent to inspect bounded recent transcript messages without prompting the child; use list only to recover private thread IDs available from the current parent branch.",
       "Review child responses and workspace changes before relying on them.",
     ]);
     assert.deepEqual(f.tools.get("spawn_session").promptGuidelines, [
       "Use spawn_session only when the child conversation must be an ordinary Pi session the user can inspect, open, or continue separately; do not use spawn_session as the default delegation tool when a private spawn_agent thread or focused specialist tool is sufficient.",
       "When starting independent work with spawn_session, use create with a self-contained kickoff prompt and a concise purpose-based name; use continue with the returned ID for follow-ups, and use list only to recover sessions available from the current parent branch.",
-      "Set spawn_session project only when the user explicitly requests work in another project; relative project paths resolve from the current project.",
+      "Set background true only for independent work that should continue across parent turns; use status with the returned session and run IDs to collect its result, or cancel to stop it.",
+      "Set spawn_session project only when the user explicitly requests another project; relative project paths resolve from the current project.",
       "Use spawn_session adopt only when the user explicitly asks to resume an existing session in the current or selected project and provides its exact ID; adopt claims and immediately prompts that existing transcript while preserving its model, name, and native parent metadata.",
       "Do not use spawn_session to customize system instructions, thinking, tools, or extensions because it loads the selected project's normal runtime; never prompt or adopt a session concurrently open in another Pi process.",
     ]);
@@ -322,6 +332,127 @@ test("running spawn updates expose the selected model", async () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
       });
     }
+  } finally { f.restore(); }
+});
+
+test("synchronous mode remains the default and waits for completion", async () => {
+  let release!: () => void;
+  const f = await fixture(() => new Promise<SpawnRun>((resolve) => {
+    release = () => resolve(completed("waited"));
+  }));
+  try {
+    let settled = false;
+    const pending = f.tools.get("spawn_agent").execute("create", {
+      action: "create", prompt: "wait by default",
+    }, undefined, undefined, f.ctx).then((result: any) => { settled = true; return result; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    release();
+    const result = await pending;
+    assert.equal(result.details.status, "completed");
+    assert.match(result.content[0].text, /waited/);
+  } finally { f.restore(); }
+});
+
+test("background agent runs return immediately, report status, and preserve thread locking", async () => {
+  let release!: () => void;
+  const f = await fixture((_args, options) => new Promise<SpawnRun>((resolve) => {
+    release = () => resolve(completed(`done:${options.prompt}`));
+  }));
+  try {
+    const tool = f.tools.get("spawn_agent");
+    const started = await tool.execute("create", {
+      action: "create", prompt: "work independently", background: true,
+    }, undefined, undefined, f.ctx);
+    assert.equal(started.details.status, "running");
+    assert.equal(started.details.background, true);
+    const id = started.details.piSpawn.id;
+    const runId = started.details.runId;
+    persist(f.parent, "spawn_agent", started);
+
+    const running = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
+    assert.equal(running.details.status, "running");
+    const busy = await tool.execute("continue", {
+      action: "continue", id, prompt: "overlap", background: true,
+    }, undefined, undefined, f.ctx);
+    assert.equal(busy.details.failureCode, "busy");
+
+    const context = (f.handlers.get("context") ?? [])[0]?.({ messages: [] });
+    assert.match(context.messages.at(-1).content, new RegExp(runId));
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    const completedRun = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
+    assert.equal(completedRun.details.status, "completed");
+    assert.match(completedRun.content[0].text, /done:work independently/);
+    const consumed = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
+    assert.equal(consumed.details.failureCode, "not_found");
+  } finally { f.restore(); }
+});
+
+test("a completed background result can only be collected once concurrently", async () => {
+  const f = await fixture(async () => completed("once"));
+  try {
+    const tool = f.tools.get("spawn_agent");
+    const started = await tool.execute("create", {
+      action: "create", prompt: "one result", background: true,
+    }, undefined, undefined, f.ctx);
+    const id = started.details.piSpawn.id;
+    const runId = started.details.runId;
+    persist(f.parent, "spawn_agent", started);
+    await new Promise((resolve) => setImmediate(resolve));
+    const results = await Promise.all([
+      tool.execute("cancel-1", { action: "cancel", id, runId }, undefined, undefined, f.ctx),
+      tool.execute("cancel-2", { action: "cancel", id, runId }, undefined, undefined, f.ctx),
+    ]);
+    assert.equal(results.filter((result: any) => result.details.status === "completed").length, 1);
+    assert.equal(results.filter((result: any) => result.details.failureCode === "not_found").length, 1);
+  } finally { f.restore(); }
+});
+
+test("session shutdown aborts and awaits background runs", async () => {
+  let aborted = false;
+  const f = await fixture(async (_args, options) => new Promise<SpawnRun>((resolve) => {
+    options.signal.addEventListener("abort", () => {
+      aborted = true;
+      resolve({ ...completed("shutdown"), error: "Spawned thread turn was aborted." });
+    }, { once: true });
+  }));
+  try {
+    const started = await f.tools.get("spawn_session").execute("create", {
+      action: "create", prompt: "shutdown", background: true,
+    }, undefined, undefined, f.ctx);
+    assert.equal(started.details.status, "running");
+    for (const handler of f.handlers.get("session_shutdown") ?? []) await handler({}, f.ctx);
+    assert.equal(aborted, true);
+    const rejected = await f.tools.get("spawn_session").execute("create-again", {
+      action: "create", prompt: "too late", background: true,
+    }, undefined, undefined, f.ctx);
+    assert.equal(rejected.details.failureCode, "shutting_down");
+  } finally { f.restore(); }
+});
+
+test("background session cancellation aborts the run and background UI fails closed", async () => {
+  let uiResponse: any;
+  const f = await fixture(async (_args, options) => {
+    uiResponse = await options.onUiRequest({ id: "confirm", method: "confirm", title: "Guard", message: "Allow?" }, new AbortController().signal);
+    return await new Promise<SpawnRun>((resolve) => {
+      options.signal.addEventListener("abort", () => resolve({ ...completed("cancelled"), error: "Spawned thread turn was aborted." }), { once: true });
+    });
+  });
+  try {
+    f.ctx.hasUI = true;
+    f.ctx.ui = { confirm: async () => true };
+    const tool = f.tools.get("spawn_session");
+    const started = await tool.execute("create", {
+      action: "create", prompt: "cancel me", background: true,
+    }, undefined, undefined, f.ctx);
+    const id = started.details.piSpawn.id;
+    const runId = started.details.runId;
+    persist(f.parent, "spawn_session", started);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(uiResponse, { confirmed: false });
+    const cancelled = await tool.execute("cancel", { action: "cancel", id, runId }, undefined, undefined, f.ctx);
+    assert.equal(cancelled.details.status, "cancelled");
   } finally { f.restore(); }
 });
 

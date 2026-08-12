@@ -453,6 +453,10 @@ export class SpawnBusyError extends Error {}
 const activeThreads = new Set<string>();
 const abortError = () => new DOMException("Spawned thread turn was aborted.", "AbortError");
 
+export function isThreadActive(sessionPath: string): boolean {
+  return activeThreads.has(canonical(sessionPath));
+}
+
 export async function withThreadLock<T>(sessionPath: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) throw abortError();
   const key = canonical(sessionPath);

@@ -109,6 +109,7 @@ const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const EXECUTION_ENTRY_TYPE = "pi-continuity-execution";
 const COMPACTION_CONTINUATION_CHANNEL = "pi-continuity:compaction-continuation";
 const COMPACTION_INTERRUPTION_DIAGNOSTIC = "pi-continuity-compaction-interruption";
+const COMPACTION_ABORT_ERROR = /^(?:this operation|request) was aborted\.?$/i;
 type CompactionContinuationRequest = {
   id: string;
   sessionGeneration: number;
@@ -1038,10 +1039,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.on("message_end", async (event, ctx) => {
     const message = event.message as any;
     const request = automaticCompaction;
-    if (request && message.role === "assistant" && message.stopReason === "aborted") {
+    const compactionInterruption = request && message.role === "assistant" && (
+      message.stopReason === "aborted" ||
+      (message.stopReason === "error" && typeof message.errorMessage === "string"
+        && COMPACTION_ABORT_ERROR.test(message.errorMessage.trim()))
+    );
+    if (compactionInterruption) {
       return {
         message: {
           ...message,
+          stopReason: "aborted",
           diagnostics: [
             ...(Array.isArray(message.diagnostics) ? message.diagnostics : []),
             {

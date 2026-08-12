@@ -413,6 +413,20 @@ test("over-threshold tool work compacts and resumes through public extension API
     assert.equal(compactCalls.length, 1, "custom reserveTokens threshold should trigger before Pi's default threshold");
     const duplicateAutoCompact = await app.handlers.get("session_before_compact")![0]({ reason: "threshold" }, ctx);
     assert.deepEqual(duplicateAutoCompact, { cancel: true });
+    const requestId = app.emitted.find((event) => event.channel === "pi-continuity:compaction-continuation")!.value.requestId;
+    const messageEnd = app.handlers.get("message_end")![0];
+    for (const errorMessage of ["This operation was aborted", "request was aborted."]) {
+      const interruption = {
+        role: "assistant", stopReason: "error", errorMessage, content: [],
+      };
+      const annotated = await messageEnd({ message: interruption }, ctx);
+      assert.equal(annotated.message.stopReason, "aborted");
+      assert.equal(annotated.message.errorMessage, errorMessage);
+      assert.equal(annotated.message.diagnostics.at(-1).details.requestId, requestId);
+    }
+    assert.equal(await messageEnd({
+      message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected request", content: [] },
+    }, ctx), undefined, "unrelated provider errors remain terminal");
     assert.equal(app.customMessages.length, 0);
     compactCalls[0].onComplete();
     assert.equal(app.customMessages.length, 1);
@@ -426,11 +440,11 @@ test("over-threshold tool work compacts and resumes through public extension API
     assert.equal(lifecycle[1]!.value.action, "resume");
     assert.equal(lifecycle[1]!.value.requestId, lifecycle[0]!.value.requestId);
     assert.equal(app.customMessages[0].message.details.requestId, lifecycle[0]!.value.requestId);
-    const interruption = {
+    const laterUserAbort = {
       role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "partial" }],
     };
-    const annotated = await app.handlers.get("message_end")![0]({ message: interruption }, ctx);
-    assert.equal(annotated, undefined, "completed continuation no longer annotates unrelated user aborts");
+    const laterAnnotation = await messageEnd({ message: laterUserAbort }, ctx);
+    assert.equal(laterAnnotation, undefined, "completed continuation no longer annotates unrelated user aborts");
 
     for (const handler of app.handlers.get("tool_execution_end") ?? [])
       await handler({ toolCallId: "send-failure", result: { terminate: false } }, turnCtx);
@@ -502,12 +516,17 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
 
     await finishToolTurn("newer-input");
     assert.equal(compactCalls.length, 1);
-    for (const handler of app.handlers.get("input") ?? [])
-      await handler({ source: "interactive", text: "Stop and reconsider" }, ctx);
-    await finishToolTurn("after-newer-input");
-    assert.equal(compactCalls.length, 2, "accepted new input invalidates stale request bookkeeping before later tool work");
+    const cancelledRequest = app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)!.value;
+    app.emit("pi-continuity:compaction-continuation", { ...cancelledRequest, action: "cancel" });
+    const cancelledError = {
+      role: "assistant", stopReason: "error", errorMessage: "This operation was aborted", content: [],
+    };
+    assert.equal(await app.handlers.get("message_end")![0]({ message: cancelledError }, ctx), undefined,
+      "scoped cancellation clears the request before an abort-shaped provider result");
     compactCalls[0].onComplete();
     assert.equal(app.customMessages.length, 0);
+    await finishToolTurn("after-cancel");
+    assert.equal(compactCalls.length, 2);
 
     await finishToolTurn("terminating-after-request", true);
     compactCalls[1].onComplete();
