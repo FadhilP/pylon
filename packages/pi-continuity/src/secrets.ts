@@ -18,7 +18,7 @@ export function redactSecrets(text: string) {
 }
 export function sanitizeAndClip(text: string, max: number) {
   const safe = redactSecrets(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "�");
-  return safe.length <= max
-    ? safe
-    : `${safe.slice(0, max)}\n[truncated by Continuity]`;
+  if (safe.length <= max) return safe;
+  const marker = "\n[truncated by Continuity]";
+  return max <= marker.length ? marker.slice(0, max) : `${safe.slice(0, max - marker.length)}${marker}`;
 }

@@ -6,6 +6,7 @@ import {
   buildContinuityCompaction,
   buildGenericContinuityCompaction,
   finalizeContinuityCompaction,
+  isContinuityCompactionDetails,
   prepareContinuityCompaction,
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
@@ -495,6 +496,36 @@ test("generic compaction deterministically extracts discarded transcript records
   assert.match(result.summary, /Keep compatibility|existing hook|provider unavailable|Current request/);
   assert.doesNotMatch(result.summary, /Current response/);
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
+});
+
+
+test("truncated generic metadata stays within limits for later active-work compaction", () => {
+  const firstEntries = [
+    user("x".repeat(5_000), "oversized"),
+    user("Current request", "current"),
+    assistant("Retained response", "suffix"),
+  ];
+  const first = buildGenericContinuityCompaction({ branchEntries: firstEntries, preparation: preparation(firstEntries, 1) });
+  assert.ok(first);
+  const details = first.details;
+  assert.ok(isContinuityCompactionDetails(details));
+  assert.equal(details.mode, "generic");
+  if (details.mode !== "generic") assert.fail("expected generic compaction details");
+  assert.ok(details.records.every((record) => record.text.length <= 2_000));
+
+  const prior = entry({
+    type: "compaction",
+    summary: first.summary,
+    firstKeptEntryId: first.firstKeptEntryId,
+    tokensBefore: first.tokensBefore,
+    details,
+  });
+  const resumedEntries = [...firstEntries, prior, user("Active request", "active"), assistant("Progress", "progress")];
+  assert.ok(buildContinuityCompaction({
+    branchEntries: resumedEntries,
+    preparation: preparation(resumedEntries, 1),
+    work: work(),
+  }));
 });
 
 test("generic compaction excludes superseded read and discovery errors from canonical and review context", () => {
