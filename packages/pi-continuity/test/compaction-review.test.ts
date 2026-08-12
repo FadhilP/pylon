@@ -60,6 +60,18 @@ test("review packet redacts credentials before model access and remains bounded"
   assert.doesNotMatch(JSON.stringify(built), new RegExp(secret));
   assert.match(JSON.stringify(built), /REDACTED CREDENTIAL/);
 
+  const path = "platform/web/src/shared/protocol/helios-android-tooling.ts";
+  const withPath = buildCompactionReviewPacket({ canonicalSummary: `Read/search: ${path}`, safePaths: [path], sources: [source] })!;
+  assert.match(withPath.canonicalSummary, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(withPath.canonicalSummary, /REDACTED CREDENTIAL/);
+
+  const opaque = `${"A".repeat(30)}/${"B".repeat(24)}0`;
+  const strict = buildCompactionReviewPacket({ canonicalSummary: `User prose: ${opaque}`, sources: [source] })!;
+  assert.doesNotMatch(strict.canonicalSummary, new RegExp(opaque));
+  assert.match(strict.canonicalSummary, /REDACTED CREDENTIAL/);
+  const untrustedAllowlist = buildCompactionReviewPacket({ canonicalSummary: `User prose: ${opaque}`, safePaths: ["A"], sources: [source] })!;
+  assert.match(untrustedAllowlist.canonicalSummary, /REDACTED CREDENTIAL/);
+
   const many = Array.from({ length: 100 }, (_, index) => ({
     sourceEntryId: `s-${index}`,
     role: "assistant" as const,

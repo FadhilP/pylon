@@ -8,7 +8,7 @@ import {
   type CompactionReviewSource,
   type CompactionSupplement,
 } from "./compaction.ts";
-import { assertSafe, sanitizeAndClip } from "./secrets.ts";
+import { assertSafe, sanitizeAndClip, sanitizeAndClipWithPaths } from "./secrets.ts";
 
 const REVIEW_TIMEOUT_MS = 60_000;
 const REVIEW_MAX_TOKENS = 1_200;
@@ -88,12 +88,15 @@ function parseOutput(raw: string): Candidate[] {
 export function buildCompactionReviewPacket(input: {
   canonicalSummary: string;
   sources: CompactionReviewSource[];
+  safePaths?: string[];
   focus?: string;
 }): CompactionReviewPacket | undefined {
   if (!input.sources.length) return;
-  const canonicalSummary = sanitizeAndClip(input.canonicalSummary, 20_000);
+  const canonicalSummary = input.safePaths?.length
+    ? sanitizeAndClipWithPaths(input.canonicalSummary, input.safePaths, 20_000)
+    : sanitizeAndClip(input.canonicalSummary, 20_000);
   const focus = input.focus?.trim() ? sanitizeAndClip(input.focus.trim(), REVIEW_MAX_FOCUS_CHARS) : undefined;
-  assertSafe(canonicalSummary, ...(focus ? [focus] : []));
+  assertSafe(...(focus ? [focus] : []));
   const base = { version: 1 as const, canonicalSummary, ...(focus ? { focus } : {}) };
   const sanitizedSources = input.sources.map((source) => {
     const content = sanitizeAndClip(source.content, 4_000);

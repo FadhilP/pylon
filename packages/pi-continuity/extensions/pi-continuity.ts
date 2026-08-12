@@ -60,7 +60,7 @@ import {
   userMessageText,
 } from "../src/memory-review.ts";
 import { hasPendingV4Migration, isMigrationJournal, migrateV4, recordPendingV4Migration, type MigrationJournal } from "../src/memory-migration.ts";
-import { assertSafe, sanitizeAndClip } from "../src/secrets.ts";
+import { assertSafe, assertSafePath, sanitizeAndClip } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext, shortlistNotes } from "../src/context.ts";
 import {
@@ -627,7 +627,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.goal,
         work.planSummary,
         ...work.constraints,
-        ...(work.handoff?.workingSet ?? []).flatMap((value) => value.split(/[\\/]/)),
         ...(work.handoff?.assumptions ?? []),
         ...(work.handoff?.acceptanceCriteria ?? []),
         work.revisionFeedback?.text,
@@ -635,6 +634,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.nextAction,
         ...work.todos.map((t) => t.text),
       );
+      assertSafePath(...(work.handoff?.workingSet ?? []));
       await writeJson(path, work);
       publishState();
     } catch (error) {
@@ -1261,6 +1261,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       try {
         const packet = buildCompactionReviewPacket({
           canonicalSummary: draft.canonical.summary,
+          safePaths: draft.safePaths,
           sources: draft.reviewSources,
           ...(focus ? { focus } : {}),
         });
@@ -1297,7 +1298,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
     }
       if (event.signal?.aborted) return { cancel: true };
-      return { compaction: finalizeContinuityCompaction(draft.canonical, [...draft.priorSupplements, ...additions]) };
+      return { compaction: finalizeContinuityCompaction(draft.canonical, [...draft.priorSupplements, ...additions], draft.safePaths) };
     } catch {
       if (!event.signal?.aborted)
         ctx.ui?.notify?.("Compaction cancelled because Continuity could not produce deterministic output.", "error");

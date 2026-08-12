@@ -5,7 +5,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { Work } from "./active-work.ts";
-import { assertSafe, sanitizeAndClip } from "./secrets.ts";
+import { assertSafe, assertSafeWithPaths, sanitizeAndClip, sanitizePathAndClip } from "./secrets.ts";
 import { HANDOFF_ENTRY_TYPE } from "./run.ts";
 
 // Inspired by pi-blackhole's structural summaries, without its runtime, workers, or aggressive cut policy.
@@ -135,6 +135,7 @@ type SummaryRecord = {
 type BuiltDraft = {
   canonical: CompactionResult<ContinuityCompactionDetails>;
   priorSupplements: CompactionSupplement[];
+  safePaths: string[];
   sourceStart: number;
   firstKeptIndex: number;
   excludedToolErrors: Set<string>;
@@ -144,6 +145,7 @@ export type ContinuityCompactionDraft = {
   canonical: CompactionResult<ContinuityCompactionDetails>;
   priorSupplements: CompactionSupplement[];
   reviewSources: CompactionReviewSource[];
+  safePaths: string[];
 };
 
 export type ContinuityBoundaryIdentity = { runId: string; timelineId: string; handoffEntryId?: string };
@@ -258,6 +260,10 @@ function inline(value: string, max = 500) {
   return safe(value.replace(/\s+/g, " ").trim(), max);
 }
 
+function inlinePath(value: string, max = 500) {
+  return sanitizePathAndClip(value.replace(/\s+/g, " ").trim(), max);
+}
+
 function fenced(value: string) {
   const longest = (character: "`" | "~") => Math.max(0, ...(value.match(character === "`" ? /`+/g : /~+/g) ?? []).map((run) => run.length));
   const backticks = longest("`");
@@ -269,7 +275,7 @@ function fenced(value: string) {
 
 function addHistory(history: CompactionHistory, kind: HistoryKind, path: string, sourceEntryId?: string) {
   const record: CompactionHistoryRecord = {
-    path: inline(path),
+    path: inlinePath(path),
     ...(sourceEntryId ? { sourceEntryId: inline(sourceEntryId, 200) } : {}),
   };
   if (!record.path) return;
@@ -409,7 +415,7 @@ function recordsFor(work: Work, currentRequest: string, currentRequestRetained: 
     add("Current Work", `Verification: ${inline(verification.state, 100)}${qualifiers ? ` (${qualifiers})` : ""}`, 960);
   }
   add("Current Work", `Plan: ${safe(work.planSummary || "(not specified)", 4_000)}`, 950);
-  for (const value of work.handoff?.workingSet ?? []) add("Current Work", `Working set: ${safe(value, 240)}`, 948);
+  for (const value of work.handoff?.workingSet ?? []) add("Current Work", `Working set: ${inlinePath(value, 240)}`, 948);
   for (const value of work.handoff?.assumptions ?? []) add("Current Work", `Assumption/gap: ${safe(value, 500)}`, 947);
   for (const value of work.handoff?.acceptanceCriteria ?? []) add("Current Work", `Acceptance: ${safe(value, 500)}`, 946);
   if (work.revisionFeedback) add("Current Work", `Revision feedback (plan ${work.revisionFeedback.revision}): ${safe(work.revisionFeedback.text, 1_000)}`, 949);
@@ -599,12 +605,18 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
     `- **Source entries:** ${details.sourceEntryCount}`,
     "- **Budget:** Deterministic whole-record eviction",
   ].join("\n");
+  const safePaths = [
+    ...(work.handoff?.workingSet ?? []).map((value) => inlinePath(value, 240)),
+    ...history.modified.map((record) => record.path),
+    ...history.read.map((record) => record.path),
+  ];
   const summary = buildActiveSummary(recordsFor(work, currentRequest, selected.firstKeptIndex === currentTaskIndex, history, verification), metadata);
   if (!summary) return;
-  assertSafe(summary);
+  assertSafeWithPaths(summary, safePaths);
   return {
     canonical: { summary, firstKeptEntryId: selected.firstKeptEntryId, tokensBefore: preparation.tokensBefore, details },
     priorSupplements: retainedSupplements(previous, branchEntries),
+    safePaths,
     sourceStart,
     firstKeptIndex: selected.firstKeptIndex,
     excludedToolErrors: toolErrorExclusions(branchEntries, sourceStart),
@@ -723,11 +735,13 @@ function buildGenericDraft({ branchEntries, preparation }: Omit<DraftInput, "wor
     records,
     supplements: [],
   };
+  const safePaths = [...history.modified, ...history.read].map((record) => record.path);
   const summary = renderGenericSummary(records, history, sourceEntryCount);
-  assertSafe(summary);
+  assertSafeWithPaths(summary, safePaths);
   return {
     canonical: { summary, firstKeptEntryId: selected.firstKeptEntryId, tokensBefore: preparation.tokensBefore, details },
     priorSupplements: retainedSupplements(previous, branchEntries),
+    safePaths,
     sourceStart,
     firstKeptIndex: selected.firstKeptIndex,
     excludedToolErrors,
@@ -748,12 +762,14 @@ function supplementSection(supplements: CompactionSupplement[]) {
 export function finalizeContinuityCompaction(
   canonical: CompactionResult<ContinuityCompactionDetails>,
   supplements: CompactionSupplement[],
+  safePaths: string[] = [],
 ): CompactionResult<ContinuityCompactionDetails> {
   const selected: CompactionSupplement[] = [];
   const seen = new Set<string>();
   for (let index = supplements.length - 1; index >= 0; index--) {
     const item = supplements[index];
     if (!validSupplement(item) || canonical.summary.includes(item.quote)) continue;
+    assertSafe(item.quote);
     const key = `${item.sourceEntryId}:${item.quoteHash}`;
     if (seen.has(key)) continue;
     const candidate = [item, ...selected];
@@ -763,7 +779,7 @@ export function finalizeContinuityCompaction(
   const section = supplementSection(selected);
   const summary = section ? `${canonical.summary}\n\n${section}` : canonical.summary;
   if (summary.length > MAX_COMPACTION_SUMMARY_CHARS) throw Error("compaction summary exceeds its deterministic budget");
-  assertSafe(summary);
+  assertSafeWithPaths(summary, safePaths);
   return { ...canonical, summary, details: { ...canonical.details, supplements: selected } } as CompactionResult<ContinuityCompactionDetails>;
 }
 
@@ -775,6 +791,7 @@ export function prepareContinuityCompaction(input: DraftInput): ContinuityCompac
   return {
     canonical: built.canonical,
     priorSupplements: built.priorSupplements,
+    safePaths: built.safePaths,
     reviewSources: reviewSources(input.branchEntries, built.sourceStart, built.firstKeptIndex, built.excludedToolErrors),
   };
 }
@@ -782,11 +799,11 @@ export function prepareContinuityCompaction(input: DraftInput): ContinuityCompac
 export function buildContinuityCompaction(input: BuildInput): CompactionResult<ActiveWorkCompactionDetails> | undefined {
   const draft = prepareContinuityCompaction(input);
   return draft
-    ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements) as CompactionResult<ActiveWorkCompactionDetails>
+    ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements, draft.safePaths) as CompactionResult<ActiveWorkCompactionDetails>
     : undefined;
 }
 
 export function buildGenericContinuityCompaction(input: Omit<DraftInput, "work" | "verification">): CompactionResult<ContinuityCompactionDetails> | undefined {
   const draft = prepareContinuityCompaction(input);
-  return draft ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements) : undefined;
+  return draft ? finalizeContinuityCompaction(draft.canonical, draft.priorSupplements, draft.safePaths) : undefined;
 }

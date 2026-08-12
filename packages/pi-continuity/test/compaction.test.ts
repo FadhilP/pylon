@@ -11,7 +11,7 @@ import {
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "../src/compaction.ts";
-import { assertSafe, redactSecrets } from "../src/secrets.ts";
+import { assertSafe, assertSafePath, redactPathSecrets, redactSecrets } from "../src/secrets.ts";
 import type { Work } from "../src/active-work.ts";
 
 let sequence = 0;
@@ -26,15 +26,20 @@ const assistant = (content: any, id?: string) => entry({ id, type: "message", me
 const toolCall = (toolCallId: string, name: string, args: Record<string, unknown>, id?: string) =>
   assistant([{ type: "toolCall", id: toolCallId, name, arguments: args }], id);
 
-test("credential heuristic ignores long alphabetic identifiers", () => {
+test("credential heuristic distinguishes nested paths from credential components", () => {
   const javaBasename = `${"LongDescriptive".repeat(5)}Validator.java`;
+  const nestedPath = "src/components/really/deep/nested/LongDescriptiveValidator.java";
   assert.doesNotThrow(() => assertSafe(javaBasename));
   assert.equal(redactSecrets(javaBasename), javaBasename);
+  assert.doesNotThrow(() => assertSafePath(nestedPath));
+  assert.equal(redactPathSecrets(nestedPath), nestedPath);
 
   for (const signal of ["0", "+", "/", "_", "-", "="])
     assert.equal(redactSecrets(`${"A".repeat(49)}${signal}`), "[REDACTED CREDENTIAL]");
   assert.equal(redactSecrets(`${"A".repeat(48)}0`), `${"A".repeat(48)}0`);
   assert.throws(() => assertSafe(`${"A".repeat(49)}0`), /possible credential/);
+  assert.throws(() => assertSafePath(`packages/${"A".repeat(49)}0/config.ts`), /possible credential/);
+  assert.throws(() => assertSafePath("packages/ghp_abcdefghijklmnopqrstuvwxyz123456/config.ts"), /possible credential/);
   assert.throws(() => assertSafe(`token=${"A".repeat(60)}`), /possible credential/);
 });
 const toolResult = (content: string, isError = false, id?: string, toolName = "bash", toolCallId = `call-${sequence}`) =>
@@ -120,6 +125,15 @@ test("repeated compaction merges structured file history without parsing its ren
   assert.equal(result.firstKeptEntryId, "suffix");
   assert.ok((result.details?.sourceEntryCount ?? 0) >= (first.details?.sourceEntryCount ?? 0));
   assert.deepEqual(result.details?.history.read.map((item) => item.path), ["src/first.ts"]);
+});
+
+test("preserves ordinary nested paths in compaction history and working set", () => {
+  const path = "platform/web/src/shared/protocol/helios-android-tooling.ts";
+  const entries = [handoff(), user("Inspect the implementation"), toolCall("read-long", "read", { path }), user("Current task", "current"), assistant("Working")];
+  const result = build(entries, work({ handoff: { workingSet: [path], assumptions: [], acceptanceCriteria: [] } }));
+  assert.equal(result.details?.history.read[0]?.path, path);
+  assert.equal(occurrences(result.summary, path), 2);
+  assert.doesNotMatch(result.summary, /REDACTED CREDENTIAL/);
 });
 
 test("uses authoritative Work fields and does not infer goals, preferences, or blockers", () => {
@@ -404,9 +418,11 @@ test("uses only supplied active ancestry, not sibling branch content", () => {
 
 test("redacts credential-like text from request, Work, and tool errors", () => {
   const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const slashCredential = `${"A".repeat(30)}/${"B".repeat(24)}0`;
   const entries = [handoff(), user("Earlier task"), toolResult(`password=${credential}`, true), user(`Use ${credential}`, "current")];
-  const result = build(entries, work({ goal: `Rotate token=${credential}` }));
+  const result = build(entries, work({ goal: `Rotate token=${credential} and ${slashCredential}` }));
   assert.doesNotMatch(result.summary, new RegExp(credential));
+  assert.doesNotMatch(result.summary, new RegExp(slashCredential));
   assert.match(result.summary, /\[REDACTED CREDENTIAL\]/);
   assert.doesNotThrow(() => assertSafe(result.summary));
 });
