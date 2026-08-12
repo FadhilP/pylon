@@ -8,6 +8,27 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.7.0",
+    date: "Aug 12, 2026",
+    title: "Faster automation and richer workflow inspection",
+    summary: "Pylon makes Helios faster and easier to set up, brings Papercuts and compaction details into the web workspace, and sharpens editing, session feedback, and runtime reliability.",
+    notes: [
+      "Added consent-gated Android tooling management to Pylon Settings, with repository-pinned Appium and UiAutomator2 installation, status, repair, removal, rollback, and session-aware locking in Pylon's own data directory, while retaining support for manually managed Appium.",
+      "Added a confirmed Helios Android package-inventory action that verifies emulator identity and returns a bounded, validated list of package IDs without opening an Appium session.",
+      "Made active Helios browser commands faster by reusing a persistent pinned Playwright client with safe one-shot fallback, added fail-closed semantic plans for short deterministic interactions, and allowed explicit local HTML file URLs for prototype testing.",
+      "Reduced browser automation context growth with tighter action and search snapshots, bounded tab metadata, leaner structured results, and context compaction for text-only Helios output while preserving image-bearing results.",
+      "Added a searchable, filterable Papercut ledger to the web Inspector with live status counts, pagination, occurrence and outcome details, inline editing, stale-change protection, and confirmed deletion.",
+      "Moved compacted conversation records into a dedicated details panel showing context before and after, source-entry counts, the compacted summary, recovered source records, failed tools, tool results, file activity, and metadata.",
+      "Improved active-work compaction across prior boundary mismatches, cleared stale automatic-compaction state on new input and terminated batches, and corrected Continuity secret detection so long ordinary identifiers no longer trigger false positives.",
+      "Enabled revision-guarded numbered reads and edits by default, retained coverage for model-authored lines, and reduced normal successful edit responses to a concise confirmation with a new-revision tag unless another process transformed the saved file.",
+      "Made Heartbeat jobs use Pi's configured Bash shell on every platform, including stdin-based Windows shells, so long-running commands follow the same syntax as the regular bash tool.",
+      "Preserved unread background-session completion indicators across browser reconnects and runtime-state changes, hid redundant sleeping indicators, and added clearer loading, copy-success, and copy-failure feedback across dialogs, files, archives, and session menus.",
+      "Added a default bounded tool-retry hook that directs agents to retry corrected inputs or transient failures at most twice while excluding denials, cancellations, permission failures, uncertain destructive actions, and failed or stale Verify results.",
+      "Added pylon --help with startup, migration, and environment guidance, and displayed StateQL result aliases in the database ledger.",
+    ],
+  },
+
+  {
     version: "1.6.0",
     date: "Aug 9, 2026",
     title: "Memory V6, Android automation, and deeper workflow control",
