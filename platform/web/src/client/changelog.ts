@@ -8,6 +8,21 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.8.0",
+    date: "Aug 12, 2026",
+    title: "Background agents and smoother compaction",
+    summary: "Pylon adds background Spawn runs, makes compaction handoffs more reliable, and improves guarded editing and session efficiency.",
+    notes: [
+      "Added optional background execution to spawn_agent and spawn_session, with immediate run references, later status or cancellation, bounded result collection, and safe rejection of interactive child prompts.",
+      "Made automatic compaction handoffs survive provider-specific abort responses, resume cleanly after the hidden checkpoint, and settle interrupted web runs without stale continuation state or misleading activity.",
+      "Fixed Continuity credential checks so long workspace paths and ordinary identifiers no longer block compaction while explicit credentials and secret-like path components remain protected.",
+      "Enabled Grunt's shared revision-guarded numbered read and edit tools, including concise persisted revision results and protection against files changing during a save.",
+      "Reduced session loading work with shared bounded concurrent inventory, incremental summary caching, smaller initial history windows, and lease-aware cleanup that preserves live sessions.",
+    ],
+  },
+
+
+  {
     version: "1.7.0",
     date: "Aug 12, 2026",
     title: "Faster automation and richer workflow inspection",
