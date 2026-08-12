@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { link, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { listSessionInventory } from "pylon-core/session-inventory";
 
 const LEASE_VERSION = 1;
 type Lease = { version: 1; sessionId: string; pid: number; token: string };
@@ -109,7 +109,7 @@ export async function startSessionGc(
   root: string,
   sessionId: string,
   cleanup: (liveSessionIds: ReadonlySet<string>) => Promise<void>,
-  listSessions: () => Promise<Array<{ id: string }>> = () => SessionManager.listAll(),
+  listSessions: () => Promise<Array<{ id: string }>> = () => listSessionInventory(undefined, { strict: true }),
 ) {
   const leases = join(root, "session-artifacts"), token = randomUUID(),
     leasePath = join(leases, `${encodeURIComponent(sessionId)}.${token}.json`),

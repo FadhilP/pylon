@@ -13,6 +13,7 @@ import {
   readPersistedWorktreeSummaries,
 } from "pylon-core/src/worktree.ts";
 import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts";
+import { listSessionInventory, resolveUniqueSession, type SessionInventoryEntry } from "pylon-core/session-inventory";
 import {
   buildSessionContext,
   createAgentSessionRuntime,
@@ -92,7 +93,7 @@ import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
-import { decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, mergeDelegatedRuns, projectConversation, projectConversationTurnIndex, projectDelegatedToolEvent } from "./projections.ts";
+import { continuityCompactionInterruptionId, decodeHistoryCursor, decodeTurnIndexCursor, encodeHistoryCursor, encodeTurnIndexCursor, HISTORY_PAGE_SIZE, latestVisibleUserIndex, mergeDelegatedRuns, projectConversation, projectConversationTurnIndex, projectDelegatedToolEvent } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
@@ -156,6 +157,38 @@ function agentWasAborted(value: Record<string, unknown>): boolean {
     if (item.role === "assistant") return item.stopReason === "aborted";
   }
   return false;
+}
+
+const CONTINUITY_COMPACTION_CHANNEL = "pi-continuity:compaction-continuation";
+type ContinuityCompactionContinuation = {
+  requestId: string;
+  sessionId: string;
+  sessionGeneration: number;
+  taskGeneration: number;
+  resuming?: boolean;
+  abandoned?: boolean;
+  interruptedAgentEnded?: boolean;
+  interruption?: {
+    durationMs: number;
+    assistantEntryId?: string;
+  };
+};
+
+function parseContinuityCompactionContinuation(value: unknown): (ContinuityCompactionContinuation & { action: string }) | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1 || !["begin", "resume", "abandon"].includes(String(raw.action))
+    || typeof raw.requestId !== "string" || !raw.requestId || raw.requestId.length > 128
+    || typeof raw.sessionId !== "string" || !raw.sessionId || raw.sessionId.length > 128
+    || !Number.isSafeInteger(raw.sessionGeneration) || Number(raw.sessionGeneration) < 0
+    || !Number.isSafeInteger(raw.taskGeneration) || Number(raw.taskGeneration) < 0) return undefined;
+  return {
+    action: raw.action as string,
+    requestId: raw.requestId,
+    sessionId: raw.sessionId,
+    sessionGeneration: Number(raw.sessionGeneration),
+    taskGeneration: Number(raw.taskGeneration),
+  };
 }
 
 const PYLON_COMPACTION_SOURCE = "pylon-compaction";
@@ -652,6 +685,7 @@ export class SessionRuntime implements PiDriver {
   private stopping = false;
   private stoppedRun?: RuntimeSnapshot["conversation"]["stoppedRun"];
   private agentError?: string;
+  private compactionContinuation?: ContinuityCompactionContinuation;
   private nextTurnId = 0;
   private readonly pendingWorktreeTurns: Array<{ turnId: string; messageId?: string; assistantEntryId?: string }> = [];
   private discoverIndex?: DiscoverIndexReadModel;
@@ -683,7 +717,7 @@ export class SessionRuntime implements PiDriver {
     this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
     if (!this.options.projectRegistry) {
       await this.projectRegistry.load(async () => {
-        const knownSessions = await SessionManager.listAll();
+        const knownSessions = await listSessionInventory(process.env.PI_CODING_AGENT_DIR || target.agentDir);
         return [target.cwd, ...knownSessions.map((session) => session.cwd)];
       });
     }
@@ -1047,9 +1081,24 @@ export class SessionRuntime implements PiDriver {
   async abort(): Promise<void> {
     if (!this.runtime || !this.gate.ready) throw new Error("runtime is not ready");
     const session = this.runtime.session;
+    const cancelledContinuation = !!this.compactionContinuation;
+    if (this.compactionContinuation) {
+      const request = this.compactionContinuation;
+      this.stopping = true;
+      this.eventBus.emit(CONTINUITY_COMPACTION_CHANNEL, {
+        version: 1,
+        action: "cancel",
+        requestId: request.requestId,
+        sessionId: request.sessionId,
+        sessionGeneration: request.sessionGeneration,
+        taskGeneration: request.taskGeneration,
+      });
+      session.abortCompaction();
+      this.abandonCompactionContinuation(request.requestId, this.gate.generation);
+    }
     const hadPendingUi = this.ui.hasPendingDialog;
     if (hadPendingUi) this.ui.cancelGeneration(this.gate.generation);
-    if (this.stopping && !hadPendingUi) return;
+    if (this.stopping && !hadPendingUi && !cancelledContinuation) return;
     if (!this.stopping) {
       this.stopping = true;
       this.refreshSnapshot();
@@ -2229,6 +2278,7 @@ export class SessionRuntime implements PiDriver {
       this.workAssistantEntryIdAtStart = undefined;
       this.stopping = false;
       this.stoppedRun = undefined;
+      this.compactionContinuation = undefined;
       this.agentError = terminalAgentError(this.transcriptMessages(session));
       this.discoverIndex = undefined;
       this.workModelName = undefined;
@@ -2262,6 +2312,24 @@ export class SessionRuntime implements PiDriver {
         ? payload as Record<string, unknown>
         : {};
       const kind = String(raw.type ?? "");
+      const interruptionId = (kind === "message_end" || kind === "message_complete")
+        ? continuityCompactionInterruptionId(raw.message)
+        : undefined;
+      if (interruptionId && this.compactionContinuation?.requestId === interruptionId) {
+        this.compactionContinuation.interruption = {
+          durationMs: Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now()))),
+          assistantEntryId: this.latestAssistantEntryId(session),
+        };
+        this.transcriptCache = undefined;
+        this.conversationProjectionCache = undefined;
+        this.emit({
+          type: "session.event",
+          sessionId: session.sessionId,
+          sessionGeneration: generation,
+          payload: { type: "continuity_compaction_interruption", message: raw.message },
+        });
+        return;
+      }
       if (kind === "message_end" || kind === "message_complete") {
         queueMicrotask(() => {
           if (!this.gate.accepts(generation) || this.runtime?.session !== session) return;
@@ -2317,6 +2385,9 @@ export class SessionRuntime implements PiDriver {
         }
         this.workModelName = session.model?.name;
         this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;
+        if (this.compactionContinuation?.resuming) {
+          this.compactionContinuation = undefined;
+        }
         this.stopping = false;
         this.stoppedRun = undefined;
         this.agentError = undefined;
@@ -2333,8 +2404,21 @@ export class SessionRuntime implements PiDriver {
         };
       } else if (kind === "agent_end") {
         const duration = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())));
-        const stopped = this.stopping || agentWasAborted(raw);
-        const willRetry = raw.willRetry === true && !stopped;
+        const continuation = this.compactionContinuation;
+        const lastAssistant = Array.isArray(raw.messages)
+          ? [...raw.messages].reverse().find((message) => message && typeof message === "object" && !Array.isArray(message)
+            && (message as { role?: unknown }).role === "assistant")
+          : undefined;
+        const compactionInterruption = !!continuation?.interruption
+          && continuityCompactionInterruptionId(lastAssistant) === continuation.requestId;
+        if (compactionInterruption && continuation?.interruption) {
+          continuation.interruption.assistantEntryId = this.compactionInterruptionEntryId(session, continuation.requestId);
+          continuation.interruptedAgentEnded = true;
+          if (continuation.abandoned) this.compactionContinuation = undefined;
+        }
+        const stopped = this.stopping || continuation?.abandoned === true
+          || (agentWasAborted(raw) && !compactionInterruption);
+        const willRetry = (raw.willRetry === true || compactionInterruption) && !stopped;
         const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
         const modelName = this.workModelName;
         const thinkingLevel = this.workThinkingLevel;
@@ -2352,6 +2436,7 @@ export class SessionRuntime implements PiDriver {
             thinkingLevel,
             gitBranch: this.gitBranch,
             metrics: this.lastSnapshot?.metrics,
+            willRetry: true,
             stopped: false,
             userEntryId,
           };
@@ -2438,15 +2523,19 @@ export class SessionRuntime implements PiDriver {
           errorMessage: this.agentError,
         };
       } else if (kind === "agent_settled" && this.workStartedAt) {
-        this.workStartedAt = undefined;
-        this.workStartedAtMs = undefined;
-        this.workModelName = undefined;
-        this.workThinkingLevel = undefined;
-        this.workTurnId = undefined;
-        this.workUserEntryId = undefined;
-        this.workAssistantEntryIdAtStart = undefined;
-        this.stopping = false;
-        this.refreshSnapshot();
+        if (this.compactionContinuation?.resuming) {
+          this.abandonCompactionContinuation(this.compactionContinuation.requestId, generation);
+        } else if (!this.compactionContinuation) {
+          this.workStartedAt = undefined;
+          this.workStartedAtMs = undefined;
+          this.workModelName = undefined;
+          this.workThinkingLevel = undefined;
+          this.workTurnId = undefined;
+          this.workUserEntryId = undefined;
+          this.workAssistantEntryIdAtStart = undefined;
+          this.stopping = false;
+          this.refreshSnapshot();
+        }
       } else if (kind === "compaction_end" && raw.aborted !== true) {
         const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result)
           ? raw.result as Record<string, unknown>
@@ -2511,7 +2600,7 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-  private async recoverSession(session: SessionInfo): Promise<void> {
+  private async recoverSession(session: Pick<SessionInfo, "cwd" | "path">): Promise<void> {
     const createRuntime = this.createRuntime;
     if (!createRuntime) throw new Error("runtime recovery is unavailable");
     await this.rebuildSession(session, createRuntime, true);
@@ -2660,10 +2749,10 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
-  private async resolveSession(sessionId: string): Promise<SessionInfo> {
-    const matches = (await SessionManager.listAll()).filter((session) => session.id === sessionId);
-    if (matches.length !== 1) throw new Error(matches.length ? "session id is ambiguous" : "session is unavailable");
-    return matches[0]!;
+  private async resolveSession(sessionId: string): Promise<SessionInventoryEntry> {
+    const session = await resolveUniqueSession(sessionId, process.env.PI_CODING_AGENT_DIR || this.target?.agentDir);
+    if (!session) throw new Error("session is unavailable");
+    return session;
   }
 
   private refreshSnapshot(): void {
@@ -2911,6 +3000,33 @@ export class SessionRuntime implements PiDriver {
         sessionGeneration: generation,
         payload: { type: "discover_index", value: this.discoverIndex },
       });
+    }));
+    this.busUnsubscribers.push(this.eventBus.on(CONTINUITY_COMPACTION_CHANNEL, (payload) => {
+      if (!this.gate.accepts(generation) || !this.runtime) return;
+      const event = parseContinuityCompactionContinuation(payload);
+      if (!event || event.sessionId !== this.runtime.session.sessionId) return;
+      const continuationMatches = (continuation: ContinuityCompactionContinuation | undefined) => !!continuation
+        && continuation.requestId === event.requestId
+        && continuation.sessionId === event.sessionId
+        && continuation.sessionGeneration === event.sessionGeneration
+        && continuation.taskGeneration === event.taskGeneration;
+      if (event.action === "begin") {
+        if (continuationMatches(this.compactionContinuation) || this.compactionContinuation) return;
+        this.compactionContinuation = {
+          requestId: event.requestId,
+          sessionId: event.sessionId,
+          sessionGeneration: event.sessionGeneration,
+          taskGeneration: event.taskGeneration,
+        };
+        return;
+      }
+      if (!continuationMatches(this.compactionContinuation)) return;
+      if (event.action === "resume") {
+        if (!this.compactionContinuation!.interruption || !this.compactionContinuation!.interruptedAgentEnded) return;
+        this.compactionContinuation!.resuming = true;
+        return;
+      }
+      this.abandonCompactionContinuation(event.requestId, generation);
     }));
     this.busUnsubscribers.push(this.eventBus.on("pi-verify:catalog", (payload) => {
       if (!this.gate.accepts(generation)) return;
@@ -3186,6 +3302,77 @@ export class SessionRuntime implements PiDriver {
       },
     });
   }
+
+  private compactionInterruptionEntryId(session: AgentSession, requestId: string): string | undefined {
+    const branch = session.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index--) {
+      const entry = branch[index];
+      if (entry.type === "message" && entry.message.role === "assistant"
+        && continuityCompactionInterruptionId(entry.message) === requestId) return entry.id;
+    }
+    return undefined;
+  }
+
+  private abandonCompactionContinuation(requestId: string, generation: number): void {
+    const continuation = this.compactionContinuation;
+    const session = this.runtime?.session;
+    if (!continuation || continuation.requestId !== requestId || !session || !this.gate.accepts(generation)) return;
+    if (!continuation.interruption) {
+      this.compactionContinuation = undefined;
+      return;
+    }
+    continuation.abandoned = true;
+    if (!continuation.interruptedAgentEnded) return;
+    this.compactionContinuation = undefined;
+    const interruption = continuation.interruption;
+    const assistantEntryId = interruption.assistantEntryId ?? this.compactionInterruptionEntryId(session, requestId);
+    if (assistantEntryId) {
+      this.workDurations.set(assistantEntryId, interruption.durationMs);
+      try {
+        if (!appendWorkDuration(session.sessionManager, assistantEntryId, interruption.durationMs))
+          this.recordError(new Error("could not persist abandoned compaction duration"));
+      } catch (error) {
+        this.recordError(error);
+      }
+      this.workDurationsLeafId = session.sessionManager.getLeafId();
+    }
+    const turnId = this.workTurnId ?? `turn-${++this.nextTurnId}`;
+    const stoppedRun = {
+      turnId,
+      ...(this.workUserEntryId ? { userEntryId: this.workUserEntryId } : {}),
+      durationMs: interruption.durationMs,
+      ...(this.workModelName ? { modelName: this.workModelName } : {}),
+      ...(this.workThinkingLevel ? { thinkingLevel: this.workThinkingLevel } : {}),
+    };
+    this.stoppedRun = stoppedRun;
+    this.workStartedAt = undefined;
+    this.workStartedAtMs = undefined;
+    this.workModelName = undefined;
+    this.workThinkingLevel = undefined;
+    this.workTurnId = undefined;
+    this.workUserEntryId = undefined;
+    this.workAssistantEntryIdAtStart = undefined;
+    this.stopping = false;
+    this.transcriptCache = undefined;
+    this.conversationProjectionCache = undefined;
+    this.refreshSnapshot();
+    this.emit({
+      type: "session.event",
+      sessionId: session.sessionId,
+      sessionGeneration: generation,
+      payload: {
+        type: "agent_end",
+        workDurationMs: interruption.durationMs,
+        turnId,
+        modelName: stoppedRun.modelName,
+        thinkingLevel: stoppedRun.thinkingLevel,
+        stopped: true,
+        userEntryId: stoppedRun.userEntryId,
+        assistantMessage: null,
+      },
+    });
+  }
+
 
   private detachBus(): void {
     for (const unsubscribe of this.busUnsubscribers.splice(0)) unsubscribe();

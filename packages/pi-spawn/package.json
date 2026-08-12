@@ -9,6 +9,7 @@
   "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
   "pi": { "extensions": ["./extensions/pi-spawn.ts"] },
   "pylon": { "settings": "./src/web-settings.ts" },
+  "dependencies": { "pylon-core": "0.1.0" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",

@@ -65,11 +65,14 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const listeners = new Map<string, Set<(value: unknown) => void>>();
+  const emitted: Array<{ channel: string; value: any }> = [];
   let sendHook: ((message: string) => void) | undefined;
   let appendFailure: Error | undefined;
+  let sendFailure: Error | undefined;
   const pi: any = {
     events: {
       emit: (channel: string, value: unknown) => {
+        emitted.push({ channel, value });
         for (const listener of listeners.get(channel) ?? []) listener(value);
       },
       on: (channel: string, listener: (value: unknown) => void) => {
@@ -98,7 +101,10 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
       sent.push(message);
       sendHook?.(message);
     },
-    sendMessage: (message: any, options: any) => customMessages.push({ message, options }),
+    sendMessage: (message: any, options: any) => {
+      if (sendFailure) { const error = sendFailure; sendFailure = undefined; throw error; }
+      customMessages.push({ message, options });
+    },
   };
   extension(pi);
   return {
@@ -108,6 +114,7 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
     appended,
     customMessages,
     sent,
+    emitted,
     selectedModel: () => selectedModel,
     modelSelections: () => modelSelections,
     thinking: () => thinking,
@@ -115,6 +122,7 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
     loadAgain: () => extension(pi),
     onSendUserMessage: (hook: (message: string) => void) => { sendHook = hook; },
     failNextAppend: (error = new Error("append failed")) => { appendFailure = error; },
+    failNextSend: (error = new Error("send failed")) => { sendFailure = error; },
     emit: (channel: string, value: unknown) => {
       for (const listener of listeners.get(channel) ?? []) listener(value);
     },
@@ -412,6 +420,28 @@ test("over-threshold tool work compacts and resumes through public extension API
     assert.equal(app.customMessages[0].message.customType, "pi-continuity-resume");
     assert.equal(app.customMessages[0].message.display, false);
     assert.match(app.customMessages[0].message.content, /Continue the unfinished task/);
+    const lifecycle = app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation");
+    assert.equal(lifecycle.length, 2);
+    assert.equal(lifecycle[0]!.value.action, "begin");
+    assert.equal(lifecycle[1]!.value.action, "resume");
+    assert.equal(lifecycle[1]!.value.requestId, lifecycle[0]!.value.requestId);
+    assert.equal(app.customMessages[0].message.details.requestId, lifecycle[0]!.value.requestId);
+    const interruption = {
+      role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "partial" }],
+    };
+    const annotated = await app.handlers.get("message_end")![0]({ message: interruption }, ctx);
+    assert.equal(annotated, undefined, "completed continuation no longer annotates unrelated user aborts");
+
+    for (const handler of app.handlers.get("tool_execution_end") ?? [])
+      await handler({ toolCallId: "send-failure", result: { terminate: false } }, turnCtx);
+    for (const handler of app.handlers.get("turn_end") ?? []) await handler({
+      message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "send-failure", name: "read", arguments: {} }] },
+      toolResults: [{ role: "toolResult", toolCallId: "send-failure" }],
+    }, turnCtx);
+    app.failNextSend();
+    compactCalls.at(-1).onComplete();
+    assert.equal(app.customMessages.length, 1);
+    assert.equal(app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action, "abandon");
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -482,16 +512,19 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     await finishToolTurn("terminating-after-request", true);
     compactCalls[1].onComplete();
     assert.equal(app.customMessages.length, 0, "a later terminating batch invalidates the superseded continuation");
+    assert.equal(app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action, "abandon");
 
     await finishToolTurn("failed-compaction");
     assert.equal(compactCalls.length, 3);
     compactCalls[2].onError(new Error("failed"));
     assert.equal(app.customMessages.length, 0);
+    assert.equal(app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action, "abandon");
 
     compactThrows = true;
     await finishToolTurn("synchronous-failure");
     compactThrows = false;
     assert.equal(compactCalls.length, 3);
+    assert.equal(app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action, "abandon");
 
     await finishToolTurn("pending-request");
     assert.equal(compactCalls.length, 4);
@@ -506,6 +539,7 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
     compactCalls[4].onComplete();
     assert.equal(app.customMessages.length, 0);
+    assert.equal(app.emitted.filter((event) => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action, "abandon");
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;

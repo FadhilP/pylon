@@ -10,6 +10,7 @@ import {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { meterFromBranch, type ProviderUsage } from "pylon-core/token-meter";
+import { listSessionInventory } from "pylon-core/session-inventory";
 
 const MAX_SESSIONS = 200;
 const MAX_MATCHES = 12;
@@ -68,14 +69,15 @@ export type SessionStatsResult = {
   };
 };
 export type SessionSource = {
-  listAll(): Promise<SessionInfo[]>;
+  list(cwd?: string): Promise<Array<Pick<SessionInfo, "id" | "path" | "cwd" | "modified">>>;
   open(path: string): Pick<SessionManager, "getBranch">;
 };
 
 const defaultSource: SessionSource = {
-  listAll: () => SessionManager.listAll(),
+  list: (cwd) => cwd ? SessionManager.list(cwd) : listSessionInventory(),
   open: (path) => SessionManager.open(path),
 };
+
 
 function canonicalPath(path: string): string {
   let value = resolve(path);
@@ -194,10 +196,14 @@ export async function searchSessions(
   if (mode !== "tools" && (options.toolName !== undefined || options.includeResult !== undefined))
     throw new Error("toolName and includeResult require tools mode");
   const currentCwd = canonicalPath(options.cwd);
-  const listed = await source.listAll();
+  let listed = await source.list(scope === "all" ? undefined : options.cwd);
   let sessionLookup: SessionSearchResult["sessionLookup"];
   if (options.sessionId) {
-    const selected = listed.find((session) => session.id === options.sessionId);
+    let selected = listed.find((session) => session.id === options.sessionId);
+    if (!selected && scope !== "all") {
+      selected = (await source.list()).find((session) => session.id === options.sessionId);
+      if (selected) listed = [...listed, selected];
+    }
     sessionLookup = !selected
       ? "not_found"
       : selected.id === options.currentSessionId
@@ -308,7 +314,8 @@ export async function sessionStats(
 ): Promise<SessionStatsResult> {
   const scope = options.scope ?? "current_cwd";
   const base = { sessionId: options.sessionId, scope };
-  const selected = (await source.listAll()).find((session) => session.id === options.sessionId);
+  let selected = (await source.list(scope === "all" ? undefined : options.cwd)).find((session) => session.id === options.sessionId);
+  if (!selected && scope !== "all") selected = (await source.list()).find((session) => session.id === options.sessionId);
   if (!selected) return { ...base, sessionLookup: "not_found" };
   if (selected.id === options.currentSessionId) return { ...base, sessionLookup: "active_session" };
   if (scope !== "all" && (!selected.cwd || canonicalPath(selected.cwd) !== canonicalPath(options.cwd)))

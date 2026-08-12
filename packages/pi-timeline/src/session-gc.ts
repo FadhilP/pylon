@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { listSessionInventory } from "pylon-core/session-inventory";
 import { git } from "./git.ts";
 
 const LEASE_VERSION = 1;
@@ -199,7 +199,7 @@ export async function cleanupTimelineSession(root: string, sessionId: string) {
 export async function startSessionGc(
   root: string,
   sessionId: string,
-  listSessions: () => Promise<Array<{ id: string }>> = () => SessionManager.listAll(),
+  listSessions: () => Promise<Array<{ id: string }>> = () => listSessionInventory(undefined, { strict: true }),
 ) {
   const leases = join(root, "session-artifacts"), token = randomUUID(),
     leasePath = join(leases, `${encodeURIComponent(sessionId)}.${token}.json`),

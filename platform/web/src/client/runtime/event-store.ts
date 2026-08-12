@@ -51,8 +51,8 @@ export interface TranscriptWindowReadModel {
 }
 
 const initial: RuntimeStoreSnapshot = { connection: "loading", sequence: 0, sessionRevision: 0, pendingMessages: [], audioCues: [] };
-const eventNames = ["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "provider.auth", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "agent.error", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-papercut:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
-const HISTORY_MUTATION_EVENTS = new Set(["message.start", "message.update", "message.end", "message.undo", "tool.start", "tool.end", "turn.changes", "compaction.update", "agent.end", "agent.error"]);
+const eventNames = ["message.start", "message.update", "message.end", "message.remove", "message.undo", "tool.start", "tool.end", "delegate.update", "turn.changes", "discover.index", "queue.update", "workspace.revision", "retry.update", "compaction.update", "metrics.update", "session.controls", "provider.auth", "runtime.policy", "runtime.error", "command.result", "projects.changed", "ui.request", "ui.closed", "ui.ownership", "ui.notify", "ui.status", "ui.widget", "ui.title", "ui.editor-text", "agent.start", "agent.end", "agent.error", "session.info", "session.status", "session.replaced", "session.unavailable", "stream.reset-required", "operational.pi-verify:lifecycle", "operational.pi-verify:result", "operational.pi-heartbeat:job", "operational.pi-guard:decision", "operational.pylon:tool-policy", "operational.pi-continuity:state-change", "operational.pi-papercut:state-change", "operational.pi-timeline:state-change", "operational.pi-sieve:state-change"];
+const HISTORY_MUTATION_EVENTS = new Set(["message.start", "message.update", "message.end", "message.remove", "message.undo", "tool.start", "tool.end", "turn.changes", "compaction.update", "agent.end", "agent.error"]);
 const MAX_CACHED_SESSIONS = 10;
 const MAX_SESSION_STATUSES = 200;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
@@ -1387,6 +1387,19 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
       } : message);
       return { ...runtime, conversation: { ...conversation, streaming: false, messages } };
     }
+    case "message.remove": {
+      const update = payload as { id?: string };
+      if (!update.id) return runtime;
+      return {
+        ...runtime,
+        conversation: {
+          ...conversation,
+          streaming: false,
+          messages: conversation.messages.filter((message) => message.id !== update.id),
+        },
+      };
+    }
+
     case "message.undo": {
       const updates = new Map(
         Array.isArray(asRecord(payload).items)

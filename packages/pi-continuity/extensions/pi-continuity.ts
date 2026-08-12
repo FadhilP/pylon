@@ -107,6 +107,14 @@ import { loadProjectRecallSessions } from "../src/project-recall.ts";
 import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const EXECUTION_ENTRY_TYPE = "pi-continuity-execution";
+const COMPACTION_CONTINUATION_CHANNEL = "pi-continuity:compaction-continuation";
+const COMPACTION_INTERRUPTION_DIAGNOSTIC = "pi-continuity-compaction-interruption";
+type CompactionContinuationRequest = {
+  id: string;
+  sessionGeneration: number;
+  taskGeneration: number;
+  sessionId: string;
+};
 type V5MigrationJournal = {
   version: 1;
   status: "prepared" | "activated" | "rolled_back";
@@ -266,7 +274,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     deniedToolCalls = new Set<string>(),
     seenMutationMessages = new Set<string>(),
     terminatingToolCalls = new Set<string>(),
-    automaticCompaction: { sessionGeneration: number; taskGeneration: number; sessionId: string } | undefined,
+    automaticCompaction: CompactionContinuationRequest | undefined,
     sharedWorktreeObserver = false,
     pendingApproval: { runId?: string; revision: number } | undefined,
     approvalContext: any,
@@ -287,6 +295,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
     await previous;
     try { return await task(); } finally { release(); }
   };
+  const emitCompactionContinuation = (action: "begin" | "resume" | "abandon", request: CompactionContinuationRequest) =>
+    pi.events.emit(COMPACTION_CONTINUATION_CHANNEL, { version: 1, action, requestId: request.id, ...request });
+  const abandonAutomaticCompaction = (request = automaticCompaction) => {
+    if (!request || automaticCompaction !== request) return;
+    automaticCompaction = undefined;
+    emitCompactionContinuation("abandon", request);
+  };
+  const disposeCompactionCancel = pi.events.on(COMPACTION_CONTINUATION_CHANNEL, (event: any) => {
+    const request = automaticCompaction;
+    if (event?.version !== 1 || event.action !== "cancel" || !request
+      || event.requestId !== request.id || event.sessionId !== request.sessionId
+      || event.sessionGeneration !== request.sessionGeneration || event.taskGeneration !== request.taskGeneration) return;
+    abandonAutomaticCompaction(request);
+  });
   const withPlanMutation = async <T>(task: () => Promise<T>): Promise<T> => {
     const previous = planMutationQueue; let release = () => {};
     planMutationQueue = new Promise<void>((resolve) => { release = resolve; });
@@ -835,6 +857,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     void saveWork();
   });
   pi.on("session_start", async (_e, ctx) => withMemoryLifecycle(async () => {
+    abandonAutomaticCompaction();
     gate(false);
     sessionGeneration++;
     const sessionId = ctx.sessionManager.getSessionId();
@@ -855,7 +878,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     deniedToolCalls.clear();
     seenMutationMessages.clear();
     terminatingToolCalls.clear();
-    automaticCompaction = undefined;
     latestVerification = ([...(ctx.sessionManager.getEntries?.() ?? [])]
       .reverse()
       .find((entry: any) => entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1 && entry.data.sessionId === sessionId) as any)
@@ -965,9 +987,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
   }));
   pi.on("session_shutdown", async () => withMemoryLifecycle(async () => {
     if (memoryEnabled) persistMemoryLedger();
+    abandonAutomaticCompaction();
     sessionGeneration++;
     activeSessionContext = undefined;
-    automaticCompaction = undefined;
     terminatingToolCalls.clear();
     legacyMigrationAvailable = false;
     pendingApproval = undefined;
@@ -983,6 +1005,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     disposeWorktreeChange();
     disposePackageMutation();
     disposeGuardDecision();
+    disposeCompactionCancel();
     disposeRuntimePolicy?.();
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -1014,6 +1037,22 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("message_end", async (event, ctx) => {
     const message = event.message as any;
+    const request = automaticCompaction;
+    if (request && message.role === "assistant" && message.stopReason === "aborted") {
+      return {
+        message: {
+          ...message,
+          diagnostics: [
+            ...(Array.isArray(message.diagnostics) ? message.diagnostics : []),
+            {
+              type: COMPACTION_INTERRUPTION_DIAGNOSTIC,
+              timestamp: Date.now(),
+              details: { version: 1, requestId: request.id, sessionId: request.sessionId },
+            },
+          ],
+        },
+      };
+    }
     if (
       message.role !== "assistant" ||
       message.stopReason !== "stop" ||
@@ -1107,7 +1146,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   pi.on("input", (event) => {
     if (event.source !== "extension") {
-      automaticCompaction = undefined;
+      abandonAutomaticCompaction();
       lastPrompt = event.text;
       memoryTaskGeneration++;
       memoryLedger = { ...memoryLedger, taskGeneration: memoryTaskGeneration };
@@ -1123,7 +1162,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const allTerminating = toolResults.every((result: any) => terminatingToolCalls.has(result.toolCallId));
     for (const result of toolResults as any[]) terminatingToolCalls.delete(result.toolCallId);
     if (allTerminating || ctx.signal?.aborted || ctx.hasPendingMessages()) {
-      automaticCompaction = undefined;
+      abandonAutomaticCompaction();
       return;
     }
     if (automaticCompaction) return;
@@ -1135,37 +1174,46 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }).getCompactionSettings();
     if (!settings.enabled || usage.tokens <= usage.contextWindow - settings.reserveTokens) return;
 
-    const request = {
+    const request: CompactionContinuationRequest = {
+      id: randomUUID(),
       sessionGeneration,
       taskGeneration: memoryTaskGeneration,
       sessionId: ctx.sessionManager.getSessionId(),
     };
     automaticCompaction = request;
+    emitCompactionContinuation("begin", request);
     try {
       ctx.compact({
         onComplete: () => {
           if (automaticCompaction !== request) return;
-          automaticCompaction = undefined;
           if (
             sessionGeneration !== request.sessionGeneration ||
             memoryTaskGeneration !== request.taskGeneration ||
             ctx.sessionManager.getSessionId() !== request.sessionId ||
             !ctx.isIdle() ||
             ctx.hasPendingMessages()
-          ) return;
-          pi.sendMessage({
-            customType: "pi-continuity-resume",
-            content: "Continue the unfinished task from the compaction checkpoint. Do not repeat completed work or wait for another user prompt.",
-            display: false,
-            details: { version: 1, reason: "mid-task-compaction" },
-          }, { triggerTurn: true });
+          ) {
+            abandonAutomaticCompaction(request);
+            return;
+          }
+          emitCompactionContinuation("resume", request);
+          if (automaticCompaction !== request) return;
+          try {
+            pi.sendMessage({
+              customType: "pi-continuity-resume",
+              content: "Continue the unfinished task from the compaction checkpoint. Do not repeat completed work or wait for another user prompt.",
+              display: false,
+              details: { version: 1, reason: "mid-task-compaction", requestId: request.id },
+            }, { triggerTurn: true });
+            automaticCompaction = undefined;
+          } catch {
+            abandonAutomaticCompaction(request);
+          }
         },
-        onError: () => {
-          if (automaticCompaction === request) automaticCompaction = undefined;
-        },
+        onError: () => abandonAutomaticCompaction(request),
       });
     } catch {
-      if (automaticCompaction === request) automaticCompaction = undefined;
+      abandonAutomaticCompaction(request);
     }
   });
   const activeWork = () =>

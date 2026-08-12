@@ -156,6 +156,19 @@ function messageText(value: unknown): string {
   }).join("").slice(0, MAX_TEXT);
 }
 
+export function continuityCompactionInterruptionId(value: unknown): string | undefined {
+  const raw = object(value);
+  if (raw.role !== "assistant" || raw.stopReason !== "aborted" || !Array.isArray(raw.diagnostics)) return undefined;
+  for (let index = raw.diagnostics.length - 1; index >= 0; index--) {
+    const diagnostic = object(raw.diagnostics[index]);
+    const details = object(diagnostic.details);
+    if (diagnostic.type === "pi-continuity-compaction-interruption" && details.version === 1
+      && typeof details.requestId === "string" && details.requestId.length > 0 && details.requestId.length <= 128)
+      return details.requestId;
+  }
+  return undefined;
+}
+
 function latestMessages(messages: MessageReadModel[]): MessageReadModel[] {
   if (messages.length <= MAX_MESSAGES) return messages;
   const tail = messages.slice(-(MAX_MESSAGES - 1));
@@ -437,6 +450,7 @@ export function projectConversation(
   for (let index = 0; index < end; index++) {
     const message = messages[index];
     const raw = object(message);
+    if (continuityCompactionInterruptionId(raw)) continue;
     const messageRole = role(raw.role);
     if (messageRole === "user") userTurn++;
     const fileCount = promptFileCount(raw);
@@ -780,6 +794,7 @@ export class RuntimeProjection {
     if (kind === "message_start" || kind === "message_starting") return this.messageStart(raw);
     if (kind === "message_update" || kind === "message_delta") return this.messageUpdate(raw);
     if (kind === "message_end" || kind === "message_complete") return this.messageEnd(raw);
+    if (kind === "continuity_compaction_interruption") return this.removeActiveMessage(raw);
     if (kind === "tool_execution_start" || kind === "tool_start" || kind === "tool_call_start") return this.toolStart(raw);
     if (kind === "tool_execution_end" || kind === "tool_end" || kind === "tool_call_end" || kind === "tool_result") return this.toolEnd(raw);
     if (kind === "tool_execution_update") return this.toolUpdate(raw);
@@ -1033,6 +1048,16 @@ export class RuntimeProjection {
     this.runtime.conversation.streaming = false;
     this.publish("message.end", { id: messageId, text: current?.text ?? "", entryId: current?.entryId });
   }
+  private removeActiveMessage(raw: Record<string, unknown>): void {
+    this.flush();
+    const messageId = this.activeMessageId ?? id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
+    this.messages.delete(messageId);
+    if (this.latestAssistantMessageId === messageId) this.latestAssistantMessageId = undefined;
+    this.activeMessageId = undefined;
+    this.runtime.conversation.streaming = false;
+    this.publish("message.remove", { id: messageId });
+  }
+
   private toolStart(raw: Record<string, unknown>): void {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, `tool-${this.tools.size + 1}`);
     const name = text(raw.name ?? raw.toolName, 200);

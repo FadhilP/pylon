@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,6 +129,83 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
     assert.equal(conversation.workStartedAt, undefined);
     assert.equal(conversation.stopping ?? false, false);
   } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Continuity compaction continuation preserves timing, suppresses interruption, and honors user abort", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-compaction-continuation-"));
+  const cwd = join(root, "workspace"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  let bus: any;
+  const bridge: InlineExtension = { name: "compaction-continuation-probe", factory(pi) { bus = pi.events; } };
+  const driver = new SessionRuntime({ extensionFactories: [bridge] });
+  const events: any[] = [];
+  const unsubscribe = driver.subscribe((event) => events.push(event));
+
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    const lifecycle = (action: string, requestId: string, overrides: Record<string, unknown> = {}) => bus.emit("pi-continuity:compaction-continuation", {
+      version: 1, action, requestId, sessionId: handle.sessionId, sessionGeneration: 1, taskGeneration: 1, ...overrides,
+    });
+    const interruption = (requestId: string) => ({
+      role: "assistant", content: [{ type: "text", text: "partial internal response" }], stopReason: "aborted",
+      diagnostics: [{ type: "pi-continuity-compaction-interruption", timestamp: Date.now(), details: { version: 1, requestId, sessionId: handle.sessionId } }],
+      api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      timestamp: Date.now(),
+    });
+
+    session._emit({ type: "agent_start" });
+    const first = await driver.snapshot();
+    const startedAt = first.conversation.workStartedAt;
+    const requestId = "compact-success";
+    lifecycle("begin", requestId);
+    const aborted = interruption(requestId);
+    session._emit({ type: "message_start", message: aborted });
+    session._emit({ type: "message_end", message: aborted });
+    session.sessionManager.appendMessage(aborted);
+    session._emit({ type: "agent_end", messages: [aborted] });
+    session._emit({ type: "agent_settled" });
+    assert.equal((await driver.snapshot()).conversation.workStartedAt, startedAt);
+    assert.ok(events.some((event) => event.type === "session.event" && event.payload?.type === "continuity_compaction_interruption"));
+    assert.equal(events.filter((event) => event.type === "session.event" && event.payload?.type === "agent_end").at(-1)?.payload.willRetry, true);
+    lifecycle("begin", "stale-begin", { taskGeneration: 2 });
+    assert.equal((driver as any).compactionContinuation.requestId, requestId, "a stale begin cannot replace the active continuation");
+
+    lifecycle("resume", requestId);
+    session._emit({ type: "agent_start" });
+    assert.equal((await driver.snapshot()).conversation.workStartedAt, startedAt);
+    const done = { ...interruption("unused"), content: [{ type: "text", text: "Done" }], stopReason: "stop", diagnostics: [] };
+    session._emit({ type: "message_end", message: done });
+    session.sessionManager.appendMessage(done);
+    session._emit({ type: "agent_end", messages: [done] });
+    let snapshot = await driver.snapshot();
+    assert.equal(snapshot.conversation.workStartedAt, undefined);
+    assert.deepEqual(snapshot.conversation.messages.filter((message) => message.role === "assistant").map((message) => message.text), ["Done"]);
+    assert.equal(session.sessionManager.getBranch().some((entry: any) => entry.type === "message" && entry.message === aborted && entry.message.stopReason === "aborted"), true);
+
+    session._emit({ type: "agent_start" });
+    lifecycle("begin", "user-stop");
+    const userAbort = interruption("user-stop");
+    session._emit({ type: "message_start", message: userAbort });
+    session._emit({ type: "message_end", message: userAbort });
+    session.sessionManager.appendMessage(userAbort);
+    const terminalEventsBeforeAbort = events.filter((event) => event.type === "session.event" && event.payload?.type === "agent_end").length;
+    const abortPromise = driver.abort();
+    session._emit({ type: "agent_end", messages: [userAbort] });
+    session._emit({ type: "agent_settled" });
+    await abortPromise;
+    snapshot = await driver.snapshot();
+    assert.equal(snapshot.conversation.workStartedAt, undefined);
+    assert.equal(snapshot.conversation.stopping ?? false, false);
+    const abortTerminalEvents = events.filter((event) => event.type === "session.event" && event.payload?.type === "agent_end").slice(terminalEventsBeforeAbort);
+    assert.equal(abortTerminalEvents.length, 1, "user abort owns the native terminal event");
+    assert.equal(abortTerminalEvents[0]?.payload.stopped, true);
+  } finally {
+    unsubscribe();
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
@@ -952,6 +1029,17 @@ test("driver deletes only inactive sessions and blocks concurrent lifecycle chan
     assert.equal(existsSync(deletablePath), true);
     await assert.rejects(driver.deleteSession({ sessionId: handle.sessionId, expectedGeneration: handle.sessionGeneration }), /currently active/);
     assert.equal((await driver.snapshot()).sessionId, handle.sessionId);
+
+    const duplicateDirectory = join(isolatedAgentDir, "sessions", "duplicate-delete");
+    const duplicatePath = join(duplicateDirectory, "duplicate.jsonl");
+    await mkdir(duplicateDirectory, { recursive: true });
+    await copyFile(deletablePath, duplicatePath);
+    await assert.rejects(
+      driver.deleteSession({ sessionId: deletable.getSessionId(), expectedGeneration: handle.sessionGeneration }),
+      /ambiguous/,
+    );
+    assert.equal(existsSync(deletablePath), true);
+    await rm(duplicateDirectory, { recursive: true, force: true });
 
     const deletion = driver.deleteSession({ sessionId: deletable.getSessionId(), expectedGeneration: handle.sessionGeneration });
     await assert.rejects(driver.switchSession({ sessionId: switchable.getSessionId() }), /another session operation/);

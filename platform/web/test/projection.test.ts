@@ -291,6 +291,43 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
   assert.equal(messages[3]?.text, "done");
 });
 
+test("Continuity compaction interruptions stay persisted but are omitted from Web history", () => {
+  const interruption = {
+    role: "assistant",
+    content: [{ type: "text", text: "partial internal response" }],
+    stopReason: "aborted",
+    diagnostics: [{
+      type: "pi-continuity-compaction-interruption",
+      timestamp: 1,
+      details: { version: 1, requestId: "compact-1", sessionId: "session" },
+    }],
+  };
+  assert.deepEqual(projectConversation([
+    { role: "user", content: "Do the task" },
+    interruption,
+    { role: "assistant", content: "Done", stopReason: "stop" },
+  ]).messages.map((message) => message.text), ["Do the task", "Done"]);
+  assert.equal(interruption.stopReason, "aborted");
+});
+
+test("live Continuity compaction interruption removes only the active assistant", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: [] } }));
+  projection.apply(session({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "partial" }] } }));
+  projection.apply(session({
+    type: "continuity_compaction_interruption",
+    message: {
+      role: "assistant",
+      stopReason: "aborted",
+      diagnostics: [{ type: "pi-continuity-compaction-interruption", details: { version: 1, requestId: "compact-1" } }],
+    },
+  }));
+  assert.deepEqual(projection.snapshot().conversation.messages, []);
+  assert.equal(projection.snapshot().conversation.streaming, false);
+  assert.equal(published.at(-1)?.type, "message.remove");
+});
+
 test("history projection keeps stable global IDs and skips old non-delegate payload serialization", () => {
   let oldPayloadReads = 0;
   const oldArguments = new Proxy({ path: "old.ts" }, {

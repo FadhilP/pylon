@@ -97,6 +97,11 @@ export class SessionIndex {
     return this.sessions.find((session) => session.id === sessionId);
   }
 
+  async all(): Promise<SessionInfo[]> {
+    await this.refresh();
+    return [...this.sessions];
+  }
+
   invalidate(): void {
     this.scannedAt = 0;
   }

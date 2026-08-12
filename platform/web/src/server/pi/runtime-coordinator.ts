@@ -2,7 +2,7 @@ import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
-import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
@@ -28,6 +28,7 @@ import {
   snapshotSessionBranch,
 } from "pylon-core/src/worktree.ts";
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
+import { listSessionInventory } from "pylon-core/session-inventory";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
@@ -255,7 +256,7 @@ export class RuntimeCoordinator implements PiDriver {
     this.modelRuntime = this.options.modelRuntime ?? await createPylonModelRuntime(target.agentDir);
     this.projectRegistry = ProjectRegistry.forAgentDir(target.agentDir);
     await this.projectRegistry.load(async () => {
-      const knownSessions = await SessionManager.listAll();
+      const knownSessions = await listSessionInventory(process.env.PI_CODING_AGENT_DIR || target.agentDir);
       return [target.cwd, ...knownSessions.map((session) => session.cwd)];
     });
     await this.recoverProvision();
@@ -753,7 +754,7 @@ export class RuntimeCoordinator implements PiDriver {
         throw new Error("cannot remove a project with a running, queued, or attention session");
       }
 
-      const sessions = (await SessionManager.listAll())
+      const sessions = (await listSessionInventory(process.env.PI_CODING_AGENT_DIR || this.baseTarget().agentDir, { strict: true }))
         .filter((session) => registry.projectForSession(session.id, session.cwd)?.id === project.id);
       if (projectSlots.some((slot) => slot.id === this.selectedId)) {
         const alternative = registry.list().find((candidate) => candidate.id !== project.id);
@@ -770,6 +771,9 @@ export class RuntimeCoordinator implements PiDriver {
         await unlink(session.path).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "ENOENT") throw error;
         });
+      }
+      const uniqueSessions = [...new Map(sessions.map((session) => [session.id, session])).values()];
+      for (const session of uniqueSessions) {
         const workspace = registry.workspaceForSession(session.id);
         if (workspace?.mode === "checkout" && workspace.commonDir && workspace.branch
           && workspace.parkedRoot && workspace.parkedCommonDir && workspace.parkedIndexTree && workspace.parkedWorktreeTree) {
@@ -792,7 +796,7 @@ export class RuntimeCoordinator implements PiDriver {
         this.sessionIndex.remove(session.id);
         this.emitStatus(session.id, "sleeping");
       }
-      await registry.remove(project.id, sessions.map((session) => session.id));
+      await registry.remove(project.id, uniqueSessions.map((session) => session.id));
       this.sessionIndex.invalidate();
       this.emitProjectsChanged();
       return this.replacement(false);
@@ -835,9 +839,9 @@ export class RuntimeCoordinator implements PiDriver {
           : await this.createSlot({ ...this.baseTarget(), inMemory: true });
         await this.select(slot);
       }
-      const projectSessionIds = (await SessionManager.listAll())
+      const projectSessionIds = [...new Set((await listSessionInventory(process.env.PI_CODING_AGENT_DIR || this.baseTarget().agentDir, { strict: true }))
         .filter((session) => registry.projectForSession(session.id, session.cwd)?.id === project.id)
-        .map((session) => session.id);
+        .map((session) => session.id))];
       await registry.archiveProject(project.id, projectSessionIds);
       await registry.deactivateSessions(projectSessionIds);
       for (const slot of projectSlots) {
@@ -2897,7 +2901,7 @@ export class RuntimeCoordinator implements PiDriver {
   private async slotForProject(projectId: string, cwd: string): Promise<RuntimeSlot> {
     const awake = [...this.slots.values()].find((slot) => this.projectIdForSlot(slot) === projectId);
     if (awake) return awake;
-    const session = (await SessionManager.listAll())
+    const session = (await this.sessionIndex.all())
       .filter((candidate) => this.registry().projectForSession(candidate.id, candidate.cwd)?.id === projectId
         && !this.registry().isSessionArchived(candidate.id))
       .sort((left, right) => right.modified.getTime() - left.modified.getTime())[0];

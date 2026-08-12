@@ -10,6 +10,7 @@
     "./delegate-retry": "./src/delegate-retry.ts",
     "./executable": "./src/executable.ts",
     "./token-meter": "./src/token-meter.ts",
+    "./session-inventory": "./src/session-inventory.ts",
     "./utf8": "./src/utf8.ts",
     "./extensions/*": "./extensions/*",
     "./src/*": "./src/*"

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { RECENT_THREAD_MAX_TOTAL_CHARS, SpawnBusyError, recentThreadTranscript, withThreadLock } from "../src/sessions.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { RECENT_THREAD_MAX_TOTAL_CHARS, SpawnBusyError, createSpawnedSession, listSpawnedSessions, recentThreadTranscript, withThreadLock } from "../src/sessions.ts";
 
 test("recent transcript bounds mixed message content and omits private reasoning and malformed entries", () => {
   const transcript = recentThreadTranscript({
@@ -53,4 +57,26 @@ test("thread lock does not start work after cancellation", async () => {
   let started = false;
   await assert.rejects(() => withThreadLock("cancelled", async () => { started = true; }, controller.signal), /aborted/);
   assert.equal(started, false);
+});
+
+
+test("legacy spawned-session references use the shallow inventory fallback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-spawn-legacy-session-"));
+  const cwd = join(root, "workspace"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const parent = SessionManager.create(cwd);
+    parent.appendSessionInfo("Parent");
+    const owner = { id: parent.getSessionId(), file: parent.getSessionFile()! };
+    const child = createSpawnedSession(cwd, owner, "Legacy child");
+
+    const listed = await listSpawnedSessions(owner, new Map([[child.info.id, undefined]]));
+    assert.deepEqual(listed.map((item) => item.info.id), [child.info.id]);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
 });

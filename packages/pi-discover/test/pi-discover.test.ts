@@ -85,7 +85,7 @@ function changedPath(path: string, state = ".M"): string {
 
 function sessionSource(sessions: any[], branches: Record<string, any[]>): SessionSource {
   return {
-    async listAll() { return sessions; },
+    async list(cwd?: string) { return cwd ? sessions.filter((session) => resolve(session.cwd) === resolve(cwd)) : sessions; },
     open(path: string) { return { getBranch: () => branches[path] ?? [] } as any; },
   };
 }
@@ -104,14 +104,22 @@ test("session search scopes by cwd, excludes the active session, redacts, and ac
     other: [{ type: "message", message: { role: "user", content: "OAuth elsewhere" } }],
   };
   const source = sessionSource(sessions, branches);
+  const requestedScopes: Array<string | undefined> = [];
+  const baseList = source.list;
+  source.list = async (requestedCwd?: string) => {
+    requestedScopes.push(requestedCwd);
+    return baseList(requestedCwd);
+  };
 
   const local = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current" }, source);
   assert.deepEqual(local.matches.map((match) => match.sessionId), ["same-cwd"]);
+  assert.deepEqual(requestedScopes, [cwd]);
   assert.ok(local.redactionCount >= 1);
   assert.doesNotMatch(local.matches[0].text, /sk-/);
 
   const selected = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "other-cwd", scope: "all" }, source);
   assert.deepEqual(selected.matches.map((match) => match.sessionId), ["other-cwd"]);
+  assert.equal(requestedScopes.at(-1), undefined);
   assert.equal(selected.sessionLookup, "found");
   const outside = await searchSessions({ query: "OAuth", cwd, sessionId: "other-cwd" }, source);
   assert.equal(outside.matches.length, 0);
@@ -210,7 +218,7 @@ test("session stats aggregates branch usage and completed tool results without r
     { id: "broken", path: "broken", cwd, modified: new Date("2026-01-04"), allMessagesText: "" },
   ];
   const source: SessionSource = {
-    async listAll() { return sessions as any; },
+    async list(requestedCwd?: string) { return requestedCwd ? sessions.filter((session) => resolve(session.cwd) === resolve(requestedCwd)) as any : sessions as any; },
     open(path) {
       if (path === "broken") throw new Error("unreadable");
       return { getBranch: () => path === "target" ? [

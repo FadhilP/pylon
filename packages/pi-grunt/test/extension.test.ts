@@ -129,6 +129,10 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(childArgs[childArgs.indexOf("--thinking") + 1], "medium");
     assert.ok(childArgs.includes("--no-session"));
     assert.ok(childArgs.includes("--no-extensions"));
+    const lineEditExtension = childArgs[childArgs.indexOf("--extension") + 1] ?? "";
+    assert.match(lineEditExtension.replace(/\\/g, "/"), /\/pylon-core\/extensions\/line-edit\.ts$/);
+    await access(lineEditExtension);
+    assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash");
     assert.ok(childArgs.includes("--system-prompt"));
     assert.ok(!childArgs.includes("--append-system-prompt"));
     assert.match(childArgs.at(-1) ?? "", /Targeted context.*exported-constant convention/s);

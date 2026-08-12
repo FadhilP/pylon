@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -17,6 +18,8 @@ import {
 import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
 import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
+
+const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
 
 const HEARTBEAT_MS = 1000;
 const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
@@ -270,7 +273,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             : "";
           const prompt = `Implementation task:\n${task}${targetedContext ? `\n\nTargeted context (directly applicable background only):\n${targetedContext}` : ""}${suggested.length ? `\n\nSuggested paths (guidance only):\n${suggested.map((path) => `- ${path}`).join("\n")}` : ""}${checkCommands.length ? `\n\nFocused checks:\n${checkCommands.map((command) => `- ${command}`).join("\n")}` : ""}${dependencyNote}${parentContext ? `\n\nBounded redacted parent context (background only; task above is authoritative):\n${parentContext}` : ""}`;
           const args = [
-            "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files",
+            "--mode", "json", "--no-session", "--no-extensions", "--extension", LINE_EDIT_EXTENSION,
+            "--no-skills", "--no-prompt-templates", "--no-context-files",
             "--tools", "read,grep,find,ls,edit,write,bash", "--model", modelName(model), "--thinking", params.thinking,
             "--system-prompt", isolated ? WORKER_PROMPT : DIRECT_WORKER_PROMPT, prompt,
           ];

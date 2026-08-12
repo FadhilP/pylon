@@ -5,6 +5,7 @@ import {
   SessionManager,
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
+import { listSessionInventory } from "pylon-core/session-inventory";
 
 type ParentSessionManager = Pick<SessionManager, "getSessionFile" | "getSessionId" | "getBranch">;
 
@@ -311,7 +312,18 @@ export async function listSpawnedSessions(
     const sessions = await SessionManager.list(location.cwd, location.directory);
     located.push(...sessions.filter((session) => location.ids.has(session.id)));
   }
-  if (legacyIds.size) located.push(...(await SessionManager.listAll()).filter((session) => legacyIds.has(session.id)));
+  if (legacyIds.size) {
+    const legacyLocations = new Map<string, { cwd: string; directory: string }>();
+    for (const session of await listSessionInventory()) {
+      if (!legacyIds.has(session.id)) continue;
+      const directory = dirname(session.path);
+      legacyLocations.set(`${canonical(session.cwd)}\0${canonical(directory)}`, { cwd: session.cwd, directory });
+    }
+    for (const location of legacyLocations.values()) {
+      located.push(...(await SessionManager.list(location.cwd, location.directory))
+        .filter((session) => legacyIds.has(session.id)));
+    }
+  }
   return authorized(located, new Set(references.keys()), parent, SESSION_MARKER);
 }
 
