@@ -135,12 +135,16 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       message?.kind === "register" && message.owner === "pi-papercut");
     assert.deepEqual(papercutPolicy?.managedTools, ["papercut"]);
     assert.deepEqual(papercutPolicy?.enabledTools, ["papercut"]);
+    assert.deepEqual(papercutPolicy?.deferredTools, ["papercut"]);
     disposeToolPolicyCapture();
     assert.ok(active.includes("search_tools"));
-    assert.ok(active.includes("continuity_recall"));
+    assert.ok(!active.includes("continuity_recall"));
     assert.ok(active.includes("continuity_update"));
-    assert.ok(active.includes("memory"));
+    assert.ok(!active.includes("memory"));
+    assert.ok(!active.includes("papercut"));
     assert.ok(!active.includes("grunt"));
+    assert.ok(!active.includes("symbol_search"));
+    assert.ok(!active.includes("code_search"));
     assert.ok(!active.includes("index_status"));
     assert.ok(!active.includes("search_sessions"));
     assert.ok(!active.includes("session_stats"));

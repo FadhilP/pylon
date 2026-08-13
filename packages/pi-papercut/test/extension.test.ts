@@ -73,6 +73,8 @@ test("one tool exposes capture and lifecycle actions without session review", as
       owner: "pi-papercut",
       managedTools: ["papercut"],
       enabledTools: ["papercut"],
+      deferredTools: ["papercut"],
+      toolUsage: { papercut: "capture or manage durable project workflow-friction notes" },
     },
   });
   assert.equal(app.emitted.some((item) => item.channel === "pi-papercut:state-change" && item.value.available === true), true);

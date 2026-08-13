@@ -576,6 +576,86 @@ test("pi-spawn executions expose stable child metadata and ignore list actions",
   assert.deepEqual(projected.delegatedRuns[0]?.activity, [{ kind: "call", tool: "read", text: "{\n  \"path\": \"auth.ts\"\n}" }]);
 });
 
+test("background pi-spawn controls update the original delegated run without duplicates", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-start", toolName: "spawn_agent",
+    args: { action: "create", prompt: "Inspect auth", background: true },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end", toolCallId: "spawn-start", toolName: "spawn_agent", isError: false,
+    result: { content: [{ type: "text", text: "Started" }], details: {
+      piSpawn: { version: 1, kind: "agent", id: "child-agent" }, runId: "run-1", background: true,
+      agentName: "Ada", startedAt: "2026-07-30T10:00:00.000Z", status: "running",
+    } },
+  }));
+  assert.deepEqual(projection.snapshot().conversation.delegatedRuns.map(({ id, status, runId, threadId, response, usage }) => ({ id, status, runId, threadId, response, usage })), [{
+    id: "spawn-start", status: "running", runId: "run-1", threadId: "child-agent", response: undefined, usage: undefined,
+  }]);
+
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-status", toolName: "spawn_agent",
+    args: { action: "status", id: "child-agent", runId: "run-1" },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end", toolCallId: "spawn-status", toolName: "spawn_agent", isError: false,
+    result: { content: [{ type: "text", text: "Done" }], details: {
+      piSpawn: { version: 1, kind: "agent", id: "child-agent" }, runId: "run-1", background: true,
+      startedAt: "2026-07-30T10:00:00.000Z", status: "completed", durationMs: 2_000,
+      usage: { input: 4, output: 6, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+      sessionUsage: { input: 40, output: 60, cacheRead: 10, cacheWrite: 0, cost: 0.2 },
+      activity: [{ kind: "result", tool: "read", text: "source" }],
+    } },
+  }));
+  const [completed] = projection.snapshot().conversation.delegatedRuns;
+  assert.equal(projection.snapshot().conversation.delegatedRuns.length, 1);
+  assert.deepEqual({ id: completed?.id, status: completed?.status, response: completed?.response, durationMs: completed?.durationMs,
+    output: completed?.usage?.output, sessionOutput: completed?.sessionUsage?.output, activity: completed?.activity.length }, {
+    id: "spawn-start", status: "completed", response: "Done", durationMs: 2_000, output: 6, sessionOutput: 60, activity: 1,
+  });
+
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-stale", toolName: "spawn_agent",
+    args: { action: "status", id: "child-agent", runId: "run-1" },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end", toolCallId: "spawn-stale", toolName: "spawn_agent", isError: false,
+    result: { content: [{ type: "text", text: "Result already collected" }], details: {
+      piSpawn: { version: 1, kind: "agent", id: "child-agent" }, runId: "run-1", background: true, failureCode: "not_found",
+    } },
+  }));
+  const [retained] = projection.snapshot().conversation.delegatedRuns;
+  assert.equal(projection.snapshot().conversation.delegatedRuns.length, 1);
+  assert.deepEqual({ status: retained?.status, response: retained?.response, output: retained?.usage?.output, activity: retained?.activity.length }, {
+    status: "completed", response: "Done", output: 6, activity: 1,
+  });
+});
+
+test("history correlates background pi-spawn status results by run ID", () => {
+  const messages = [
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-start", name: "spawn_session", arguments: { action: "create", prompt: "Check build", background: true } }] },
+    { role: "toolResult", toolCallId: "spawn-start", toolName: "spawn_session", isError: false, content: [{ type: "text", text: "Started" }], details: {
+      piSpawn: { version: 1, kind: "session", id: "child-session" }, runId: "run-2", background: true,
+      startedAt: "2026-07-30T10:00:00.000Z", status: "running",
+    } },
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-status", name: "spawn_session", arguments: { action: "status", id: "child-session", runId: "run-2" } }] },
+    { role: "toolResult", toolCallId: "spawn-status", toolName: "spawn_session", isError: false, content: [{ type: "text", text: "Finished" }], details: {
+      piSpawn: { version: 1, kind: "session", id: "child-session" }, runId: "run-2", background: true,
+      startedAt: "2026-07-30T10:00:00.000Z", status: "completed", durationMs: 3_000,
+      usage: { input: 3, output: 7, cacheRead: 0, cacheWrite: 0, cost: 0.03 }, activity: [],
+    } },
+    { role: "assistant", content: [{ type: "toolCall", id: "spawn-stale", name: "spawn_session", arguments: { action: "status", id: "child-session", runId: "run-2" } }] },
+    { role: "toolResult", toolCallId: "spawn-stale", toolName: "spawn_session", isError: false, content: [{ type: "text", text: "Result already collected" }], details: {
+      piSpawn: { version: 1, kind: "session", id: "child-session" }, runId: "run-2", background: true, failureCode: "not_found",
+    } },
+  ];
+  const [run] = projectConversation(messages).delegatedRuns;
+  assert.equal(projectConversation(messages).delegatedRuns.length, 1);
+  assert.deepEqual({ id: run?.id, status: run?.status, runId: run?.runId, response: run?.response, durationMs: run?.durationMs, output: run?.usage?.output }, {
+    id: "spawn-start", status: "completed", runId: "run-2", response: "Finished", durationMs: 3_000, output: 7,
+  });
+});
+
 test("invalid pi-spawn actions remain ordinary tools", () => {
   const projected = projectConversation([
     { role: "assistant", content: [

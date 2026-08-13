@@ -108,6 +108,7 @@ export interface DelegatedAgentRunReadModel {
   modelName?: string;
   thinkingLevel?: ThinkingLevelReadModel;
   threadId?: string;
+  runId?: string;
   action?: SpawnExecutionActionReadModel;
   durationMs?: number;
   usage?: DelegatedAgentUsageReadModel;

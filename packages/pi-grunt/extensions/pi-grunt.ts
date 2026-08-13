@@ -154,6 +154,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     pi.events.emit("pylon:tool-policy", {
       version: 1, kind: "register", owner: "pi-grunt",
       managedTools: ["grunt"], enabledTools: enabled ? ["grunt"] : [],
+      ...(enabled ? { deferredTools: ["grunt"] } : {}),
+      ...(enabled ? { toolUsage: { grunt: "delegate a large mechanical implementation slice to an isolated synchronous worker" } } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) return;

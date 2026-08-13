@@ -36,6 +36,8 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
     const events = new Bus();
+    let policy: any;
+    events.on("pylon:tool-policy", (value) => { policy = value; });
     const tools = new Map<string, any>();
     const commands = new Map<string, any>();
     const handlers = new Map<string, Function[]>();
@@ -102,6 +104,9 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       ui: { setStatus() {}, notify: (text: string, level: string) => notifications.push({ text, level }) },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+    assert.deepEqual(policy.deferredTools, ["grunt"]);
+    assert.match(policy.toolUsage.grunt, /delegate/);
+    assert.ok(active.includes("grunt"), "standalone fallback keeps Grunt active without coordination");
     const result = await tools.get("grunt").execute("id", {
       task: "Add trivial worker module", thinking: "medium", suggestedPaths: ["src/**"],
       targetedContext: "Copy the existing exported-constant convention.",

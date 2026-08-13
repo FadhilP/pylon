@@ -194,6 +194,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       owner: "pi-verify",
       managedTools: ["verify"],
       enabledTools: ["verify"],
+      toolUsage: { verify: "run bounded changed-set hygiene and existing project verification checks" },
     });
     void publishCatalog(currentCwd, currentSessionId).catch(() => undefined);
   });

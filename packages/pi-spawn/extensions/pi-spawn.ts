@@ -491,12 +491,11 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       owner: "pi-spawn",
       managedTools: SPAWN_TOOLS,
       enabledTools: SPAWN_TOOLS,
-      ...(deferredTools.length ? {
-        deferredTools,
-        deferredToolUsage: Object.fromEntries(deferredTools.map((tool) => [tool, tool === "spawn_agent"
-          ? "create, continue, or inspect private customized subagent conversations"
-          : "create, adopt, or continue inspectable Pi sessions"])),
-      } : {}),
+      toolUsage: {
+        spawn_agent: "create, continue, or inspect private customized subagent conversations",
+        spawn_session: "create, adopt, or continue inspectable Pi sessions",
+      },
+      ...(deferredTools.length ? { deferredTools } : {}),
     });
   });
   pi.on("session_shutdown", async () => {

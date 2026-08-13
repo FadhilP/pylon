@@ -42,6 +42,7 @@ test("verify publishes package tool ownership for the session lifecycle", () => 
     owner: "pi-verify",
     managedTools: ["verify"],
     enabledTools: ["verify"],
+    toolUsage: { verify: "run bounded changed-set hygiene and existing project verification checks" },
   });
   handlers.get("session_shutdown")!();
   assert.deepEqual(events.at(-1), {

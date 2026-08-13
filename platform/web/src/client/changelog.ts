@@ -8,6 +8,21 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.8.1",
+    date: "Aug 13, 2026",
+    title: "Smarter tool discovery and background-run tracking",
+    summary: "Pylon keeps the default tool surface leaner, makes deferred capabilities easier to find, adapts guarded editing to model pricing, and improves background-run and database visibility.",
+    notes: [
+      "Expanded tool-policy usage metadata across bundled packages so search_tools can match inactive capabilities from package guidance or registered descriptions, while deferring more specialist tools such as indexed search, durable memory, Papercuts, and Grunt until needed.",
+      "Made revision-guarded numbered read and edit selection session-aware: models whose advertised output pricing stays below 3× input pricing use Pi's native tools, while higher-ratio or missing pricing retains numbered edits and model changes re-evaluate the choice.",
+      "Correlated background Spawn status and cancellation results with their original delegated runs by stable run ID, preserving one accurate activity record with final status, output, usage, duration, and child-session metadata.",
+      "Kept StateQL snapshots available while database commands are running instead of waiting behind the sequential command queue.",
+      "Allowed deferred-tool discovery during Continuity planning and tightened protocol validation and compatibility coverage for the new policy and background-run metadata.",
+    ],
+  },
+
+
+  {
     version: "1.8.0",
     date: "Aug 12, 2026",
     title: "Background agents and smoother compaction",

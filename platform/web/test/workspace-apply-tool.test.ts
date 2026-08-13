@@ -65,7 +65,7 @@ test("workspace apply tool policy fails closed without coordination and unregist
     managedTools: ["apply_session_changes"],
     enabledTools: ["apply_session_changes"],
     deferredTools: ["apply_session_changes"],
-    deferredToolUsage: { apply_session_changes: "apply this session's changes to the registered project's current branch after explicit user approval" },
+    toolUsage: { apply_session_changes: "apply this session's changes to the registered project's current branch after explicit user approval" },
     acknowledge: runtime.policies[0].acknowledge,
   });
   assert.ok(!runtime.activeTools().includes("apply_session_changes"));

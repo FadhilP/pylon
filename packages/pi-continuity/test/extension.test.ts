@@ -151,6 +151,9 @@ test("package settings disable durable memory while keeping planning and recall"
     assert.equal(app.active().includes("memory"), false);
     assert.equal(app.active().includes("continuity_recall"), true);
     assert.equal(app.active().includes("continuity_update"), true);
+    const policy = app.emitted.filter((event) => event.channel === "pylon:tool-policy" && event.value?.kind === "register").at(-1)?.value;
+    assert.deepEqual(policy.deferredTools, ["continuity_recall"]);
+    assert.equal(policy.toolUsage.memory, undefined);
     const result = await app.tools.get("memory").execute("stale", { action: "list" }, undefined, undefined, ctx);
     assert.equal(result.details.memoryError, true);
     assert.match(result.content[0].text, /disabled in package settings/i);

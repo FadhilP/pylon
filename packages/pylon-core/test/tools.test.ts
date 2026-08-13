@@ -60,6 +60,17 @@ test("protocol validates version, owners, and managed subsets", () => {
   }) as any;
   assert.deepEqual(parsed.message.deferredTools, ["read"]);
   assert.deepEqual(parsed.message.deferredToolUsage, { read: "inspect project files" });
+  const generalized = parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read"], enabledTools: ["read"],
+    toolUsage: { read: "  inspect project files  " },
+  }) as any;
+  assert.deepEqual(generalized.message.toolUsage, { read: "inspect project files" });
+  assert.match((parseToolMessage({
+    version: 1, kind: "register", owner: "pi-test",
+    managedTools: ["read", "write"], enabledTools: ["read"],
+    toolUsage: { write: "change files" },
+  }) as any).error, /keys must be enabled tools/);
   assert.match((parseToolMessage({
     version: 1, kind: "register", owner: "pi-test",
     managedTools: ["read"], enabledTools: ["read"], deferredToolUsage: { read: "inspect files" },

@@ -524,6 +524,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       owner: "pi-sieve",
       managedTools: [RECALL_TOOL_NAME],
       enabledTools: recallEnabled ? [RECALL_TOOL_NAME] : [],
+      ...(recallEnabled ? { toolUsage: { [RECALL_TOOL_NAME]: "recover a registered tool result omitted from the active context" } } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) return;

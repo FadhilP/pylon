@@ -83,13 +83,14 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     assert.ok(!active.includes("repo_scout"));
     assert.ok(!active.includes("grunt"));
     assert.ok(active.includes("continuity_update"));
-    assert.ok(active.includes("memory"));
+    assert.ok(!active.includes("memory"));
+    assert.ok(!active.includes("continuity_recall"));
     assert.ok(!active.includes("advisor"));
     await commands.get("advisor").handler("reset", ctx);
     await commands.get("grunt").handler("reset", ctx);
     await commands.get("scout").handler("reset", ctx);
     assert.ok(active.includes("advisor"));
-    assert.ok(active.includes("grunt"));
+    assert.ok(!active.includes("grunt"));
     assert.ok(active.includes("repo_scout"));
     assert.ok(!active.includes("web_scout"));
 
@@ -132,12 +133,17 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     const capabilities: any[] = [];
     events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => capabilities.push(value) });
     assert.equal(capabilities.length, 1);
-    assert.deepEqual(capabilities[0].eligible(), ["index_status", "relationship_graph", "search_sessions", "session_stats", "web_scout"]);
+    assert.deepEqual(capabilities[0].eligible(), ["code_search", "continuity_recall", "grunt", "index_status", "memory", "relationship_graph", "search_sessions", "session_stats", "symbol_search", "web_scout"]);
     assert.deepEqual(capabilities[0].catalog(), [
+      { name: "code_search", usage: "search indexed source with ranked lexical snippets" },
+      { name: "continuity_recall", usage: "recall bounded historical evidence omitted from the active context" },
+      { name: "grunt", usage: "delegate a large mechanical implementation slice to an isolated synchronous worker" },
       { name: "index_status", usage: "inspect local repository code-index status" },
+      { name: "memory", usage: "inspect durable notes or propose grounded reviewer-gated memory changes" },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
       { name: "search_sessions", usage: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested" },
       { name: "session_stats", usage: "inspect historical Pi session usage and tool-call statistics when explicitly requested" },
+      { name: "symbol_search", usage: "search local repository symbols by name, kind, language, or path" },
       { name: "web_scout", usage: "research current public web pages with bounded URL-cited evidence" },
     ]);
     capabilities[0].select(["web_scout"]);
@@ -157,6 +163,8 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     );
     await commands.get("plan").handler("approve-current", ctx);
     assert.ok(active.includes("edit"));
+    assert.ok(!active.includes("continuity_recall"));
+    assert.ok(!active.includes("memory"));
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
     assert.equal(events.handlers.get("pylon:tool-policy")?.size ?? 0, 0);
   } finally {

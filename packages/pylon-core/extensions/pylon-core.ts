@@ -1,7 +1,13 @@
 import { constants } from "node:fs";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  createEditToolDefinition,
+  createReadToolDefinition,
+  getAgentDir,
+  SettingsManager,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import {
   parseToolMessage,
   PROTOCOL_VERSION,
@@ -45,12 +51,40 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   let runCwd = "";
   const delegateNames = new Map<string, string>();
   const delegateCounts = { A: 0, G: 0, S: 0 };
-  let lineToolsRegistered = false;
+  let lineEditMode: "native" | "numbered" = "native";
+  let lineToolsOverridden = false;
   let lineEditConfigError: string | undefined;
   const coreConfig = loadConfig().catch((error) => {
     lineEditConfigError = error instanceof Error ? error.message : String(error);
     return defaultConfig();
   });
+
+  const modelUsesNumberedLineEdits = (model: any): boolean => {
+    const rates = model?.cost ? [model.cost, ...(Array.isArray(model.cost.tiers) ? model.cost.tiers : [])] : [];
+    if (!rates.length) return true;
+    return rates.some((rate) => !Number.isFinite(rate?.input) || rate.input <= 0
+      || !Number.isFinite(rate?.output) || rate.output <= 0
+      || rate.output / rate.input >= 3);
+  };
+  const setLineEditMode = (mode: "native" | "numbered", cwd: string, sessionStart = false) => {
+    if (!sessionStart && mode === lineEditMode) return;
+    if (mode === "native" && !lineToolsOverridden) {
+      lineEditMode = mode;
+      return;
+    }
+    if (mode === "numbered") registerLineEditTools(pi);
+    else {
+      const autoResizeImages = SettingsManager.create(cwd).getImageAutoResize();
+      pi.registerTool(createReadToolDefinition(cwd, { autoResizeImages }));
+      pi.registerTool(createEditToolDefinition(cwd));
+    }
+    lineToolsOverridden = true;
+    lineEditMode = mode;
+  };
+  const updateLineEditMode = async (model: any, cwd: string, sessionStart = false) => {
+    const config = await coreConfig;
+    setLineEditMode(config.lineEditEnabled && modelUsesNumberedLineEdits(model) ? "numbered" : "native", cwd, sessionStart);
+  };
 
   const rebuildDelegateNames = (ctx: any) => {
     delegateNames.clear();
@@ -101,13 +135,13 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const discoveryCatalog = () => {
     const entries = new Map<string, Set<string>>();
     const discoverable = discoverableTools();
+    for (const name of discoverable) entries.set(name, new Set());
     for (const policy of policies.values()) {
-      for (const name of policy.deferredTools ?? []) {
-        if (!discoverable.has(name)) continue;
-        const usages = entries.get(name) ?? new Set<string>();
-        const usage = policy.deferredToolUsage?.[name];
+      for (const name of policy.enabledTools) {
+        const usages = entries.get(name);
+        if (!usages) continue;
+        const usage = policy.toolUsage?.[name] ?? policy.deferredToolUsage?.[name];
         if (usage) usages.add(usage);
-        entries.set(name, usages);
       }
     }
     return [...entries].sort(([a], [b]) => a.localeCompare(b)).map(([name, usages]) => ({
@@ -188,6 +222,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       managedTools: [...message.managedTools],
       enabledTools: [...message.enabledTools],
       ...(message.deferredTools ? { deferredTools: [...message.deferredTools] } : {}),
+      ...(message.toolUsage ? { toolUsage: { ...message.toolUsage } } : {}),
       ...(message.deferredToolUsage ? { deferredToolUsage: { ...message.deferredToolUsage } } : {}),
       ...(message.allowOnly ? { allowOnly: [...message.allowOnly] } : {}),
     });
@@ -358,11 +393,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     tokenMeter = meterFromBranch(ctx.sessionManager?.getBranch?.() ?? []);
   };
   pi.on("session_start", async (_event, ctx) => {
-    const config = await coreConfig;
-    if (config.lineEditEnabled && !lineToolsRegistered) {
-      registerLineEditTools(pi);
-      lineToolsRegistered = true;
-    }
+    await updateLineEditMode(ctx.model, ctx.cwd, true);
     selectedTools.clear();
     shellBaseline = undefined;
     shellCwd = "";
@@ -373,6 +404,9 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     reconcile();
     rebuildTokenMeter(ctx);
     rebuildDelegateNames(ctx);
+  });
+  pi.on("model_select", async (event, ctx) => {
+    await updateLineEditMode(event.model, ctx.cwd);
   });
   pi.on("session_tree", (_event, ctx) => {
     rebuildTokenMeter(ctx);
@@ -574,7 +608,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         "Executables:",
         ...executables.map(({ label, required, available }) => `${label}: ${available ? "available" : `missing${required ? "" : " (optional)"}`}`),
         `State root: ${agentDir} (${stateStatus})`,
-        `Numbered line edit: ${lineToolsRegistered ? "enabled" : "disabled"}${lineEditConfigError ? ` (config error: ${lineEditConfigError.slice(0, 200)})` : ""}`,
+        `Numbered line edit: ${lineEditMode}${lineEditConfigError ? ` (config error: ${lineEditConfigError.slice(0, 200)})` : ""}`,
         `Locks older than 30s: ${oldLocks.join(", ") || "none"}`,
         `Quarantined state: ${quarantined.join(", ") || "none"}`,
         "Configured child models:",

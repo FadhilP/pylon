@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -68,11 +68,72 @@ test("numbered line tools default on and honor an explicit disable", async () =>
     assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "read"]);
 
     await mkdir(join(root, "pylon-core"), { recursive: true });
-    await writeFile(join(root, "pylon-core", "config.json"), JSON.stringify({ version: 1, lineEditEnabled: false }));
+    const persisted = JSON.stringify({ version: 1, lineEditEnabled: false });
+    await writeFile(join(root, "pylon-core", "config.json"), persisted);
     const disabled = harness();
     for (const handler of disabled.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
+      await handler({ reason: "startup" }, { cwd: root, model: { cost: { input: 1, output: 10 } }, sessionManager: { getBranch: () => [] } });
     assert.equal(disabled.tools.size, 0);
+    assert.equal(await readFile(join(root, "pylon-core", "config.json"), "utf8"), persisted);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("numbered line tools follow session model pricing without persisting the choice", async () => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "pylon-core-model-pricing-"));
+  process.env.PI_CODING_AGENT_DIR = root;
+  const model = (input: number, output: number, tiers?: Array<{ input: number; output: number }>) => ({
+    cost: { input, output, cacheRead: 0, cacheWrite: 0, ...(tiers ? { tiers } : {}) },
+  });
+  try {
+    const runtime = harness();
+    const start = runtime.handlers.get("session_start")![0];
+    const select = runtime.handlers.get("model_select")![0];
+    const ctx = { cwd: root, sessionManager: { getBranch: () => [] } };
+
+    await start({ reason: "startup" }, { ...ctx, model: model(1, 2.99) });
+    assert.equal(runtime.tools.size, 0, "low-ratio startup keeps Pi's built-in tools");
+
+    await select({ model: model(1, 3), previousModel: model(1, 2.99), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
+    assert.equal(runtime.tools.get("edit")?.label, "edit (numbered)");
+    assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
+    const firstNumberedRead = runtime.tools.get("read");
+
+    await select({ model: model(1, 2, [{ input: 2, output: 6 }]), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "a qualifying tier keeps numbered mode");
+
+    await select({ model: model(0, 0), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "unknown pricing keeps numbered mode");
+    await select({ model: model(1, 0), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "zero output pricing keeps numbered mode");
+
+    await select({ model: model(2, 5.99, [{ input: 4, output: 11.99 }]), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read")?.label, "read");
+    assert.equal(runtime.tools.get("edit")?.label, "edit");
+    assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
+
+    const other = join(root, "other");
+    await mkdir(other);
+    await writeFile(join(root, "probe.txt"), "old cwd");
+    await writeFile(join(other, "probe.txt"), "new cwd");
+    const firstNativeRead = runtime.tools.get("read");
+    await start({ reason: "new" }, { ...ctx, cwd: other, model: model(1, 2) });
+    assert.notEqual(runtime.tools.get("read"), firstNativeRead, "native tools rebind for a new session cwd");
+    const nativeResult = await runtime.tools.get("read").execute("read-1", { path: "probe.txt" }, undefined, undefined, {});
+    assert.equal(nativeResult.content[0]?.text, "new cwd");
+
+    await select({ model: model(1, 4), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
+    assert.notEqual(runtime.tools.get("read"), firstNumberedRead, "re-enabling creates fresh revision state");
+    const secondNumberedRead = runtime.tools.get("read");
+    await start({ reason: "new" }, { ...ctx, model: model(1, 4) });
+    assert.notEqual(runtime.tools.get("read"), secondNumberedRead, "numbered state is fresh for every session");
+    await assert.rejects(() => readFile(join(root, "pylon-core", "config.json")), { code: "ENOENT" });
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -388,6 +449,7 @@ test("user overrides control active deferred and disabled tools without bypassin
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-advisor",
     managedTools: ["advisor"], enabledTools: ["advisor"],
+    toolUsage: { advisor: "review consequential decisions" },
   });
   runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "deferred", edit: "deferred" } });
   assert.ok(!runtime.active().includes("advisor"));
@@ -395,8 +457,16 @@ test("user overrides control active deferred and disabled tools without bypassin
   const responses: any[] = [];
   runtime.events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => responses.push(value) });
   assert.deepEqual(responses[0].eligible(), ["advisor", "edit"]);
+  assert.deepEqual(responses[0].catalog(), [
+    { name: "advisor", usage: "review consequential decisions" },
+    { name: "edit", usage: undefined },
+  ]);
   responses[0].select(["advisor"]);
   assert.ok(runtime.active().includes("advisor"));
+  assert.deepEqual(responses[0].catalog(), [
+    { name: "advisor", usage: "review consequential decisions" },
+    { name: "edit", usage: undefined },
+  ]);
 
   runtime.events.emit("pylon:tool-policy", {
     version: 1, kind: "register", owner: "pi-other", managedTools: [], enabledTools: [],

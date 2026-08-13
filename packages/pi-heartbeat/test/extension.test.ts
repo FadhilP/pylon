@@ -44,6 +44,7 @@ test("session_start shuts down the previous manager before replacing it", async 
       owner: "pi-heartbeat",
       managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
       enabledTools: ["heartbeat_start"],
+      toolUsage: { heartbeat_start: "start a long shell command while independent work remains" },
     });
     const started = await tools.get("heartbeat_start").execute(
       "start",

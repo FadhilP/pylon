@@ -5,6 +5,7 @@ export const INSPECTION = new Set([
   "grep",
   "find",
   "ls",
+  "search_tools",
   "continuity_recall",
   "continuity_update",
   "memory",

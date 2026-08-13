@@ -227,7 +227,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       enabledTools: enabled ? ["repo_scout", "web_scout"] : [],
       ...(enabled ? {
         deferredTools: ["web_scout"],
-        deferredToolUsage: { web_scout: "research current public web pages with bounded URL-cited evidence" },
+        toolUsage: {
+          repo_scout: "trace unfamiliar or cross-file repository behavior with exact source citations",
+          web_scout: "research current public web pages with bounded URL-cited evidence",
+        },
       } : {}),
       acknowledge: () => { coordinated = true; },
     });

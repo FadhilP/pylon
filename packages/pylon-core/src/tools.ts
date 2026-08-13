@@ -5,6 +5,8 @@ export type ToolPolicy = {
   managedTools: string[];
   enabledTools: string[];
   deferredTools?: string[];
+  toolUsage?: Record<string, string>;
+  /** @deprecated Use toolUsage. */
   deferredToolUsage?: Record<string, string>;
   allowOnly?: string[];
 };
@@ -28,23 +30,23 @@ const stringList = (value: unknown): value is string[] =>
   value.every((item) => typeof item === "string" && item.length > 0) &&
   new Set(value).size === value.length;
 
-function parseDeferredToolUsage(value: unknown, deferredTools: string[] | undefined):
+function parseToolUsage(value: unknown, allowedTools: string[] | undefined, field: "toolUsage" | "deferredToolUsage"):
   | { usage: Record<string, string> }
   | { error: string } {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    return { error: "deferredToolUsage must be an object" };
-  if (!deferredTools) return { error: "deferredToolUsage requires deferredTools" };
+    return { error: `${field} must be an object` };
+  if (!allowedTools) return { error: `${field} requires ${field === "toolUsage" ? "enabledTools" : "deferredTools"}` };
   const entries = Object.entries(value);
-  if (entries.length > 32) return { error: "deferredToolUsage must contain at most 32 tools" };
-  const deferred = new Set(deferredTools);
+  if (entries.length > 32) return { error: `${field} must contain at most 32 tools` };
+  const allowed = new Set(allowedTools);
   const usage: Array<[string, string]> = [];
   for (const [tool, phrase] of entries) {
-    if (!deferred.has(tool)) return { error: "deferredToolUsage keys must be deferred tools" };
+    if (!allowed.has(tool)) return { error: `${field} keys must be ${field === "toolUsage" ? "enabled" : "deferred"} tools` };
     if (typeof phrase !== "string" || /[\u0000-\u001f\u007f-\u009f]/u.test(phrase))
-      return { error: "deferredToolUsage phrases must be one-line strings" };
+      return { error: `${field} phrases must be one-line strings` };
     const normalized = phrase.trim().replace(/\s+/gu, " ");
     if (!normalized || normalized.length > 120)
-      return { error: "deferredToolUsage phrases must contain 1 to 120 characters" };
+      return { error: `${field} phrases must contain 1 to 120 characters` };
     usage.push([tool, normalized]);
   }
   return { usage: Object.fromEntries(usage) };
@@ -71,9 +73,15 @@ export function parseToolMessage(value: unknown):
     return { error: "deferredTools must contain unique non-empty strings" };
   if (input.deferredTools && !input.deferredTools.every((tool) => enabledTools.includes(tool)))
     return { error: "deferredTools must be a subset of enabledTools" };
+  let toolUsage: Record<string, string> | undefined;
+  if (input.toolUsage !== undefined) {
+    const parsedUsage = parseToolUsage(input.toolUsage, enabledTools, "toolUsage");
+    if ("error" in parsedUsage) return parsedUsage;
+    toolUsage = parsedUsage.usage;
+  }
   let deferredToolUsage: Record<string, string> | undefined;
   if (input.deferredToolUsage !== undefined) {
-    const parsedUsage = parseDeferredToolUsage(input.deferredToolUsage, input.deferredTools as string[] | undefined);
+    const parsedUsage = parseToolUsage(input.deferredToolUsage, input.deferredTools as string[] | undefined, "deferredToolUsage");
     if ("error" in parsedUsage) return parsedUsage;
     deferredToolUsage = parsedUsage.usage;
   }
@@ -91,6 +99,7 @@ export function parseToolMessage(value: unknown):
       managedTools: [...managedTools],
       enabledTools: [...enabledTools],
       ...(input.deferredTools ? { deferredTools: [...input.deferredTools] } : {}),
+      ...(toolUsage ? { toolUsage } : {}),
       ...(deferredToolUsage ? { deferredToolUsage } : {}),
       ...(input.allowOnly ? { allowOnly: [...input.allowOnly] } : {}),
       ...(input.restoreTools ? { restoreTools: [...input.restoreTools] } : {}),

@@ -606,6 +606,7 @@ function validDelegatedRun(value: unknown): boolean {
   if (spawned !== spawnExecutionActions.has(String(value.action))) return false;
   if (value.action === "adopt" && value.kind !== "spawn_session") return false;
   if (value.threadId !== undefined && (!spawned || !identifier(value.threadId))) return false;
+  if (value.runId !== undefined && (!spawned || !identifier(value.runId))) return false;
   if (value.durationMs !== undefined && (!Number.isSafeInteger(value.durationMs)
     || (value.durationMs as number) < 0 || (value.durationMs as number) > 7 * 24 * 60 * 60 * 1_000)) return false;
   if (value.usage !== undefined) {

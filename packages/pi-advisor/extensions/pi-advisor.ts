@@ -145,6 +145,7 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       owner: "pi-advisor",
       managedTools: ["advisor"],
       enabledTools: enabled ? ["advisor"] : [],
+      ...(enabled ? { toolUsage: { advisor: "review consequential decisions, architecture, migrations, security, or broad regression risk" } } : {}),
       acknowledge: () => { coordinated = true; },
     });
     if (coordinated) return;

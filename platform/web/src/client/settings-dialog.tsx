@@ -462,7 +462,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
   if (settings.kind === "pylon-core") {
     return <div className="package-fields">
       <label className="checkbox-field"><input type="checkbox" checked={settings.lineEditEnabled} disabled={disabled} onChange={(event) => onUpdate({ ...settings, lineEditEnabled: event.target.checked })} />Revision-guarded numbered edits</label>
-      <p className="settings-policy-note">Overrides read and edit with numbered ranges and compact file-revision tags. A 50-session simulation broke even when output tokens cost ~2.9× input; at 6×, read/edit payload cost was ~5.3% lower despite ~4.9% more raw tokens. Existing tools remain unchanged when disabled.</p>
+      <p className="settings-policy-note">Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price. Lower-ratio models automatically keep Pi's native read and edit for that session; missing pricing keeps numbered edits. Disable to always use the native tools.</p>
     </div>;
   }
   if (settings.kind === "advisor" || settings.kind === "scout") {

@@ -756,6 +756,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
       owner: "pi-continuity",
       managedTools: continuityTools,
       enabledTools: enabledContinuityTools(),
+      deferredTools: enabledContinuityTools().filter((tool) => tool === "continuity_recall" || tool === "memory"),
+      toolUsage: Object.fromEntries(enabledContinuityTools().map((tool) => [tool, tool === "continuity_recall"
+        ? "recall bounded historical evidence omitted from the active context"
+        : tool === "memory" ? "inspect durable notes or propose grounded reviewer-gated memory changes"
+          : "update planning, todo, execution state, or request structured clarification"])),
+
       ...(on ? { allowOnly: planningTools() } : {}),
       ...(!on && savedTools ? { restoreTools: [...new Set([
         ...savedTools.filter((tool) => memoryEnabled || tool !== "memory"),

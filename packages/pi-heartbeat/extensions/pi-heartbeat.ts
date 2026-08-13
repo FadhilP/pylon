@@ -31,6 +31,11 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
         owner: "pi-heartbeat",
         managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
         enabledTools,
+        toolUsage: Object.fromEntries(enabledTools.map((tool) => [tool, tool === "heartbeat_start"
+          ? "start a long shell command while independent work remains"
+          : tool === "heartbeat_status" ? "inspect running or recently completed background jobs"
+            : "cancel a running background job"])),
+
       });
     }
     for (const job of manager.jobs.values()) {

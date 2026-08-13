@@ -105,12 +105,12 @@ test("advertises compact deferred browser usages to Pylon", async () => {
   let policy: any;
   eventHandlers.set("pylon:tool-policy", [(value: any) => { policy = value; }]);
   await handlers.get("session_start")![0]({}, context());
-  assert.deepEqual(policy.deferredToolUsage, {
+  assert.deepEqual(policy.toolUsage, {
     helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
     helios_capture: "capture a consented Windows window for visual debugging",
     helios_android: "list packages on, start, or attach to an Android emulator and navigate one app with constrained Appium actions",
   });
-  assert.ok(Object.values(policy.deferredToolUsage).every((value: any) => value.length <= 120));
+  assert.ok(Object.values(policy.toolUsage).every((value: any) => value.length <= 120));
 });
 
 test("Android start and attachment require visible consent before SDK or Appium access", async () => {

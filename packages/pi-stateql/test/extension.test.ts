@@ -151,7 +151,7 @@ test("registers one deferred, sequential StateQL tool bound to the Pi actor", as
   assert.ok(value.instances[0].options.signal instanceof AbortSignal);
   const policy = value.emitted.find((item) => item.name === "pylon:tool-policy")?.value;
   assert.deepEqual(policy.deferredTools, ["stateql"]);
-  assert.match(policy.deferredToolUsage.stateql, /databases/);
+  assert.match(policy.toolUsage.stateql, /databases/);
 });
 
 test("composes environment and active Pylon credential resolution without retaining the host", async () => {
@@ -646,7 +646,7 @@ test("cancellation aborts, replaces the session instance, and permits the next c
   assert.equal(value.instances[1].commands.length, 1);
 });
 
-test("a timed-out snapshot does not execute after queued database work", async () => {
+test("snapshot remains available while database work is running", async () => {
   const value = await start();
   let release!: () => void;
   value.instances[0].executeImpl = async () => new Promise((resolve) => {
@@ -654,22 +654,27 @@ test("a timed-out snapshot does not execute after queued database work", async (
   });
   const running = value.tools.get("stateql").execute("query", { command: "query", sql: "SELECT 1" }, undefined, undefined, context());
   await new Promise((resolve) => setImmediate(resolve));
-  const controller = new AbortController();
   let snapshot: Promise<StateQLSnapshot> | undefined;
   value.events.get("pylon:stateql-snapshot-request")![0]({
     version: 1,
     sessionId: "pi-session",
     historyLimit: 10,
-    signal: controller.signal,
+    signal: new AbortController().signal,
     claim: () => true,
     respond(result: Promise<StateQLSnapshot>) { snapshot = result; },
   });
   assert.ok(snapshot);
-  controller.abort();
-  release();
-  await running;
-  await assert.rejects(snapshot, /snapshot request cancelled/);
-  assert.deepEqual(value.instances[0].snapshotCalls, []);
+  try {
+    const result = await Promise.race([
+      snapshot,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("snapshot waited for database work")), 100)),
+    ]);
+    assert.deepEqual(result, baseSnapshot);
+    assert.deepEqual(value.instances[0].snapshotCalls, [10]);
+  } finally {
+    release();
+    await running;
+  }
 });
 
 test("shutdown aborts work, closes StateQL, and unregisters bridges", async () => {

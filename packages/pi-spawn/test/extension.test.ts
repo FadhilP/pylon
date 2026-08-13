@@ -188,12 +188,11 @@ test("spawn tools independently control prompt guidelines and deferred discovery
         owner: "pi-spawn",
         managedTools: ["spawn_agent", "spawn_session"],
         enabledTools: ["spawn_agent", "spawn_session"],
-        ...(deferredTools.length ? {
-          deferredTools,
-          deferredToolUsage: Object.fromEntries(deferredTools.map((tool) => [tool, tool === "spawn_agent"
-            ? "create, continue, or inspect private customized subagent conversations"
-            : "create, adopt, or continue inspectable Pi sessions"])),
-        } : {}),
+        toolUsage: {
+          spawn_agent: "create, continue, or inspect private customized subagent conversations",
+          spawn_session: "create, adopt, or continue inspectable Pi sessions",
+        },
+        ...(deferredTools.length ? { deferredTools } : {}),
       });
     } finally { f.restore(); }
   }
@@ -211,7 +210,7 @@ test("spawn tools advertise deferred discovery without disabling standalone use"
       managedTools: ["spawn_agent", "spawn_session"],
       enabledTools: ["spawn_agent", "spawn_session"],
       deferredTools: ["spawn_agent", "spawn_session"],
-      deferredToolUsage: {
+      toolUsage: {
         spawn_agent: "create, continue, or inspect private customized subagent conversations",
         spawn_session: "create, adopt, or continue inspectable Pi sessions",
       },

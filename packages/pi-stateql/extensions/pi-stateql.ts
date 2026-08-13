@@ -361,7 +361,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       || typeof request.claim !== "function" || typeof request.respond !== "function" || !request.claim()) return;
     const historyLimit = request.historyLimit ?? 50;
     if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 100) return;
-    request.respond(exclusive(() => {
+    request.respond(Promise.resolve().then(() => {
       if (request.signal?.aborted) throw new Error("StateQL snapshot request cancelled");
       return current(request.sessionId).stateql.snapshot({ historyLimit });
     }));
@@ -422,7 +422,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       managedTools: ["stateql"],
       enabledTools: ["stateql"],
       deferredTools: ["stateql"],
-      deferredToolUsage: { stateql: "query and safely modify databases with durable result handles" },
+      toolUsage: { stateql: "query and safely modify databases with durable result handles" },
     });
   });
 

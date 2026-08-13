@@ -905,8 +905,13 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
       "relationship_graph", "index_status", "search_sessions", "session_stats",
     ]);
     assert.deepEqual(policy.enabledTools, policy.managedTools);
-    assert.deepEqual(policy.deferredTools, ["relationship_graph", "index_status", "search_sessions", "session_stats"]);
-    assert.deepEqual(policy.deferredToolUsage, {
+    assert.deepEqual(policy.deferredTools, ["symbol_search", "code_search", "relationship_graph", "index_status", "search_sessions", "session_stats"]);
+    assert.deepEqual(policy.toolUsage, {
+      search_tools: "find and activate inactive tools by capability",
+      symbol_search: "search local repository symbols by name, kind, language, or path",
+      fd: "find files and directories by path pattern",
+      rg: "search file contents with regex and line-numbered matches",
+      code_search: "search indexed source with ranked lexical snippets",
       relationship_graph: "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
       search_sessions: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
@@ -916,6 +921,11 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.ok(!runtime.active.includes("relationship_graph"));
     assert.ok(!runtime.active.includes("search_sessions"));
     assert.ok(!runtime.active.includes("session_stats"));
+    assert.ok(!runtime.active.includes("symbol_search"));
+    assert.ok(!runtime.active.includes("code_search"));
+    assert.ok(runtime.active.includes("rg"));
+    assert.ok(runtime.active.includes("fd"));
+    assert.ok(runtime.active.includes("search_tools"));
     await waitFor(() => indexStates.at(-1)?.state === "idle");
     assert.equal(indexStates.at(-1)?.state, "idle");
     assert.equal(indexStates.at(-1)?.files, 1);
@@ -1317,7 +1327,7 @@ test("before_agent_start advertises the current deferred usage catalog", () => {
   assert.equal(handler({ systemPrompt: "base", systemPromptOptions: {} }), undefined);
 });
 
-test("old discovery capability ranks descriptions without generated guidance", async () => {
+test("registered descriptions provide guidance when policy usage is absent", async () => {
   const { events, lifecycle, tools } = setup();
   events.on("pylon:tool-discovery", (request) => request.respond({
     eligible: () => ["web_lookup"],
@@ -1325,10 +1335,12 @@ test("old discovery capability ranks descriptions without generated guidance", a
     reset: () => ({ selected: [] }),
   }));
   const handler = lifecycle.handlers.get("before_agent_start")![0];
-  assert.equal(handler({
+  const prompt = handler({
     systemPrompt: "base",
     systemPromptOptions: { selectedTools: ["search_tools"] },
-  }), undefined);
+  });
+  assert.match(prompt.systemPrompt, /Deferred tool discovery/);
+  assert.match(prompt.systemPrompt, /public web pages/);
   const result = await tools.get("search_tools").execute("id", { query: "public pages" }, undefined, undefined, {});
   assert.deepEqual(result.details.matches, ["web_lookup"]);
 });

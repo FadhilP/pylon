@@ -459,6 +459,8 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ id: "x".repeat(129), kind: "call", tool: "read" }] }] } }), false);
   const spawnedRun = { ...timedSnapshot.conversation.delegatedRuns[0], kind: "spawn_session", action: "adopt", threadId: "child-session" };
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [spawnedRun] } }), true);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, runId: "run-1" }] } }), true);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, runId: "x".repeat(129) }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, action: undefined }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, kind: "spawn_agent" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...spawnedRun, threadId: "x".repeat(129) }] } }), false);

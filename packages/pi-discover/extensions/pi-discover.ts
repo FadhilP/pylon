@@ -138,6 +138,8 @@ function discoveryCapability(pi: ExtensionAPI): ToolDiscoveryCapability | undefi
 
 function discoveryInventory(pi: ExtensionAPI, capability: ToolDiscoveryCapability) {
   const eligible = [...new Set(capability.eligible())].sort();
+  const active = new Set(pi.getActiveTools());
+  const inactive = eligible.filter((name) => !active.has(name));
   const eligibleSet = new Set(eligible);
   let catalog: ToolDiscoveryCatalogEntry[] = [];
   try {
@@ -150,18 +152,19 @@ function discoveryInventory(pi: ExtensionAPI, capability: ToolDiscoveryCapabilit
       .map((entry) => [entry.name, normalizedUsage(entry.usage)] as const)
       .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
   );
-  const candidates = [...new Map(
+  const registered = new Map(
     ((pi.getAllTools?.() ?? []) as ToolMetadata[])
       .filter((tool) => eligibleSet.has(tool.name))
-      .map((tool) => {
-        const usage = usageByName.get(tool.name);
-        return [tool.name, usage ? {
-          ...tool,
-          capabilities: [...(tool.capabilities ?? []), usage],
-        } : tool] as const;
-      }),
-  ).values()];
-  const guidance = eligible.map((name) => ({ name, usage: usageByName.get(name) }));
+      .map((tool) => [tool.name, tool] as const),
+  );
+  const candidates = [...registered.values()].map((tool) => {
+    const usage = usageByName.get(tool.name);
+    return usage ? { ...tool, capabilities: [...(tool.capabilities ?? []), usage] } : tool;
+  });
+  const guidance = inactive.map((name) => ({
+    name,
+    usage: usageByName.get(name) ?? normalizedUsage(registered.get(name)?.description),
+  }));
   return { eligible, candidates, guidance };
 }
 
@@ -186,8 +189,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
   registerIndexTools(pi, indexFor);
   const configureDeferredTools = () => {
     let coordinated = false;
-    const deferredTools = ["relationship_graph", "index_status", "search_sessions", "session_stats"];
-    const managedTools = ["search_tools", "symbol_search", "fd", "rg", "code_search", ...deferredTools];
+    const deferredTools = ["symbol_search", "code_search", "relationship_graph", "index_status", "search_sessions", "session_stats"];
+    const managedTools = ["search_tools", "symbol_search", "fd", "rg", "code_search", "relationship_graph", "index_status", "search_sessions", "session_stats"];
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -195,7 +198,12 @@ export default function discoverExtension(pi: ExtensionAPI) {
       managedTools,
       enabledTools: managedTools,
       deferredTools,
-      deferredToolUsage: {
+      toolUsage: {
+        search_tools: "find and activate inactive tools by capability",
+        symbol_search: "search local repository symbols by name, kind, language, or path",
+        fd: "find files and directories by path pattern",
+        rg: "search file contents with regex and line-numbered matches",
+        code_search: "search indexed source with ranked lexical snippets",
         relationship_graph: "map source symbols or tokens to related files and source locations",
         index_status: "inspect local repository code-index status",
         search_sessions: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",

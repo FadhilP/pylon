@@ -419,7 +419,7 @@ export default function heliosExtension(pi: ExtensionAPI, options: { configPath?
       managedTools: ["helios_browser", "helios_capture", "helios_android"],
       enabledTools: ["helios_browser", "helios_capture", "helios_android"],
       deferredTools: ["helios_browser", "helios_capture", "helios_android"],
-      deferredToolUsage: {
+      toolUsage: {
         helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
         helios_capture: "capture a consented Windows window for visual debugging",
         helios_android: "list packages on, start, or attach to an Android emulator and navigate one app with constrained Appium actions",
