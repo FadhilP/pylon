@@ -8,23 +8,24 @@ import {
 } from "../src/context.ts";
 
 test("snapshot omits images/thinking and redacts", () => {
-  const snapshot = buildSnapshot("system", [{ role: "user", content: [{ type: "text", text: "token=sk-proj-abcdefghijklmnopqrstuvwxyz" }, { type: "image" }] }, { role: "assistant", content: [{ type: "thinking", thinking: "secret thought" }, { type: "text", text: "answer" }] }], 20_000);
+  const snapshot = buildSnapshot([{ role: "user", content: [{ type: "text", text: "token=sk-proj-abcdefghijklmnopqrstuvwxyz" }, { type: "image" }] }, { role: "assistant", content: [{ type: "thinking", thinking: "secret thought" }, { type: "text", text: "answer" }] }], 20_000);
   assert.ok(snapshot.text.indexOf("[USER]") < snapshot.text.indexOf("[ASSISTANT]"));
   assert.match(snapshot.text, /image omitted/);
   assert.doesNotMatch(snapshot.text, /secret thought|thinking omitted/);
   assert.ok(!snapshot.text.includes("abcdefghijklmnopqrstuvwxyz"));
+  assert.equal(Object.hasOwn(snapshot.sectionAllocations, "executor-system-prompt"), false);
 });
 
 test("small budget marks truncation and keeps newest user", () => {
   const messages = Array.from({ length: 30 }, (_, i) => ({ role: "user", content: `message-${i} ${"x".repeat(1000)}` }));
-  const snapshot = buildSnapshot("system", messages, 9000);
+  const snapshot = buildSnapshot(messages, 9000);
   assert.equal(snapshot.truncated, true);
   assert.match(snapshot.text, /message-29/);
   assert.match(snapshot.text, /omitted/);
 });
 
 test("snapshot prioritizes advisor request, evidence, continuity, summaries, user, then assistant", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "assistant", content: "assistant judgment" },
     { role: "user", content: "review finding" },
     { role: "custom", customType: "advisor-request", content: "Which approach has less migration risk?" },
@@ -38,7 +39,7 @@ test("snapshot prioritizes advisor request, evidence, continuity, summaries, use
 });
 
 test("snapshot deduplicates normalized records before budgeting", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "review" },
     { role: "custom", customType: "advisor-evidence", content: "same evidence\r\n" },
     { role: "custom", customType: "advisor-evidence", content: "same evidence\n" },
@@ -47,7 +48,7 @@ test("snapshot deduplicates normalized records before budgeting", () => {
 });
 
 test("snapshot deduplicates exact payloads across sections by priority", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "same text" },
     { role: "custom", customType: "pi-continuity", content: "same text" },
     { role: "user", content: "same text" },
@@ -58,7 +59,7 @@ test("snapshot deduplicates exact payloads across sections by priority", () => {
 });
 
 test("cross-section identity does not collapse different raw values after redaction", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-one" },
     { role: "user", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-two" },
   ], 20_000);
@@ -67,7 +68,7 @@ test("cross-section identity does not collapse different raw values after redact
 });
 
 test("snapshot includes latest bounded verification metadata", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "pi-verify-result", content: "failed: npm test" },
     { role: "user", content: "help recover" },
   ], 20_000);
@@ -76,7 +77,7 @@ test("snapshot includes latest bounded verification metadata", () => {
 });
 
 test("snapshot excludes raw tool and bash output", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "user", content: "question" },
     { role: "toolResult", toolName: "read", content: "noisy tool output" },
     { role: "bashExecution", command: "build", output: "noisy bash output" },
@@ -85,7 +86,7 @@ test("snapshot excludes raw tool and bash output", () => {
 });
 
 test("snapshot keeps complete advisor and user records without per-section clipping", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: `START-${"alpha ".repeat(2_000)}-MIDDLE-${"omega ".repeat(2_000)}-END` },
     { role: "user", content: `USER-START-${"beta ".repeat(7_000)}-USER-MIDDLE-${"gamma ".repeat(7_000)}-USER-END` },
   ], 100_000);
@@ -97,7 +98,7 @@ test("snapshot keeps complete advisor and user records without per-section clipp
 });
 
 test("snapshot omits oversized records whole and keeps later records", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "review" },
     { role: "custom", customType: "advisor-evidence", content: `EVIDENCE-START${"x".repeat(30_000)}EVIDENCE-END` },
     { role: "custom", customType: "pi-continuity", content: "small durable state" },
@@ -119,7 +120,7 @@ test("snapshot omits oversized records whole and keeps later records", () => {
 test("snapshot ranks evidence and retains omitted anchors", () => {
   const relevant = { path: "src/database.ts", start: 10, end: 20, claim: "database migration safety", revision: "git:new", verification: "tested" };
   const irrelevant = { path: "src/colors.ts", start: 1, end: 5, claim: "color palette" };
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "Review database migration safety" },
     { role: "custom", customType: "advisor-evidence", content: `COLORS-${"color detail ".repeat(90)}-END`, evidenceRef: irrelevant },
     { role: "custom", customType: "advisor-evidence", content: `DATABASE-MIGRATION-${"migration detail ".repeat(75)}-END`, evidenceRef: relevant },
@@ -131,7 +132,7 @@ test("snapshot ranks evidence and retains omitted anchors", () => {
 });
 
 test("evidence relevance ties prefer newer records", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "review evidence" },
     { role: "custom", customType: "advisor-evidence", content: `OLDER-${"older evidence words ".repeat(65)}`, evidenceRef: { path: "old.ts", start: 1, end: 2 } },
     { role: "custom", customType: "advisor-evidence", content: `NEWER-${"newer evidence words ".repeat(65)}`, evidenceRef: { path: "new.ts", start: 1, end: 2 } },
@@ -141,7 +142,7 @@ test("evidence relevance ties prefer newer records", () => {
 });
 
 test("oversized omission anchors stay inside the snapshot budget", () => {
-  const snapshot = buildSnapshot("system", [
+  const snapshot = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "review" },
     ...Array.from({ length: 5 }, (_, index) => ({
       role: "custom", customType: "advisor-evidence", content: "record ".repeat(200),
@@ -156,10 +157,10 @@ test("oversized omission anchors stay inside the snapshot budget", () => {
 
 test("snapshot reports required context that cannot fit instead of clipping it", () => {
   const messages = [{ role: "custom", customType: "advisor-request", content: "review" }];
-  const oversized = buildSnapshot("system", [
+  const oversized = buildSnapshot([
     { role: "custom", customType: "advisor-request", content: "x".repeat(10_000) },
   ], 1_000);
-  const reserved = buildSnapshot("system", messages, 10_000, 8_000);
+  const reserved = buildSnapshot(messages, 10_000, 8_000);
   assert.equal(oversized.text, "");
   assert.equal(oversized.requiredContextOmitted, true);
   assert.equal(reserved.text, "");
@@ -168,7 +169,6 @@ test("snapshot reports required context that cannot fit instead of clipping it",
 
 test("snapshot redacts advisor request", () => {
   const snapshot = buildSnapshot(
-    "system",
     [{ role: "custom", customType: "advisor-request", content: "Review token=sk-proj-abcdefghijklmnopqrstuvwxyz" }],
     20_000,
   );
@@ -178,7 +178,6 @@ test("snapshot redacts advisor request", () => {
 
 test("snapshot includes and redacts high-priority evidence", () => {
   const snapshot = buildSnapshot(
-    "system",
     [
       { role: "user", content: "review finding" },
       {
@@ -196,7 +195,6 @@ test("snapshot includes and redacts high-priority evidence", () => {
 test("small model windows reserve bounded input and output", () => {
   const window = 1000;
   const snapshot = buildSnapshot(
-    "system",
     [{ role: "user", content: "x".repeat(20_000) }],
     window,
   );
@@ -208,7 +206,6 @@ test("small model windows reserve bounded input and output", () => {
 test("large model windows cap total estimated input at 32,768 tokens", () => {
   const reservedInputTokens = 1000;
   const snapshot = buildSnapshot(
-    "s".repeat(20_000),
     [
       { role: "custom", customType: "advisor-evidence", content: "e".repeat(40_000) },
       { role: "custom", customType: "pi-continuity", content: "c".repeat(20_000) },

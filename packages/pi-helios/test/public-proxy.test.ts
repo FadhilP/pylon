@@ -1,15 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { connect } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { PublicNetworkProxy, isPublicAddress, resolvePublicHost, validatePublicWebUrl } from "../src/public-proxy.ts";
 
-function proxyRequest(proxy: PublicNetworkProxy, url: string, authorized = true): Promise<number> {
+function proxyRequest(proxy: PublicNetworkProxy, url: string): Promise<number> {
   const target = new URL(proxy.serverUrl);
   return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = {};
-    if (authorized) headers["proxy-authorization"] = `Basic ${Buffer.from(`${proxy.username}:${proxy.password}`).toString("base64")}`;
-    const req = request({ host: target.hostname, port: target.port, method: "GET", path: url, headers }, (response) => {
+    const req = request({ host: target.hostname, port: target.port, method: "GET", path: url }, (response) => {
       response.resume();
       response.once("end", () => resolve(response.statusCode ?? 0));
     });
@@ -18,17 +16,26 @@ function proxyRequest(proxy: PublicNetworkProxy, url: string, authorized = true)
   });
 }
 
-function proxyConnect(proxy: PublicNetworkProxy, authority: string): Promise<string> {
+function openProxyTunnel(proxy: PublicNetworkProxy, authority: string): Promise<{ socket: Socket; response: string }> {
   const target = new URL(proxy.serverUrl);
   return new Promise((resolve, reject) => {
     const socket = connect(Number(target.port), target.hostname);
-    let text = "";
+    let response = "";
     socket.once("connect", () => socket.write(
-      `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\nProxy-Authorization: Basic ${Buffer.from(`${proxy.username}:${proxy.password}`).toString("base64")}\r\n\r\n`,
+      `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`,
     ));
-    socket.on("data", (chunk) => { text += chunk; if (text.includes("\r\n\r\n")) { socket.destroy(); resolve(text); } });
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.includes("\r\n\r\n")) resolve({ socket, response });
+    });
     socket.once("error", reject);
   });
+}
+
+async function proxyConnect(proxy: PublicNetworkProxy, authority: string): Promise<string> {
+  const { socket, response } = await openProxyTunnel(proxy, authority);
+  socket.destroy();
+  return response;
 }
 
 test("public address policy rejects local, reserved, transition, and metadata ranges", () => {
@@ -62,12 +69,63 @@ test("proxy enforces total request budget and idempotent cleanup", async () => {
   await proxy.close();
 });
 
-test("authenticated proxy blocks private HTTP and HTTPS destinations before connection", async () => {
+test("capability proxy blocks private HTTP and HTTPS destinations before connection", async () => {
   const proxy = await PublicNetworkProxy.start(async () => [{ address: "127.0.0.1", family: 4 }]);
   try {
     assert.equal(await proxyRequest(proxy, "http://example.test/"), 403);
-    assert.equal(await proxyRequest(proxy, "http://example.test/", false), 407);
     assert.match(await proxyConnect(proxy, "example.test:443"), /^HTTP\/1\.1 403/);
     assert.match(await proxyConnect(proxy, "example.test:22"), /^HTTP\/1\.1 403/);
   } finally { await proxy.close(); }
+});
+
+
+test("established tunnels do not consume establishment capacity and remain bounded", async () => {
+  const accepted: Socket[] = [];
+  const upstream = createServer((socket) => accepted.push(socket));
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  assert.ok(address && typeof address === "object");
+  const proxy = await PublicNetworkProxy.start({
+    resolver: async () => [{ address: "93.184.216.34", family: 4 }],
+    connector: () => connect(address.port, "127.0.0.1"),
+    maxTunnels: 65,
+  });
+  const tunnels: Socket[] = [];
+  try {
+    for (let index = 0; index < 65; index++) {
+      const tunnel = await openProxyTunnel(proxy, `example-${index}.test:443`);
+      assert.match(tunnel.response, /^HTTP\/1\.1 200/);
+      tunnels.push(tunnel.socket);
+    }
+    assert.equal(accepted.length, 65);
+    assert.match((await openProxyTunnel(proxy, "over-cap.test:443")).response, /^HTTP\/1\.1 429/);
+
+    const clientReleased = new Promise<void>((resolve) => accepted[0].once("close", resolve));
+    tunnels[0].destroy();
+    await clientReleased;
+    const afterClientClose = await openProxyTunnel(proxy, "after-client-close.test:443");
+    assert.match(afterClientClose.response, /^HTTP\/1\.1 200/);
+    tunnels.push(afterClientClose.socket);
+
+    const upstreamReleased = new Promise<void>((resolve) => tunnels[1].once("close", resolve));
+    accepted[1].destroy();
+    await upstreamReleased;
+    const afterUpstreamClose = await openProxyTunnel(proxy, "after-upstream-close.test:443");
+    assert.match(afterUpstreamClose.response, /^HTTP\/1\.1 200/);
+    tunnels.push(afterUpstreamClose.socket);
+  } finally {
+    for (const socket of tunnels) socket.destroy();
+    for (const socket of accepted) socket.destroy();
+    await proxy.close();
+    await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("proxy capability endpoint is randomized and unavailable after cleanup", async () => {
+  const proxy = await PublicNetworkProxy.start();
+  const endpoint = new URL(proxy.serverUrl);
+  assert.match(endpoint.hostname, /^127\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])(?:\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])){2}$/);
+  assert.notEqual(endpoint.hostname, "127.0.0.1");
+  await proxy.close();
+  await assert.rejects(proxyRequest(proxy, "http://example.com/"));
 });

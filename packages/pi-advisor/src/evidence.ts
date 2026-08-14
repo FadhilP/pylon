@@ -94,6 +94,17 @@ function formatRecord(ref: EvidenceRef, excerpt: string): string {
   return [`--- ${safeField(ref.path)}:${ref.start}-${ref.end} ---`, ...metadata, excerpt].join("\n");
 }
 
+async function resolveEvidencePath(root: string, referencePath: string): Promise<{ path: string; workspacePath: string }> {
+  if (referencePath.split(/[\\/]/).includes(".git")) throw Error("path must be outside .git");
+  const path = await realpath(resolve(root, referencePath));
+  const fromRoot = relative(root, path);
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
+    throw Error("path escapes workspace");
+  const workspacePath = fromRoot.split(sep).join("/");
+  if (workspacePath.split("/").includes(".git")) throw Error("path must be outside .git");
+  return { path, workspacePath };
+}
+
 export async function loadEvidenceRecords(
   cwd: string,
   references: readonly EvidenceRef[] = [],
@@ -103,20 +114,17 @@ export async function loadEvidenceRecords(
   const records: EvidenceRecord[] = [];
 
   for (const ref of mergeEvidenceRefs(references)) {
+    let recordRef = ref;
     let excerpt = "";
     let unavailable = false;
     try {
       if (!validRange(ref)) throw Error("range must contain 1..200 lines");
-      if (isAbsolute(ref.path) || ref.path.split(/[\\/]/).includes(".git"))
-        throw Error("path must be workspace-relative and outside .git");
-      const path = await realpath(resolve(root, ref.path));
-      const fromRoot = relative(root, path);
-      if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
-        throw Error("path escapes workspace");
-      const info = await stat(path);
+      const resolved = await resolveEvidencePath(root, ref.path);
+      recordRef = { ...ref, path: resolved.workspacePath };
+      const info = await stat(resolved.path);
       if (!info.isFile()) throw Error("path is not a regular file");
       if (info.size > MAX_FILE_BYTES) throw Error("file exceeds 1 MiB");
-      const data = await readFile(path);
+      const data = await readFile(resolved.path);
       if (data.includes(0)) throw Error("binary file rejected");
       const lines = data.toString("utf8").split(/\r?\n/);
       const start = Math.min(ref.start, lines.length + 1);
@@ -128,7 +136,7 @@ export async function loadEvidenceRecords(
       unavailable = true;
       excerpt = `[evidence unavailable: ${error?.message ?? String(error)}]`;
     }
-    records.push({ ref, excerpt, text: formatRecord(ref, excerpt), unavailable });
+    records.push({ ref: recordRef, excerpt, text: formatRecord(recordRef, excerpt), unavailable });
   }
   return records;
 }
@@ -144,19 +152,15 @@ export async function loadEvidence(
   let remainingChars = MAX_TOTAL_CHARS;
 
   for (const ref of mergeEvidenceRefs(references)) {
-    const label = `${safeField(ref.path)}:${ref.start}-${ref.end}`;
+    let label = `${safeField(ref.path)}:${ref.start}-${ref.end}`;
     try {
       if (!validRange(ref)) throw Error("range must contain 1..200 lines");
-      if (isAbsolute(ref.path) || ref.path.split(/[\\/]/).includes(".git"))
-        throw Error("path must be workspace-relative and outside .git");
-      const path = await realpath(resolve(root, ref.path));
-      const fromRoot = relative(root, path);
-      if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
-        throw Error("path escapes workspace");
-      const info = await stat(path);
+      const resolved = await resolveEvidencePath(root, ref.path);
+      label = `${safeField(resolved.workspacePath)}:${ref.start}-${ref.end}`;
+      const info = await stat(resolved.path);
       if (!info.isFile()) throw Error("path is not a regular file");
       if (info.size > MAX_FILE_BYTES) throw Error("file exceeds 1 MiB");
-      const data = await readFile(path);
+      const data = await readFile(resolved.path);
       if (data.includes(0)) throw Error("binary file rejected");
       if (!remainingLines || !remainingChars) throw Error("evidence budget exhausted");
       const lines = data.toString("utf8").split(/\r?\n/);

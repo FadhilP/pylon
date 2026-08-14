@@ -38,9 +38,16 @@ function selectedProviderEnv(provider: string): Set<string> {
   return selected;
 }
 
-export function scoutChildEnv(extra: NodeJS.ProcessEnv = {}, source: NodeJS.ProcessEnv = process.env, provider?: string): NodeJS.ProcessEnv {
+export function scoutChildEnv(
+  extra: NodeJS.ProcessEnv = {},
+  source: NodeJS.ProcessEnv = process.env,
+  provider?: string,
+  additionalProviders: readonly string[] = [],
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  const providerEnv = provider ? selectedProviderEnv(provider) : undefined;
+  const providerEnv = provider || additionalProviders.length
+    ? new Set([...(provider ? selectedProviderEnv(provider) : []), ...additionalProviders.flatMap((name) => [...selectedProviderEnv(name)])])
+    : undefined;
   for (const [key, value] of Object.entries(source)) {
     const normalized = key.toUpperCase();
     if (value !== undefined && (ALLOWED_ENV.has(normalized) || normalized.startsWith("LC_")) && (!providerEnv || !PROVIDER_ENV.has(normalized) || providerEnv.has(normalized))) env[key] = value;

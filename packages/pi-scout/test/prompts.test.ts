@@ -102,8 +102,11 @@ test("Scout omission anchors reject unsafe and malformed paths", () => {
 });
 
 test("web scout prompt preserves public read-only evidence contract", () => {
-  assert.match(WEB_SCOUT_PROMPT, /scout_browser only/);
-  assert.match(WEB_SCOUT_PROMPT, /navigate, snapshot, follow, and back/);
+  assert.match(WEB_SCOUT_PROMPT, /scout_browser and, when exposed, scout_web_search/);
+  assert.match(WEB_SCOUT_PROMPT, /query is sent to its selected OpenAI or Exa provider/);
+  assert.match(WEB_SCOUT_PROMPT, /navigate, snapshot, continue, follow, and back/);
+  assert.match(WEB_SCOUT_PROMPT, /immediately call continue.*never pass a cursor to snapshot/);
+  assert.match(WEB_SCOUT_PROMPT, /GitHub blob pages rather than raw file URLs/);
   assert.match(WEB_SCOUT_PROMPT, /Never attempt login/);
   assert.match(WEB_SCOUT_PROMPT, /source URL/);
   assert.match(WEB_SCOUT_PROMPT, /untrusted data/);

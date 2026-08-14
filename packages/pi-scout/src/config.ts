@@ -5,7 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type ScoutConfig = { version: 1; model?: string; thinking?: ThinkingLevel; disabled?: boolean };
+export type ScoutConfig = { version: 1; model?: string; thinking?: ThinkingLevel; disabled?: boolean; webSearch?: boolean };
 export const isScoutEnabled = (config: ScoutConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const defaultConfig = (): ScoutConfig => ({ version: 1 });
@@ -41,7 +41,8 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
       (value.model !== undefined &&
         (typeof value.model !== "string" || !value.model.trim())) ||
       (value.thinking !== undefined && !thinkingLevels.includes(value.thinking)) ||
-      (value.disabled !== undefined && typeof value.disabled !== "boolean")
+      (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
+      (value.webSearch !== undefined && typeof value.webSearch !== "boolean")
     )
       throw new Error("invalid config");
     return {
@@ -49,6 +50,7 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
       ...(value.model ? { model: value.model } : {}),
       ...(value.thinking ? { thinking: value.thinking } : {}),
       ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
+      ...(value.webSearch !== undefined ? { webSearch: value.webSearch } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return defaultConfig();

@@ -44,6 +44,8 @@ export interface BrowserOperationResult {
   findMatches?: number;
   snapshotContinuation?: string;
   resolvedUrl?: string;
+  textContentType?: string;
+  textContentTruncated?: boolean;
   artifactPath?: string;
   cleanupWarnings?: string[];
 }
@@ -80,7 +82,7 @@ export interface InteractiveBrowserState {
 }
 
 const INTERACTIVE_LEASE_IDLE_MS = 5_000;
-const METADATA_ACTIONS = new Set(["start", "attach", "navigate", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
+const METADATA_ACTIONS = new Set(["start", "attach", "navigate", "page-text", "click", "press", "back", "forward", "reload", "tab-list", "tab-new", "tab-select", "tab-close"]);
 const MAX_RESULT_TABS = 20;
 const MAX_TAB_TITLE_CHARS = 160;
 const MAX_TAB_URL_CHARS = 768;
@@ -190,7 +192,7 @@ export class BrowserSessionManager {
     };
   }
 
-  async start(piSessionId: string, url?: string, signal?: AbortSignal, headed = false, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<BrowserOperationResult> {
+  async start(piSessionId: string, url?: string, signal?: AbortSignal, headed = false, webIsolation?: { proxy: { server: string } }): Promise<BrowserOperationResult> {
     if (this.sessions.has(piSessionId)) throw new Error("Pi session already has an active Helios browser session");
     const cli = await this.createCli(this.exec);
     const record: BrowserSessionRecord = {
@@ -572,6 +574,8 @@ export class BrowserSessionManager {
       findMatches: result.findMatches,
       snapshotContinuation: result.snapshotContinuation,
       resolvedUrl: action === "link-url" ? resultText(result.value) : undefined,
+      textContentType: result.textContentType,
+      textContentTruncated: result.textContentTruncated,
       artifactPath: result.artifactPath,
     };
   }

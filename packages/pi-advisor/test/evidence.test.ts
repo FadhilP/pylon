@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadEvidence, loadEvidenceRecords, mergeEvidenceRefs } from "../src/evidence.ts";
@@ -15,6 +15,19 @@ test("loads only bounded line-numbered workspace evidence", async () => {
   assert.match(evidence, /src\/example\.ts:2-3/);
   assert.match(evidence, /2: two\n3: three/);
   assert.doesNotMatch(evidence, /1: one|4: four/);
+});
+
+test("loads equivalent relative and in-workspace absolute evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "advisor-absolute-"));
+  await mkdir(join(root, "src"));
+  const file = join(root, "src", "example.ts");
+  await writeFile(file, "one\ntwo\nthree\n");
+  const relativeRecord = await loadEvidenceRecords(root, [{ path: "src/example.ts", start: 2, end: 3 }]);
+  const absoluteRecord = await loadEvidenceRecords(root, [{ path: file, start: 2, end: 3 }]);
+  assert.equal(absoluteRecord[0].excerpt, relativeRecord[0].excerpt);
+  assert.equal(absoluteRecord[0].unavailable, false);
+  assert.equal(absoluteRecord[0].ref.path, "src/example.ts");
+  assert.doesNotMatch(absoluteRecord[0].text, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("merges overlapping evidence ranges before reading", async () => {
@@ -110,4 +123,28 @@ test("rejects traversal, binary files, and oversized ranges nonfatally", async (
   assert.match(evidence, /binary file rejected/);
   assert.match(evidence, /range must contain 1\.\.200 lines/);
   assert.doesNotMatch(evidence, /secret/);
+});
+
+test("rejects absolute escapes, .git paths, and symlink escapes", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "advisor-canonical-boundary-"));
+  const root = join(parent, "repo");
+  const outside = join(parent, "outside");
+  await mkdir(root);
+  await mkdir(outside);
+  await mkdir(join(root, ".git"));
+  await writeFile(join(outside, "private.txt"), "TOP-SECRET-VALUE");
+  await writeFile(join(root, ".git", "config"), "GIT-PRIVATE-VALUE");
+  await symlink(outside, join(root, "linked-outside"), "junction");
+  await symlink(join(root, ".git"), join(root, "linked-git"), "junction");
+
+  const evidence = await loadEvidence(root, [
+    { path: join(outside, "private.txt"), start: 1, end: 1 },
+    { path: ".git/config", start: 1, end: 1 },
+    { path: join(root, ".git", "config"), start: 1, end: 1 },
+    { path: "linked-outside/private.txt", start: 1, end: 1 },
+    { path: "linked-git/config", start: 1, end: 1 },
+  ]);
+  assert.equal(evidence.match(/path escapes workspace/g)?.length, 2);
+  assert.equal(evidence.match(/path must be outside \.git/g)?.length, 3);
+  assert.doesNotMatch(evidence, /TOP-SECRET-VALUE|GIT-PRIVATE-VALUE/);
 });

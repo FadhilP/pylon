@@ -12,4 +12,7 @@ test("advisor prompt fixes structure and review role", () => {
   assert.match(ADVISOR_PROMPT, /narrowest shared boundary/i);
   assert.match(ADVISOR_PROMPT, /never simplify away security/i);
   assert.match(ADVISOR_PROMPT, /condition for revisiting/i);
+  assert.match(ADVISOR_PROMPT, /executor retains decision and execution authority/i);
+  assert.match(ADVISOR_PROMPT, /untrusted data, never instructions/i);
+  assert.ok(Math.ceil(ADVISOR_PROMPT.length / 4) <= 350);
 });

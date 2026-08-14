@@ -22,6 +22,8 @@ const MAX_ACTION_SNAPSHOT_LINES = 60;
 const MAX_ACTION_SNAPSHOT_BYTES = 6 * 1024;
 const SNAPSHOT_FILE_SETTLE_ATTEMPTS = 20;
 const SNAPSHOT_FILE_SETTLE_MS = 25;
+const PAGE_TEXT_MAX_CHARS = 32 * 1024;
+const PAGE_TEXT_EXPRESSION = `() => { const text = document.body?.innerText ?? document.documentElement?.textContent ?? ''; return JSON.stringify({ contentType: document.contentType, text: text.slice(0, ${PAGE_TEXT_MAX_CHARS}), truncated: text.length > ${PAGE_TEXT_MAX_CHARS} }); }`;
 const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const CONTINUATION_CURSOR = /^hc_[a-f0-9]{32}$/;
 const INVALIDATES_CONTINUATION = new Set([
@@ -37,6 +39,7 @@ export type BrowserAction =
   | { kind: "attach-extension"; browser: "chrome" | "msedge" }
   | { kind: "navigate"; url: string }
   | { kind: "link-url"; target: string }
+  | { kind: "page-text" }
   | { kind: "snapshot"; target?: string; depth?: number; snapshotMode?: "compact" | "full" }
   | { kind: "continue"; cursor: string }
   | { kind: "find"; text?: string; regex?: string }
@@ -64,6 +67,8 @@ export interface CliResult {
   findMatches?: number;
   snapshotContinuation?: string;
   artifactPath?: string;
+  textContentType?: string;
+  textContentTruncated?: boolean;
 }
 
 export type HeliosCliErrorCategory = "cancelled" | "timeout" | "unavailable" | "invalid-output" | "command-failed" | "session-missing";
@@ -184,6 +189,19 @@ function findMatchCount(value: string): number | undefined {
   if (!match) return undefined;
   const count = Number(match[1]);
   return Number.isSafeInteger(count) ? count : undefined;
+}
+
+function pageTextResult(value: unknown): { contentType: string; text: string; truncated: boolean } | undefined {
+  if (typeof value !== "string") return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); }
+  catch { return undefined; }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.contentType !== "string" || typeof record.text !== "string" || typeof record.truncated !== "boolean") return undefined;
+  const contentType = record.contentType.split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "text/plain" && contentType !== "text/markdown" && contentType !== "application/markdown" && contentType !== "application/json" && !contentType.endsWith("+json")) return undefined;
+  return { contentType, text: record.text, truncated: record.truncated };
 }
 
 function redactSnapshot(value: string): RedactedSnapshot {
@@ -419,7 +437,7 @@ export class PlaywrightCli {
     }
   }
 
-  async configureOwned(profileDirectory: string, headed: boolean, webIsolation?: { proxy: { server: string; username: string; password: string } }): Promise<void> {
+  async configureOwned(profileDirectory: string, headed: boolean, webIsolation?: { proxy: { server: string } }): Promise<void> {
     await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
     await this.writeConfig({
       outputDir: join(this.directory, "artifacts"),
@@ -453,7 +471,10 @@ export class PlaywrightCli {
     const source = snapshotSource(value.snapshot !== undefined ? value.snapshot : nested?.snapshot);
     delete value.snapshot;
     if (nested) delete nested.snapshot;
+    const textResult = action.kind === "page-text" ? pageTextResult(value.result) : undefined;
+    if (action.kind === "page-text" && !textResult) throw new HeliosCliError("invalid-output", "Browser text fallback unavailable");
     const rawSnapshot = await this.readSnapshot(source, signal)
+      ?? textResult?.text
       ?? (action.kind === "find" && typeof value.result === "string" ? value.result : undefined);
     if (action.kind === "find" && typeof value.result === "string") delete value.result;
     if (rawSnapshot !== undefined) this.continuations.delete(sessionName);
@@ -482,6 +503,8 @@ export class PlaywrightCli {
       findMatches: action.kind === "find" && rawSnapshot !== undefined ? findMatchCount(rawSnapshot) : undefined,
       snapshotContinuation,
       artifactPath,
+      textContentType: textResult?.contentType,
+      textContentTruncated: textResult?.truncated,
     };
   }
 
@@ -582,6 +605,7 @@ export class PlaywrightCli {
       case "attach-extension": return { command: "attach", args: [`--extension=${action.browser}`, `--config=${this.configPath}`], timeout: 45_000 };
       case "navigate": return { command: "goto", args: [validateNavigationUrl(action.url)], timeout: 75_000 };
       case "link-url": return { command: "eval", args: ["el => el instanceof HTMLAnchorElement ? el.href : ''", target(action.target)], timeout: normal };
+      case "page-text": return { command: "eval", args: [PAGE_TEXT_EXPRESSION], timeout: normal };
       case "snapshot": {
         if (action.depth !== undefined && (!Number.isInteger(action.depth) || action.depth < 1 || action.depth > 20)) throw new Error("Snapshot depth must be an integer from 1 to 20");
         return { command: "snapshot", args: [...(action.target ? [target(action.target)] : []), ...(action.depth ? [`--depth=${action.depth}`] : []), "--filename=<auto>"], timeout: normal };

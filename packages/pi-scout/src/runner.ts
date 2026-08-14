@@ -106,6 +106,8 @@ export type RunPiOptions = {
   prompt: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Ask the child to return its final report after this many milliseconds, before the hard timeout. */
+  finalizeAfterMs?: number;
   maxCostUsd?: number;
   /** Caller-local final-report cap; false leaves final capping to the caller. */
   resultMaxBytes?: number | false;
@@ -134,6 +136,10 @@ export async function runPi(args: string[], options: RunPiOptions): Promise<Scou
 
 async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<ScoutRun> {
   const started = Date.now();
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  if (options.finalizeAfterMs !== undefined && (!Number.isFinite(options.finalizeAfterMs) || options.finalizeAfterMs <= 0 || options.finalizeAfterMs >= timeoutMs)) {
+    throw new Error("Scout finalization deadline must be positive and earlier than its timeout");
+  }
   const invocation = options.invocation ?? getPiInvocation(args);
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.cwd,
@@ -155,6 +161,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   let finalizationAttempted = false;
   let finalizationSucceeded = false;
   let finalizationFailed = false;
+  let finalizationReason: "budget" | "deadline" | undefined;
   let contextTokens = 0, cacheReadTokens = 0, reportedCost = 0;
   let finalizationMessage: any;
   let commandId = 0;
@@ -174,6 +181,12 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     } catch (error) {
       failCommand(type, error instanceof Error ? error.message : String(error));
     }
+  };
+  const requestFinalization = (reason: "budget" | "deadline", message: string) => {
+    if (finalizationAttempted || controlledCompletion || timedOut || aborted || commandError) return;
+    finalizationAttempted = true;
+    finalizationReason = reason;
+    sendCommand("steer", message);
   };
   const pushActivity = (item: ScoutActivity) => {
     activity.push(item);
@@ -230,19 +243,21 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       try { options.onUsage?.({ ...usage }); } catch { /* Progress observers must not control the child. */ }
 
       if (finalizationAttempted && !finalizationMessage) {
-        finalizationMessage = message;
         if (message.stopReason === "toolUse") {
-          finalizationFailed = true;
-          terminate(child);
-        } else if (message.stopReason !== "error" && message.stopReason !== "aborted") {
-          finalizationSucceeded = true;
+          if (finalizationReason === "budget") {
+            finalizationMessage = message;
+            finalizationFailed = true;
+            terminate(child);
+          }
+          return;
         }
+        finalizationMessage = message;
+        if (message.stopReason !== "error" && message.stopReason !== "aborted") finalizationSucceeded = true;
         return;
       }
       if (!budgetExceeded && message.stopReason === "toolUse" && options.maxCostUsd !== undefined && reportedCost >= options.maxCostUsd) {
         budgetExceeded = true;
-        finalizationAttempted = true;
-        sendCommand("steer", "Discovery budget exhausted. Stop searching and return your compact cited findings now. Do not call more tools.");
+        requestFinalization("budget", "Discovery budget exhausted. Stop searching and return your compact cited findings now. Do not call more tools.");
       }
     } catch {
       /* Malformed lines remain harmless unless no usable final response arrives. */
@@ -271,7 +286,11 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   const abort = () => { aborted = true; terminate(child); };
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
-  const timeout = setTimeout(() => { timedOut = true; terminate(child); }, options.timeoutMs ?? 90_000);
+  const timeout = setTimeout(() => { timedOut = true; terminate(child); }, timeoutMs);
+  const finalizationTimer = options.finalizeAfterMs === undefined ? undefined : setTimeout(() => {
+    requestFinalization("deadline", "Research deadline approaching. Stop searching and return your compact cited findings now. Do not call more tools.");
+  }, options.finalizeAfterMs);
+  finalizationTimer?.unref();
   // Attach every handler before the initial command; RPC uses strict LF-delimited JSON.
   if (!aborted) sendCommand("prompt", options.prompt);
   const exitCode = await new Promise<number>((resolve) => {
@@ -279,6 +298,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     child.once("close", (code) => resolve(code ?? 1));
   });
   clearTimeout(timeout);
+  if (finalizationTimer) clearTimeout(finalizationTimer);
   options.signal?.removeEventListener("abort", abort);
   if (stdout.trim()) processLine(stdout);
 
@@ -290,7 +310,8 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       ? capText(rawText)
       : capReport(rawText, options.resultMaxBytes);
   const incompleteFinalization = agentSettled && finalizationAttempted && !finalizationSucceeded;
-  const budgetFailure = finalizationFailed || incompleteFinalization;
+  const finalizationFailure = finalizationFailed || incompleteFinalization;
+  const finalizationLabel = finalizationReason === "deadline" ? "deadline finalization" : "budget finalization";
   const error = protocolOverflow
     ? "Scout protocol output exceeded 1 MiB."
     : aborted
@@ -300,9 +321,9 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
         : commandError
           ? commandError
           : finalizationFailed
-            ? "Scout exceeded its discovery budget and requested more tools during finalization."
+            ? `Scout requested more tools during finalization (${finalizationLabel}).`
             : incompleteFinalization
-              ? "Scout settled before returning its budget finalization."
+              ? `Scout settled before returning its finalization (${finalizationLabel}).`
               : !agentSettled && !controlledCompletion
                 ? "Scout exited before agent settlement."
                 : final?.stopReason === "error"
@@ -315,7 +336,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     model: final?.model,
     stopReason: final?.stopReason,
     error,
-    ...(budgetFailure ? { failure: "budget_exceeded" as const } : {}),
+    ...(finalizationReason === "budget" && finalizationFailure ? { failure: "budget_exceeded" as const } : {}),
     budgetExceeded,
     finalizationAttempted,
     finalizationSucceeded,

@@ -1116,7 +1116,66 @@ test("rg does not start a fallback after cancellation", async () => {
   assert.deepEqual(calls, ["rg"]);
 });
 
-test("fd tries fdfind only when the preceding executable is absent", async () => {
+test("fd falls back to system find when fd and fdfind are absent", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const tools = new Map<string, any>();
+  const cwd = process.cwd();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string, args: string[]) => {
+      calls.push({ command, args });
+      if (command !== "find") return { stdout: "", stderr: "", code: 1, killed: false };
+      return {
+        stdout: [cwd, resolve(cwd, "src/a.ts"), resolve(cwd, "src/a.js")].join("\n"),
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+  };
+  registerFd(pi, 8 * 1024, async (command) => command === "find", "linux");
+  const regex = await tools.get("fd").execute("regex", { pattern: "\\.ts$" }, undefined, undefined, { cwd });
+  const glob = await tools.get("fd").execute("glob", { pattern: "*.js", glob: true }, undefined, undefined, { cwd });
+  assert.equal(regex.content[0].text, resolve(cwd, "src/a.ts"));
+  assert.equal(glob.content[0].text, resolve(cwd, "src/a.js"));
+  assert.equal(regex.details.fallback, true);
+  assert.deepEqual(calls.map(({ command }) => command), ["fd", "fdfind", "find", "fd", "fdfind", "find"]);
+  assert.deepEqual(calls.filter(({ command }) => command === "find").map(({ args }) => args), [[cwd], [cwd]]);
+});
+
+test("fd reports unavailable when system find cannot start on POSIX", async () => {
+  const calls: string[] = [];
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => {
+      calls.push(command);
+      if (command === "find") throw new Error("spawn find ENOENT");
+      return { stdout: "", stderr: "", code: 1, killed: false };
+    },
+  };
+  registerFd(pi, 8 * 1024, async () => false, "linux");
+  const result = await tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() });
+  assert.deepEqual(calls, ["fd", "fdfind", "find"]);
+  assert.match(result.content[0].text, /fd, fdfind, and find unavailable/);
+});
+
+test("fd surfaces find failures after the fallback starts", async () => {
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    exec: async (command: string) => command === "find"
+      ? { stdout: "", stderr: "missing path", code: 1, killed: false }
+      : { stdout: "", stderr: "", code: 1, killed: false },
+  };
+  registerFd(pi, 8 * 1024, async (command) => command === "find", "linux");
+  await assert.rejects(
+    tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() }),
+    /find failed.*missing path/i,
+  );
+});
+
+test("fd does not invoke Windows find.exe as a path-search fallback", async () => {
   const calls: string[] = [];
   const tools = new Map<string, any>();
   const pi: any = {
@@ -1126,10 +1185,10 @@ test("fd tries fdfind only when the preceding executable is absent", async () =>
       return { stdout: "", stderr: "", code: 1, killed: false };
     },
   };
-  registerFd(pi, 8 * 1024, async () => false);
+  registerFd(pi, 8 * 1024, async () => false, "win32");
   const result = await tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(calls, ["fd", "fdfind"]);
-  assert.match(result.content[0].text, /fd\/fdfind unavailable/);
+  assert.match(result.content[0].text, /unsupported on Windows/);
 });
 
 test("fd does not mistake an invalid path error for a missing executable", async () => {

@@ -327,6 +327,24 @@ test("owned visibility controls config and headed CLI flag", async () => {
   } finally { await cli.dispose(); }
 });
 
+test("web isolation config uses a capability endpoint without proxy credentials", async () => {
+  let args: string[] = [];
+  const cli = await PlaywrightCli.create(async (_command, value) => {
+    args = value;
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  });
+  try {
+    const server = "http://127.42.73.99:45678";
+    await cli.configureOwned(`${cli.directory}/profile`, false, { proxy: { server } });
+    await cli.run(SESSION, { kind: "open", profileDirectory: `${cli.directory}/profile`, headed: false });
+    const configArg = args.find((arg) => arg.startsWith("--config="));
+    assert.ok(configArg);
+    const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
+    assert.deepEqual(config.browser.launchOptions.proxy, { server });
+    assert.deepEqual(config.browser.contextOptions, { acceptDownloads: false, serviceWorkers: "block" });
+  } finally { await cli.dispose(); }
+});
+
 test("navigation permits local HTML file URLs only", () => {
   assert.equal(validateNavigationUrl("about:blank"), "about:blank");
   assert.equal(validateNavigationUrl("http://example.com"), "http://example.com/");

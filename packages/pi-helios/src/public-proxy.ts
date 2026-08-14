@@ -1,12 +1,18 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { BlockList, isIP, connect as netConnect } from "node:net";
+import { BlockList, isIP, connect as netConnect, type Socket } from "node:net";
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 
 export type ResolvedAddress = { address: string; family: 4 | 6 };
 export type Resolver = (hostname: string) => Promise<ResolvedAddress[]>;
-export type PublicProxyOptions = { resolver?: Resolver; maxRequests?: number; maxBytes?: number };
+export type PublicProxyOptions = {
+  resolver?: Resolver;
+  connector?: (options: { host: string; family: 4 | 6; port: number }) => Socket;
+  maxRequests?: number;
+  maxBytes?: number;
+  maxTunnels?: number;
+};
 
 const blockedV4 = new BlockList();
 for (const [address, prefix] of [
@@ -34,6 +40,11 @@ export function isPublicAddress(address: string, family: 4 | 6 = isIP(address) a
 
 async function defaultResolver(hostname: string): Promise<ResolvedAddress[]> {
   return await lookup(hostname, { all: true, verbatim: true }) as ResolvedAddress[];
+}
+
+function randomLoopbackAddress(): string {
+  const octets = randomBytes(3);
+  return `127.${1 + octets[0] % 254}.${1 + octets[1] % 254}.${1 + octets[2] % 254}`;
 }
 
 async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
@@ -70,32 +81,31 @@ export function validatePublicWebUrl(value: string): URL {
   if (port !== "80" && port !== "443") throw new Error("Web Scout permits only ports 80 and 443");
   return url;
 }
-
-function sameSecret(actual: string | undefined, expected: string): boolean {
-  if (!actual) return false;
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
+// Chromium's credentialed proxy path enables request interception and can deadlock
+// Google-hosted navigations. The random loopback address and ephemeral port form a
+// run-scoped capability that is never exposed to page content.
 export class PublicNetworkProxy {
-  readonly username = "web-scout";
-  readonly password = randomBytes(24).toString("base64url");
   private readonly resolver: Resolver;
   private readonly server: Server;
+  private readonly connector: NonNullable<PublicProxyOptions["connector"]>;
   private readonly sockets = new Set<Duplex>();
   private readonly maxRequests: number;
   private readonly maxBytes: number;
+  private readonly maxTunnels: number;
   private active = 0;
   private requests = 0;
   private bytes = 0;
+  private tunnels = 0;
   private port = 0;
+  private host = "";
   private closed = false;
 
   private constructor(options: PublicProxyOptions) {
     this.resolver = options.resolver ?? defaultResolver;
+    this.connector = options.connector ?? ((connectOptions) => netConnect(connectOptions));
     this.maxRequests = options.maxRequests ?? 500;
     this.maxBytes = options.maxBytes ?? 100 * 1024 * 1024;
+    this.maxTunnels = options.maxTunnels ?? 256;
     this.server = createServer((request, response) => {
       void this.handleHttp(request, response).catch(() => this.fail(response, 502));
     });
@@ -112,22 +122,33 @@ export class PublicNetworkProxy {
   }
 
   static async start(options: Resolver | PublicProxyOptions = {}): Promise<PublicNetworkProxy> {
-    const proxy = new PublicNetworkProxy(typeof options === "function" ? { resolver: options } : options);
-    await new Promise<void>((resolve, reject) => {
-      proxy.server.once("error", reject);
-      proxy.server.listen(0, "127.0.0.1", () => {
-        proxy.server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = proxy.server.address();
-    if (!address || typeof address === "string") throw new Error("Could not bind Web Scout proxy");
-    proxy.port = address.port;
-    return proxy;
+    const normalized = typeof options === "function" ? { resolver: options } : options;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const proxy = new PublicNetworkProxy(normalized);
+      const host = randomLoopbackAddress();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          proxy.server.once("error", reject);
+          proxy.server.listen(0, host, () => {
+            proxy.server.off("error", reject);
+            resolve();
+          });
+        });
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      const address = proxy.server.address();
+      if (!address || typeof address === "string") throw new Error("Could not bind Web Scout proxy");
+      proxy.host = host;
+      proxy.port = address.port;
+      return proxy;
+    }
+    throw new Error("Could not bind private Web Scout proxy endpoint", { cause: lastError });
   }
-
   get serverUrl(): string {
-    return `http://127.0.0.1:${this.port}`;
+    return `http://${this.host}:${this.port}`;
   }
 
   async close(): Promise<void> {
@@ -136,18 +157,11 @@ export class PublicNetworkProxy {
     for (const socket of this.sockets) socket.destroy();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
-
-  private authorized(request: IncomingMessage): boolean {
-    const expected = `Basic ${Buffer.from(`${this.username}:${this.password}`).toString("base64")}`;
-    return sameSecret(request.headers["proxy-authorization"], expected);
-  }
-
-  private fail(response: ServerResponse, status: 403 | 407 | 429 | 502): void {
+  private fail(response: ServerResponse, status: 403 | 429 | 502): void {
     if (response.headersSent || response.destroyed) return;
     response.writeHead(status, {
       "content-type": "text/plain",
       "connection": "close",
-      ...(status === 407 ? { "proxy-authenticate": "Basic realm=\"Web Scout\"" } : {}),
     });
     response.end("Web Scout proxy blocked request");
   }
@@ -168,7 +182,6 @@ export class PublicNetworkProxy {
   private leave = (): void => { this.active = Math.max(0, this.active - 1); };
 
   private async handleHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (!this.authorized(request)) return this.fail(response, 407);
     if (!this.enter()) return this.fail(response, 429);
     response.once("close", this.leave);
     let url: URL;
@@ -201,38 +214,69 @@ export class PublicNetworkProxy {
   }
 
   private async handleConnect(request: IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
-    if (!this.authorized(request)) {
-      client.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Web Scout\"\r\nConnection: close\r\n\r\n");
-      return;
-    }
     if (!this.enter()) {
       client.end("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
       return;
     }
-    client.once("close", this.leave);
+    let establishing = true;
+    let tunnelReserved = false;
+    let upstream: Socket | undefined;
+    const releaseEstablishment = () => {
+      if (!establishing) return;
+      establishing = false;
+      this.leave();
+    };
+    const releaseTunnel = () => {
+      if (!tunnelReserved) return;
+      tunnelReserved = false;
+      this.tunnels = Math.max(0, this.tunnels - 1);
+    };
+    const reject = (status: 403 | 429) => {
+      releaseEstablishment();
+      releaseTunnel();
+      client.end(`HTTP/1.1 ${status === 403 ? "403 Forbidden" : "429 Too Many Requests"}\r\nConnection: close\r\n\r\n`);
+    };
+    client.once("close", () => {
+      releaseEstablishment();
+      releaseTunnel();
+      upstream?.destroy();
+    });
     let url: URL;
     try { url = new URL(`https://${request.url}`); }
-    catch { client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
+    catch { reject(403); return; }
     if ((url.port || "443") !== "443" || url.username || url.password) {
-      client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      reject(403);
       return;
     }
     let target: ResolvedAddress;
     try { target = await resolvePublicHost(url.hostname, this.resolver); }
-    catch { client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
-    const upstream = netConnect({ host: target.address, family: target.family, port: 443 });
+    catch { reject(403); return; }
+    if (this.tunnels >= this.maxTunnels) {
+      reject(429);
+      return;
+    }
+    this.tunnels++;
+    tunnelReserved = true;
+    upstream = this.connector({ host: target.address, family: target.family, port: 443 });
     client.on("data", this.account);
     upstream.on("data", this.account);
     this.sockets.add(upstream);
-    upstream.once("close", () => this.sockets.delete(upstream));
-    upstream.setTimeout(15_000, () => upstream.destroy());
-    client.on("error", () => upstream.destroy());
+    upstream.once("close", () => {
+      this.sockets.delete(upstream!);
+      releaseEstablishment();
+      releaseTunnel();
+      if (!client.destroyed) client.destroy();
+    });
+    upstream.setTimeout(15_000, () => upstream?.destroy());
+    client.on("error", () => upstream?.destroy());
     upstream.once("error", () => client.destroy());
     upstream.once("connect", () => {
+      if (client.destroyed) { upstream?.destroy(); return; }
+      releaseEstablishment();
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length) upstream.write(head);
-      client.pipe(upstream);
-      upstream.pipe(client);
+      if (head.length) upstream?.write(head);
+      client.pipe(upstream!);
+      upstream!.pipe(client);
     });
   }
 }

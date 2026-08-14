@@ -4,13 +4,31 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { BrowserSessionManager, type BrowserOperationResult } from "../src/browser-session.ts";
 import { elementReferences, ELEMENT_REF_PATTERN } from "../src/element-ref.ts";
-import { PlaywrightCli } from "../src/playwright-cli.ts";
+import { HeliosCliError, PlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { PublicNetworkProxy, resolvePublicHost, validatePublicWebUrl } from "../src/public-proxy.ts";
 import { consumeWebScoutGrant } from "../src/web-scout-grant.ts";
+
+const parameters = Type.Object({
+  action: StringEnum(["navigate", "snapshot", "continue", "follow", "back"] as const),
+  url: Type.Optional(Type.String({ maxLength: 2048, description: "Required only for navigate." })),
+  target: Type.Optional(Type.String({ pattern: ELEMENT_REF_PATTERN, maxLength: 32, description: "Required only for follow; use a link reference from the latest snapshot chunk." })),
+  cursor: Type.Optional(Type.String({ pattern: "^hc_[a-f0-9]{32}$", maxLength: 35, description: "Required only for continue; consume the latest continuation cursor immediately." })),
+}, { additionalProperties: false });
+
+type BrowserParams = { action: "navigate" | "snapshot" | "continue" | "follow" | "back"; url?: string; target?: string; cursor?: string };
+
+function prepareArguments(args: unknown): BrowserParams {
+  const input = args as BrowserParams;
+  if (input?.action === "snapshot" && typeof input.cursor === "string" && input.url === undefined && input.target === undefined) {
+    return { action: "continue", cursor: input.cursor };
+  }
+  return input;
+}
 
 function describe(result: BrowserOperationResult, pages: number, maxPages: number, actions: number, maxActions: number): string {
   const lines = [`Pages: ${pages}/${maxPages}. Actions: ${actions}/${maxActions}.`];
   if (result.page) lines.push(`Page: ${result.page.title} (${result.page.url})`);
+  if (result.textContentType) lines.push(`Bounded text fallback: ${result.textContentType}${result.textContentTruncated ? " (source truncated)" : ""}.`);
   if (result.snapshot) lines.push(`Snapshot:\n${result.snapshot}`);
   if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
   if (result.snapshotTruncated) lines.push(`Snapshot truncated; ${result.snapshotOmittedLines ?? 0} lines remain.`);
@@ -18,6 +36,10 @@ function describe(result: BrowserOperationResult, pages: number, maxPages: numbe
   if (result.metadataStale) lines.push("Page metadata cached.");
   else if (result.metadataAvailable === false) lines.push("Page metadata unavailable.");
   return lines.join("\n");
+}
+
+function snapshotArtifactFailure(error: unknown): boolean {
+  return error instanceof HeliosCliError && error.category === "invalid-output" && /snapshot artifact/i.test(error.message);
 }
 
 export default async function webScoutBrowserExtension(pi: ExtensionAPI, options: { persistentClient?: boolean } = {}) {
@@ -42,7 +64,7 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
   const ensureStarted = async (signal?: AbortSignal) => {
     if (started) return;
     await manager.start(sessionId, "about:blank", signal, grant.headed, {
-      proxy: { server: proxy.serverUrl, username: proxy.username, password: proxy.password },
+      proxy: { server: proxy.serverUrl },
     });
     started = true;
   };
@@ -50,9 +72,8 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
     actions++;
     if (actions > grant.maxActions) throw new Error("Web Scout action limit reached");
   };
-  const consumePage = () => {
-    pages++;
-    if (pages > grant.maxPages) throw new Error("Web Scout page limit reached");
+  const ensurePageAvailable = () => {
+    if (pages >= grant.maxPages) throw new Error("Web Scout page limit reached");
   };
   const publicUrl = async (value: string) => {
     const url = validatePublicWebUrl(value);
@@ -66,10 +87,23 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
     return result;
   };
   const snapshot = async (signal?: AbortSignal) => acceptSnapshot(await manager.operate(sessionId, { kind: "snapshot", depth: 6 }, signal));
-  const actionSnapshot = async (result: BrowserOperationResult, signal?: AbortSignal) => result.snapshot === undefined ? snapshot(signal) : acceptSnapshot(result);
+  const observePage = async (action: BrowserAction, signal?: AbortSignal): Promise<BrowserOperationResult> => {
+    try {
+      const changed = await manager.operate(sessionId, action, signal);
+      return changed.snapshot === undefined ? await snapshot(signal) : acceptSnapshot(changed);
+    } catch (error) {
+      if (!snapshotArtifactFailure(error)) throw error;
+      try {
+        return acceptSnapshot(await manager.operate(sessionId, { kind: "page-text" }, signal));
+      } catch (fallbackError) {
+        if (fallbackError instanceof HeliosCliError && fallbackError.category === "invalid-output") throw error;
+        throw fallbackError;
+      }
+    }
+  };
   const response = (action: string, result: BrowserOperationResult) => ({
     content: [{ type: "text" as const, text: describe(result, pages, grant.maxPages, actions, grant.maxActions) }],
-    details: { action, pages, actions, page: result.page, truncated: result.snapshotTruncated, continuation: result.snapshotContinuation, redactions: result.snapshotRedactions },
+    details: { action, pages, actions, page: result.page, truncated: result.snapshotTruncated, continuation: result.snapshotContinuation, redactions: result.snapshotRedactions, textContentType: result.textContentType, textContentTruncated: result.textContentTruncated },
   });
 
   pi.on("session_shutdown", async () => {
@@ -83,52 +117,53 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
     description: "Navigate an isolated public-web browser, read bounded snapshots, follow current link references, or go back. Public HTTP(S) only; no private networks, user browser attachment, arbitrary clicks, forms, scripts, storage, uploads, downloads, or screenshots.",
     promptSnippet: "Read public web pages through isolated bounded browser navigation",
     promptGuidelines: [
-      "Use scout_browser only for supplied Web Scout research task. Prefer direct public URLs, snapshot before following links, continue truncated snapshots with returned cursor, follow only link refs from latest chunk, never attempt login, account, purchase, messaging, publishing, permissions, or destructive workflows.",
+      "Use scout_browser only for the supplied Web Scout research task. Prefer direct authoritative URLs and rendered HTML pages. When a snapshot is truncated, immediately call continue with its cursor before any navigation or new snapshot; never pass a cursor to snapshot. Follow only link refs from the latest chunk. Never attempt login, account, purchase, messaging, publishing, permissions, or destructive workflows.",
     ],
-    parameters: Type.Object({
-      action: StringEnum(["navigate", "snapshot", "continue", "follow", "back"] as const),
-      url: Type.Optional(Type.String({ maxLength: 2048 })),
-      target: Type.Optional(Type.String({ pattern: ELEMENT_REF_PATTERN, maxLength: 32 })),
-      cursor: Type.Optional(Type.String({ pattern: "^hc_[a-f0-9]{32}$", maxLength: 35 })),
-    }, { additionalProperties: false }),
+    parameters,
+    prepareArguments,
     executionMode: "sequential",
     async execute(_id, params, signal) {
+      const input = params as BrowserParams;
       consumeAction();
       await ensureStarted(signal);
-      if (params.action === "navigate") {
-        if (!params.url) throw new Error("navigate requires url");
-        if (params.target !== undefined || params.cursor !== undefined) throw new Error("navigate accepts only url");
-        const url = await publicUrl(params.url);
-        consumePage();
-        const navigated = await manager.operate(sessionId, { kind: "navigate", url }, signal);
-        const result = await actionSnapshot(navigated, signal);
-        return response(params.action, result);
+      if (input.action === "navigate") {
+        if (!input.url) throw new Error("navigate requires url");
+        if (input.target !== undefined || input.cursor !== undefined) throw new Error("navigate accepts only url");
+        ensurePageAvailable();
+        const url = await publicUrl(input.url);
+        const result = await observePage({ kind: "navigate", url }, signal);
+        pages++;
+        return response(input.action, result);
       }
-      if (params.url !== undefined) throw new Error(`${params.action} does not accept url`);
-      if (params.action === "continue") {
-        if (!params.cursor) throw new Error("continue requires cursor");
-        if (params.target !== undefined) throw new Error("continue does not accept target");
-        return response(params.action, acceptSnapshot(await manager.operate(sessionId, { kind: "continue", cursor: params.cursor }, signal)));
+      if (input.url !== undefined) throw new Error(`${input.action} does not accept url`);
+      if (input.action === "continue") {
+        if (!input.cursor) throw new Error("continue requires cursor");
+        if (input.target !== undefined) throw new Error("continue does not accept target");
+        return response(input.action, acceptSnapshot(await manager.operate(sessionId, { kind: "continue", cursor: input.cursor }, signal)));
       }
-      if (params.cursor !== undefined) throw new Error(`${params.action} does not accept cursor`);
-      let actionResult: BrowserOperationResult | undefined;
-      if (params.action === "follow") {
-        if (!params.target) throw new Error("follow requires target");
-        if (!linkRefs.has(params.target)) throw new Error("follow target must be a link reference from latest snapshot");
-        const href = await manager.operate(sessionId, { kind: "link-url", target: params.target }, signal);
+      if (input.cursor !== undefined) throw new Error(`${input.action} does not accept cursor`);
+      if (input.action === "follow") {
+        if (!input.target) throw new Error("follow requires target");
+        if (!linkRefs.has(input.target)) throw new Error("follow target must be a link reference from latest snapshot");
+        ensurePageAvailable();
+        const href = await manager.operate(sessionId, { kind: "link-url", target: input.target }, signal);
         if (!href.resolvedUrl) throw new Error("Link has no public navigation URL");
         const url = await publicUrl(href.resolvedUrl);
-        consumePage();
-        actionResult = await manager.operate(sessionId, { kind: "navigate", url }, signal);
-      } else if (params.action === "back") {
-        if (params.target !== undefined) throw new Error("back does not accept target");
-        consumePage();
-        actionResult = await manager.operate(sessionId, { kind: "back" }, signal);
-      } else {
-        if (params.target !== undefined) throw new Error("snapshot does not accept target");
+        const result = await observePage({ kind: "navigate", url }, signal);
+        pages++;
+        return response(input.action, result);
       }
-      const result = actionResult ? await actionSnapshot(actionResult, signal) : await snapshot(signal);
-      return response(params.action, result);
+      if (input.action === "back") {
+        if (input.target !== undefined) throw new Error("back does not accept target");
+        ensurePageAvailable();
+        const result = await observePage({ kind: "back" }, signal);
+        pages++;
+        return response(input.action, result);
+      }
+      if (input.action !== "snapshot") throw new Error("Unsupported Web Scout browser action");
+      if (input.target !== undefined) throw new Error("snapshot does not accept target");
+      return response(input.action, await snapshot(signal));
     },
   });
 }
+

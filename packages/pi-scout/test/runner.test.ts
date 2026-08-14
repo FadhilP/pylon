@@ -120,6 +120,7 @@ test("runner passes extension-controlled child environment", async () => {
 test("Web Scout child environment is allowlisted and can replace parent environment", async () => {
   assert.deepEqual(scoutChildEnv({ PI_HELIOS_WEB_SCOUT_GRANT: "grant" }, { PATH: "safe-path", OPENAI_API_KEY: "provider-key", NODE_OPTIONS: "--require=evil", SECRET_DATABASE_URL: "secret" }), { PATH: "safe-path", OPENAI_API_KEY: "provider-key", PI_HELIOS_WEB_SCOUT_GRANT: "grant" });
   assert.deepEqual(scoutChildEnv({}, { PATH: "safe", OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "anthropic" }, "openai"), { PATH: "safe", OPENAI_API_KEY: "openai" });
+  assert.deepEqual(scoutChildEnv({}, { PATH: "safe", OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "anthropic", GEMINI_API_KEY: "gemini" }, "anthropic", ["openai"]), { PATH: "safe", OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "anthropic" });
   const child = await fake("scout-env-replace-", `if(command.type==='prompt'){emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:String(process.env.SECRET_DATABASE_URL)+'|'+process.env.PI_HELIOS_WEB_SCOUT_GRANT}],model:'fake',stopReason:'stop',usage:{}}});settled();setInterval(()=>{},1000);}`);
   const run = await runPi([], { cwd: child.dir, prompt: "x", invocation: child.invocation, env: { PI_HELIOS_WEB_SCOUT_GRANT: "grant" }, inheritEnv: false });
   assert.equal(run.text, "undefined|grant");
@@ -141,6 +142,18 @@ test("exact discovery ceiling sends one steer and accepts one final response", a
   assert.deepEqual(run.usage, usage.at(-1));
   assert.equal(run.budgetExceeded, true); assert.equal(run.finalizationAttempted, true); assert.equal(run.finalizationSucceeded, true);
   assert.equal(run.failure, undefined); assert.equal(run.error, undefined);
+});
+
+
+test("runner reserves deadline headroom for a final report", async () => {
+  const child = await fake("scout-deadline-", `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});}else if(command.type==='steer'){emit({id:command.id,type:'response',command:'steer',success:true});emit(${assistant("in-flight turn", "toolUse")});emit(${assistant("deadline findings")});settled();setInterval(()=>{},1000);}`);
+  const run = await runPi([], { cwd: child.dir, prompt: "x", timeoutMs: 1_000, finalizeAfterMs: 20, invocation: child.invocation });
+  assert.equal(run.text, "deadline findings");
+  assert.equal(run.budgetExceeded, false);
+  assert.equal(run.finalizationAttempted, true);
+  assert.equal(run.finalizationSucceeded, true);
+  assert.equal(run.failure, undefined);
+  assert.equal(run.error, undefined);
 });
 
 test("usage observer failures do not control Scout", async () => {

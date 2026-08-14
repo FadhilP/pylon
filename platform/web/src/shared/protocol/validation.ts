@@ -128,8 +128,13 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
   const model = value.model === undefined || boundedString(value.model, 400);
   const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));
-  if (value.kind === "advisor" || value.kind === "scout") {
-    return modelMode && model && thinking && (value.mode !== "model" || boundedString(value.model, 400));
+  if (value.kind === "advisor") {
+    return modelMode && model && thinking && value.webSearch === undefined
+      && (value.mode !== "model" || boundedString(value.model, 400));
+  }
+  if (value.kind === "scout") {
+    return modelMode && model && thinking && (value.mode !== "model" || boundedString(value.model, 400))
+      && (value.webSearch === undefined || typeof value.webSearch === "boolean");
   }
   const validThinkingList = (levels: unknown) => Array.isArray(levels) && levels.length > 0
     && new Set(levels).size === levels.length

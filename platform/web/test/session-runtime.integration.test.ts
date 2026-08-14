@@ -925,7 +925,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.equal(spawnConfigured.sessionGeneration, generation);
     for (const [packageId, settings] of [
       ["pi-advisor", { kind: "advisor", mode: "session" }],
-      ["pi-scout", { kind: "scout", mode: "session" }],
+      ["pi-scout", { kind: "scout", mode: "session", webSearch: true }],
       ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic", thinkingLevels: ["medium", "high"] as any }],
     ] as const) {
       const updated = await driver.updatePackageSettings({ packageId, settings });

@@ -70,7 +70,7 @@ test("live Web Scout proxy prevents Chromium loopback bypass", { skip: !live, ti
   const manager = new BrowserSessionManager(exec);
   try {
     await manager.start("live-web-isolation", "about:blank", undefined, false, {
-      proxy: { server: proxy.serverUrl, username: proxy.username, password: proxy.password },
+      proxy: { server: proxy.serverUrl },
     });
     await manager.operate("live-web-isolation", { kind: "navigate", url: `http://127.0.0.1:${address.port}/private` }).catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -80,6 +80,26 @@ test("live Web Scout proxy prevents Chromium loopback bypass", { skip: !live, ti
     await manager.shutdown();
     await proxy.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("live Web Scout proxy navigates Google-hosted public pages", { skip: !live, timeout: 120_000 }, async () => {
+  const proxy = await PublicNetworkProxy.start();
+  const manager = new BrowserSessionManager(exec);
+  try {
+    await manager.start("live-web-google", "about:blank", undefined, false, {
+      proxy: { server: proxy.serverUrl },
+    });
+    const result = await manager.operate("live-web-google", {
+      kind: "navigate",
+      url: "https://developer.android.com/build/releases/gradle-plugin",
+    });
+    assert.equal(result.page?.url.startsWith("https://developer.android.com/"), true);
+    assert.ok(result.snapshot);
+    await manager.close("live-web-google", "close");
+  } finally {
+    await manager.shutdown();
+    await proxy.close();
   }
 });
 

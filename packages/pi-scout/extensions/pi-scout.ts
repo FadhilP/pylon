@@ -29,8 +29,10 @@ import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const scoutChildToolsExtension = join(packageDir, "src", "scout-child-tools.ts");
+const scoutWebSearchExtension = join(packageDir, "src", "scout-web-search.ts");
 const HEARTBEAT_MS = 1_000;
-const WEB_SCOUT_TIMEOUT_MS = 5 * 60 * 1000;
+const WEB_SCOUT_TIMEOUT_MS = 15 * 60 * 1000;
+const WEB_SCOUT_FINALIZE_AFTER_MS = 14 * 60 * 1000;
 const WEB_SCOUT_GRANT_ENV = "PI_HELIOS_WEB_SCOUT_GRANT";
 
 type DiscoverChildToolsCapability = {
@@ -535,10 +537,10 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
   pi.registerTool({
     name: "web_scout",
     label: "Web Scout",
-    description: "Research current browser-rendered public HTTP(S) pages only when the user requests it, using a fresh temporary Helios browser and separate Scout model without per-call confirmation. Give a concrete evidence task and useful starting URLs when known. Private/reserved networks and user browser state are unavailable. Never use for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, or monitoring. Returns bounded URL-cited evidence for the main model to evaluate and use in any consequential decision.",
-    promptSnippet: "Research public web pages in a fresh isolated browser and return bounded URL-cited evidence",
+    description: "Gather bounded, URL-cited evidence from browser-rendered public HTTP(S) pages in a fresh temporary Helios browser and separate Scout model. Use when a task needs current or external information that local context cannot establish—such as official documentation, API references, dependency behavior, release notes, standards, or current facts—even if the user did not explicitly request web research. Skip it when repository or local documentation is sufficient. Optional search discovers URL candidates through an existing OpenAI/Codex subscription or API key, otherwise keyless Exa. Private/reserved networks and user browser state are unavailable. Never use for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, or monitoring. The main model evaluates the returned evidence and owns consequential decisions.",
+    promptSnippet: "Research current public-web evidence, including official documentation and API references, in a fresh isolated browser",
     promptGuidelines: [
-      "Use web_scout only when user asks for current public-web research needing browser-rendered pages. It launches a fresh isolated browser without per-call confirmation. Give a concrete research task and useful starting URLs when known. Keep evaluation and consequential decisions in main model. Never use web_scout for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, private networks, or monitoring.",
+      "Use web_scout when the user requests public-web research or when completing the task reasonably requires current external evidence unavailable in the repository or local documentation, including official docs, API references, dependency behavior, release notes, standards, and current facts. Do not wait for an explicit browsing request, but skip web_scout when local evidence is sufficient. It launches a fresh isolated browser without per-call confirmation. When optional search is enabled, queries are sent to the tool-selected OpenAI or Exa provider and result URLs remain untrusted until opened through scout_browser. Give a concrete evidence task and useful starting URLs when known. Keep evaluation and consequential decisions in main model. Never use web_scout for login, accounts, purchases, messages, publishing, permissions, forms, downloads, uploads, private networks, or monitoring.",
     ],
     parameters: Type.Object({
       task: Type.String({ minLength: 1, maxLength: 1000, description: "Concrete public-web research question and evidence needed" }),
@@ -547,7 +549,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
     }, { additionalProperties: false }),
     executionMode: "sequential",
     async execute(id, params, signal, onUpdate, ctx) {
-      if (!isScoutEnabled(await loadConfig())) return { content: [{ type: "text" as const, text: "Web Scout inactive. Configure it with /scout or use /scout reset." }], details: { failureCode: "disabled" } };
+      const config = await loadConfig();
+      if (!isScoutEnabled(config)) return { content: [{ type: "text" as const, text: "Web Scout inactive. Configure it with /scout or use /scout reset." }], details: { failureCode: "disabled" } };
       const task = params.task.trim();
       if (!task) return { content: [{ type: "text" as const, text: "Web scout task must not be empty." }], details: { failureCode: "invalid" } };
       let startUrls: string[];
@@ -578,10 +581,12 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       heartbeat.unref();
       try {
         const prompt = `Public web research task: ${task}\nAccess date: ${new Date().toISOString().slice(0, 10)}.${startUrls.length ? `\nSuggested starting URLs:\n${startUrls.map((value) => `- ${value}`).join("\n")}` : "\nNo starting URL supplied; choose relevant public authoritative sources."}`;
+        const webSearch = config.webSearch === true;
         const args = [
           "--mode", "rpc", "--no-session", "--no-extensions", "-e", capability.childExtensionPath,
+          ...(webSearch ? ["-e", scoutWebSearchExtension] : []),
           "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve",
-          "--no-builtin-tools", "--tools", "scout_browser", "--model", modelName(model),
+          "--no-builtin-tools", "--tools", webSearch ? "scout_browser,scout_web_search" : "scout_browser", "--model", modelName(model),
           "--thinking", thinking, "--system-prompt", WEB_SCOUT_PROMPT,
         ];
         const run = await runChild(args, {
@@ -589,8 +594,9 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           prompt,
           signal,
           timeoutMs: WEB_SCOUT_TIMEOUT_MS,
+          finalizeAfterMs: WEB_SCOUT_FINALIZE_AFTER_MS,
           maxCostUsd: scoutMaxCostUsd(),
-          env: scoutChildEnv({ [WEB_SCOUT_GRANT_ENV]: grant.value }, process.env, model.provider),
+          env: scoutChildEnv({ [WEB_SCOUT_GRANT_ENV]: grant.value }, process.env, model.provider, webSearch ? ["openai"] : []),
           inheritEnv: false,
           onUsage: (usage) => {
             lastUpdateAt = Date.now();

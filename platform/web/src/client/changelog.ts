@@ -75,7 +75,7 @@ export const RELEASES: Release[] = [
       "Added searchable global and project memory ledgers with revision-guarded direct editing and deletion, plus restartable V5-to-V6 migration, safeguarded V4 import, hardened backups, explicit retry, and revision-guarded rollback.",
       "Expanded continuity_recall with bounded same-owner project-session search, inclusive time filters, sanitized tool-call search, and exact stored-result expansion using source-addressed evidence.",
       "Extended historical session search with exact session-ID targeting, tool-name and argument search, linked-result retrieval, and clearer missing, stale, or out-of-scope handling.",
-      "Allowed bounded fd and rg searches in any directory accessible to the Pi process, with rg falling back to system grep and fd detecting Debian's fdfind command.",
+      "Allowed bounded fd and rg searches in any directory accessible to the Pi process, with rg falling back to system grep and fd trying Debian's fdfind before a POSIX system-find fallback.",
       "Taught Sieve to reduce eligible older tool results retained after Continuity V3 compaction into recoverable markers while preserving recent batches, failures, mutations, images, and uncertain identities.",
       "Added a real prompt queue with immediate pending-message feedback, multiple bounded follow-ups, and controls to restore a queued prompt for editing or steer the active run with it.",
       "Made new sessions draftable while their workspace is still preparing, preserving text and selection across startup or retry, and added drag-and-drop workspace file references alongside external attachments.",

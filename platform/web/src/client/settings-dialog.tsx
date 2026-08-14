@@ -465,7 +465,7 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <p className="settings-policy-note">Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price. Lower-ratio models automatically keep Pi's native read and edit for that session; missing pricing keeps numbered edits. Disable to always use the native tools.</p>
     </div>;
   }
-  if (settings.kind === "advisor" || settings.kind === "scout") {
+  if (settings.kind === "advisor") {
     const levels = thinkingLevels(settings.mode === "model" ? settings.model : undefined, models, sessionThinkingLevels);
     return <div className="package-fields">
       <ModelModeField value={settings.mode === "model" ? settings.model! : settings.mode} models={models} disabled={disabled} onChange={(value) => {
@@ -473,6 +473,18 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
         onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
       }} />
       <ThinkingField value={settings.thinking} levels={levels} disabled={disabled || settings.mode === "disabled"} onChange={(thinking) => onUpdate({ ...settings, thinking })} />
+    </div>;
+  }
+  if (settings.kind === "scout") {
+    const levels = thinkingLevels(settings.mode === "model" ? settings.model : undefined, models, sessionThinkingLevels);
+    return <div className="package-fields">
+      <ModelModeField value={settings.mode === "model" ? settings.model! : settings.mode} models={models} disabled={disabled} onChange={(value) => {
+        const mode = value === "disabled" || value === "session" ? value : "model";
+        onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
+      }} />
+      <ThinkingField value={settings.thinking} levels={levels} disabled={disabled || settings.mode === "disabled"} onChange={(thinking) => onUpdate({ ...settings, thinking })} />
+      <label className="checkbox-field"><input type="checkbox" checked={settings.webSearch === true} disabled={disabled} onChange={(event) => onUpdate({ ...settings, webSearch: event.target.checked })} />OpenAI / Exa search for Web Scout</label>
+      <p className="settings-policy-note">Optional. Search uses an existing OpenAI/Codex subscription or API key when available, otherwise Exa; result pages still open through the isolated Helios browser.</p>
     </div>;
   }
   if (settings.kind === "grunt") {

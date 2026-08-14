@@ -62,10 +62,12 @@ test("parallel Advisor calls serialize and report running duration", async () =>
   assert.ok(guidelines.every((guideline) => /advisor/i.test(guideline)));
   assert.match(tool.description, /Maximum three successful consultations/);
   assert.match(tool.description, /failures do not consume quota/);
-  assert.match(guidance, /two advisor consultations by default for consequential work/);
-  assert.match(guidance, /Skip advisor for trivial or local work/);
-  assert.match(guidance, /after implementation and before final verification/);
-  assert.match(guidance, /do not repeat the first request ceremonially/);
+  assert.match(guidance, /one advisor consultation before implementation only when both conditions hold/);
+  assert.match(guidance, /repository precedent does not clearly determine the solution/);
+  assert.match(guidance, /wrong choice risks security or privacy, data loss, compatibility or migration failure, or broad cross-module regression/);
+  assert.match(guidance, /Skip advisor for local fixes, established repository patterns, routine refactors, test additions, dependency-free changes, and decisions reversible in one small diff/);
+  assert.match(guidance, /after focused reads or repo_scout establish evidence, before choosing an approach/);
+  assert.match(guidance, /after implementation only when implementation exposes new risks, contradicts assumptions, or verification fails ambiguously—not by default/);
   assert.match(guidance, /Reserve a third advisor call for material contradictions, failures, or unresolved risks/);
   assert.match(guidance, /concrete decision, risk, or approach to review/);
   assert.match(guidance, /only the highest-priority cited file ranges/);
@@ -80,7 +82,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
   const ctx = {
-    cwd: process.cwd(), hasUI: false, getSystemPrompt: () => "system",
+    cwd: process.cwd(), hasUI: false,
+    getSystemPrompt: () => { throw new Error("executor system prompt must not be copied"); },
     modelRegistry: {
       find: () => model,
       async getApiKeyAndHeaders() { return { ok: true, apiKey: "key" }; },

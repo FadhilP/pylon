@@ -354,11 +354,15 @@ test("Scout registers separate repo and web tools", async () => {
     assert.match(taskDescription, /Evidence-only repository search, mapping, or tracing task/i);
     assert.match(taskDescription, /exclude design, recommendation, prioritization, and architecture-choice requests/i);
     assert.match(retryDescription, /not a decision or recommendation request/i);
-    const webDescription = runtime.tools.get("web_scout").description;
+    const webTool = runtime.tools.get("web_scout");
+    const webDescription = webTool.description;
+    const webGuidance = (webTool.promptGuidelines as string[]).join("\n");
     assert.match(webDescription, /fresh temporary Helios browser/);
-    assert.match(webDescription, /only when the user requests it/);
+    assert.match(webDescription, /official documentation, API references, dependency behavior, release notes/);
+    assert.match(webGuidance, /Do not wait for an explicit browsing request/);
+    assert.match(webGuidance, /skip web_scout when local evidence is sufficient/);
     assert.match(webDescription, /Never use for login, accounts, purchases/);
-    assert.match(webDescription, /main model to evaluate/);
+    assert.match(webDescription, /main model evaluates/);
   } finally { runtime.restore(); }
 });
 
@@ -399,7 +403,9 @@ test("Web Scout validates input and requires exactly one Helios capability befor
 test("Web Scout launches headless without UI or confirmation and revokes grant", async () => {
   let childArgs: string[] = [];
   let childError: string | undefined;
-  const run = async (args: string[]): Promise<ScoutRun> => {
+  let runOptions: any;
+  const run = async (args: string[], options: any): Promise<ScoutRun> => {
+    runOptions = options;
     childArgs = args;
     return {
       text: "cited report", stderr: "", durationMs: 1,
@@ -449,8 +455,40 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
     assert.doesNotMatch(failed.content[0].text, new RegExp(secret));
     assert.equal(revoked, 3);
     assert.deepEqual(options, { maxPages: 2, maxActions: 20, headed: false });
+    assert.equal(runOptions.timeoutMs, 15 * 60 * 1000);
+    assert.equal(runOptions.finalizeAfterMs, 14 * 60 * 1000);
     for (const flag of ["--no-extensions", "--no-approve", "--no-builtin-tools", "--no-session"]) assert.ok(childArgs.includes(flag));
     assert.ok(childArgs.includes("scout_browser"));
+    assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "scout_browser");
+    assert.equal(childArgs.filter((value) => value === "-e").length, 1);
+    assert.equal(childArgs.includes("scout_web_search"), false);
+  } finally { runtime.restore(); }
+});
+
+test("Web Scout optionally loads only the restricted OpenAI/Exa search tool", async () => {
+  let childArgs: string[] = [];
+  const runtime = await harness(async (args): Promise<ScoutRun> => {
+    childArgs = args;
+    return {
+      text: "searched report", stderr: "", durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      turns: [], truncated: false, exitCode: 0, activity: [], budgetExceeded: false,
+      finalizationAttempted: false, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
+    };
+  });
+  runtime.events.on("pi-helios:web-scout-capability", (request) => request.respond({
+    version: 1, owner: "pi-helios", childExtensionPath: "C:/bundle/web-scout-browser.ts",
+    async issueGrant() { return { value: "grant", async revoke() {} }; },
+  }));
+  try {
+    await saveConfig({ version: 1, disabled: false, webSearch: true });
+    await runtime.tools.get("web_scout").execute("search", { task: "find current docs" }, undefined, undefined, context({ hasUI: false }));
+    assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "scout_browser,scout_web_search");
+    const extensions = childArgs.flatMap((value, index) => value === "-e" ? [childArgs[index + 1]] : []);
+    assert.equal(extensions.length, 2);
+    assert.equal(extensions[0], "C:/bundle/web-scout-browser.ts");
+    assert.match(extensions[1], /pi-scout[\\/]src[\\/]scout-web-search\.ts$/);
+    assert.ok(childArgs.includes("--no-builtin-tools"));
   } finally { runtime.restore(); }
 });
 

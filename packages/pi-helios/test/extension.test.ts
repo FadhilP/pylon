@@ -355,7 +355,13 @@ test("Web Scout child extension requires and consumes issued grant", async () =>
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   } as any, { persistentClient: false });
   assert.deepEqual([...tools.keys()], ["scout_browser"]);
-  const targetPattern = new RegExp(tools.get("scout_browser").parameters.properties.target.pattern);
+  const browser = tools.get("scout_browser");
+  const targetPattern = new RegExp(browser.parameters.properties.target.pattern);
+  assert.deepEqual(browser.parameters.properties.action.enum, ["navigate", "snapshot", "continue", "follow", "back"]);
+  assert.match(browser.parameters.properties.cursor.description, /Required only for continue/);
+  assert.deepEqual(browser.prepareArguments({ action: "snapshot", cursor: "hc_0123456789abcdef0123456789abcdef" }), {
+    action: "continue", cursor: "hc_0123456789abcdef0123456789abcdef",
+  });
   assert.equal(targetPattern.test("f1e12"), true);
   assert.equal(targetPattern.test("f1f2e12"), false);
   assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
@@ -393,6 +399,62 @@ test("Web Scout reuses navigation snapshots without extra snapshot subprocesses"
   assert.equal(commands.length, beforeContinue);
   assert.match(continued.content[0].text, /ref=f1e105/);
   assert.equal(commands.includes("snapshot"), false);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+});
+
+
+test("Web Scout falls back to bounded redacted text for raw public documents", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 1, maxActions: 3, headed: false });
+  process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  const commands: string[] = [];
+  await webScoutBrowser({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find((value) => ["open", "goto", "eval", "tab-list", "close"].includes(value)) ?? "unknown";
+      commands.push(action);
+      if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Changelog](https://example.com/CHANGELOG.md)" }), stderr: "", killed: false };
+      if (action === "goto") return { code: 0, stdout: JSON.stringify({ snapshot: { file: "../invalid-snapshot" } }), stderr: "", killed: false };
+      if (action === "eval") return { code: 0, stdout: JSON.stringify({ result: JSON.stringify({ contentType: "text/plain", text: "# Changelog\napi_key=top-secret\nFixed", truncated: false }) }), stderr: "", killed: false };
+      return { code: 0, stdout: "{}", stderr: "", killed: false };
+    },
+    registerTool(value: any) { tools.set(value.name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any, { persistentClient: false });
+  const result = await tools.get("scout_browser").execute("raw", { action: "navigate", url: "https://example.com/CHANGELOG.md" });
+  assert.match(result.content[0].text, /Pages: 1\/1/);
+  assert.match(result.content[0].text, /Bounded text fallback: text\/plain/);
+  assert.match(result.content[0].text, /# Changelog/);
+  assert.match(result.content[0].text, /\[possible credential redacted\]/);
+  assert.deepEqual(commands, ["open", "tab-list", "goto", "eval", "tab-list"]);
+  for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+});
+
+test("Web Scout does not consume page quota when navigation and text fallback fail", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 1, maxActions: 3, headed: false });
+  process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  let navigations = 0;
+  await webScoutBrowser({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find((value) => ["open", "goto", "eval", "tab-list", "close"].includes(value)) ?? "unknown";
+      if (action === "tab-list") return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }), stderr: "", killed: false };
+      if (action === "goto" && ++navigations === 1) return { code: 0, stdout: JSON.stringify({ snapshot: { file: "../invalid-snapshot" } }), stderr: "", killed: false };
+      if (action === "goto") return { code: 0, stdout: JSON.stringify({ snapshot: "- heading Success" }), stderr: "", killed: false };
+      if (action === "eval") return { code: 0, stdout: JSON.stringify({ result: JSON.stringify({ contentType: "text/html", text: "not an allowed fallback", truncated: false }) }), stderr: "", killed: false };
+      return { code: 0, stdout: "{}", stderr: "", killed: false };
+    },
+    registerTool(value: any) { tools.set(value.name, value); },
+    on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  } as any, { persistentClient: false });
+  const browser = tools.get("scout_browser");
+  await assert.rejects(browser.execute("failed", { action: "navigate", url: "https://example.com/first" }), /invalid snapshot artifact/);
+  const recovered = await browser.execute("success", { action: "navigate", url: "https://example.com/second" });
+  assert.match(recovered.content[0].text, /Pages: 1\/1/);
+  assert.equal(navigations, 2);
+  await assert.rejects(browser.execute("limited", { action: "navigate", url: "https://example.com/third" }), /page limit/);
+  assert.equal(navigations, 2);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
 });
 

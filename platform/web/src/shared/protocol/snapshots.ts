@@ -425,10 +425,17 @@ export type PackageSettingsReadModel =
       lineEditEnabled: boolean;
     }
   | {
-      kind: "advisor" | "scout";
+      kind: "advisor";
       mode: PackageModelMode;
       model?: string;
       thinking?: import("./events.ts").ThinkingLevelReadModel;
+    }
+  | {
+      kind: "scout";
+      mode: PackageModelMode;
+      model?: string;
+      thinking?: import("./events.ts").ThinkingLevelReadModel;
+      webSearch?: boolean;
     }
   | {
       kind: "grunt";

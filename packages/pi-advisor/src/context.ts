@@ -111,7 +111,7 @@ export function advisorMaxTokens(contextWindow: number): number {
   return Math.max(128, Math.min(ADVISOR_MAX_OUTPUT_TOKENS, Math.floor(window * 0.25)));
 }
 
-export function buildSnapshot(systemPrompt: string, messages: any[], contextWindow: number, reservedInputTokens = 0): Snapshot {
+export function buildSnapshot(messages: any[], contextWindow: number, reservedInputTokens = 0): Snapshot {
   const window = Number.isFinite(contextWindow)
       ? Math.max(512, Math.floor(contextWindow))
       : 8_192,
@@ -153,14 +153,12 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
   const latestAssistantMessage = [...messages].reverse().find(message => message?.role === "assistant" && assistantText(message.content));
   const latestUser = latestUserMessage ? localUnique([serializeMessage(latestUserMessage)]) : [];
   const latestAssistant = latestAssistantMessage ? localUnique([`[ASSISTANT]\n${assistantText(latestAssistantMessage.content)}`]) : [];
-  const system = systemPrompt ? [systemPrompt] : [];
   const sectionSize = (label: string, records: string[]) => records.length
     ? `<${label}>\n${records.join("\n\n")}\n</${label}>`.length + 2
     : 0;
   const allocationLabels = [
     "advisor-request", "explicit-evidence", "continuity-state", "latest-verification",
     "session-summaries-newest-first", "latest-user-request", "latest-assistant-judgment",
-    "executor-system-prompt",
   ];
   const sectionAllocations = Object.fromEntries(allocationLabels.map(label => [label, {
     estimatedTokens: 0, includedRecords: 0, omittedRecords: 0, truncated: false,
@@ -173,10 +171,9 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
       truncated: omittedRecords > 0,
     };
   };
-  const requiredSize = sectionSize("advisor-request", request) + sectionSize("executor-system-prompt", system);
+  const requiredSize = sectionSize("advisor-request", request);
   if (requiredSize > charBudget) {
     recordAllocation("advisor-request", "", 0, request.length);
-    recordAllocation("executor-system-prompt", "", 0, system.length);
     return { text: "", estimatedTokens: 0, redactionCount: 0, truncated: true, requiredContextOmitted: true, omittedEvidence: [], sectionAllocations, duplicateTelemetry };
   }
 
@@ -184,14 +181,14 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
   const omittedEvidence: EvidenceRef[] = [];
   let used = 0;
   let truncated = false;
-  const add = (label: string, records: string[], reservedChars = 0, dedupeAcross = true) => {
+  const add = (label: string, records: string[], dedupeAcross = true) => {
     if (!records.length) return;
     const candidates = dedupeAcross ? dedupeAcrossSections(records, globalSeen, duplicateTelemetry) : records;
     if (!candidates.length) return;
     const kept: string[] = [];
     for (const record of candidates) {
       const candidate = [...kept, record];
-      if (used + sectionSize(label, candidate) + reservedChars <= charBudget) kept.push(record);
+      if (used + sectionSize(label, candidate) <= charBudget) kept.push(record);
       else truncated = true;
     }
     if (!kept.length) {
@@ -205,19 +202,18 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
     recordAllocation(label, section, kept.length, candidates.length - kept.length);
   };
 
-  const systemSize = sectionSize("executor-system-prompt", system);
-  add("advisor-request", request, systemSize);
+  add("advisor-request", request);
   if (evidenceMessages.length) {
-    const selectEvidence = (reserve: number) => {
+    const selectEvidence = () => {
       const kept: typeof evidenceMessages = [];
       const omitted: typeof evidenceMessages = [];
       for (const candidate of evidenceMessages) {
-        if (used + sectionSize("explicit-evidence", [...kept.map(item => item.text), candidate.text]) + systemSize + reserve <= charBudget) kept.push(candidate);
+        if (used + sectionSize("explicit-evidence", [...kept.map(item => item.text), candidate.text]) <= charBudget) kept.push(candidate);
         else omitted.push(candidate);
       }
       return { kept, omitted };
     };
-    const selectedEvidence = selectEvidence(0);
+    const selectedEvidence = selectEvidence();
     const kept = selectedEvidence.kept.map(candidate => candidate.text);
     for (const candidate of selectedEvidence.omitted) {
       truncated = true;
@@ -233,19 +229,18 @@ export function buildSnapshot(systemPrompt: string, messages: any[], contextWind
     const omittedCount = evidenceMessages.length - kept.length;
     recordAllocation("explicit-evidence", evidenceSection, kept.length, omittedCount);
     if (omittedCount) {
-      const marker = evidenceMarker(omittedEvidence, omittedCount, Math.max(0, charBudget - used - systemSize));
+      const marker = evidenceMarker(omittedEvidence, omittedCount, Math.max(0, charBudget - used));
       if (marker) {
         sections.push(marker);
         used += marker.length + 2;
       }
     }
   }
-  add("continuity-state", continuity, systemSize);
-  add("latest-verification", verification, systemSize);
-  add("session-summaries-newest-first", summaries, systemSize);
-  add("latest-user-request", latestUser, systemSize);
-  add("latest-assistant-judgment", latestAssistant, systemSize);
-  add("executor-system-prompt", system, 0, false);
+  add("continuity-state", continuity);
+  add("latest-verification", verification);
+  add("session-summaries-newest-first", summaries);
+  add("latest-user-request", latestUser);
+  add("latest-assistant-judgment", latestAssistant);
 
   const selected = new Set([latestUserMessage, latestAssistantMessage].filter(Boolean));
   if (messages.some(message => !selected.has(message) && !(message?.role === "custom" && (message.customType === "advisor-request" || message.customType === "advisor-evidence" || message.customType === "pi-continuity" || message.customType === "pi-verify-result")) && message?.role !== "compactionSummary" && message?.role !== "branchSummary")) truncated = true;

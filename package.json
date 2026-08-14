@@ -31,6 +31,7 @@
     "packages/*/package.json",
     "packages/*/README.md",
     "packages/*/LICENSE",
+    "packages/*/THIRD_PARTY_NOTICES.md",
     "skills",
     "platform/web/dist",
     "platform/web/dist-server",
@@ -101,7 +102,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.0",
-    "@earendil-works/pi-tui": "0.84.0"
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2"
   }
 }
