@@ -8,6 +8,23 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.9.0",
+    date: "Aug 14, 2026",
+    title: "Safer web research with tighter cost and context control",
+    summary: "Pylon expands Web Scout with optional search and sturdier isolated browsing, caps delegated research costs, and trims Advisor and always-on context overhead.",
+    notes: [
+      "Added an optional OpenAI / Exa search setting for Web Scout, using an existing OpenAI/Codex subscription or API key when available and otherwise Exa, while requiring every discovered result page to be verified through the isolated Helios browser.",
+      "Strengthened Web Scout with a randomized run-scoped loopback proxy, direct connections to validated public addresses, bounded plain-text fallback for snapshot failures, safer continuation handling, and tighter request, tunnel, action, and navigation budgets.",
+      "Raised Web Scout's hard timeout to 15 minutes with deadline-aware finalization, stopped failed page operations from consuming the successful-navigation budget, and added a default $1.0 reported-cost ceiling for both repository and web Scout runs with an environment override.",
+      "Reduced Advisor token use by omitting the executor system prompt, shortening its strategic prompt, and making one pre-implementation consultation the exception for consequential ambiguous choices instead of defaulting to two consultations.",
+      "Allowed Advisor evidence to use canonical absolute paths inside the workspace while preserving traversal, symlink-escape, .git, binary, and file-size protections.",
+      "Collapsed the always-on Ponytail guidance and removed its duplicate before-turn hook injection, reducing repeated context while retaining the requirements to understand root causes, prefer the smallest correct change, and preserve safety and validation.",
+      "Added a POSIX system-find fallback when fd and fdfind are unavailable, updated Pi runtime compatibility to 0.84.2, and included third-party notices in published packages.",
+    ],
+  },
+
+
+  {
     version: "1.8.1",
     date: "Aug 13, 2026",
     title: "Smarter tool discovery and background-run tracking",

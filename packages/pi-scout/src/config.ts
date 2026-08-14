@@ -10,7 +10,7 @@ export const isScoutEnabled = (config: ScoutConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const defaultConfig = (): ScoutConfig => ({ version: 1 });
 export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
-export const DEFAULT_SCOUT_MAX_COST_USD = 0.5;
+export const DEFAULT_SCOUT_MAX_COST_USD = 1.0;
 export function repoTimeoutMs(value = process.env.PI_SCOUT_TIMEOUT_MS): number {
   if (value === undefined) return DEFAULT_REPO_TIMEOUT_MS;
   const timeout = Number(value);
