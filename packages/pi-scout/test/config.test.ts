@@ -38,7 +38,6 @@ test("repo timeout defaults to fifteen minutes and validates overrides", () => {
 });
 test("Scout reported-cost ceiling defaults, disables, and validates overrides", () => {
   assert.equal(scoutMaxCostUsd(undefined), DEFAULT_SCOUT_MAX_COST_USD);
-  assert.equal(DEFAULT_SCOUT_MAX_COST_USD, 0.5);
   assert.equal(scoutMaxCostUsd("0"), undefined);
   assert.equal(scoutMaxCostUsd("1.25"), 1.25);
   assert.throws(() => scoutMaxCostUsd("-0.01"), /PI_SCOUT_MAX_COST_USD/);

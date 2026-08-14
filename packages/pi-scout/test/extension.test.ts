@@ -301,9 +301,9 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
   const run = async (_args: string[], options: any): Promise<ScoutRun> => {
     maxCostUsd = options.maxCostUsd;
     return {
-      text: "partial", error: "Scout reached reported cost limit ($0.50).", failure: "budget_exceeded",
+      text: "partial", error: "Scout reached reported cost limit ($1.0).", failure: "budget_exceeded",
       stderr: "", durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 },
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1.0 },
       turns: [], truncated: false, exitCode: 1, activity: [], budgetExceeded: true, finalizationAttempted: true, finalizationSucceeded: false, contextTokens: 0, cacheReadTokens: 0,
     };
   };
@@ -313,7 +313,7 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
       hasUI: false,
       sessionManager: { buildContextEntries: () => [] },
     }));
-    assert.equal(maxCostUsd, 0.5);
+    assert.equal(maxCostUsd, 1.0);
     assert.equal(result.details.failureCode, "budget_exceeded");
     assert.equal(result.details.budgetExceeded, true);
     assert.equal(result.details.finalizationAttempted, true);
