@@ -432,6 +432,44 @@ test("executes reads without confirmation and returns compact details", async ()
   assert.match(result.content[0].text, /"ok": true/);
 });
 
+test("formats materialized rows as parallel arrays for model output", async () => {
+  const value = await start();
+  value.instances[0].executeImpl = async (command) => ({
+    ok: true,
+    command_id: "cmd_table",
+    session_id: "s_1",
+    data: command.command === "rows"
+      ? { result_id: "q_1", offset: 0, limit: 2, rows: [{ id: 1, name: "Ada" }, { id: 2, name: "Lin" }], returned: 2, total: 2, truncated: false, next_offset: null }
+      : { result_id: "q_1", rows: 2, columns: [{ name: "id", type: "integer" }, { name: "name", type: "text" }], preview: [{ id: 1, name: "Ada" }, { id: 2, name: "Lin" }], preview_count: 2, truncated: false, cached: false, state_version: "v1", storage: { mode: "memory", expires_at: "later" } },
+    warnings: [],
+    meta: { duration_ms: 1 },
+  });
+
+  const queryResult = await value.tools.get("stateql").execute(
+    "query",
+    { command: "query", sql: "SELECT id, name FROM users" },
+    undefined,
+    undefined,
+    context(),
+  );
+  const queryOutput = JSON.parse(queryResult.content[0].text);
+  assert.deepEqual(queryOutput.data.columns, ["id", "name"]);
+  assert.deepEqual(queryOutput.data.column_types, ["integer", "text"]);
+  assert.deepEqual(queryOutput.data.preview, [[1, "Ada"], [2, "Lin"]]);
+  assert.doesNotMatch(queryResult.content[0].text, /"id"\s*:/);
+
+  const rowsResult = await value.tools.get("stateql").execute(
+    "rows",
+    { command: "rows", handle: "q_1", offset: 0, limit: 2 },
+    undefined,
+    undefined,
+    context(),
+  );
+  const rowsOutput = JSON.parse(rowsResult.content[0].text);
+  assert.deepEqual(rowsOutput.data.columns, ["id", "name"]);
+  assert.deepEqual(rowsOutput.data.rows, [[1, "Ada"], [2, "Lin"]]);
+});
+
 test("snapshot bridge is bounded, actor-scoped, and single-claim", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-snapshot-request")![0];

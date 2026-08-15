@@ -261,8 +261,47 @@ function fit(value: string, maxBytes: number): string {
   return output;
 }
 
-function boundedResponse(response: Response<unknown>): { text: string; truncated: boolean } {
-  const output = JSON.stringify(response, null, 2);
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function tabularRows(value: unknown, declaredColumns?: string[]): { columns: string[]; rows: unknown[][] } | undefined {
+  if (!Array.isArray(value) || !value.every(record)) return undefined;
+  const columns = declaredColumns ? [...declaredColumns] : [...new Set(value.flatMap((row) => Object.keys(row)))];
+  if (new Set(columns).size !== columns.length || !value.every((row) => {
+    const keys = Object.keys(row);
+    return keys.length === columns.length
+      && columns.every((column) => Object.hasOwn(row, column) && row[column] !== undefined);
+  })) return undefined;
+  return { columns, rows: value.map((row) => columns.map((column) => row[column])) };
+}
+
+function modelResponse(response: Response<unknown>, command: StateQLToolInput["command"]): Response<unknown> {
+  if (!response.ok || !record(response.data)) return response;
+  const data = response.data;
+  if ((command === "query" || command === "filter") && Array.isArray(data.columns)
+    && data.columns.every((column) => record(column) && typeof column.name === "string" && typeof column.type === "string")) {
+    const columnMetadata = data.columns as Array<{ name: string; type: string }>;
+    const table = tabularRows(data.preview, columnMetadata.map((column) => column.name));
+    if (table) return {
+      ...response,
+      data: {
+        ...data,
+        columns: table.columns,
+        column_types: columnMetadata.map((column) => column.type),
+        preview: table.rows,
+      },
+    };
+  }
+  if (command === "rows") {
+    const table = tabularRows(data.rows);
+    if (table) return { ...response, data: { ...data, columns: table.columns, rows: table.rows } };
+  }
+  return response;
+}
+
+function boundedResponse(response: Response<unknown>, command: StateQLToolInput["command"]): { text: string; truncated: boolean } {
+  const output = JSON.stringify(modelResponse(response, command), null, 2);
   const result = truncateHead(output, { maxLines: 1_000, maxBytes: MAX_OUTPUT_BYTES });
   if (!result.truncated) return { text: result.content, truncated: false };
   const notice = `\n\n[StateQL output truncated at ${formatSize(MAX_OUTPUT_BYTES)}. Request a smaller rows limit or narrower query.]`;
@@ -444,7 +483,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   pi.registerTool({
     name: "stateql",
     label: "StateQL",
-    description: "Perform user-requested SQLite, PostgreSQL, or MySQL work. Prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT. Query output already includes a preview in model context; call rows only when truncated or additional rows are needed. When the complete preview is present, continue from preview_count rather than repeating offset 0. For PostgreSQL/MySQL, never put passwords in target: use Pylon's masked prompt or secret_env for a complete source already stored in an environment variable. Never weaken TLS verification or set replay, unbounded, or destructive overrides without explicit user authorization. Plan consequential writes when practical; use doctor for storage-integrity failures. Supports schemas, confirmed writes, transactions, receipts, and history; cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
+    description: "Perform user-requested SQLite, PostgreSQL, or MySQL work. Prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT. Query output already includes a preview in model context; call rows only when truncated or additional rows are needed. Query previews and rows use parallel columns, optional column_types, and row-value arrays to avoid repeating column names. When the complete preview is present, continue from preview_count rather than repeating offset 0. For PostgreSQL/MySQL, never put passwords in target: use Pylon's masked prompt or secret_env for a complete source already stored in an environment variable. Never weaken TLS verification or set replay, unbounded, or destructive overrides without explicit user authorization. Plan consequential writes when practical; use doctor for storage-integrity failures. Supports schemas, confirmed writes, transactions, receipts, and history; cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",
@@ -514,7 +553,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             }
             throw safeFailure(response);
           }
-          const output = boundedResponse(response);
+          const output = boundedResponse(response, input.command);
           return {
             content: [{ type: "text" as const, text: output.text }],
             details: {
