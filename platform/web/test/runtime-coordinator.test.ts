@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
+import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
@@ -1488,6 +1489,40 @@ test("pinned sessions persist, wake on restart, and never sleep", { timeout: 30_
   }
 });
 
+test("General sessions use the built-in home scope instead of the selected project", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-general-session-"));
+  const cwd = join(root, "project");
+  const generalCwd = join(root, "home");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(generalCwd), mkdir(agentDir)]);
+  const registry = new ProjectRegistry(join(agentDir, "pylon-web", "projects.json"), generalCwd);
+  await registry.load([cwd]);
+  const driver = new RuntimeCoordinator({ projectRegistry: registry });
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const created = await driver.newSession({ projectId: GENERAL_PROJECT_ID, expectedGeneration: 1 });
+    const details = (driver as any).selected().driver.runtimeDetails();
+    const sessions = await driver.listSessions();
+
+    assert.equal(details.cwd, generalCwd);
+    assert.equal(registry.workspaceForSession(created.sessionId)?.projectId, GENERAL_PROJECT_ID);
+    assert.equal(registry.workspaceForSession(created.sessionId)?.mode, "local");
+    assert.ok(sessions.projects.some((project) => project.id === GENERAL_PROJECT_ID && project.cwd === generalCwd));
+    const snapshot = await driver.snapshot();
+    assert.equal(snapshot.runtimePolicy.effective.toolOverrides?.code_search, "disabled");
+    assert.equal(snapshot.runtimePolicy.effective.toolOverrides?.bash, "disabled");
+    assert.equal(snapshot.activeTools.includes("bash"), false);
+    assert.equal(snapshot.activeTools.includes("edit"), false);
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));
+    await Promise.all(sessions.map((session) => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
 test("new sessions apply the effective workspace policy before the first prompt", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-new-session-workspace-"));
   const cwd = join(root, "workspace");
@@ -1813,7 +1848,7 @@ test("empty project registry uses parking runtime and add/remove keeps the works
   try {
     await driver.start({ cwd, agentDir, repositoryRoot: root });
     assert.equal((await driver.snapshot()).projectAvailable, false);
-    assert.deepEqual((await driver.listSessions()).projects, []);
+    assert.deepEqual((await driver.listSessions()).projects.map((project) => project.id), [GENERAL_PROJECT_ID]);
 
     assert.equal((await driver.addProject({ expectedGeneration: 1 })).cancelled, true);
     selectedDirectory = cwd;
@@ -1831,7 +1866,7 @@ test("empty project registry uses parking runtime and add/remove keeps the works
 
     await driver.removeProject({ projectId: projectIdForCwd(cwd), expectedGeneration: archived.sessionGeneration });
     assert.equal((await driver.snapshot()).projectAvailable, false);
-    assert.deepEqual((await driver.listSessions()).projects, []);
+    assert.deepEqual((await driver.listSessions()).projects.map((project) => project.id), [GENERAL_PROJECT_ID]);
     await assert.doesNotReject(() => mkdir(join(cwd, "still-here")));
   } finally {
     await driver.dispose();

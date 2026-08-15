@@ -4,7 +4,39 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
+import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
 import { ProjectRegistry, projectIdForCwd, projectPickerCommand } from "../src/server/pi/project-registry.ts";
+
+test("General is a built-in local scope rooted outside the project list", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-general-"));
+  const generalCwd = join(root, "home");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(generalCwd);
+  try {
+    const registry = new ProjectRegistry(config, generalCwd);
+    await registry.load([]);
+
+    assert.deepEqual(registry.list(), []);
+    assert.equal(registry.get(GENERAL_PROJECT_ID)?.cwd, generalCwd);
+    const policy = registry.runtimePolicy(GENERAL_PROJECT_ID, "general-session");
+    assert.equal(policy.effective.workspace, "local");
+    assert.equal(policy.effective.toolOverrides?.code_search, "disabled");
+    assert.equal(policy.effective.toolOverrides?.bash, "disabled");
+    assert.equal(policy.effective.toolOverrides?.edit, "disabled");
+
+    await registry.setSessionWorkspace({ sessionId: "general-session", projectId: GENERAL_PROJECT_ID, mode: "local" });
+    assert.equal(registry.projectForSession("general-session", root)?.id, GENERAL_PROJECT_ID);
+    assert.equal(registry.effectiveCwd("general-session", root), generalCwd);
+
+    const reloaded = new ProjectRegistry(config, generalCwd);
+    await reloaded.load([]);
+    assert.equal(reloaded.workspaceForSession("general-session")?.projectId, GENERAL_PROJECT_ID);
+    assert.equal(reloaded.effectiveCwd("general-session", root), generalCwd);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("project registry seeds, deduplicates, persists, and removes canonical directories", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-projects-"));

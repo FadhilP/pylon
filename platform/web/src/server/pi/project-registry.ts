@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
+import { homedir } from "node:os";
 import { DEFAULT_GUARD_RULES, mergeGuardRules, validGuardRules, type GuardRuleOverrides } from "../../shared/guard-policy.ts";
 import type { DialogTimeoutSeconds, RuntimePolicyReadModel, ToolExposureMode, ToolOverrideReadModel, VerifyPolicyReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots.ts";
+import { GENERAL_PROJECT_ID, GENERAL_PROJECT_LABEL } from "../../shared/general-session.ts";
 
 const VERSION = 13;
 const MAX_PROJECTS = 100;
@@ -12,6 +14,22 @@ const MAX_ARCHIVED_SESSIONS = 10_000;
 const MAX_PINNED_SESSIONS = 10_000;
 const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
 const MAX_TOOL_OVERRIDES = 256;
+
+const GENERAL_TOOL_OVERRIDES: ToolOverrideReadModel = {
+  apply_session_changes: "disabled",
+  bash: "disabled",
+  code_search: "disabled",
+  edit: "disabled",
+  grunt: "disabled",
+  heartbeat_start: "disabled",
+  index_status: "disabled",
+  relationship_graph: "disabled",
+  spawn_agent: "disabled",
+  spawn_session: "disabled",
+  symbol_search: "disabled",
+  verify: "disabled",
+  write: "disabled",
+};
 
 export interface RegisteredProject {
   id: string;
@@ -161,7 +179,7 @@ export class ProjectRegistry {
   private loaded = false;
   private saveQueue = Promise.resolve();
 
-  constructor(private readonly configPath: string) {}
+  constructor(private readonly configPath: string, private readonly generalCwd = homedir()) {}
 
   static forAgentDir(agentDir: string): ProjectRegistry {
     return new ProjectRegistry(resolve(agentDir, "pylon-web", "projects.json"));
@@ -294,8 +312,20 @@ export class ProjectRegistry {
 
   get(projectId: string): RegisteredProject | undefined {
     this.assertLoaded();
+    if (projectId === GENERAL_PROJECT_ID) return this.generalProject();
     const project = this.projects.find((item) => item.id === projectId);
     return project ? { ...project } : undefined;
+  }
+
+  generalProject(): RegisteredProject {
+    this.assertLoaded();
+    return {
+      id: GENERAL_PROJECT_ID,
+      cwd: resolve(this.generalCwd),
+      label: GENERAL_PROJECT_LABEL,
+      workspacePolicy: "local",
+      toolOverrides: cloneToolOverrides(GENERAL_TOOL_OVERRIDES),
+    };
   }
 
   async add(path: string): Promise<RegisteredProject> {
@@ -555,7 +585,7 @@ export class ProjectRegistry {
   }
 
   runtimePolicy(projectId: string, sessionId: string): RuntimePolicyReadModel {
-    const project = this.requireProject(projectId);
+    const project = projectId === GENERAL_PROJECT_ID ? this.generalProject() : this.requireProject(projectId);
     const session = this.sessionPolicies.find((item) => item.sessionId === sessionId && item.projectId === projectId);
     const projectVerify = cloneVerifyPolicy(project.verifyPolicy ?? { mode: "auto" });
     const projectTimeline = project.timelineEnabled ?? this.globalPolicy.timelineEnabled;

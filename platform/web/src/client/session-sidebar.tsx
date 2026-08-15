@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX, IconLibrary } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconWorld, IconX, IconLibrary } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
@@ -24,6 +24,7 @@ interface SidebarProps {
   activeSessions: SessionSummary[];
   unseenCompletions?: Record<string, true>;
   projects: SessionProject[];
+  general?: SessionProject;
   pages: SessionProjectPage[];
   query: string;
   searchRef: RefObject<HTMLInputElement | null>;
@@ -56,24 +57,28 @@ interface SidebarProps {
   onRemoveProject: (project: SessionProject) => void;
   onArchiveSession: (session: SessionSummary) => void;
   onNewSession: (project: SessionProject) => void;
+  onNewGeneral: () => void;
   onWorktreeSetup: (project: SessionProject) => void;
   onReorderProject: (projectId: string, beforeProjectId?: string) => Promise<void>;
   onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
-export function SessionSidebar({ activeSessions, unseenCompletions, projects, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
+export function SessionSidebar({ activeSessions, unseenCompletions, projects, general, pages, query, searchRef, expandedProjects, loading, busy, deleting, projectLoading, projectBusy, isOpen, mobile, onClose, onQuery, onToggleProject, onSelectSession, onDeleteSession, onRenameSession, onSetSessionActive, onSetSessionPinned, onLoadMore, onShowLess, onAddProject, onOpenArchives, terminalOpen, terminalAvailable, onToggleTerminal, onOpenSettings, onArchiveProject, onRenameProject, onRemoveProject, onArchiveSession, onNewSession, onNewGeneral, onWorktreeSetup, onReorderProject, onReorderActiveSession }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [generalOpen, setGeneralOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const menuTrigger = useRef<HTMLElement | null>(null);
   const [preview, setPreview] = useState<{ kind: "project" | "active"; id: string; ids: string[] }>();
   const [announcement, setAnnouncement] = useState("");
   const visibleProjects = useMemo(() => orderByIds(projects, preview?.kind === "project" ? preview.ids : undefined), [preview, projects]);
   const visibleActiveSessions = useMemo(() => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined), [activeSessions, preview]);
+  const generalPage = general ? pages.find((page) => page.id === general.id) : undefined;
   const working = activeSessions.some((session) => session.workStartedAt)
-    || projects.some((project) => project.sessions.some((session) => session.workStartedAt));
+    || projects.some((project) => project.sessions.some((session) => session.workStartedAt))
+    || general?.sessions.some((session) => session.workStartedAt);
   const announceCopy = (value: string, label: string) => {
     setAnnouncement("");
     void copyText(value).then((copied) => {
@@ -362,7 +367,55 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, pa
             </div>}
           </section>;
         })}
-        {(projectsOpen || Boolean(query.trim())) && !loading && projects.length === 0 && <div className="sidebar-state">{query ? "No matching sessions." : "No projects yet. Add a folder to start."}</div>}
+        {(projectsOpen || Boolean(query.trim())) && !loading && projects.length === 0 && (!query || !general?.sessions.length) && <div className="sidebar-state">{query ? "No matching sessions." : "No projects yet. Add a folder to start."}</div>}
+        {general && <section className="project-group general-group">
+          <div className="project-row">
+            <button
+              type="button"
+              className={`project-toggle ${general.active ? "is-active" : ""}`}
+              onClick={() => setGeneralOpen((open) => !open)}
+              aria-expanded={generalOpen}
+            >
+              <IconWorld size={14} />
+              <span>General</span>
+              <small>{generalPage?.totalCount ?? general.sessions.length}</small>
+            </button>
+            <button className="project-new" type="button" onClick={onNewGeneral} disabled={Boolean(busy || deleting || projectBusy)} aria-label="New general session" title="New general session">
+              <IconPlus size={14} />
+            </button>
+          </div>
+          {generalOpen && <div className="project-sessions">
+            {general.sessions.length
+              ? general.sessions.map((session) => <SessionRow
+                  key={session.id}
+                  session={session}
+                  menuId={`general-${session.id}`}
+                  menuOpen={openMenu === `general-${session.id}`}
+                  busy={busy}
+                  deleting={deleting}
+                  completed={Boolean(unseenCompletions?.[session.id])}
+                  now={now}
+                  onSelect={selectSession}
+                  onDelete={onDeleteSession}
+                  onArchive={onArchiveSession}
+                  onRename={onRenameSession}
+                  onSetActive={onSetSessionActive}
+                  onSetPinned={onSetSessionPinned}
+                  onToggleMenu={toggleMenu}
+                  onCloseMenu={() => closeMenu(true)}
+                  onCopySessionId={(id) => announceCopy(id, "Session ID")}
+                />)
+              : <p className="active-session-empty">Read-only search across files accessible on this PC.</p>}
+            {(general.sessions.length > SESSION_LIST_INITIAL_LIMIT || generalPage?.nextCursor) && <div className="session-list-controls">
+              {generalPage?.nextCursor && <button className="session-list-button" type="button" onClick={() => onLoadMore(general)} disabled={projectLoading === general.id}>
+                {projectLoading === general.id ? "Loading…" : "Show more"}
+              </button>}
+              {general.sessions.length > SESSION_LIST_INITIAL_LIMIT && <button className="session-list-button" type="button" onClick={() => onShowLess(general)} disabled={projectLoading === general.id}>
+                Show less
+              </button>}
+            </div>}
+          </div>}
+        </section>}
       </nav>
 
       <div className="sidebar-foot">

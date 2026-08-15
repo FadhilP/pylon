@@ -14,6 +14,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
 import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
+import { GENERAL_PROJECT_ID } from "../shared/general-session";
 import type { MessageReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
@@ -201,14 +202,21 @@ export function App() {
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
   const agentColors = useAgentColors(live.runtime?.sessionId, live.runtime?.conversation.delegatedRuns ?? []);
-  const projects = useMemo<SessionProject[]>(() => sessionPages.map((page) => ({
+  const toSessionProject = (page: SessionProjectPage): SessionProject => ({
     id: page.id,
     label: page.label,
     cwd: page.cwd,
     sessions: page.sessions,
     active: activeSessions.some((session) => session.projectId === page.id && session.active)
       || page.sessions.some((session) => session.active),
-  })), [activeSessions, sessionPages]);
+  });
+  const projects = useMemo<SessionProject[]>(() => sessionPages
+    .filter((page) => page.id !== GENERAL_PROJECT_ID)
+    .map(toSessionProject), [activeSessions, sessionPages]);
+  const general = useMemo<SessionProject | undefined>(() => {
+    const page = sessionPages.find((candidate) => candidate.id === GENERAL_PROJECT_ID);
+    return page ? toSessionProject(page) : undefined;
+  }, [activeSessions, sessionPages]);
   const sessions = useMemo(() => sessionPages.flatMap((page) => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find((session) => session.active) ?? sessions.find((session) => session.active);
   const activePackages = useMemo(() => new Set(packages.filter((item) => item.active).map((item) => item.id)), [packages]);
@@ -990,6 +998,7 @@ export function App() {
         onLoadMore={(project) => void loadMoreSessions(project)}
         onShowLess={(project) => void showLessSessions(project)}
         onAddProject={() => void addProject()}
+        general={general}
         onOpenArchives={() => {
           setArchivesOpen(true);
           if (mobile) setSidebarOpen(false);
@@ -1048,6 +1057,9 @@ export function App() {
         onNewSession={(project) => {
           const unfiltered = projects.find((candidate) => candidate.id === project.id);
           if (unfiltered) void newSession(unfiltered);
+        }}
+        onNewGeneral={() => {
+          if (general) void newSession(general);
         }}
         onWorktreeSetup={(project) => setSidebarAction({
           key: `worktree-setup-${project.id}`,

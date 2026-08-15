@@ -512,6 +512,7 @@
   .project-add:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-soft); }
   .project-add:disabled { cursor: default; opacity: .45; }
   .project-group + .project-group { margin-top: 3px; }
+  .general-group { margin-top: 14px !important; padding-top: 13px; border-top: 1px solid var(--line); }
   .project-row { position: relative; display: flex; align-items: center; gap: 3px; }
   .project-group.is-dragging > .project-row::before,
   .session-row.is-dragging::before {

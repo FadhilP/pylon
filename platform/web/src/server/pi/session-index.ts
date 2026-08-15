@@ -126,7 +126,7 @@ export class SessionIndex {
 
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
     await this.refresh();
-    const registered = this.registry?.list();
+    const registered = this.registry ? [...this.registry.list(), this.registry.generalProject()] : undefined;
     const registeredById = registered ? new Map(registered.map((project) => [project.id, project])) : undefined;
     const registeredIds = registeredById ? new Set(registeredById.keys()) : undefined;
     const workspaceProjectIds = new Map(this.registry?.listSessionWorkspaces().map((record) => [record.sessionId, record.projectId]));
@@ -208,7 +208,7 @@ export class SessionIndex {
     const archivedProjects = registry.listArchived();
     const archivedProjectIds = new Set(archivedProjects.map((project) => project.id));
     const workspaceProjectIds = new Map(registry.listSessionWorkspaces().map((record) => [record.sessionId, record.projectId]));
-    const projectById = new Map(registry.list().map((project) => [project.id, project]));
+    const projectById = new Map([...registry.list(), registry.generalProject()].map((project) => [project.id, project]));
     const projectIdFor = (session: Pick<SessionInfo, "id" | "cwd">) => workspaceProjectIds.get(session.id) ?? projectIdForCwd(session.cwd);
     const projectFor = (session: Pick<SessionInfo, "id" | "cwd">) => projectById.get(projectIdFor(session));
     const projects: ArchivedProjectSummary[] = archivedProjects

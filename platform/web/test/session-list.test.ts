@@ -76,6 +76,19 @@ test("expanded project sessions can collapse to the initial three", async () => 
   assert.match(sidebar, /formatSessionActivity\(session\.modifiedAt, session\.workStartedAt, now\)/);
 });
 
+test("General renders below projects and starts through its reserved page", async () => {
+  const [app, sidebar] = await Promise.all([
+    readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.ok(sidebar.indexOf("visibleProjects.map") < sidebar.indexOf("general && <section"));
+  assert.match(sidebar, /Read-only search across files accessible on this PC/);
+  assert.match(app, /page\.id !== GENERAL_PROJECT_ID/);
+  assert.match(app, /if \(general\) void newSession\(general\)/);
+});
+
+
 test("a completed sleeping session renders the new-response orb", async () => {
   const sidebar = await readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8");
 

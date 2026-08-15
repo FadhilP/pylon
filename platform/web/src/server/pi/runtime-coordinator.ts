@@ -254,7 +254,7 @@ export class RuntimeCoordinator implements PiDriver {
     this.target = target;
     this.sessionIndex.setAgentDir(target.agentDir);
     this.modelRuntime = this.options.modelRuntime ?? await createPylonModelRuntime(target.agentDir);
-    this.projectRegistry = ProjectRegistry.forAgentDir(target.agentDir);
+    this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
     await this.projectRegistry.load(async () => {
       const knownSessions = await listSessionInventory(process.env.PI_CODING_AGENT_DIR || target.agentDir);
       return [target.cwd, ...knownSessions.map((session) => session.cwd)];
