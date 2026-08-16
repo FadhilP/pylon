@@ -459,7 +459,7 @@ export function latestVisibleUserIndex(messages: unknown[], end = messages.lengt
 
 export function projectConversation(
   messages: unknown[],
-  options: { start?: number; end?: number; includeDelegated?: boolean; limitMessages?: boolean } = {},
+  options: { start?: number; end?: number; includeDelegated?: boolean; limitMessages?: boolean; toolDurations?: ReadonlyMap<string, number> } = {},
 ): Pick<ConversationReadModel, "messages" | "delegatedRuns"> {
   const start = Math.min(messages.length, Math.max(0, Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES))));
   const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
@@ -518,6 +518,7 @@ export function projectConversation(
             name,
             input: browserJson(item.arguments),
             status: completedToolStatuses.get(item.id) ?? "running",
+            ...(options.toolDurations?.get(item.id) === undefined ? {} : { durationMs: options.toolDurations.get(item.id) }),
           },
         });
       }
@@ -563,6 +564,7 @@ export function projectConversation(
           name,
           input: browserJson(call?.rawInput),
           status: raw.isError === true ? "failed" : "completed",
+          ...(options.toolDurations?.get(toolId) === undefined ? {} : { durationMs: options.toolDurations.get(toolId) }),
         },
       });
       continue;
@@ -1059,6 +1061,8 @@ export class RuntimeProjection {
         name: text(message.toolName ?? raw.toolName, 200) || activity?.name || "Tool",
         input: activity?.input,
         status: message.isError === true || raw.isError === true ? "failed" : activity?.status ?? "completed",
+        ...(activity?.startedAt ? { startedAt: activity.startedAt } : {}),
+        ...(activity?.durationMs === undefined ? {} : { durationMs: activity.durationMs }),
       };
     }
     this.messages.set(messageId, item);
@@ -1112,8 +1116,9 @@ export class RuntimeProjection {
     this.flush(); const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, `tool-${this.tools.size + 1}`);
     const name = text(raw.name ?? raw.toolName, 200);
     const input = raw.args ?? raw.input;
+    const startedAt = createdAt(raw.startedAt) ?? new Date().toISOString();
     this.toolInputs.set(toolId, input);
-    const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running" };
+    const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running", startedAt };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.start", item);
     const run = projectDelegatedToolEvent("start", toolId, undefined, raw, this.runtime.metrics.userMessages);
     if (run) this.setDelegatedRun(run);
@@ -1135,7 +1140,10 @@ export class RuntimeProjection {
     const input = this.toolInputs.get(toolId) ?? raw.args ?? raw.input;
     this.toolInputs.delete(toolId);
     const name = old?.name ?? text(raw.name ?? raw.toolName, 200);
-    const item: ToolActivityReadModel = { id: toolId, name, input: old?.input ?? browserJson(input), status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed", summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined };
+    const startedAt = createdAt(raw.startedAt) ?? old?.startedAt;
+    const projectedDuration = boundedNumber(raw.durationMs, 7 * 24 * 60 * 60 * 1_000);
+    const durationMs = projectedDuration ?? (startedAt ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - Date.parse(startedAt))) : undefined);
+    const item: ToolActivityReadModel = { id: toolId, name, input: old?.input ?? browserJson(input), status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed", summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined, ...(startedAt ? { startedAt } : {}), ...(durationMs === undefined ? {} : { durationMs }) };
     this.tools.set(toolId, item); trimMap(this.tools, MAX_TOOLS); this.publish("tool.end", item);
     const event = { ...raw, name, args: input };
     const previous = this.delegatedRuns.get(toolId);

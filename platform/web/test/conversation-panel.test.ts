@@ -42,6 +42,7 @@ test("compaction history opens summary-first details in the right panel", async 
 test("new sessions show an isolated drafting shell until the authoritative runtime is ready", async () => {
   const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
   const store = await readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8");
 
   assert.match(app, /conversation:pending:\$\{pendingSession\.requestId\}/);
@@ -62,6 +63,8 @@ test("new sessions show an isolated drafting shell until the authoritative runti
   assert.match(panel, /onPaste=\{draftingOnly \? undefined/);
   assert.match(panel, /disabled=\{!connected \|\| composerBlocked \|\| submitting \|\| !hasDraft \|\| !controls\?\.model\}/);
   assert.match(panel, /Workspace setup failed[\s\S]*?Retry setup/);
+  assert.match(styles, /pending-session-progress > span[\s\S]*?translateX\(-100%\)[\s\S]*?linear-gradient\(90deg, transparent, var\(--accent\), transparent\)[\s\S]*?transcript-activity-scan 1\.7s ease-in-out infinite/);
+  assert.doesNotMatch(styles, /@keyframes pending-session-progress/);
   assert.match(store, /async newSession\([\s\S]*?Promise<number>[\s\S]*?return accepted\.sessionGeneration/);
   const newSession = app.slice(app.indexOf("const newSession"), app.indexOf("const deleteSession"));
   assert.doesNotMatch(newSession, /setRightPanel\(null\)/);
@@ -109,16 +112,24 @@ test("spawned conversations reuse main-chat timing metadata without a child-work
   assert.doesNotMatch(agents, /Child is working/);
 });
 
-test("main and agent aggregate tool groups keep their icon and running state", async () => {
+test("tool groups keep running state, quiet durations, and recent unique names", async () => {
   const panel = await readFile(new URL("../src/client/conversation-panel.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../src/client/styles.css", import.meta.url), "utf8");
   const agents = await readFile(new URL("../src/client/agent-drawer.tsx", import.meta.url), "utf8");
   const activity = await readFile(new URL("../src/shared/agent-activity.ts", import.meta.url), "utf8");
 
   assert.match(panel, /const activeToolGroupId = running[\s\S]*?reverse\(\)\.find\(\(block\) => "tools" in block && !toolBlocksBeforeLaterPrompt\.has\(block\.id\)\)\?\.id/);
-  assert.match(panel, /<ToolTurnGroup[^\n]*?running=\{block\.id === activeToolGroupId\}/);
-  assert.match(panel, /function ToolTurnGroup\(\{ tools, running, onExpand \}/);
+  assert.match(panel, /const hasRunningTools = runningTools\.length > 0;[\s\S]*?setInterval\(\(\) => setToolNow\(Date\.now\(\)\), 1_000\)/);
+  assert.match(panel, /<ToolTurnGroup[^\n]*?running=\{block\.id === activeToolGroupId\}[^\n]*?now=\{toolNow\}/);
+  assert.match(panel, /function ToolTurnGroup\(\{ tools, running, now, onExpand \}/);
+  assert.match(panel, /latestUniqueToolNames\(tools\)/);
+  assert.match(panel, /aggregateToolDuration\(tools, now\)/);
+  assert.match(panel, /className="tool-group-duration"[\s\S]*?formatToolDuration\(durationMs\)/);
   assert.match(panel, /className=\{`tool-turn-group\$\{running \? " is-running" : ""\}`\}/);
-  assert.match(panel, /summary=\{<>\s*<IconTool size=\{15\} \/>/);
+  assert.match(panel, /<span className="sr-only">\{status\}, <\/span><time[\s\S]*?formatToolDuration\(durationMs\)/);
+  assert.match(styles, /@keyframes transcript-activity-scan \{ from \{ transform: translateX\(-100%\); \} to \{ transform: translateX\(100%\); \} \}/);
+  assert.match(styles, /transcript-activity-progress::after[\s\S]*?linear-gradient\(90deg, transparent, var\(--accent\), transparent\)[\s\S]*?transcript-activity-scan 1\.7s ease-in-out infinite/);
+  assert.match(styles, /tool-turn-group\.is-running::after,[\s\S]*?agent-tool-group\.is-running::after[\s\S]*?transcript-activity-scan 1\.7s ease-in-out infinite/);
   assert.match(agents, /className=\{`agent-tool-group is-\$\{toolStatus\}`\}/);
   assert.match(agents, /const toolStatus = run\.status === "running"\s*\? "running"/);
   assert.doesNotMatch(agents, /run\.status === "running" && tools\.some\(\(tool\) => !tool\.completed\)/);

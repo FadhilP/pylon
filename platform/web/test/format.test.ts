@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCacheHitRate, formatCompactNumber, formatRelativeTime, formatSessionActivity, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
+import { formatCacheHitRate, formatCompactNumber, formatRelativeTime, formatSessionActivity, formatToolDuration, formatWorkDuration, modelLabel } from "../src/shared/format.ts";
 import { highlightSource, renderMarkdown } from "../src/shared/markdown.ts";
 
 test("work duration uses compact Codex-style units", () => {
@@ -8,6 +8,14 @@ test("work duration uses compact Codex-style units", () => {
   assert.equal(formatWorkDuration(15_900), "15s");
   assert.equal(formatWorkDuration(15 * 60_000 + 9_000), "15m 9s");
   assert.equal(formatWorkDuration(2 * 60 * 60_000 + 7 * 60_000), "2h 7m");
+});
+
+
+test("tool duration keeps fast calls precise and long calls compact", () => {
+  assert.equal(formatToolDuration(284), "284ms");
+  assert.equal(formatToolDuration(1_250), "1.3s");
+  assert.equal(formatToolDuration(18_900), "18s");
+  assert.equal(formatToolDuration(2 * 60_000 + 9_000), "2m 9s");
 });
 
 test("session activity uses compact relative units", () => {

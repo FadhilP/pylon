@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSessionContext, estimateTokens, SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { appendWorkDuration } from "pylon-core/src/work-duration.ts";
+import { appendToolDuration, appendWorkDuration } from "pylon-core/src/work-duration.ts";
 import { correlatePendingUserMessageStart, deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
 import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
@@ -381,6 +381,52 @@ test("completed work duration survives runtime restart", { timeout: 45_000 }, as
     await driver.start({ cwd, agentDir, repositoryRoot, sessionPath: session.getSessionFile()! });
     const message = (await driver.snapshot()).conversation.messages.find((item) => item.entryId === assistantEntryId);
     assert.equal(message?.workDurationMs, 12_345);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("completed tool duration survives runtime restart", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-tool-duration-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
+  const session = SessionManager.create(cwd, sessionDir);
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/app.ts" } }],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: Date.now(),
+  });
+  session.appendMessage({
+    role: "toolResult",
+    toolCallId: "read-1",
+    toolName: "read",
+    content: [{ type: "text", text: "source" }],
+    isError: false,
+    timestamp: Date.now(),
+  });
+  appendToolDuration(session, "read-1", 1_250);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot, sessionPath: session.getSessionFile()! });
+    const message = (await driver.snapshot()).conversation.messages.find((item) => item.tool?.id === "read-1");
+    assert.equal(message?.tool?.durationMs, 1_250);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });

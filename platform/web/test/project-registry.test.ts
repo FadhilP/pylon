@@ -21,8 +21,8 @@ test("General is a built-in local scope rooted outside the project list", async 
     const policy = registry.runtimePolicy(GENERAL_PROJECT_ID, "general-session");
     assert.equal(policy.effective.workspace, "local");
     assert.equal(policy.effective.toolOverrides?.code_search, "disabled");
-    assert.equal(policy.effective.toolOverrides?.bash, "disabled");
-    assert.equal(policy.effective.toolOverrides?.edit, "disabled");
+    assert.equal(policy.effective.toolOverrides?.bash, undefined);
+    assert.equal(policy.effective.toolOverrides?.edit, undefined);
 
     await registry.setSessionWorkspace({ sessionId: "general-session", projectId: GENERAL_PROJECT_ID, mode: "local" });
     assert.equal(registry.projectForSession("general-session", root)?.id, GENERAL_PROJECT_ID);

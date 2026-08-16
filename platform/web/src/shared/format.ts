@@ -10,6 +10,19 @@ export function formatWorkDuration(value: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+
+export function formatToolDuration(value: number): string {
+  const milliseconds = Math.max(0, Math.round(value));
+  if (milliseconds < 1_000) return `${milliseconds}ms`;
+  const seconds = milliseconds / 1_000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const wholeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  if (minutes < 60) return `${minutes}m ${wholeSeconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export function formatRelativeTime(value: string, now = Date.now()): string {
   const time = Date.parse(value);
   if (Number.isNaN(time)) return "Unknown";

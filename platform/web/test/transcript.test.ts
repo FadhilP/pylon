@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, groupConversationMessages, includeLatestLoadedTurn, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus, turnIdsInViewport } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, aggregateToolDuration, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus, toolElapsedDuration, turnIdsInViewport } from "../src/shared/transcript.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { DelegatedAgentRunReadModel, MessageReadModel } from "../src/shared/protocol/events.ts";
 
@@ -32,6 +32,27 @@ test("adjacent tools group without crossing message boundaries", () => {
     "user-2",
     ["tool-4"],
   ]);
+});
+
+
+test("tool summaries use recent unique names and the longest relevant duration", () => {
+  const startedAt = "2026-01-01T00:00:00.000Z";
+  const tools: MessageReadModel[] = [
+    { ...message("one", "tool"), tool: { id: "one", name: "bash", status: "completed", durationMs: 8_000 } },
+    { ...message("two", "tool"), tool: { id: "two", name: "rg", status: "completed", durationMs: 1_000 } },
+    { ...message("three", "tool"), tool: { id: "three", name: "bash", status: "completed", durationMs: 3_000 } },
+    { ...message("four", "tool"), tool: { id: "four", name: "fd", status: "running", startedAt } },
+    { ...message("five", "tool"), tool: { id: "five", name: "fd", status: "running", startedAt: "2026-01-01T00:00:02.000Z" } },
+  ];
+  const now = Date.parse("2026-01-01T00:00:05.000Z");
+
+  assert.deepEqual(latestUniqueToolNames(tools), ["rg", "bash", "fd"]);
+  assert.equal(toolElapsedDuration(tools[3]!, now), 5_000);
+  assert.equal(aggregateToolDuration(tools, now), 5_000);
+  const completed = tools.map((tool) => tool.tool?.status === "running"
+    ? { ...tool, tool: { ...tool.tool, status: "completed" as const, durationMs: tool.tool.id === "four" ? 5_000 : 3_000 } }
+    : tool);
+  assert.equal(aggregateToolDuration(completed, now), 8_000);
 });
 
 test("terminal activity status is neutral for stops and failed for errors and retry handoffs", () => {

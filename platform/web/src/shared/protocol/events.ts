@@ -57,6 +57,8 @@ export interface MessageReadModel {
     name: string;
     input?: string;
     status: "running" | "completed" | "failed";
+    startedAt?: string;
+    durationMs?: number;
   };
 }
 
@@ -75,6 +77,8 @@ export interface ToolActivityReadModel {
   input?: string;
   status: "running" | "completed" | "failed";
   summary?: string;
+  startedAt?: string;
+  durationMs?: number;
 }
 
 export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout" | "spawn_agent" | "spawn_session";

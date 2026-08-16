@@ -1,4 +1,4 @@
-import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconWorld, IconX, IconLibrary } from "@tabler/icons-react";
+import { IconArchive, IconChevronRight, IconCopy, IconDots, IconFolder, IconFolderOpen, IconPencil, IconPin, IconPlus, IconPower, IconSearch, IconSettings, IconTerminal2, IconTrash, IconX, IconLibrary } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
@@ -368,23 +368,17 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, ge
           </section>;
         })}
         {(projectsOpen || Boolean(query.trim())) && !loading && projects.length === 0 && (!query || !general?.sessions.length) && <div className="sidebar-state">{query ? "No matching sessions." : "No projects yet. Add a folder to start."}</div>}
-        {general && <section className="project-group general-group">
-          <div className="project-row">
-            <button
-              type="button"
-              className={`project-toggle ${general.active ? "is-active" : ""}`}
-              onClick={() => setGeneralOpen((open) => !open)}
-              aria-expanded={generalOpen}
-            >
-              <IconWorld size={14} />
+        {general && <section className="general-session-group" aria-labelledby="general-sessions-heading">
+          <div className="project-heading">
+            <h2 className="nav-label" id="general-sessions-heading"><button type="button" aria-expanded={generalOpen} onClick={() => setGeneralOpen((open) => !open)}>
               <span>General</span>
-              <small>{generalPage?.totalCount ?? general.sessions.length}</small>
-            </button>
-            <button className="project-new" type="button" onClick={onNewGeneral} disabled={Boolean(busy || deleting || projectBusy)} aria-label="New general session" title="New general session">
-              <IconPlus size={14} />
-            </button>
+              <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
+            </button></h2>
+            <div>
+              <button className="project-add" type="button" onClick={onNewGeneral} disabled={Boolean(busy || deleting || projectBusy)}>New session</button>
+            </div>
           </div>
-          {generalOpen && <div className="project-sessions">
+          {generalOpen && <div className="active-session-list">
             {general.sessions.length
               ? general.sessions.map((session) => <SessionRow
                   key={session.id}
@@ -405,7 +399,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, ge
                   onCloseMenu={() => closeMenu(true)}
                   onCopySessionId={(id) => announceCopy(id, "Session ID")}
                 />)
-              : <p className="active-session-empty">Read-only search across files accessible on this PC.</p>}
+              : <p className="active-session-empty">Search and work with files accessible on this PC.</p>}
             {(general.sessions.length > SESSION_LIST_INITIAL_LIMIT || generalPage?.nextCursor) && <div className="session-list-controls">
               {generalPage?.nextCursor && <button className="session-list-button" type="button" onClick={() => onLoadMore(general)} disabled={projectLoading === general.id}>
                 {projectLoading === general.id ? "Loading…" : "Show more"}

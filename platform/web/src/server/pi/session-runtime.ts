@@ -4,8 +4,10 @@ import { unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  appendToolDuration,
   appendWorkDuration,
   MAX_WORK_DURATION_MS,
+  readPersistedToolDurations,
   readPersistedWorkDurations,
 } from "pylon-core/src/work-duration.ts";
 import {
@@ -670,6 +672,9 @@ export class SessionRuntime implements PiDriver {
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
   private workDurationsLeafId: string | null | undefined;
+  private readonly toolDurations = new Map<string, number>();
+  private toolDurationsLeafId: string | null | undefined;
+  private readonly activeToolStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
   private readonly turnControls = new Map<string, { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }>();
   private readonly turnChanges = new Map<string, ChangedFileReadModel[]>();
   private turnChangesLeafId: string | null | undefined;
@@ -788,6 +793,7 @@ export class SessionRuntime implements PiDriver {
     if (!this.gate.ready) throw new Error("runtime is not ready");
     const cursor = decodeHistoryCursor(input.cursor);
     if (cursor === undefined) throw new Error("history cursor is invalid");
+    this.hydrateToolDurations(runtime.session);
     const messages = this.transcriptMessages(runtime.session);
     const limit = Math.min(HISTORY_PAGE_SIZE, Math.max(1, input.limit ?? HISTORY_PAGE_SIZE));
     const direction = input.direction ?? "before";
@@ -804,7 +810,7 @@ export class SessionRuntime implements PiDriver {
       end = Math.min(cursor, messages.length);
       start = Math.max(0, end - limit);
     }
-    const projected = projectConversation(messages, { start, end, includeDelegated: false }).messages;
+    const projected = projectConversation(messages, { start, end, includeDelegated: false, toolDurations: this.toolDurations }).messages;
     return {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: runtime.session.sessionId,
@@ -2268,6 +2274,9 @@ export class SessionRuntime implements PiDriver {
       this.workStartedAtMs = undefined;
       this.workDurations.clear();
       this.workDurationsLeafId = undefined;
+      this.toolDurations.clear();
+      this.toolDurationsLeafId = undefined;
+      this.activeToolStarts.clear();
       this.turnControls.clear();
       this.turnChanges.clear();
       this.turnChangesLeafId = undefined;
@@ -2344,15 +2353,39 @@ export class SessionRuntime implements PiDriver {
           });
         });
       }
+      let forwarded: unknown = raw;
       const phase = kind === "tool_execution_start" ? "start"
         : kind === "tool_execution_update" ? "update"
         : kind === "tool_execution_end" ? "end"
         : undefined;
       if (phase && typeof raw.toolCallId === "string" && raw.toolCallId) {
-        const previous = this.liveDelegatedRuns.get(raw.toolCallId);
+        const toolCallId = raw.toolCallId;
+        if (phase === "start") {
+          const startedAtMs = Date.now();
+          const startedAt = new Date(startedAtMs).toISOString();
+          this.activeToolStarts.set(toolCallId, { startedAt, startedAtMs });
+          forwarded = { ...raw, startedAt };
+        } else if (phase === "end") {
+          const started = this.activeToolStarts.get(toolCallId);
+          this.activeToolStarts.delete(toolCallId);
+          if (started) {
+            const durationMs = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - started.startedAtMs));
+            this.toolDurations.set(toolCallId, durationMs);
+            try {
+              if (!appendToolDuration(session.sessionManager, toolCallId, durationMs)) {
+                this.recordError(new Error("could not persist completed tool duration"));
+              }
+            } catch (error) {
+              this.recordError(error);
+            }
+            this.toolDurationsLeafId = session.sessionManager.getLeafId();
+            forwarded = { ...raw, startedAt: started.startedAt, durationMs };
+          }
+        }
+        const previous = this.liveDelegatedRuns.get(toolCallId);
         const run = projectDelegatedToolEvent(
           phase,
-          raw.toolCallId,
+          toolCallId,
           previous,
           raw,
           this.lastSnapshot?.metrics.userMessages ?? session.getSessionStats().userMessages,
@@ -2374,7 +2407,7 @@ export class SessionRuntime implements PiDriver {
           payload: forwarded,
         });
       })) return;
-      let forwarded: unknown = correlatePendingUserMessageStart(raw, this.pendingUserMessageIds);
+      forwarded = correlatePendingUserMessageStart(forwarded as Record<string, unknown>, this.pendingUserMessageIds);
       if (kind === "agent_start") {
         if (this.workStartedAtMs === undefined) {
           this.workTurnId = `turn-${++this.nextTurnId}`;
@@ -2765,6 +2798,7 @@ export class SessionRuntime implements PiDriver {
     }));
     const session = runtime.session;
     this.hydrateWorkDurations(session);
+    this.hydrateToolDurations(session);
     this.hydrateTurnChanges(session);
     this.requestPackageStates(session.sessionId);
     const stats = session.getSessionStats();
@@ -2778,7 +2812,7 @@ export class SessionRuntime implements PiDriver {
       && cachedProjection.leafId === leafId
       && cachedProjection.historyStart === historyStart
       ? cachedProjection.value
-      : projectConversation(messages, { start: historyStart, limitMessages: false });
+      : projectConversation(messages, { start: historyStart, limitMessages: false, toolDurations: this.toolDurations });
     if (projectedConversation !== cachedProjection?.value) {
       this.conversationProjectionCache = { sessionId: session.sessionId, leafId, historyStart, value: projectedConversation };
     }
@@ -3114,6 +3148,16 @@ export class SessionRuntime implements PiDriver {
       this.workDurations.set(entryId, durationMs);
     }
     this.workDurationsLeafId = leafId;
+  }
+
+  private hydrateToolDurations(session: AgentSession): void {
+    const leafId = session.sessionManager.getLeafId();
+    if (this.toolDurationsLeafId === leafId) return;
+    this.toolDurations.clear();
+    for (const [toolCallId, durationMs] of readPersistedToolDurations(session.sessionManager)) {
+      this.toolDurations.set(toolCallId, durationMs);
+    }
+    this.toolDurationsLeafId = leafId;
   }
 
   private hydrateTurnChanges(session: AgentSession): void {

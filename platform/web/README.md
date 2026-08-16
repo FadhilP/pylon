@@ -49,7 +49,7 @@ finally { await vite.close(); }
 ```
 ## Session workspaces
 
-The sidebar also includes a built-in **General** scope below Projects. General sessions are rooted at the current OS user's home directory, can use the bounded `fd`, `rg`, and `read` tools with explicit paths outside that directory, and do not use repository indexing. Agent shell and filesystem mutation tools are disabled in this scope.
+The sidebar also includes a built-in **General** scope below Projects. General sessions are rooted at the current OS user's home directory, can search and edit files available to that user through explicit paths, and do not use repository indexing. Normal Guard protections still apply.
 
 New sessions use the project's explicit workspace policy. Local works directly in the registered folder without changing branches, Project folder uses a Pylon session branch in that checkout, and Session worktree creates a linked worktree under the agent directory. Project setup commands run only inside newly created worktrees.
 

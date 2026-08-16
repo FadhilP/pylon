@@ -1511,9 +1511,9 @@ test("General sessions use the built-in home scope instead of the selected proje
     assert.ok(sessions.projects.some((project) => project.id === GENERAL_PROJECT_ID && project.cwd === generalCwd));
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.runtimePolicy.effective.toolOverrides?.code_search, "disabled");
-    assert.equal(snapshot.runtimePolicy.effective.toolOverrides?.bash, "disabled");
-    assert.equal(snapshot.activeTools.includes("bash"), false);
-    assert.equal(snapshot.activeTools.includes("edit"), false);
+    assert.equal(snapshot.runtimePolicy.effective.toolOverrides?.bash, undefined);
+    assert.equal(snapshot.activeTools.includes("bash"), true);
+    assert.equal(snapshot.activeTools.includes("edit"), true);
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter((session) => session.cwd.startsWith(root));

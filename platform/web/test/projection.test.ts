@@ -113,14 +113,16 @@ test("projection maps SDK event names and retains active messages", () => {
   projection.apply(session({ type: "queue_update", steering: ["one"], followUp: ["two", "three"] }));
   projection.apply(session({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "retry" }));
   projection.apply(session({ type: "compaction_start", reason: "threshold" }));
-  projection.apply(session({ type: "tool_execution_start", toolCallId: "call", toolName: "read", args: { path: "src/app.ts", apiToken: "hidden" } }));
-  projection.apply(session({ type: "tool_execution_end", toolCallId: "call", toolName: "read", result: {}, isError: false }));
+  projection.apply(session({ type: "tool_execution_start", toolCallId: "call", toolName: "read", args: { path: "src/app.ts", apiToken: "hidden" }, startedAt: "2026-01-01T00:00:00.000Z" }));
+  projection.apply(session({ type: "tool_execution_end", toolCallId: "call", toolName: "read", result: {}, isError: false, durationMs: 1_250 }));
   projection.apply(session({ type: "message_start", message: { role: "toolResult", toolCallId: "call", toolName: "read", content: [{ type: "text", text: "source" }], isError: false } }));
   projection.apply(session({ type: "message_end", message: { role: "toolResult", toolCallId: "call", toolName: "read", content: [{ type: "text", text: "source" }], isError: false } }));
   const toolMessage = projection.snapshot().conversation.messages.at(-1);
   assert.equal(toolMessage?.role, "tool");
   assert.match(toolMessage?.tool?.input ?? "", /src\/app\.ts/);
   assert.doesNotMatch(toolMessage?.tool?.input ?? "", /hidden|apiToken/);
+  assert.equal(toolMessage?.tool?.startedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(toolMessage?.tool?.durationMs, 1_250);
   for (let index = 0; index < 105; index++) {
     projection.apply(session({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: `message ${index}` }] } }));
     projection.apply(session({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `message ${index}` }] } }));
@@ -130,6 +132,7 @@ test("projection maps SDK event names and retains active messages", () => {
   assert.equal(result.conversation.retry.active, true);
   assert.deepEqual(result.conversation.compaction, { active: true, reason: "threshold" });
   assert.equal(result.conversation.tools[0]?.status, "completed");
+  assert.equal(result.conversation.tools[0]?.durationMs, 1_250);
   assert.equal(result.conversation.messages.length, 106);
   assert.equal(result.conversation.messages[0]?.role, "tool");
   assert.equal(result.conversation.messages.at(-1)?.text, "message 104");
@@ -150,6 +153,16 @@ test("projection maps SDK event names and retains active messages", () => {
   assert.equal(replaced.messages.length, 1);
   assert.equal(replaced.messages[0]?.text, "Loaded history");
   assert.equal(replaced.tools.length, 0);
+});
+
+
+test("history projection attaches persisted tool durations", () => {
+  const projected = projectConversation([
+    { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/app.ts" } }] },
+    { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "source" }], isError: false },
+  ], { toolDurations: new Map([["read-1", 1_250]]) });
+
+  assert.equal(projected.messages.find((message) => message.role === "tool")?.tool?.durationMs, 1_250);
 });
 
 test("compaction completion appends a durable disclosure without changing streaming state", () => {

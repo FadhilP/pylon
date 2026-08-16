@@ -416,7 +416,11 @@ test("event and snapshot validators reject incompatible versions", () => {
     conversation: {
       ...snapshot.conversation,
       workStartedAt: new Date().toISOString(),
-      messages: [{ id: "assistant-1", entryId: "entry-1", role: "assistant", text: "Done", streaming: false, workDurationMs: 1_234 }],
+      messages: [
+        { id: "assistant-1", entryId: "entry-1", role: "assistant", text: "Done", streaming: false, workDurationMs: 1_234 },
+        { id: "tool-1", role: "tool", text: "source", streaming: false, tool: { id: "call-1", name: "read", status: "completed", durationMs: 1_250 } },
+      ],
+      tools: [{ id: "call-live", name: "bash", status: "running", startedAt: new Date().toISOString() }],
       delegatedRuns: [{
         id: "scout-1",
         kind: "repo_scout",
@@ -447,6 +451,8 @@ test("event and snapshot validators reject incompatible versions", () => {
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, gitBranch: "x".repeat(201) }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, workStartedAt: "invalid" } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, messages: [{ ...timedSnapshot.conversation.messages[0], workDurationMs: 8 * 24 * 60 * 60 * 1_000 }] } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, messages: [{ ...timedSnapshot.conversation.messages[1], tool: { ...timedSnapshot.conversation.messages[1]!.tool, durationMs: 8 * 24 * 60 * 60 * 1_000 } }] } }), false);
+  assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, tools: [{ ...timedSnapshot.conversation.tools[0], startedAt: "invalid" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], kind: "unknown" }] } }), false);
   assert.equal(isRuntimeSnapshot({ ...timedSnapshot, conversation: { ...timedSnapshot.conversation, delegatedRuns: [{ ...timedSnapshot.conversation.delegatedRuns[0], activity: [{ kind: "result", tool: "read", text: "x".repeat(2_001) }] }] } }), false);
   assert.equal(isRuntimeSnapshot({
@@ -524,6 +530,14 @@ test("event and snapshot validators reject incompatible versions", () => {
     nextCursor: "cursor",
   };
   assert.equal(isConversationHistoryPage(history), true);
+  assert.equal(isConversationHistoryPage({
+    ...history,
+    messages: [{ id: "tool-1", role: "tool", text: "source", streaming: false, tool: { id: "call-1", name: "read", status: "completed", durationMs: 1_250 } }],
+  }), true);
+  assert.equal(isConversationHistoryPage({
+    ...history,
+    messages: [{ id: "tool-1", role: "tool", text: "source", streaming: false, tool: { id: "call-1", name: "read", status: "completed", durationMs: -1 } }],
+  }), false);
   const exactLimitDisplay = {
     ...history.messages[0].compaction.display,
     records: [{ sourceEntryId: "s".repeat(240), role: "user", text: "x".repeat(2_000) }],

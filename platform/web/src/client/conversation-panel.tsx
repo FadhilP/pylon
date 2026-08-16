@@ -1,8 +1,8 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconBotId, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { groupConversationMessages, includeLatestLoadedTurn, turnIdsInViewport } from "../shared/transcript";
-import { formatCompactNumber, formatWorkDuration } from "../shared/format";
+import { aggregateToolDuration, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
+import { formatCompactNumber, formatToolDuration, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
@@ -103,6 +103,7 @@ export function ConversationPanel({
   const [undo, setUndo] = useState<PromptUndo>();
   const [fork, setFork] = useState<PromptFork>();
   const [visibleTurnIds, setVisibleTurnIds] = useState<Set<string>>(() => new Set());
+  const [toolNow, setToolNow] = useState(Date.now());
   const [railPage, setRailPage] = useState<ConversationTurnIndexPage>();
   const [railLoading, setRailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -202,6 +203,13 @@ export function ConversationPanel({
   const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
   const transcriptMessageIds = new Set(transcriptMessages.map((item) => item.id));
   const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
+  const hasRunningTools = runningTools.length > 0;
+  useEffect(() => {
+    if (!hasRunningTools) return;
+    setToolNow(Date.now());
+    const timer = window.setInterval(() => setToolNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningTools]);
   const liveToolMessages: MessageReadModel[] = runningTools
     .filter((tool) => !transcriptToolIds.has(tool.id))
     .map((tool) => ({
@@ -687,9 +695,9 @@ export function ConversationPanel({
         {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
         {conversationBlocks.map((block) => {
           if ("tools" in block) {
-            return <ToolTurnGroup key={block.id} tools={block.tools} running={block.id === activeToolGroupId} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
+            return <ToolTurnGroup key={block.id} tools={block.tools} running={block.id === activeToolGroupId} now={toolNow} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
           }
-          if (block.role === "tool") return <ToolDisclosure key={block.id} name={block.tool?.name || "Tool"} status={block.tool?.status || "completed"} input={block.tool?.input} output={block.text} />;
+          if (block.role === "tool") return <ToolDisclosure key={block.id} message={block} now={toolNow} />;
           if (block.compaction) return <CompactionDisclosure key={block.id} message={block} onOpen={onOpenCompaction} />;
           if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
           const editing = edit?.messageId === block.id;
@@ -1818,15 +1826,21 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 
-function ToolTurnGroup({ tools, running, onExpand }: { tools: MessageReadModel[]; running: boolean; onExpand?: () => void }) {
-  const names = [...new Set(tools.map((tool) => tool.tool?.name || "Tool"))];
+function ToolTurnGroup({ tools, running, now, onExpand }: { tools: MessageReadModel[]; running: boolean; now: number; onExpand?: () => void }) {
+  const names = latestUniqueToolNames(tools);
+  const durationMs = aggregateToolDuration(tools, now);
   return <AnimatedDetails
     className={`tool-turn-group${running ? " is-running" : ""}`}
-    summary={<><IconTool size={15} /><strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong><span>{names.slice(-3).join(", ")}{names.length > 3 ? "…" : ""}</span></>}
+    summary={<>
+      <IconTool size={15} />
+      <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>
+      <span>{names.join(", ")}</span>
+      {durationMs !== undefined && <time className="tool-group-duration" dateTime={`PT${durationMs / 1_000}S`} aria-label={`Longest tool duration ${formatToolDuration(durationMs)}`}>{formatToolDuration(durationMs)}</time>}
+    </>}
     onExpand={onExpand}
   >
     <div className="tool-turn-items">
-      {tools.map((tool) => <ToolDisclosure key={tool.id} name={tool.tool?.name || "Tool"} status={tool.tool?.status || "completed"} input={tool.tool?.input} output={tool.text} />)}
+      {tools.map((tool) => <ToolDisclosure key={tool.id} message={tool} now={now} />)}
     </div>
   </AnimatedDetails>;
 }
@@ -1980,8 +1994,13 @@ function fileBase64(file: File): Promise<string> {
   });
 }
 
-function ToolDisclosure({ name, status, input, output }: { name: string; status: "running" | "completed" | "failed"; input?: string; output?: string }) {
+function ToolDisclosure({ message, now }: { message: MessageReadModel; now: number }) {
+  const name = message.tool?.name || "Tool";
+  const status = message.tool?.status || "completed";
+  const input = message.tool?.input;
+  const output = message.text;
   const inputPreview = input?.replace(/\s+/g, " ").trim();
+  const durationMs = toolElapsedDuration(message, now);
 
   return <details className={`tool-disclosure is-${status}`}>
     <summary>
@@ -1990,7 +2009,11 @@ function ToolDisclosure({ name, status, input, output }: { name: string; status:
         <strong>{name}</strong>
         {inputPreview && <code>{inputPreview}</code>}
       </span>
-      <span className="tool-status">{status}</span>
+      <span className="tool-status">
+        {durationMs === undefined
+          ? status
+          : <><span className="sr-only">{status}, </span><time dateTime={`PT${durationMs / 1_000}S`}>{formatToolDuration(durationMs)}</time></>}
+      </span>
     </summary>
     <div className="tool-details">
       <section><small>Input</small><pre>{input || "No input"}</pre></section>

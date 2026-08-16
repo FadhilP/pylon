@@ -83,7 +83,9 @@ test("General renders below projects and starts through its reserved page", asyn
   ]);
 
   assert.ok(sidebar.indexOf("visibleProjects.map") < sidebar.indexOf("general && <section"));
-  assert.match(sidebar, /Read-only search across files accessible on this PC/);
+  assert.match(sidebar, /Search and work with files accessible on this PC/);
+  assert.match(sidebar, /general-session-group/);
+  assert.doesNotMatch(sidebar, /IconWorld/);
   assert.match(app, /page\.id !== GENERAL_PROJECT_ID/);
   assert.match(app, /if \(general\) void newSession\(general\)/);
 });

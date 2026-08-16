@@ -1447,7 +1447,14 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
                 ...existing,
                 text: tool.summary ?? existing.text,
                 streaming: false,
-                tool: { ...existing.tool!, name: tool.name || existing.tool!.name, input: tool.input ?? existing.tool!.input, status: tool.status },
+                tool: {
+                  ...existing.tool!,
+                  name: tool.name || existing.tool!.name,
+                  input: tool.input ?? existing.tool!.input,
+                  status: tool.status,
+                  ...(tool.startedAt ? { startedAt: tool.startedAt } : {}),
+                  ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
+                },
               }
             : liveToolMessage(tool)),
         },

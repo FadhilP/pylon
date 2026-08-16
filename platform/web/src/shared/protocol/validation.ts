@@ -44,6 +44,12 @@ function boundedString(value: unknown, maximum = 200): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maximum;
 }
 
+function validOptionalToolTiming(value: Record<string, unknown>): boolean {
+  return (value.startedAt === undefined || typeof value.startedAt === "string" && !Number.isNaN(Date.parse(value.startedAt)))
+    && (value.durationMs === undefined || Number.isSafeInteger(value.durationMs)
+      && (value.durationMs as number) >= 0 && (value.durationMs as number) <= 7 * 24 * 60 * 60 * 1_000);
+}
+
 function validImages(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES) return false;
@@ -683,7 +689,8 @@ function validHistoryMessage(message: unknown): boolean {
       && identifier(message.tool.id)
       && boundedString(message.tool.name)
       && (message.tool.input === undefined || typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)
-      && ["running", "completed", "failed"].includes(String(message.tool.status)));
+      && ["running", "completed", "failed"].includes(String(message.tool.status))
+      && validOptionalToolTiming(message.tool));
 }
 
 export function isConversationHistoryPage(value: unknown): value is ConversationHistoryPage {
@@ -879,11 +886,13 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
       && identifier(message.tool.id)
       && boundedString(message.tool.name)
       && (message.tool.input === undefined || typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)
-      && ["running", "completed", "failed"].includes(String(message.tool.status))))) return false;
+      && ["running", "completed", "failed"].includes(String(message.tool.status))
+      && validOptionalToolTiming(message.tool)))) return false;
   if (!conversation.tools.every((tool) => record(tool) && identifier(tool.id) && typeof tool.name === "string"
     && (tool.input === undefined || typeof tool.input === "string" && tool.input.length <= MAX_MESSAGE_LENGTH)
     && (tool.summary === undefined || typeof tool.summary === "string" && tool.summary.length <= MAX_MESSAGE_LENGTH)
-    && ["running", "completed", "failed"].includes(tool.status as string))) return false;
+    && ["running", "completed", "failed"].includes(tool.status as string)
+    && validOptionalToolTiming(tool))) return false;
   if (!conversation.delegatedRuns.every((run) => validDelegatedRun(run))) return false;
   if (!Number.isSafeInteger(conversation.queue.steering) || !Number.isSafeInteger(conversation.queue.followUp)
     || typeof conversation.retry.active !== "boolean" || typeof conversation.compaction.active !== "boolean") return false;

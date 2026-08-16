@@ -16,19 +16,10 @@ const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
 const MAX_TOOL_OVERRIDES = 256;
 
 const GENERAL_TOOL_OVERRIDES: ToolOverrideReadModel = {
-  apply_session_changes: "disabled",
-  bash: "disabled",
   code_search: "disabled",
-  edit: "disabled",
-  grunt: "disabled",
-  heartbeat_start: "disabled",
   index_status: "disabled",
   relationship_graph: "disabled",
-  spawn_agent: "disabled",
-  spawn_session: "disabled",
   symbol_search: "disabled",
-  verify: "disabled",
-  write: "disabled",
 };
 
 export interface RegisteredProject {

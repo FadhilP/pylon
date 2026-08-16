@@ -66,3 +66,73 @@ export function readPersistedWorkDurations(
   }
   return durations;
 }
+
+export const TOOL_DURATION_ENTRY_TYPE = "pylon-tool-duration";
+
+export interface PersistedToolDuration {
+  version: 1;
+  toolCallId: string;
+  durationMs: number;
+}
+
+export function parseToolDuration(value: unknown): PersistedToolDuration | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  try {
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES) return undefined;
+  } catch {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1
+    || typeof raw.toolCallId !== "string"
+    || !/^[A-Za-z0-9._:-]{1,128}$/.test(raw.toolCallId)
+    || !Number.isSafeInteger(raw.durationMs)
+    || Number(raw.durationMs) < 0
+    || Number(raw.durationMs) > MAX_WORK_DURATION_MS) return undefined;
+  return {
+    version: 1,
+    toolCallId: raw.toolCallId,
+    durationMs: Number(raw.durationMs),
+  };
+}
+
+export function appendToolDuration(
+  session: { appendCustomEntry(customType: string, data?: unknown): string },
+  toolCallId: string,
+  durationMs: number,
+): boolean {
+  const duration = parseToolDuration({ version: 1, toolCallId, durationMs });
+  if (!duration) return false;
+  session.appendCustomEntry(TOOL_DURATION_ENTRY_TYPE, duration);
+  return true;
+}
+
+export function activeToolCallIds(branch: unknown[]): Set<string> {
+  return new Set(branch.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const entry = value as Record<string, unknown>;
+    const message = entry.message as Record<string, unknown> | undefined;
+    if (entry.type !== "message" || message?.role !== "assistant" || !Array.isArray(message.content)) return [];
+    return message.content.flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const part = value as Record<string, unknown>;
+      return part.type === "toolCall" && typeof part.id === "string" ? [part.id] : [];
+    });
+  }));
+}
+
+export function readPersistedToolDurations(
+  session: { getBranch(): unknown[]; getEntries(): unknown[] },
+): Map<string, number> {
+  const activeTools = activeToolCallIds(session.getBranch());
+  const durations = new Map<string, number>();
+  for (const value of session.getEntries()) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Record<string, unknown>;
+    if (entry.type !== "custom" || entry.customType !== TOOL_DURATION_ENTRY_TYPE) continue;
+    const duration = parseToolDuration(entry.data);
+    if (!duration || !activeTools.has(duration.toolCallId)) continue;
+    durations.set(duration.toolCallId, duration.durationMs);
+  }
+  return durations;
+}

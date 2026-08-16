@@ -25,6 +25,34 @@ export function groupConversationMessages(messages: MessageReadModel[]): Convers
   return blocks;
 }
 
+export function latestUniqueToolNames(tools: MessageReadModel[], limit = 3): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (let index = tools.length - 1; index >= 0 && names.length < Math.max(0, limit); index--) {
+    const name = tools[index]!.tool?.name || "Tool";
+    if (seen.has(name)) continue;
+    seen.add(name);
+    names.unshift(name);
+  }
+  return names;
+}
+
+export function toolElapsedDuration(tool: MessageReadModel, now = Date.now()): number | undefined {
+  const activity = tool.tool;
+  if (!activity) return undefined;
+  if (activity.status !== "running") return activity.durationMs;
+  const startedAt = activity.startedAt ? Date.parse(activity.startedAt) : Number.NaN;
+  return Number.isNaN(startedAt) ? activity.durationMs : Math.max(0, now - startedAt);
+}
+
+export function aggregateToolDuration(tools: MessageReadModel[], now = Date.now()): number | undefined {
+  const running = tools.filter((tool) => tool.tool?.status === "running");
+  const durations = (running.length ? running : tools)
+    .map((tool) => toolElapsedDuration(tool, now))
+    .filter((duration): duration is number => duration !== undefined);
+  return durations.length ? Math.max(...durations) : undefined;
+}
+
 export function terminalActivityStatus(
   kind: "end" | "error",
   info: { stopped?: boolean; willRetry?: boolean },
@@ -33,15 +61,29 @@ export function terminalActivityStatus(
   return kind === "error" || info.willRetry === true ? "failed" : "completed";
 }
 
+function settledTool<T extends { status: "running" | "completed" | "failed"; startedAt?: string; durationMs?: number }>(
+  tool: T,
+  status: "completed" | "failed",
+): T {
+  if (tool.status !== "running") return tool;
+  const startedAt = tool.startedAt ? Date.parse(tool.startedAt) : Number.NaN;
+  return {
+    ...tool,
+    status,
+    ...(tool.durationMs === undefined && !Number.isNaN(startedAt) ? { durationMs: Math.max(0, Date.now() - startedAt) } : {}),
+  };
+}
+
+
 export function settleRunningActivities(
   conversation: Pick<ConversationReadModel, "messages" | "tools" | "delegatedRuns">,
   status: "completed" | "failed",
 ): Pick<ConversationReadModel, "messages" | "tools" | "delegatedRuns"> {
   return {
     messages: conversation.messages.map((message) => message.tool?.status === "running"
-      ? { ...message, streaming: false, tool: { ...message.tool, status } }
+      ? { ...message, streaming: false, tool: settledTool(message.tool, status) }
       : message),
-    tools: conversation.tools.map((tool) => tool.status === "running" ? { ...tool, status } : tool),
+    tools: conversation.tools.map((tool) => settledTool(tool, status)),
     delegatedRuns: conversation.delegatedRuns.map((run) => run.status === "running" ? { ...run, status } : run),
   };
 }
@@ -52,7 +94,14 @@ export function liveToolMessage(tool: ToolActivityReadModel): MessageReadModel {
     role: "tool",
     text: tool.summary ?? "",
     streaming: tool.status === "running",
-    tool: { id: tool.id, name: tool.name || "Tool", input: tool.input, status: tool.status },
+    tool: {
+      id: tool.id,
+      name: tool.name || "Tool",
+      input: tool.input,
+      status: tool.status,
+      ...(tool.startedAt ? { startedAt: tool.startedAt } : {}),
+      ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
+    },
   };
 }
 
