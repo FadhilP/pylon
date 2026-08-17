@@ -8,6 +8,21 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.10.0",
+    date: "Aug 17, 2026",
+    title: "General conversations and native extension management",
+    summary: "Pylon adds project-independent General sessions, Pi-native extension controls, persistent tool-call timing, and more compact StateQL output.",
+    notes: [
+      "Added a dedicated General area for conversations rooted in the configured home directory, keeping them separate from registered projects and their workspace context.",
+      "Added an Extensions settings panel for discovering, enabling, disabling, installing, removing, and reloading global or trusted-project Pi extensions and npm or git packages, with explicit arbitrary-code warnings and idle-session safeguards.",
+      "Displayed live and completed durations for individual tool calls and grouped tool activity, persisted timing across runtime restarts, and kept duration recovery aligned with the active conversation branch.",
+      "Compacted StateQL query, filter, and row results into column-oriented output, bounded responses to 40 KiB and 1,000 lines, and provided continuation guidance when output is truncated.",
+      "Aligned bundled package loading with Pi's native extension discovery and trust model, strengthened integrated extension compatibility coverage, and made Grunt's maximum tool-call turns configurable in Settings.",
+    ],
+  },
+
+
+  {
     version: "1.9.0",
     date: "Aug 14, 2026",
     title: "Safer web research with tighter cost and context control",

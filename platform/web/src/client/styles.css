@@ -1563,7 +1563,7 @@
   .tool-turn-group > summary span,
   .system-disclosure > summary span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .tool-group-duration { min-width: 48px; justify-self: end; color: var(--text-muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; }
-  .tool-group-duration.is-running { color: var(--accent-text); }
+  .tool-group-duration.is-running { color: var(--text-soft); }
   .tool-group-duration.is-failed { color: var(--red); }
   .compaction-disclosure > time { justify-self: end; color: var(--text-muted); font-size: 12px; }
   .compaction-disclosure-chevron {
