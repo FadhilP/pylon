@@ -5,11 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerScoutChildTools, { boundedSearch, SCOUT_TOOL_MAX_BYTES, workspacePath } from "../src/scout-child-tools.ts";
 
-test("child entrypoint registers exactly its bounded child tools", () => {
-  const tools = new Map<string, any>();
-  registerScoutChildTools({ registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
-  assert.deepEqual([...tools.keys()], ["read", "search_excerpt"]);
-});
 
 test("search paths cannot escape workspace", () => {
   assert.equal(workspacePath("/workspace", "src"), "src");

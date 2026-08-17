@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
 import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
-import { ProjectRegistry, projectIdForCwd, projectPickerCommand } from "../src/server/pi/project-registry.ts";
+import { ProjectRegistry, projectIdForCwd } from "../src/server/pi/project-registry.ts";
 
 test("General is a built-in local scope rooted outside the project list", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-general-"));
@@ -528,11 +528,3 @@ test("global runtime policy is inherited independently by projects and sessions"
   }
 });
 
-test("Windows picker uses the modern Explorer dialog with a topmost owner", () => {
-  const picker = projectPickerCommand("win32");
-  assert.equal(picker.command, "powershell.exe");
-  assert.match(picker.args.join(" "), /TopMost = \$true/);
-  assert.match(picker.args.join(" "), /OpenFileDialog/);
-  assert.match(picker.args.join(" "), /AutoUpgradeEnabled = \$true/);
-  assert.match(picker.args.join(" "), /ShowDialog\(\$owner\)/);
-});

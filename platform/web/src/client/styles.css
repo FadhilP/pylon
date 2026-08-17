@@ -1562,7 +1562,9 @@
   .compaction-disclosure-title strong { color: var(--text-soft); font-size: 13px; font-weight: 570; }
   .tool-turn-group > summary span,
   .system-disclosure > summary span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .tool-group-duration { min-width: 48px; justify-self: end; color: var(--text-soft); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; }
+  .tool-group-duration { min-width: 48px; justify-self: end; color: var(--text-muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; }
+  .tool-group-duration.is-running { color: var(--accent-text); }
+  .tool-group-duration.is-failed { color: var(--red); }
   .compaction-disclosure > time { justify-self: end; color: var(--text-muted); font-size: 12px; }
   .compaction-disclosure-chevron {
     display: grid;
@@ -2925,6 +2927,16 @@
   .settings-option-list small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .settings-option-list button:hover { background: var(--surface-hover); color: var(--text); }
 
+  .extension-settings { display: grid; gap: 4px; }
+  .extension-install { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .extension-install input, .extension-install select { min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-control); outline: none; background: var(--surface); color: var(--text); font-size: 12px; }
+  .extension-install input:focus, .extension-install select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .extension-install button, .extension-reload button, .workbench-section > header > button { display: inline-flex; min-height: 34px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-soft); font-size: 12px; font-weight: 600; }
+  .extension-reload { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .extension-reload span { color: var(--text-muted); font-size: 12px; }
+  .extension-settings .settings-option-list strong, .extension-settings .settings-option-list small { overflow-wrap: anywhere; }
+
+
   .settings-theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 12px; }
   .settings-theme-options label { position: relative; display: grid; gap: 9px; color: var(--text-soft); font-size: 12px; text-transform: capitalize; cursor: pointer; }
   .settings-theme-options input { position: absolute; opacity: 0; pointer-events: none; }
@@ -3133,4 +3145,3 @@
     .branch-label, .topbar-divider { display: none; }
     .package-fields, .continuity-fields { grid-template-columns: 1fr; }
   }
-}

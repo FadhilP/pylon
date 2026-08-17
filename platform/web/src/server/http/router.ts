@@ -90,6 +90,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt") return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives") return await this.archiveList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/packages") return await this.packageList(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/extensions") return await this.extensionList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/hooks") return await this.hookSettings(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/stateql") return await this.stateqlSnapshot(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/stateql/rows") return await this.stateqlRows(request, response);
@@ -509,6 +510,14 @@ export class ServerTransport {
     this.send(response, 200, queued);
   }
 
+  private async extensionList(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.requireTab(request);
+    if (!this.driver.listExtensions) throw httpError(409, "native extensions are unavailable");
+    const result = await this.driver.listExtensions();
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while listing extensions");
+    this.send(response, 200, result);
+  }
+
   private async archiveList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
@@ -652,6 +661,25 @@ export class ServerTransport {
       case "updatePackageSettings":
         return this.driver.updatePackageSettings({ packageId: command.packageId, settings: command.settings })
           .then((result) => accepted(result.sessionGeneration));
+      case "setExtensionEnabled":
+        if (!this.driver.setExtensionEnabled) return Promise.reject(httpError(409, "native extensions are unavailable"));
+        return this.driver.setExtensionEnabled({ extensionId: command.extensionId, enabled: command.enabled })
+          .then((result) => accepted(result.sessionGeneration));
+      case "installExtensionPackage":
+        if (!this.driver.installExtensionPackage) return Promise.reject(httpError(409, "native extensions are unavailable"));
+        return this.driver.installExtensionPackage({ source: command.source, scope: command.scope })
+          .then((result) => accepted(result.sessionGeneration));
+      case "removeExtensionPackage":
+        if (!this.driver.removeExtensionPackage) return Promise.reject(httpError(409, "native extensions are unavailable"));
+        return this.driver.removeExtensionPackage({ source: command.source, scope: command.scope })
+          .then((result) => accepted(result.sessionGeneration));
+      case "setProjectTrust":
+        if (!this.driver.setProjectTrust) return Promise.reject(httpError(409, "project trust is unavailable"));
+        return this.driver.setProjectTrust({ trusted: command.trusted })
+          .then((result) => accepted(result.sessionGeneration));
+      case "reloadExtensions":
+        if (!this.driver.reloadExtensions) return Promise.reject(httpError(409, "native extensions are unavailable"));
+        return this.driver.reloadExtensions().then((result) => accepted(result.sessionGeneration));
       case "updateHookSettings":
         if (!this.driver.updateHookSettings) return Promise.reject(httpError(409, "hook settings are unavailable"));
         return this.driver.updateHookSettings({ settings: command.settings })

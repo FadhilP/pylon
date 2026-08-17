@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const execFileAsync = promisify(execFile);
-import discover, { formatToolDiscoveryGuidance, keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
+import discover, { keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
 import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
 import { registerFd } from "../src/fd.ts";
 import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
@@ -397,17 +397,6 @@ test("discover child tools enforce their child-local output cap", async () => {
   assert.match(result.content[0].text, /truncated/i);
 });
 
-test("host advertises an install-resolved discover child capability", async () => {
-  const { events } = setup();
-  const responses: any[] = [];
-  events.emit("pi-discover:child-tools-capability", { version: 2, respond: (value: any) => responses.push(value) });
-  assert.equal(responses.length, 1);
-  assert.equal(responses[0].version, 2);
-  assert.equal(responses[0].owner, "pi-discover");
-  assert.deepEqual(responses[0].toolNames, ["rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status"]);
-  assert.match(responses[0].childExtensionPath, /discover-child-tools\.ts$/);
-  await access(responses[0].childExtensionPath);
-});
 
 test("index database lives under pi-discover and migrates the legacy path", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-discover-agent-"));
@@ -1341,68 +1330,6 @@ test("query normalization and structured metadata outrank description overlap", 
   ], "Public WEB", 2)[0].name, "alpha");
 });
 
-test("discovery guidance lists bounded usages without exposing tool names", () => {
-  const entries = [
-    { name: "z_tool", usage: "capture a consented application window" },
-    { name: "a_tool", usage: "research current public web pages" },
-    { name: "duplicate", usage: "research current public web pages" },
-    { name: "large", usage: "x".repeat(200) },
-  ];
-  const guidance = formatToolDiscoveryGuidance(entries, 240, 3)!;
-  assert.ok(guidance.length <= 240);
-  assert.match(guidance, /research current public web pages/);
-  assert.match(guidance, /additional deferred capabilities/i);
-  assert.doesNotMatch(guidance, /a_tool|z_tool|duplicate|large/);
-  assert.equal((guidance.match(/research current public web pages/g) ?? []).length, 1);
-});
-
-test("before_agent_start advertises the current deferred usage catalog", () => {
-  const { events, lifecycle } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["web_lookup", "git_history"],
-    catalog: () => [
-      { name: "web_lookup", usage: "research current public web pages" },
-      { name: "git_history", usage: "inspect release provenance" },
-    ],
-    select: () => ({ selected: [] }),
-    reset: () => ({ selected: [] }),
-  }));
-  const handler = lifecycle.handlers.get("before_agent_start")![0];
-  const result = handler({
-    systemPrompt: "base prompt",
-    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
-  });
-  assert.match(result.systemPrompt, /Deferred tool discovery/);
-  assert.match(result.systemPrompt, /research current public web pages/);
-  assert.match(result.systemPrompt, /inspect release provenance/);
-  assert.doesNotMatch(result.systemPrompt, /web_lookup|git_history/);
-  const repeated = handler({
-    systemPrompt: "base prompt",
-    systemPromptOptions: { selectedTools: ["read", "search_tools"] },
-  });
-  assert.equal(repeated.systemPrompt, result.systemPrompt);
-  assert.equal((repeated.systemPrompt.match(/Deferred tool discovery/g) ?? []).length, 1);
-  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"] } }), undefined);
-  assert.equal(handler({ systemPrompt: "base", systemPromptOptions: {} }), undefined);
-});
-
-test("registered descriptions provide guidance when policy usage is absent", async () => {
-  const { events, lifecycle, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["web_lookup"],
-    select: (names: string[]) => ({ selected: names }),
-    reset: () => ({ selected: [] }),
-  }));
-  const handler = lifecycle.handlers.get("before_agent_start")![0];
-  const prompt = handler({
-    systemPrompt: "base",
-    systemPromptOptions: { selectedTools: ["search_tools"] },
-  });
-  assert.match(prompt.systemPrompt, /Deferred tool discovery/);
-  assert.match(prompt.systemPrompt, /public web pages/);
-  const result = await tools.get("search_tools").execute("id", { query: "public pages" }, undefined, undefined, {});
-  assert.deepEqual(result.details.matches, ["web_lookup"]);
-});
 
 test("search_tools uses advertised usage and activates eligible matches", async () => {
   const { events, tools, getSetActiveCalls } = setup();

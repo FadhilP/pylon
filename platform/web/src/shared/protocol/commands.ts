@@ -30,6 +30,11 @@ export const COMMAND_NAMES = [
   "timeline",
   "setPackageEnabled",
   "updatePackageSettings",
+  "setExtensionEnabled",
+  "installExtensionPackage",
+  "removeExtensionPackage",
+  "setProjectTrust",
+  "reloadExtensions",
   "updateHookSettings",
   "rebuildDiscoverIndex",
   "setModel",
@@ -106,6 +111,11 @@ export type WebCommand =
   | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
   | ({ type: "updatePackageSettings"; packageId: string; settings: PackageSettingsReadModel } & CommandBase)
+  | ({ type: "setExtensionEnabled"; extensionId: string; enabled: boolean } & CommandBase)
+  | ({ type: "installExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
+  | ({ type: "removeExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
+  | ({ type: "setProjectTrust"; trusted: boolean; confirmed: true } & CommandBase)
+  | ({ type: "reloadExtensions"; confirmed: true } & CommandBase)
   | ({ type: "updateHookSettings"; settings: HookSettingsReadModel } & CommandBase)
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)

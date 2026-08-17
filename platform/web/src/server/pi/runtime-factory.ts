@@ -3,6 +3,9 @@ import {
   createAgentSessionFromServices,
   createAgentSessionServices,
   createEventBus,
+  hasTrustRequiringProjectResources,
+  ProjectTrustStore,
+  SettingsManager,
   type AgentSessionRuntimeDiagnostic,
   type EventBus,
   type CreateAgentSessionRuntimeFactory,
@@ -33,10 +36,17 @@ export async function createPylonRuntimeFactory(options: {
     if (resolve(agentDir) !== fixedAgentDir) {
       throw new Error("runtime replacement cannot change the configured agent directory");
     }
+    // Do not let Pi infer trust from its default agent directory. Pylon owns
+    // the configured trust store and deliberately starts untrusted projects
+    // with project resources disabled; user resources still remain available.
+    const trustStore = new ProjectTrustStore(fixedAgentDir);
+    const projectTrusted = !hasTrustRequiringProjectResources(cwd) || trustStore.get(cwd) === true;
+    const settingsManager = SettingsManager.create(cwd, fixedAgentDir, { projectTrusted });
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
       modelRuntime,
+      settingsManager,
       resourceLoaderOptions: {
         additionalExtensionPaths: options.additionalExtensionPaths ?? [],
         eventBus,

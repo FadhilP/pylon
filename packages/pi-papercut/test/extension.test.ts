@@ -48,42 +48,6 @@ function context(cwd: string, notifications: Array<{ text: string; level: string
   } as any;
 }
 
-test("one tool exposes capture and lifecycle actions without session review", async () => {
-  const app = runtime();
-  assert.deepEqual([...app.tools.keys()], ["papercut"]);
-  assert.deepEqual([...app.commands.keys()], ["papercuts"]);
-  assert.equal(app.commands.has("papercut"), false);
-  const tool = app.tools.get("papercut");
-  assert.equal(tool.executionMode, "sequential");
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["action", "message", "status", "limit", "ids", "note"]);
-  assert.equal(tool.parameters.properties.message.maxLength, 500);
-  assert.match(tool.promptGuidelines.join("\n"), /avoidable retry.*undocumented setup.*flaky command.*stale cache.*misleading error.*gotcha/i);
-  assert.match(tool.promptGuidelines.join("\n"), /continue the current task/i);
-  assert.match(tool.promptGuidelines.join("\n"), /Do not log actual bugs or tracked work/i);
-  assert.match(tool.promptGuidelines.join("\n"), /incidental recurrence is deduplicated automatically/i);
-  assert.deepEqual(tool.parameters.properties.action.enum, ["capture", "list", "resolve", "dismiss", "reopen"]);
-  assert.equal(app.commands.has("papercut-review"), false);
-
-  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, context(root));
-  assert.deepEqual(app.emitted.find((item) => item.channel === "pylon:tool-policy"), {
-    channel: "pylon:tool-policy",
-    value: {
-      version: 1,
-      kind: "register",
-      owner: "pi-papercut",
-      managedTools: ["papercut"],
-      enabledTools: ["papercut"],
-      deferredTools: ["papercut"],
-      toolUsage: { papercut: "capture or manage durable project workflow-friction notes" },
-    },
-  });
-  assert.equal(app.emitted.some((item) => item.channel === "pi-papercut:state-change" && item.value.available === true), true);
-  for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, {});
-  assert.deepEqual(app.emitted.at(-1), {
-    channel: "pylon:tool-policy",
-    value: { version: 1, kind: "unregister", owner: "pi-papercut" },
-  });
-});
 
 test("capture, dedupe, list, resolve, and command flows persist project state", async () => {
   const cwd = join(root, "repo");

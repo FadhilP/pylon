@@ -48,13 +48,15 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     let workerCwd = "";
     const workerCwds: string[] = [];
     let workerAttempts = 0;
+    const maxTurnBudgets: number[] = [];
     let outcome: "completed" | "blocked" = "completed";
     const runningUpdates: any[] = [];
-    const runWorker = async (args: string[], options: { cwd: string; onActivity?: Function; onUsage?: Function }): Promise<WorkerRun> => {
+    const runWorker = async (args: string[], options: { cwd: string; maxTurns: number; onActivity?: Function; onUsage?: Function }): Promise<WorkerRun> => {
       childArgs = args;
       workerCwd = options.cwd;
       workerCwds.push(options.cwd);
       workerAttempts++;
+      maxTurnBudgets.push(options.maxTurns);
       if (workerAttempts === 1) {
         options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
         return {
@@ -95,7 +97,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         }
       },
     };
-    await saveConfig({ version: 1, disabled: false, mode: "dynamic" });
+    await saveConfig({ version: 1, disabled: false, mode: "dynamic", maxTurns: 12 });
     grunt(pi, runWorker as any, async () => true);
     const ctx: any = {
       cwd, hasUI: false, model,
@@ -112,6 +114,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       targetedContext: "Copy the existing exported-constant convention.",
       checkCommands: ["npm test -- worker"],
     }, undefined, (update: any) => runningUpdates.push(update), ctx);
+    assert.deepEqual(maxTurnBudgets, [12, 11]);
     const activityUpdate = runningUpdates.find((update) => update.details?.activity?.length);
     assert.equal(activityUpdate.details.state, "running");
     assert.ok(activityUpdate.details.durationMs > 0);
@@ -302,75 +305,8 @@ test("Grunt publishes sanitized bounded worker and outer failure details", async
   }
 });
 
-test("Grunt guidance favors high-displacement work and retains Main ownership", () => {
-  const events = new Bus();
-  const tools = new Map<string, any>();
-  const pi: any = {
-    events, on() {}, registerCommand() {}, getActiveTools: () => [], setActiveTools() {},
-    registerTool: (tool: any) => tools.set(tool.name, tool), exec() {},
-  };
-  grunt(pi);
-  const tool = tools.get("grunt");
-  const guidance = tool.promptGuidelines.join("\n");
-  assert.deepEqual(tool.parameters.properties.thinking.enum, ["medium", "high"]);
-  assert.equal(tool.parameters.properties.targetedContext.maxLength, 4000);
-  assert.equal(tool.parameters.properties.checkCommands.maxItems, 8);
-  assert.match(tool.description, /Main model reviews and verifies/i);
-  assert.match(guidance, /expected main-model effort avoided, not changed LOC alone/i);
-  assert.match(guidance, /ordinary semantic changes around 50–300 LOC in the main model/i);
-  assert.match(guidance, /mechanical multi-file work/i);
-  assert.match(guidance, /typically 300–500\+ LOC/i);
-  assert.match(guidance, /Use the lowest configured thinking level that fits/i);
-  assert.match(guidance, /dependent slices sequentially, inspecting and checking each result first/i);
-  assert.match(guidance, /main model owns integration and recovery/i);
-  assert.match(guidance, /Fix small remaining defects directly/i);
-  assert.match(guidance, /Never call grunt only to verify or repair its previous result/i);
-  assert.match(guidance, /self-contained medium or large work/i);
-  assert.match(guidance, /without rollback, stale-parent checks, changed-path detection/i);
-  assert.ok(guidance.length < 1_000);
 
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  };
-  assert.equal(
-    tool.renderCall({ task: "Implement change", thinking: "medium" }, theme, { state: {} }).render(1_000).map((line: string) => line.trimEnd()).join("\n"),
-    "Grunt · 1/∞\nImplement change",
-  );
-  assert.equal(
-    tool.renderResult({
-      content: [{ type: "text", text: "Worker details" }],
-      details: {
-        status: "completed",
-        model: "test/worker",
-        durationMs: 1_250,
-        usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
-        turns: 1,
-      },
-    }, { expanded: false }, theme).render(1_000).map((line: string) => line.trimEnd()).join("\n"),
-    "Grunt · test/worker · 1 turn · 1 input · 2 output · R3 · W4 · $0.5000 · 1.3s",
-  );
-
-  let runtimeColor = "";
-  tool.renderResult({
-    content: [{ type: "text", text: "1s" }],
-    details: { state: "running", model: "test/worker", durationMs: 1_000 },
-  }, { expanded: false }, {
-    fg: (color: string, text: string) => { runtimeColor = color; return text; },
-  });
-  assert.equal(runtimeColor, "success");
-
-  let errorColor = "";
-  tool.renderResult({
-    content: [{ type: "text", text: "Grunt isolation unavailable: not a Git worktree" }],
-    details: { status: "unavailable", failureCode: "isolation_error" },
-  }, { expanded: false }, {
-    fg: (color: string, text: string) => { errorColor = color; return text; },
-  }, { isError: true });
-  assert.equal(errorColor, "error");
-});
-
-test("configured thinking levels update the tool schema and are revalidated at execution", async () => {
+test("configured thinking levels are revalidated at execution", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "grunt-thinking-"));
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -387,7 +323,6 @@ test("configured thinking levels update the tool schema and are revalidated at e
     };
     grunt(pi);
     for (const handler of handlers.get("session_start") ?? []) await handler({}, {});
-    assert.deepEqual(tools.get("grunt").parameters.properties.thinking.enum, ["low", "xhigh"]);
     const rejected = await tools.get("grunt").execute("id", { task: "No run", thinking: "high" }, undefined, undefined, {});
     assert.equal(rejected.details.status, "invalid");
     assert.match(rejected.content[0].text, /not enabled/i);

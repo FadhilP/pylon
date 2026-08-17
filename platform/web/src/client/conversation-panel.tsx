@@ -1,7 +1,7 @@
 import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconBotId, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { aggregateToolDuration, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
+import { aggregateToolTiming, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, reconcileToolActivity, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
 import { formatCompactNumber, formatToolDuration, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
@@ -191,18 +191,24 @@ export function ConversationPanel({
   const sending = submitting && !edit && !undo && !fork;
   const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
   const activeHistoryWindow = live.historyWindow;
-  const transcriptMessages = activeHistoryWindow
+  const transcriptSourceMessages = activeHistoryWindow
     && activeHistoryWindow.sessionId === runtime?.sessionId
     && activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
     ? activeHistoryWindow.messages
     : runtime?.conversation.messages ?? [];
+  const liveTools = runtime?.conversation.tools ?? [];
+  const liveToolsById = new Map(liveTools.map((tool) => [tool.id, tool]));
+  const transcriptMessages = transcriptSourceMessages.map((message) => {
+    const activity = message.tool?.id ? liveToolsById.get(message.tool.id) : undefined;
+    return activity ? reconcileToolActivity(message, activity) : message;
+  });
   const pendingMessages = (live.pendingMessages ?? []).filter((item) =>
     item.sessionId === runtime?.sessionId && item.sessionGeneration === runtime?.sessionGeneration);
   const pendingById = new Map(pendingMessages.map((item) => [item.id, item]));
   const queuedByCommand = new Map(queuedItems.map((item) => [item.commandId, item]));
   const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
   const transcriptMessageIds = new Set(transcriptMessages.map((item) => item.id));
-  const runningTools = runtime?.conversation.tools.filter((tool) => tool.status === "running") ?? [];
+  const runningTools = liveTools.filter((tool) => tool.status === "running");
   const hasRunningTools = runningTools.length > 0;
   useEffect(() => {
     if (!hasRunningTools) return;
@@ -210,15 +216,9 @@ export function ConversationPanel({
     const timer = window.setInterval(() => setToolNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [hasRunningTools]);
-  const liveToolMessages: MessageReadModel[] = runningTools
+  const liveToolMessages = runningTools
     .filter((tool) => !transcriptToolIds.has(tool.id))
-    .map((tool) => ({
-      id: `live-tool-${tool.id}`,
-      role: "tool",
-      text: tool.summary ?? "",
-      streaming: true,
-      tool: { id: tool.id, name: tool.name || "Tool", input: tool.input, status: tool.status },
-    }));
+    .map(liveToolMessage);
   const pendingTranscriptMessages: MessageReadModel[] = pendingMessages
     .filter((item) => !transcriptMessageIds.has(item.id))
     .map((item) => ({
@@ -1828,14 +1828,18 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
 
 function ToolTurnGroup({ tools, running, now, onExpand }: { tools: MessageReadModel[]; running: boolean; now: number; onExpand?: () => void }) {
   const names = latestUniqueToolNames(tools);
-  const durationMs = aggregateToolDuration(tools, now);
+  const timing = aggregateToolTiming(tools, now);
+  const active = running && tools.some((tool) => tool.tool?.status === "running");
+  const timingLabel = timing?.status === "running"
+    ? "Longest running tool duration"
+    : `Latest ${timing?.status ?? "completed"} tool duration`;
   return <AnimatedDetails
-    className={`tool-turn-group${running ? " is-running" : ""}`}
+    className={`tool-turn-group${active ? " is-running" : ""}`}
     summary={<>
       <IconTool size={15} />
       <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>
       <span>{names.join(", ")}</span>
-      {durationMs !== undefined && <time className="tool-group-duration" dateTime={`PT${durationMs / 1_000}S`} aria-label={`Longest tool duration ${formatToolDuration(durationMs)}`}>{formatToolDuration(durationMs)}</time>}
+      {timing && <time className={`tool-group-duration is-${timing.status}`} dateTime={`PT${timing.durationMs / 1_000}S`} aria-label={`${timingLabel} ${formatToolDuration(timing.durationMs)}`}>{formatToolDuration(timing.durationMs)}</time>}
     </>}
     onExpand={onExpand}
   >

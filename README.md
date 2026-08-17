@@ -27,6 +27,8 @@ The server binds only to loopback and uses the directory where you ran `pylon` a
 
 Pylon Web stores sessions, settings, and package state in `~/.pylon/agent` by default. Set `PI_CODING_AGENT_DIR` to override it. Existing `~/.pi/agent` data is copied non-destructively on first run; run `pylon migrate` to retry migration.
 
+Pi-native extensions can be managed from **Settings → Extensions**. Global extensions and installed packages are stored under Pylon’s configured agent directory (`~/.pylon/agent/extensions`, `npm`, and `git` by default); later changes under `~/.pi/agent` are not synchronized. Trusted project extensions continue to use `<project>/.pi/extensions`. Extensions execute arbitrary code with the Pylon server’s permissions, so review package sources before installing or enabling them.
+
 Before startup, Pylon checks npm for a newer stable release. Interactive terminals ask before updating; non-interactive sessions only print the update command. After an approved update attempt, run `pylon` again. Set `PYLON_NO_UPDATE_CHECK=1` to disable the check.
 
 ## Terminal Setup (Alternative)

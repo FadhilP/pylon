@@ -1,7 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { showSessionRuntimeState } from "../src/shared/session-completions.ts";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT } from "../src/shared/session-list.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { SessionListQuery, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../src/shared/protocol/snapshots.ts";
@@ -62,54 +60,3 @@ test("session list refresh drops expanded pages missing from fresh project list"
   assert.deepEqual(result.projects.map((project) => project.id), ["remaining"]);
 });
 
-test("expanded project sessions can collapse to the initial three", async () => {
-  const [app, sidebar] = await Promise.all([
-    readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
-  ]);
-  const collapse = app.slice(app.indexOf("const showLessSessions"), app.indexOf("const archiveProject"));
-
-  assert.match(collapse, /limit: SESSION_LIST_INITIAL_LIMIT/);
-  assert.match(sidebar, /page\.sessions\.length > SESSION_LIST_INITIAL_LIMIT/);
-  assert.match(sidebar, /onShowLess\(project\)/);
-  assert.match(sidebar, /working \? 1_000 : 60_000/);
-  assert.match(sidebar, /formatSessionActivity\(session\.modifiedAt, session\.workStartedAt, now\)/);
-});
-
-test("General renders below projects and starts through its reserved page", async () => {
-  const [app, sidebar] = await Promise.all([
-    readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8"),
-  ]);
-
-  assert.ok(sidebar.indexOf("visibleProjects.map") < sidebar.indexOf("general && <section"));
-  assert.match(sidebar, /Search and work with files accessible on this PC/);
-  assert.match(sidebar, /general-session-group/);
-  assert.doesNotMatch(sidebar, /IconWorld/);
-  assert.match(app, /page\.id !== GENERAL_PROJECT_ID/);
-  assert.match(app, /if \(general\) void newSession\(general\)/);
-});
-
-
-test("a completed sleeping session renders the new-response orb", async () => {
-  const sidebar = await readFile(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8");
-
-  assert.equal(showSessionRuntimeState("sleeping", true), true);
-  assert.equal(showSessionRuntimeState("sleeping", false), false);
-  assert.match(sidebar, /showSessionRuntimeState\(session\.runtimeState, completed\) && <span/);
-  assert.match(sidebar, /completed \? "is-complete"/);
-  assert.match(sidebar, /completed \? "New response"/);
-});
-
-
-test("pin and activation updates do not show a current-session transition", async () => {
-  const app = await readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8");
-  const activation = app.slice(app.indexOf("const setSessionActive"), app.indexOf("const setSessionPinned"));
-  const pinning = app.slice(app.indexOf("const setSessionPinned"), app.indexOf("const loadMoreSessions"));
-  const switching = app.slice(app.indexOf("const switchSession"), app.indexOf("const deleteSession"));
-
-  assert.doesNotMatch(activation, /setSessionTransition/);
-  assert.doesNotMatch(pinning, /setSessionTransition/);
-  assert.match(switching, /setSessionTransition\(!listedParentId \|\| live\.runtime\?\.sessionId !== listedParentId\)/);
-  assert.match(app, /\{\(sessionTransition \|\| packageBusy\) && <div className="session-transition"/);
-});

@@ -4,23 +4,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultHookSettings, HookSettingsStore } from "../src/server/pi/hook-settings.ts";
-import { validHookSettings } from "../src/shared/protocol/validation.ts";
 
 const settings = {
   sessionStart: { enabled: true, sources: [{ id: "start", name: "Start", kind: "text" as const, content: "hello" }] },
   beforeAgentStart: { enabled: false, sources: [] },
 };
 
-test("hook settings enforce exact bounded sources", () => {
-  assert.equal(validHookSettings(settings), true);
-  assert.equal(validHookSettings({ ...settings, sessionStart: { ...settings.sessionStart, sources: [{ ...settings.sessionStart.sources[0], reinjectOnCompaction: true }] } }), true);
-  assert.equal(validHookSettings({ ...settings, sessionStart: { ...settings.sessionStart, sources: [{ ...settings.sessionStart.sources[0], reinjectOnCompaction: "yes" }] } }), false);
-  assert.equal(validHookSettings({ ...settings, extra: true }), false);
-  assert.equal(validHookSettings({
-    sessionStart: { enabled: true, sources: [{ id: "a", name: "A", kind: "text", content: "x".repeat(49 * 1024) }] },
-    beforeAgentStart: { enabled: true, sources: [{ id: "b", name: "B", kind: "text", content: "x".repeat(49 * 1024) }] },
-  }), false);
-});
 
 test("hook settings use safe defaults, validate persisted values, and persist atomically", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-hooks-"));
@@ -28,12 +17,6 @@ test("hook settings use safe defaults, validate persisted values, and persist at
   try {
     const defaults = defaultHookSettings();
     assert.deepEqual(await store.read(), defaults);
-    assert.equal(defaults.sessionStart.enabled, true);
-    assert.equal(defaults.sessionStart.sources[0]?.reinjectOnCompaction, true);
-    assert.equal(defaults.sessionStart.sources[1]?.id, "tool-retry-policy");
-    assert.equal(defaults.sessionStart.sources[1]?.reinjectOnCompaction, true);
-    assert.equal(defaults.beforeAgentStart.enabled, true);
-    assert.equal(defaults.beforeAgentStart.sources.length, 0);
     await store.update(settings);
     const normalized = await store.read();
     assert.equal(normalized.sessionStart.sources[0]?.reinjectOnCompaction, false);

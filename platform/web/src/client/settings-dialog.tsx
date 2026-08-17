@@ -3,16 +3,17 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS } from "../shared/guard-policy";
 import type { ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, ThinkingLevelReadModel, ToolPolicyReadModel, UiRequestReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
-import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel, ToolExposureMode } from "../shared/protocol/snapshots";
+import type { ExtensionListSnapshot, HookSettingsReadModel, NativeExtensionReadModel, PackageSettingsReadModel, PackageSummary, RuntimePolicyReadModel, ToolExposureMode } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
+import { ExtensionSettingsFields } from "./extension-settings-fields";
 import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 
-export type SettingsTab = "providers" | "packages" | "hooks" | "policy" | "notifications" | "appearance";
+export type SettingsTab = "providers" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "hooks", "policy", "notifications", "appearance"];
+const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "extensions", "hooks", "policy", "notifications", "appearance"];
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 interface SettingsDialogProps {
@@ -22,13 +23,16 @@ interface SettingsDialogProps {
   providerAuth?: ProviderAuthReadModel;
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
+  extensions?: ExtensionListSnapshot;
   hookSettings?: HookSettingsReadModel;
   runtimePolicy?: RuntimePolicyReadModel;
   toolPolicies: ToolPolicyReadModel[];
   policyDisabled: boolean;
   loading: boolean;
+  extensionLoading: boolean;
   hookLoading: boolean;
   busy: string;
+  extensionBusy: boolean;
   hookBusy: boolean;
   androidTooling?: HeliosAndroidToolingResult;
   androidToolingBusy: "" | "install" | "remove";
@@ -44,12 +48,17 @@ interface SettingsDialogProps {
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
+  onToggleExtension: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
+  onInstallExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
+  onRemoveExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
+  onSetProjectTrust: (trusted: boolean) => Promise<void>;
+  onReloadExtensions: () => Promise<void>;
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
   onUpdateGlobalPolicy: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
   onUpdateGlobalToolPolicy: (tool: string, mode: ToolExposureMode | "inherit", expectedRevision: number) => Promise<void>;
 }
 
-export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", initialPackageQuery = "", providerAuth, pendingUi, packages, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, hookLoading, busy, hookBusy, androidTooling, androidToolingBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onAndroidTooling, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
+export function SettingsDialog({ initialTab = "packages", initialProviderQuery = "", initialPackageQuery = "", providerAuth, pendingUi, packages, extensions, hookSettings, runtimePolicy, toolPolicies, policyDisabled, loading, extensionLoading, hookLoading, busy, extensionBusy, hookBusy, androidTooling, androidToolingBusy, providerLogoutDisabled, models, sessionThinkingLevels, theme, onThemeChange, onClose, onProviderLogin, onProviderLogout, onProviderCancel, onSetEnabled, onUpdate, onAndroidTooling, onToggleExtension, onInstallExtensionPackage, onRemoveExtensionPackage, onSetProjectTrust, onReloadExtensions, onUpdateHooks, onUpdateGlobalPolicy, onUpdateGlobalToolPolicy }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
@@ -252,6 +261,11 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
                 </section>
               </article>
             </div>}
+          </section>
+
+          <section id="settings-panel-extensions" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-extensions" hidden={activeTab !== "extensions"}>
+            <div className="settings-pane-header"><div><h2>Extensions</h2><p>Manage Pi-native extensions and packages in Pylon’s isolated agent directory.</p></div></div>
+            <ExtensionSettingsFields snapshot={extensions} loading={extensionLoading} disabled={extensionBusy || policyDisabled} onToggle={onToggleExtension} onInstall={onInstallExtensionPackage} onRemove={onRemoveExtensionPackage} onTrust={onSetProjectTrust} onReload={onReloadExtensions} />
           </section>
 
           <section id="settings-panel-hooks" className="settings-pane hooks-pane" role="tabpanel" aria-labelledby="settings-tab-hooks" hidden={activeTab !== "hooks"}>
@@ -496,6 +510,12 @@ function PackageFields({ settings, models, sessionThinkingLevels, disabled, onUp
       <label>Execution mode<select value={settings.executionMode} disabled={disabled} onChange={(event) => onUpdate({ ...settings, executionMode: event.target.value as typeof settings.executionMode })}>
         <option value="isolated">Isolated</option><option value="direct">Direct</option><option value="dynamic">Dynamic</option>
       </select></label>
+      <label>Maximum tool-call turns<input key={settings.maxTurns} type="number" min={1} step={1} defaultValue={settings.maxTurns} disabled={disabled} onBlur={(event) => {
+        const maxTurns = Number(event.target.value);
+        if (Number.isSafeInteger(maxTurns) && maxTurns >= 1) {
+          if (maxTurns !== settings.maxTurns) onUpdate({ ...settings, maxTurns });
+        } else event.currentTarget.value = String(settings.maxTurns);
+      }} /></label>
       <ThinkingChoices label="Eligible thinking levels" value={settings.thinkingLevels} disabled={disabled} onChange={(thinkingLevels) => onUpdate({ ...settings, thinkingLevels })} />
     </div>;
   }

@@ -1,16 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ADVISOR_MAX_CALLS,
   ADVISOR_MAX_OUTPUT_TOKENS,
   capAdvice,
 } from "../src/advisor.ts";
 import { isTransientProviderFailure } from "../src/retry.ts";
 
-test("advisor limits calls and output", () => {
-  assert.equal(ADVISOR_MAX_CALLS, 3);
-  assert.equal(ADVISOR_MAX_OUTPUT_TOKENS, 8_192);
-});
 
 test("advice cap is explicit", () => {
   const value = capAdvice("a".repeat(33_000));

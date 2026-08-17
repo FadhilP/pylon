@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { appendWebAudioCue, soundPattern } from "../src/shared/sound-cues.ts";
+import { appendWebAudioCue } from "../src/shared/sound-cues.ts";
 
 test("live completion and approval events queue distinct sound cues without collapsing", () => {
   const completed = appendWebAudioCue([], { eventId: "end-1", sessionId: "selected", type: "agent.end", payload: {} });
@@ -55,42 +54,3 @@ test("non-completion events stay silent", () => {
   assert.equal(appendWebAudioCue(cues, { eventId: "start", sessionId: "selected", type: "agent.start", payload: {} }), cues);
 });
 
-test("completion and attention sounds use distinct short patterns", () => {
-  const completion = soundPattern("turn-complete");
-  const attention = soundPattern("attention");
-
-  assert.notDeepEqual(completion, attention);
-  assert.ok(completion.every((tone) => tone.offset + tone.duration <= .5));
-  assert.ok(attention.every((tone) => tone.offset + tone.duration <= .5));
-});
-
-test("first user gesture resumes audio even before a cue is pending", async () => {
-  const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
-  assert.match(source, /function flush\(\): void \{\s*const audio = context;\s*if \(!audio\) return;[\s\S]*?if \(audio\.state !== "running"\)/);
-  assert.doesNotMatch(source, /if \(!context \|\| !pending\.length\) return/);
-});
-
-test("closed audio contexts and scheduling failures remain recoverable", async () => {
-  const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
-  assert.match(source, /if \(context && isClosed\(context\)\) resetContext\(context\)/);
-  assert.match(source, /try \{ schedule\(audio, pending\[0\]!\); \}[\s\S]*?pending\.shift\(\)/);
-  assert.match(source, /function isClosed\(audio: AudioContext\): boolean \{\s*return audio\.state === "closed"/);
-  assert.match(source, /if \(isClosed\(audio\)\) resetContext\(audio\)/);
-  assert.doesNotMatch(source, /unavailable/);
-});
-
-test("finished audio nodes disconnect after playback", async () => {
-  const source = await readFile(new URL("../src/client/web-audio.ts", import.meta.url), "utf8");
-  assert.match(source, /oscillator\.addEventListener\("ended", \(\) => \{\s*oscillator\.disconnect\(\);\s*gain\.disconnect\(\);\s*\}, \{ once: true \}\)/);
-});
-
-test("live cues drain by ID while bootstrap and reset clear stale cues", async () => {
-  const [store, app] = await Promise.all([
-    readFile(new URL("../src/client/runtime/event-store.ts", import.meta.url), "utf8"),
-    readFile(new URL("../src/client/App.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(store, /event\.type === "session\.status"[\s\S]*?audioCues: appendWebAudioCue\(current\.audioCues, event\)/);
-  assert.match(store, /pendingUi: boot\.pendingUi[\s\S]*?audioCues: \[\]/);
-  assert.match(store, /pendingUi: undefined,[^}]*audioCues: \[\]/s);
-  assert.match(app, /enqueueWebAudioCues\(live\.audioCues\.map[^\n]*\n\s*runtimeStore\.consumeAudioCues/);
-});

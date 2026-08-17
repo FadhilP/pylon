@@ -2,7 +2,7 @@ import { validGuardRules } from "../guard-policy.ts";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "./events.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, RuntimeSnapshot, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, WorkspaceFileContent, WorkspaceFilePage } from "./snapshots.ts";
 
 const MAX_ID_LENGTH = 128;
 const MAX_MESSAGE_LENGTH = 64 * 1024;
@@ -13,6 +13,8 @@ const MAX_TEXT_FILES = 100;
 const MAX_TEXT_FILE_TOTAL_BYTES = 10 * 1024 * 1024;
 const commandNames = new Set<string>(COMMAND_NAMES);
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const extensionPackageName = /^npm:(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)(?:@[^\s]+)?$/i;
+const extensionGitSource = /^(?:git:(?:[^\s]+)|(?:https?|ssh|git):\/\/[^\s]+)$/i;
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
 const memoryScopes = new Set(["user", "project"]);
@@ -149,7 +151,9 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
     return modelMode && model
       && (value.mode !== "model" || boundedString(value.model, 400))
       && ["isolated", "direct", "dynamic"].includes(String(value.executionMode))
-      && validThinkingList(value.thinkingLevels);
+      && validThinkingList(value.thinkingLevels)
+      && Number.isSafeInteger(value.maxTurns)
+      && (value.maxTurns as number) >= 1;
   }
   if (value.kind === "continuity") {
     return typeof value.memoryEnabled === "boolean"
@@ -291,6 +295,22 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
     if (!identifier(value.packageId)) return { ok: false, error: "invalid packageId" };
     if (!validPackageSettings(value.settings)) return { ok: false, error: "invalid package settings" };
   }
+  if (value.type === "setExtensionEnabled") {
+    if (!identifier(value.extensionId) || typeof value.enabled !== "boolean") return { ok: false, error: "invalid extension enabled state" };
+  }
+  if (value.type === "installExtensionPackage" || value.type === "removeExtensionPackage") {
+    if (value.scope !== "user" && value.scope !== "project") return { ok: false, error: "invalid extension package scope" };
+    if (value.confirmed !== true || typeof value.source !== "string" || value.source.length > 500
+      || !(extensionPackageName.test(value.source) || extensionGitSource.test(value.source))) {
+      return { ok: false, error: "invalid extension package source" };
+    }
+  }
+  if (value.type === "setProjectTrust" && (typeof value.trusted !== "boolean" || value.confirmed !== true)) {
+    return { ok: false, error: "invalid project trust decision" };
+  }
+  if (value.type === "reloadExtensions" && value.confirmed !== true) {
+    return { ok: false, error: "extension reload requires confirmation" };
+  }
   if (value.type === "updateHookSettings" && !validHookSettings(value.settings)) {
     return { ok: false, error: "invalid hook settings" };
   }
@@ -413,6 +433,23 @@ export function isPackageListSnapshot(value: unknown): value is PackageListSnaps
     && Number.isSafeInteger(item.extensionCount) && (item.extensionCount as number) > 0 && (item.extensionCount as number) <= 50
     && (item.settings === undefined || validPackageSettings(item.settings))
     && (item.error === undefined || typeof item.error === "string" && item.error.length <= 500));
+}
+
+export function isExtensionListSnapshot(value: unknown): value is ExtensionListSnapshot {
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION || !generation(value.sessionGeneration)
+    || typeof value.projectTrustRequired !== "boolean" || typeof value.projectTrusted !== "boolean"
+    || !Array.isArray(value.packages) || value.packages.length > 200
+    || !Array.isArray(value.extensions) || value.extensions.length > 500) return false;
+  if (!value.packages.every((item) => record(item)
+    && boundedString(item.source, 500) && (item.scope === "user" || item.scope === "project"))) return false;
+  return value.extensions.every((item) => record(item)
+    && identifier(item.id)
+    && (item.scope === "user" || item.scope === "project")
+    && validWorkspacePath(item.path)
+    && boundedString(item.source, 500)
+    && (item.origin === "package" || item.origin === "top-level")
+    && typeof item.enabled === "boolean" && typeof item.active === "boolean"
+    && (item.loadError === undefined || typeof item.loadError === "string" && item.loadError.length <= 500));
 }
 
 export function isWebEvent(value: unknown): value is WebEvent {

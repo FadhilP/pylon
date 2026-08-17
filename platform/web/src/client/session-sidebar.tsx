@@ -375,7 +375,7 @@ export function SessionSidebar({ activeSessions, unseenCompletions, projects, ge
               <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
             </button></h2>
             <div>
-              <button className="project-add" type="button" onClick={onNewGeneral} disabled={Boolean(busy || deleting || projectBusy)}>New session</button>
+              <button className="project-add" type="button" onClick={onNewGeneral} disabled={Boolean(busy || deleting || projectBusy)} aria-label="New general session" title="New general session"><IconPlus size={14} /></button>
             </div>
           </div>
           {generalOpen && <div className="active-session-list">

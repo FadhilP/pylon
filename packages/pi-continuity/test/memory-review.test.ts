@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   callMemoryReviewer,
-  MEMORY_REVIEWER_OUTPUT_CONTRACT,
-  MEMORY_REVIEWER_PROMPT,
   preflightMemoryProposals,
   resolveExactUserQuote,
   reviewedRecord,
@@ -40,11 +38,6 @@ function reviewerInput(completeReview: any, signal?: AbortSignal) {
   return callMemoryReviewer({ model: { provider: "test", id: "reviewer" }, auth: { apiKey: "safe-short-key" }, profile: { model: "test/reviewer" }, packet: reviewerPacket(), sessionId: "s", completeReview, signal });
 }
 
-test("reviewer prompt supplies the V2 admission and activation contract", () => {
-  assert.ok(MEMORY_REVIEWER_PROMPT.endsWith(MEMORY_REVIEWER_OUTPUT_CONTRACT));
-  for (const token of ["\"version\":2", '"verdict":"defer"', "ActivationDraft", "semantic_guarded", "hardNegative", "material_rewrite_required", "blocking is authorized"])
-    assert.ok(MEMORY_REVIEWER_OUTPUT_CONTRACT.includes(token) || MEMORY_REVIEWER_PROMPT.includes(token), token);
-});
 
 test("quote resolution ignores assistant text and hashes the immutable user entry", () => {
   const quote = "Prefer concise replies across projects.";

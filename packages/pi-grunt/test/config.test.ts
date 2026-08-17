@@ -13,8 +13,8 @@ import { readSettings, updateSettings } from "../src/web-settings.ts";
 test("config is atomic, validated, and preserves corrupt input", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-config-"));
   const path = join(dir, "nested", "config.json");
-  await saveConfig({ version: 1, model: "openai/worker", mode: "direct" }, path);
-  assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker", mode: "direct" });
+  await saveConfig({ version: 1, model: "openai/worker", mode: "direct", maxTurns: 12 }, path);
+  assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker", mode: "direct", maxTurns: 12 });
   await saveConfig({ version: 1, disabled: false }, path);
   assert.deepEqual(await loadConfig(path), { version: 1, disabled: false });
   await writeFile(path, "bad");
@@ -44,7 +44,8 @@ test("timeout defaults to fifteen minutes and validates overrides", () => {
 test("worker budgets and parent context limits are bounded", () => {
   assert.equal(gruntMaxTurns(undefined), DEFAULT_GRUNT_MAX_TURNS);
   assert.equal(gruntMaxTurns("3"), 3);
-  assert.throws(() => gruntMaxTurns("0"), /between/);
+  assert.equal(gruntMaxTurns(10_000), 10_000);
+  assert.throws(() => gruntMaxTurns("0"), /positive/);
   assert.equal(gruntMaxCostUsd(undefined), DEFAULT_GRUNT_MAX_COST_USD);
   assert.equal(gruntMaxCostUsd("0.5"), 0.5);
   assert.throws(() => gruntMaxCostUsd("0"), /greater/);
@@ -60,13 +61,16 @@ test("worker thinking defaults to medium/high and supports a configured allowlis
 
   const agentDir = await mkdtemp(join(tmpdir(), "grunt-settings-"));
   await updateSettings({
-    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["low", "xhigh"],
+    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["low", "xhigh"], maxTurns: 10_000,
   }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["low", "xhigh"],
+    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["low", "xhigh"], maxTurns: 10_000,
   });
   await assert.rejects(updateSettings({
-    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: [],
+    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: [], maxTurns: 12,
+  }, { agentDir }), /invalid Grunt settings/);
+  await assert.rejects(updateSettings({
+    kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["medium"], maxTurns: 0,
   }, { agentDir }), /invalid Grunt settings/);
 });
 

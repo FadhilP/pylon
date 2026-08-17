@@ -7,7 +7,7 @@ import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protoco
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import type { HeliosAndroidToolingCommand } from "../src/shared/protocol/helios-android-tooling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PapercutMutationResult, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationHistoryPage, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PapercutMutationResult, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PapercutMutationInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
@@ -113,6 +113,7 @@ class FakeDriver implements PiDriver {
     return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projects: [], sessions: [], totalSessionCount: 0 });
   }
   listPackages(): Promise<PackageListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, packages: [{ id: "pi-test", name: "pi-test", description: "Test package", enabled: true, active: true, extensionCount: 1 }] }); }
+  listExtensions(): Promise<ExtensionListSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, projectTrustRequired: false, projectTrusted: true, packages: [], extensions: [{ id: "a".repeat(32), scope: "user", path: "extensions/test.ts", source: "auto", origin: "top-level", enabled: true, active: true }] }); }
   listHookSettings(): Promise<HookSettingsSnapshot> { return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration, settings: structuredClone(this.hookSettings) }); }
   heliosBrowser(input: HeliosBrowserInput) {
     this.heliosRequests.push(input);
@@ -234,6 +235,11 @@ class FakeDriver implements PiDriver {
     this.packageSettingsUpdates.push(input);
     return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration });
   }
+  setExtensionEnabled(): Promise<ReplacementResult> { return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration }); }
+  installExtensionPackage(): Promise<ReplacementResult> { return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration }); }
+  removeExtensionPackage(): Promise<ReplacementResult> { return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration }); }
+  setProjectTrust(): Promise<ReplacementResult> { return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration }); }
+  reloadExtensions(): Promise<ReplacementResult> { return Promise.resolve({ cancelled: false, sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration }); }
   updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
     this.hookSettings = structuredClone(input.settings);
     this.hookSettingsUpdates.push(structuredClone(input.settings));
@@ -713,6 +719,10 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     const packages = await fetch(`${origin}/api/v1/packages`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(packages.status, 200);
     assert.equal(((await body(packages)).packages as unknown[]).length, 1);
+    const extensions = await fetch(`${origin}/api/v1/extensions`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(extensions.status, 200);
+    assert.equal(((await body(extensions)).extensions as unknown[]).length, 1);
+    assert.equal((await fetch(`${origin}/api/v1/commands`, { method: "POST", headers: mutationHeaders, body: JSON.stringify({ type: "installExtensionPackage", source: "npm:example", scope: "user", confirmed: false, commandId: "extension-invalid", expectedGeneration: 1 }) })).status, 400);
     const settingsCommand = {
       type: "updatePackageSettings",
       packageId: "pi-advisor",

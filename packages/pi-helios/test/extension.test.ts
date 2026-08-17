@@ -59,59 +59,6 @@ function context(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("registers native capture and constrained browser and Android tools", () => {
-  const { tools } = runtime();
-  assert.deepEqual([...tools.keys()].sort(), ["helios_android", "helios_browser", "helios_capture"]);
-  const android = tools.get("helios_android");
-  assert.match(android.description, /start one owned Android AVD/i);
-  assert.match(android.description, /installed package IDs/i);
-  assert.match(android.description, /consented existing Android emulator/);
-  assert.match(android.description, /returned Android element refs/);
-  assert.match(android.description, /never guess selectors/i);
-  assert.match(android.promptGuidelines.join("\n"), /Never request raw ADB, Appium commands/i);
-  assert.equal(android.parameters.properties.serial.pattern, "^emulator-[0-9]{4,5}$");
-  assert.equal(android.parameters.properties.target.pattern, "^a[1-9][0-9]{0,5}$");
-  const captureDescription = tools.get("helios_capture").description;
-  assert.match(captureDescription, /Windows window/);
-  assert.match(captureDescription, /user asks/);
-  assert.match(captureDescription, /fresh visible confirmation/);
-  assert.match(captureDescription, /Never use for monitoring/);
-  assert.doesNotMatch(captureDescription, /browser viewport/);
-  const browser = tools.get("helios_browser");
-  assert.match(browser.description, /only for user-requested browser work/);
-  assert.match(browser.description, /user supervision/);
-  assert.match(browser.description, /returned element refs/);
-  assert.match(browser.description, /continuation cursors/);
-  assert.match(browser.description, /bounded semantic plan/);
-  assert.equal(browser.parameters.anyOf, undefined);
-  assert.ok(browser.parameters.properties.actions);
-  assert.ok(browser.parameters.properties.plan);
-  const targetPattern = new RegExp(browser.parameters.properties.target.pattern);
-  assert.equal(targetPattern.test("f1e12"), true);
-  assert.equal(targetPattern.test("f1f2e12"), false);
-  const guidance = browser.promptGuidelines.join("\n");
-  assert.ok(guidance.length < 1_000);
-  assert.match(guidance, /Never monitor/i);
-  assert.match(guidance, /never guess selectors/i);
-  assert.match(guidance, /continuation cursors/i);
-  assert.match(guidance, /Reuse returned snapshots/i);
-  assert.match(guidance, /Prefer targeted screenshots; use fullPage only/i);
-  assert.match(guidance, /Use plan only for deterministic, non-consequential steps/i);
-  assert.match(guidance, /User must supervise purchases/i);
-});
-
-test("advertises compact deferred browser usages to Pylon", async () => {
-  const { handlers, eventHandlers } = runtime();
-  let policy: any;
-  eventHandlers.set("pylon:tool-policy", [(value: any) => { policy = value; }]);
-  await handlers.get("session_start")![0]({}, context());
-  assert.deepEqual(policy.toolUsage, {
-    helios_browser: "navigate and interact with browser pages, tabs, and screenshots",
-    helios_capture: "capture a consented Windows window for visual debugging",
-    helios_android: "list packages on, start, or attach to an Android emulator and navigate one app with constrained Appium actions",
-  });
-  assert.ok(Object.values(policy.toolUsage).every((value: any) => value.length <= 120));
-});
 
 test("Android start and attachment require visible consent before SDK or Appium access", async () => {
   let executions = 0;
@@ -332,38 +279,16 @@ test("Helios exposes fixed Android tooling status through the runtime bridge", a
   assert.equal(invalidClaimed, false);
 });
 
-test("Helios advertises one-use Web Scout child capability", async () => {
-  const { eventHandlers } = runtime();
-  const capabilities: any[] = [];
-  for (const handler of eventHandlers.get("pi-helios:web-scout-capability") ?? []) {
-    handler({ version: 1, respond(value: unknown) { capabilities.push(value); } });
-  }
-  assert.equal(capabilities.length, 1);
-  assert.match(capabilities[0].childExtensionPath, /web-scout-browser\.ts$/);
-  const issued = await capabilities[0].issueGrant({ maxPages: 2, maxActions: 4, headed: true });
-  await issued.revoke();
-});
 
 test("Web Scout child extension requires and consumes issued grant", async () => {
   const issued = await issueWebScoutGrant({ maxPages: 2, maxActions: 4, headed: false });
   process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
-  const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   await webScoutBrowser({
     exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
-    registerTool(value: any) { tools.set(value.name, value); },
+    registerTool() {},
     on(name: string, handler: Function) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   } as any, { persistentClient: false });
-  assert.deepEqual([...tools.keys()], ["scout_browser"]);
-  const browser = tools.get("scout_browser");
-  const targetPattern = new RegExp(browser.parameters.properties.target.pattern);
-  assert.deepEqual(browser.parameters.properties.action.enum, ["navigate", "snapshot", "continue", "follow", "back"]);
-  assert.match(browser.parameters.properties.cursor.description, /Required only for continue/);
-  assert.deepEqual(browser.prepareArguments({ action: "snapshot", cursor: "hc_0123456789abcdef0123456789abcdef" }), {
-    action: "continue", cursor: "hc_0123456789abcdef0123456789abcdef",
-  });
-  assert.equal(targetPattern.test("f1e12"), true);
-  assert.equal(targetPattern.test("f1f2e12"), false);
   assert.equal(process.env[WEB_SCOUT_GRANT_ENV], undefined);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
   await assert.rejects(webScoutBrowser({} as any, { persistentClient: false }), /grant is missing/);

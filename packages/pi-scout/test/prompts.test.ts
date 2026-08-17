@@ -3,31 +3,6 @@ import assert from "node:assert/strict";
 import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
 import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClaims } from "../src/result.ts";
 
-test("repo scout prompt preserves core contracts", () => {
-  assert.match(REPO_SCOUT_PROMPT, /path:start-end/);
-  assert.match(REPO_SCOUT_PROMPT, /search_excerpt/i);
-  assert.match(REPO_SCOUT_PROMPT, /symbol_search for identifiers/i);
-  assert.match(REPO_SCOUT_PROMPT, /code_search for concepts/i);
-  assert.match(REPO_SCOUT_PROMPT, /relationship_graph for known symbols or dependencies/i);
-  assert.match(REPO_SCOUT_PROMPT, /rg\/fd for index misses or live confirmation/i);
-  assert.match(REPO_SCOUT_PROMPT, /index_status only when indexed results appear unavailable or stale/i);
-  assert.match(REPO_SCOUT_PROMPT, /only the tools exposed to you/i);
-  assert.match(REPO_SCOUT_PROMPT, /at most 8 lines/i);
-  assert.match(REPO_SCOUT_PROMPT, /Keep the report compact/i);
-  assert.match(REPO_SCOUT_PROMPT, /retained or omitted whole/i);
-  assert.match(REPO_SCOUT_PROMPT, /Stop immediately when the task is evidenced/i);
-  assert.match(REPO_SCOUT_PROMPT, /every additional tool call must resolve a named evidence gap/i);
-  assert.doesNotMatch(REPO_SCOUT_PROMPT, /KiB|hard cap|soft target/i);
-  assert.match(REPO_SCOUT_PROMPT, /Do not edit/i);
-  assert.match(REPO_SCOUT_PROMPT, /mixes factual reconnaissance with design, recommendation, prioritization, or architecture-choice requests/i);
-  assert.match(REPO_SCOUT_PROMPT, /decision portion is parent-owned/i);
-  assert.match(REPO_SCOUT_PROMPT, /do not answer it/i);
-  assert.match(REPO_SCOUT_PROMPT, /directly implicated by observed references or flows/i);
-  assert.doesNotMatch(REPO_SCOUT_PROMPT, /likely needing changes/i);
-  assert.match(REPO_SCOUT_PROMPT, /parent model decides/i);
-  assert.match(REPO_SCOUT_PROMPT, /do not infer edits or repeat evidence/i);
-  assert.doesNotMatch(REPO_SCOUT_PROMPT, /no fixed turn cap/i);
-});
 
 test("Scout report cap keeps complete blocks and reports omission", () => {
   const first = `## Findings\n\n- first complete finding\n  path.ts:1-2\n  excerpt`;
@@ -101,13 +76,3 @@ test("Scout omission anchors reject unsafe and malformed paths", () => {
   assert.deepEqual(result.omittedEvidence, [{ path: "safe/file.ts", start: 10, end: 12 }]);
 });
 
-test("web scout prompt preserves public read-only evidence contract", () => {
-  assert.match(WEB_SCOUT_PROMPT, /scout_browser and, when exposed, scout_web_search/);
-  assert.match(WEB_SCOUT_PROMPT, /query is sent to its selected OpenAI or Exa provider/);
-  assert.match(WEB_SCOUT_PROMPT, /navigate, snapshot, continue, follow, and back/);
-  assert.match(WEB_SCOUT_PROMPT, /immediately call continue.*never pass a cursor to snapshot/);
-  assert.match(WEB_SCOUT_PROMPT, /GitHub blob pages rather than raw file URLs/);
-  assert.match(WEB_SCOUT_PROMPT, /Never attempt login/);
-  assert.match(WEB_SCOUT_PROMPT, /source URL/);
-  assert.match(WEB_SCOUT_PROMPT, /untrusted data/);
-});

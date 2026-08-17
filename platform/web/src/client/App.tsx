@@ -17,7 +17,7 @@ import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
 import { GENERAL_PROJECT_ID } from "../shared/general-session";
 import type { MessageReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
-import type { HookSettingsReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import type { ExtensionListSnapshot, HookSettingsReadModel, NativeExtensionReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
@@ -167,6 +167,9 @@ export function App() {
   const [packages, setPackages] = useState<PackageSummary[]>([]);
   const [packagesLoading, setPackagesLoading] = useState(true);
   const [packageBusy, setPackageBusy] = useState("");
+  const [extensions, setExtensions] = useState<ExtensionListSnapshot>();
+  const [extensionsLoading, setExtensionsLoading] = useState(true);
+  const [extensionBusy, setExtensionBusy] = useState("");
   const [androidTooling, setAndroidTooling] = useState<HeliosAndroidToolingResult>();
   const [androidToolingBusy, setAndroidToolingBusy] = useState<"" | "install" | "remove">("");
   const [hookSettings, setHookSettings] = useState<HookSettingsReadModel>();
@@ -480,6 +483,24 @@ export function App() {
       if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) reportError(cause, "Unable to list packages");
     }).finally(() => {
       if (active) setPackagesLoading(false);
+    });
+    return () => { active = false; };
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
+
+  useEffect(() => {
+    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    let active = true;
+    const sessionId = live.runtime.sessionId;
+    const generation = live.runtime.sessionGeneration;
+    setExtensionsLoading(true);
+    void runtimeStore.listExtensions().then((result) => {
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) setExtensions(result);
+    }).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "Unable to list extensions";
+      if (/session changed while listing extensions|extension list is stale/i.test(message)) return;
+      if (active && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) reportError(cause, "Unable to list extensions");
+    }).finally(() => {
+      if (active) setExtensionsLoading(false);
     });
     return () => { active = false; };
   }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
@@ -915,6 +936,26 @@ export function App() {
     }
   };
 
+  const refreshExtensions = async () => setExtensions(await runtimeStore.listExtensions());
+  const manageExtension = async (key: string, action: () => Promise<void>, failure: string) => {
+    if (extensionBusy) throw new Error("Another extension operation is still running");
+    setExtensionBusy(key);
+    try {
+      await action();
+      await refreshExtensions();
+    } catch (cause) {
+      reportError(cause, failure);
+      throw cause;
+    } finally {
+      setExtensionBusy("");
+    }
+  };
+  const toggleExtension = (extension: NativeExtensionReadModel, enabled: boolean) => manageExtension(extension.id, () => runtimeStore.setExtensionEnabled(extension.id, enabled), "Unable to update extension");
+  const installExtensionPackage = (source: string, scope: "user" | "project") => manageExtension(`install:${source}`, () => runtimeStore.installExtensionPackage(source, scope), "Unable to install extension package");
+  const removeExtensionPackage = (source: string, scope: "user" | "project") => manageExtension(`remove:${source}`, () => runtimeStore.removeExtensionPackage(source, scope), "Unable to remove extension package");
+  const setProjectTrust = (trusted: boolean) => manageExtension("trust", () => runtimeStore.setProjectTrust(trusted), "Unable to update project trust");
+  const reloadExtensions = () => manageExtension("reload", () => runtimeStore.reloadExtensions(), "Unable to reload extensions");
+
   const manageAndroidTooling = async (action: "status" | "install" | "remove") => {
     if (androidToolingBusy) throw new Error("Another Android tooling operation is still running");
     if (action !== "status") setAndroidToolingBusy(action);
@@ -1313,6 +1354,7 @@ export function App() {
         providerAuth={live.runtime?.providerAuth}
         pendingUi={live.pendingUi}
         packages={packages}
+        extensions={extensions}
         hookSettings={hookSettings}
         runtimePolicy={live.runtime?.runtimePolicy}
         toolPolicies={live.runtime?.operational.tools.policies ?? []}
@@ -1321,8 +1363,10 @@ export function App() {
           || Boolean(live.pendingUi)
           || activeSessions.some((session) => session.runtimeState === "running" || session.runtimeState === "attention")}
         loading={packagesLoading}
+        extensionLoading={extensionsLoading}
         hookLoading={hooksLoading}
         busy={packageBusy}
+        extensionBusy={Boolean(extensionBusy)}
         hookBusy={hooksBusy}
         androidTooling={androidTooling}
         androidToolingBusy={androidToolingBusy}
@@ -1341,6 +1385,11 @@ export function App() {
         onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
         onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
         onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
+        onToggleExtension={toggleExtension}
+        onInstallExtensionPackage={installExtensionPackage}
+        onRemoveExtensionPackage={removeExtensionPackage}
+        onSetProjectTrust={setProjectTrust}
+        onReloadExtensions={reloadExtensions}
         onUpdateHooks={updateHookSettings}
         onUpdateGlobalPolicy={(settings, expectedRevision) => runtimeStore.updateRuntimePolicy(
           "global",

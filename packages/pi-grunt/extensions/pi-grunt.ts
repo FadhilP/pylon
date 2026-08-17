@@ -256,7 +256,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         heartbeat.unref();
         const timeoutMs = gruntTimeoutMs();
         const maxCostUsd = gruntMaxCostUsd();
-        const maxTurns = gruntMaxTurns();
+        const maxTurns = gruntMaxTurns(config.maxTurns);
         const deadline = started + timeoutMs;
         let totalTurns = 0;
         let attempts = 0;

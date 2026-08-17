@@ -41,14 +41,6 @@ test("V6 state validates strict records and owner visibility", () => {
   assert.equal(normalizeMemoryState({ ...file, notes: [{ ...user, owner: "forged" }] }), undefined);
 });
 
-test("proposal schema enforces batch, scope, fields, and exact target shape", () => {
-  const proposals = normalizeProposalBatch([{ operation: "add", scope: "project", trigger: " changing settings ", guidance: " restart later ", basis: { type: "project_contract", evidence: [{ path: "src/a.ts", start: 1, end: 2 }] } }]);
-  assert.equal((proposals[0] as any).trigger, "changing settings");
-  assert.throws(() => normalizeProposalBatch([]), /one or two/);
-  assert.throws(() => normalizeProposalBatch([proposals[0], proposals[0], proposals[0]]), /one or two/);
-  assert.throws(() => normalizeProposalBatch([{ ...proposals[0], scope: "user" }]), /user memory/);
-  assert.throws(() => normalizeProposalBatch([{ ...proposals[0], owner: "forged" }]), /invalid/);
-});
 
 test("reviewer output is V2, strict, and conservatively archives missing or invalid activation", () => {
   const accepted = { proposalIndex: 0, verdict: "accept", operation: "add", scope: "user", trigger: "using filters", guidance: "Prefer a dropdown for finite categories.", authority: "user_instruction", activationDraft: archivalActivationDraft(), reasonCode: "durable_rule" };

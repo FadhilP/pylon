@@ -30,7 +30,7 @@ import {
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import { listSessionInventory } from "pylon-core/session-inventory";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -67,6 +67,9 @@ import type {
   SetModelInput,
   SetPackageEnabledInput,
   SetSessionActiveInput,
+  SetExtensionEnabledInput,
+  ExtensionPackageInput,
+  SetProjectTrustInput,
   SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
@@ -358,6 +361,15 @@ export class RuntimeCoordinator implements PiDriver {
     const generation = this.generation;
     const result = await slot.driver.listPackages();
     this.assertSelected(slot, generation, "listing packages");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async listExtensions(): Promise<ExtensionListSnapshot> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.listExtensions) throw new Error("native extensions are unavailable");
+    const result = await slot.driver.listExtensions();
+    this.assertSelected(slot, generation, "listing extensions");
     return { ...result, sessionGeneration: generation };
   }
 
@@ -1429,6 +1441,29 @@ export class RuntimeCoordinator implements PiDriver {
     return this.withLifecycle(async () => {
       await this.selected().driver.updatePackageSettings(input);
       return this.replacement(false);
+    });
+  }
+
+  async setExtensionEnabled(input: SetExtensionEnabledInput): Promise<ReplacementResult> {
+    return this.withExtensionLifecycle(() => this.selected().driver.setExtensionEnabled?.(input) ?? Promise.reject(new Error("native extensions are unavailable")));
+  }
+  async installExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
+    return this.withExtensionLifecycle(() => this.selected().driver.installExtensionPackage?.(input) ?? Promise.reject(new Error("native extensions are unavailable")));
+  }
+  async removeExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
+    return this.withExtensionLifecycle(() => this.selected().driver.removeExtensionPackage?.(input) ?? Promise.reject(new Error("native extensions are unavailable")));
+  }
+  async setProjectTrust(input: SetProjectTrustInput): Promise<ReplacementResult> {
+    return this.withExtensionLifecycle(() => this.selected().driver.setProjectTrust?.(input) ?? Promise.reject(new Error("project trust is unavailable")));
+  }
+  async reloadExtensions(): Promise<ReplacementResult> {
+    return this.withExtensionLifecycle(async () => {
+      const selected = this.selected();
+      for (const slot of this.slots.values()) {
+        if (!slot.driver.reloadExtensions) throw new Error("native extensions are unavailable");
+        await slot.driver.reloadExtensions();
+      }
+      return { cancelled: false, sessionId: selected.id, sessionGeneration: this.generation };
     });
   }
 
@@ -2950,6 +2985,17 @@ export class RuntimeCoordinator implements PiDriver {
     } finally {
       this.lifecycleBusy = false;
     }
+  }
+
+  /** Extension settings can change resources shared by several live sessions. */
+  private async withExtensionLifecycle<T>(action: () => Promise<T>): Promise<T> {
+    return this.withLifecycle(async () => {
+      if ([...this.slots.values()].some((slot) => !this.slotCanSleep(slot))
+        || [...this.externalSpawnRuns.values()].some((run) => run.state === "running")) {
+        throw new Error("extensions can only change while affected sessions are idle");
+      }
+      return action();
+    });
   }
 
   private async sleepIdleSlots(): Promise<void> {

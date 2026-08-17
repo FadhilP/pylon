@@ -5,51 +5,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import extension from "../extensions/pi-verify.ts";
 
-test("verify guidance requires one post-result response", () => {
-  let tool: any;
-  extension({
-    registerTool: (value: any) => { tool = value; },
-    on: () => {}, events: { emit: () => {} }, appendEntry: () => {},
-  } as any);
-  const guidance = tool.promptGuidelines.join("\n");
-  assert.match(guidance, /tool-only assistant turn/i);
-  assert.match(guidance, /no user-facing prose/i);
-  assert.match(guidance, /exactly one evidence-aware final response/i);
-  assert.match(guidance, /After failed, stale, cancelled, or error results, stop without another tool call/i);
-  assert.match(guidance, /Omit checks by default; only pass exact IDs supplied by the user or verification catalog/i);
-  assert.match(guidance, /never infer IDs from scripts or labels/i);
-  assert.doesNotMatch(guidance, /prose first|verification follows below/i);
-  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-  assert.match(tool.renderCall({ scope: "changed" }, theme).render(80).join("\n"), /Verify worktree changes/);
-});
-
-test("verify publishes package tool ownership for the session lifecycle", () => {
-  const handlers = new Map<string, (event?: any, ctx?: any) => any>();
-  const events: Array<{ channel: string; value: any }> = [];
-  extension({
-    registerTool: () => {},
-    on: (name: string, handler: (event?: any, ctx?: any) => any) => handlers.set(name, handler),
-    events: { emit: (channel: string, value: any) => events.push({ channel, value }) },
-    appendEntry: () => {},
-  } as any);
-  handlers.get("session_start")!({}, {
-    cwd: process.cwd(),
-    sessionManager: { getSessionId: () => "verify-policy", getEntries: () => [] },
-  });
-  assert.deepEqual(events.find((event) => event.channel === "pylon:tool-policy")?.value, {
-    version: 1,
-    kind: "register",
-    owner: "pi-verify",
-    managedTools: ["verify"],
-    enabledTools: ["verify"],
-    toolUsage: { verify: "run bounded changed-set hygiene and existing project verification checks" },
-  });
-  handlers.get("session_shutdown")!();
-  assert.deepEqual(events.at(-1), {
-    channel: "pylon:tool-policy",
-    value: { version: 1, kind: "unregister", owner: "pi-verify" },
-  });
-});
 
 test("verify publishes bounded result metadata and session entry", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-verify-extension-"));

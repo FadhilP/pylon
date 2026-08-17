@@ -85,7 +85,9 @@ export function parseToolDuration(value: unknown): PersistedToolDuration | undef
   const raw = value as Record<string, unknown>;
   if (raw.version !== 1
     || typeof raw.toolCallId !== "string"
-    || !/^[A-Za-z0-9._:-]{1,128}$/.test(raw.toolCallId)
+    || raw.toolCallId.length < 1
+    || raw.toolCallId.length > 128
+    || /[\u0000-\u001f\u007f]/.test(raw.toolCallId)
     || !Number.isSafeInteger(raw.durationMs)
     || Number(raw.durationMs) < 0
     || Number(raw.durationMs) > MAX_WORK_DURATION_MS) return undefined;

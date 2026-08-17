@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activeTurnAtMarker, aggregateToolDuration, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus, toolElapsedDuration, turnIdsInViewport } from "../src/shared/transcript.ts";
+import { activeTurnAtMarker, aggregateToolTiming, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, reconcileToolActivity, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus, toolElapsedDuration, turnIdsInViewport } from "../src/shared/transcript.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { DelegatedAgentRunReadModel, MessageReadModel } from "../src/shared/protocol/events.ts";
 
@@ -34,7 +34,6 @@ test("adjacent tools group without crossing message boundaries", () => {
   ]);
 });
 
-
 test("tool summaries use recent unique names and the longest relevant duration", () => {
   const startedAt = "2026-01-01T00:00:00.000Z";
   const tools: MessageReadModel[] = [
@@ -48,11 +47,39 @@ test("tool summaries use recent unique names and the longest relevant duration",
 
   assert.deepEqual(latestUniqueToolNames(tools), ["rg", "bash", "fd"]);
   assert.equal(toolElapsedDuration(tools[3]!, now), 5_000);
-  assert.equal(aggregateToolDuration(tools, now), 5_000);
+  assert.deepEqual(aggregateToolTiming(tools, now), { durationMs: 5_000, status: "running" });
   const completed = tools.map((tool) => tool.tool?.status === "running"
     ? { ...tool, tool: { ...tool.tool, status: "completed" as const, durationMs: tool.tool.id === "four" ? 5_000 : 3_000 } }
     : tool);
-  assert.equal(aggregateToolDuration(completed, now), 8_000);
+  assert.deepEqual(aggregateToolTiming(completed, now), { durationMs: 3_000, status: "completed" });
+
+  const sequential: MessageReadModel[] = [
+    { ...message("slow", "tool"), tool: { id: "slow", name: "bash", status: "completed", durationMs: 3_000 } },
+    { ...message("latest", "tool"), tool: { id: "latest", name: "rg", status: "completed", durationMs: 1_000 } },
+  ];
+  assert.deepEqual(aggregateToolTiming(sequential, now), { durationMs: 1_000, status: "completed" });
+  sequential.push({ ...message("failed", "tool"), tool: { id: "failed", name: "bash", status: "failed", durationMs: 4_000 } });
+  assert.deepEqual(aggregateToolTiming(sequential, now), { durationMs: 4_000, status: "failed" });
+});
+
+test("live tool activity settles stale history messages before aggregation", () => {
+  const stale = {
+    ...message("stale", "tool"),
+    streaming: true,
+    tool: { id: "call-1", name: "bash", status: "running" as const, startedAt: "2026-01-01T00:00:00.000Z" },
+  };
+  const reconciled = reconcileToolActivity(stale, {
+    id: "call-1",
+    name: "bash",
+    status: "completed",
+    summary: "Done",
+    durationMs: 9_000,
+  });
+
+  assert.equal(reconciled.tool?.status, "completed");
+  assert.equal(reconciled.tool?.durationMs, 9_000);
+  assert.equal(reconciled.streaming, false);
+  assert.equal(reconciled.text, "Done");
 });
 
 test("terminal activity status is neutral for stops and failed for errors and retry handoffs", () => {

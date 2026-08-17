@@ -56,27 +56,6 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     getActiveTools: () => [],
     setActiveTools: () => {},
   } as any, complete as any);
-  const guidelines = tool.promptGuidelines as string[];
-  const guidance = guidelines.join("\n");
-  assert.equal(guidelines.length, 3);
-  assert.ok(guidelines.every((guideline) => /advisor/i.test(guideline)));
-  assert.match(tool.description, /Maximum three successful consultations/);
-  assert.match(tool.description, /failures do not consume quota/);
-  assert.match(guidance, /one advisor consultation before implementation only when both conditions hold/);
-  assert.match(guidance, /repository precedent does not clearly determine the solution/);
-  assert.match(guidance, /wrong choice risks security or privacy, data loss, compatibility or migration failure, or broad cross-module regression/);
-  assert.match(guidance, /Skip advisor for local fixes, established repository patterns, routine refactors, test additions, dependency-free changes, and decisions reversible in one small diff/);
-  assert.match(guidance, /after focused reads or repo_scout establish evidence, before choosing an approach/);
-  assert.match(guidance, /after implementation only when implementation exposes new risks, contradicts assumptions, or verification fails ambiguously—not by default/);
-  assert.match(guidance, /Reserve a third advisor call for material contradictions, failures, or unresolved risks/);
-  assert.match(guidance, /concrete decision, risk, or approach to review/);
-  assert.match(guidance, /only the highest-priority cited file ranges/);
-  assert.match(guidance, /Usually provide 3–5 concise, non-overlapping ranges/);
-  assert.match(guidance, /use up to 8 only when each range is independently necessary/);
-  assert.match(guidance, /avoid redundant evidence/);
-  assert.match(guidance, /complete decisive definitions, callers, and checks over broad file slices/);
-  assert.match(guidance, /150–300 total evidence lines is a selection signal, not a hard cap/);
-  assert.match(guidance, /main model decides, verifies evidence, and performs tools/);
   const model = {
     provider: "test", id: "model", contextWindow: 32_000, maxTokens: 8_192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

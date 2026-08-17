@@ -443,6 +443,7 @@ export type PackageSettingsReadModel =
       model?: string;
       executionMode: "isolated" | "direct" | "dynamic";
       thinkingLevels: import("./events.ts").ThinkingLevelReadModel[];
+      maxTurns: number;
     }
   | {
       kind: "continuity";
@@ -487,6 +488,35 @@ export interface PackageListSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
   packages: PackageSummary[];
+}
+
+/** A Pi-native extension resolved from Pylon's configured agent/project roots. */
+export interface NativeExtensionReadModel {
+  /** Stable opaque identifier; absolute paths stay server-side. */
+  id: string;
+  scope: "user" | "project";
+  /** Package-relative or scope-relative display path. */
+  path: string;
+  /** Pi source metadata, such as "auto" or an npm/git package source. */
+  source: string;
+  origin: "package" | "top-level";
+  enabled: boolean;
+  active: boolean;
+  loadError?: string;
+}
+
+export interface NativeExtensionPackageReadModel {
+  source: string;
+  scope: "user" | "project";
+}
+
+export interface ExtensionListSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  projectTrustRequired: boolean;
+  projectTrusted: boolean;
+  packages: NativeExtensionPackageReadModel[];
+  extensions: NativeExtensionReadModel[];
 }
 
 export type HookKind = "file" | "text";

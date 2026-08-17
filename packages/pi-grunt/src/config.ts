@@ -8,7 +8,14 @@ export type ThinkingLevel = (typeof thinkingLevels)[number];
 export const defaultThinkingLevels: ThinkingLevel[] = ["medium", "high"];
 export const gruntModes = ["isolated", "direct", "dynamic"] as const;
 export type GruntMode = (typeof gruntModes)[number];
-export type GruntConfig = { version: 1; model?: string; disabled?: boolean; mode?: GruntMode; thinkingLevels?: ThinkingLevel[] };
+export type GruntConfig = {
+  version: 1;
+  model?: string;
+  disabled?: boolean;
+  mode?: GruntMode;
+  thinkingLevels?: ThinkingLevel[];
+  maxTurns?: number;
+};
 export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
   config.thinkingLevels ?? defaultThinkingLevels;
 export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
@@ -28,11 +35,11 @@ export function gruntTimeoutMs(value = process.env.PI_GRUNT_TIMEOUT_MS): number 
   return timeout;
 }
 
-export function gruntMaxTurns(value = process.env.PI_GRUNT_MAX_TURNS): number {
+export function gruntMaxTurns(value: string | number | undefined = process.env.PI_GRUNT_MAX_TURNS): number {
   if (value === undefined) return DEFAULT_GRUNT_MAX_TURNS;
   const turns = Number(value);
-  if (!Number.isInteger(turns) || turns < 1 || turns > 100)
-    throw new Error("PI_GRUNT_MAX_TURNS must be an integer between 1 and 100");
+  if (!Number.isSafeInteger(turns) || turns < 1)
+    throw new Error("PI_GRUNT_MAX_TURNS must be a positive safe integer");
   return turns;
 }
 
@@ -60,6 +67,7 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
       (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
       (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
       (value.mode !== undefined && !gruntModes.includes(value.mode)) ||
+      (value.maxTurns !== undefined && (!Number.isSafeInteger(value.maxTurns) || value.maxTurns < 1)) ||
       (value.thinkingLevels !== undefined && (!Array.isArray(value.thinkingLevels)
         || !value.thinkingLevels.length || new Set(value.thinkingLevels).size !== value.thinkingLevels.length
         || !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel))))
@@ -70,6 +78,7 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
       ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
       ...(value.mode !== undefined ? { mode: value.mode } : {}),
       ...(value.thinkingLevels !== undefined ? { thinkingLevels: value.thinkingLevels } : {}),
+      ...(value.maxTurns !== undefined ? { maxTurns: value.maxTurns } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return { version: 1 };

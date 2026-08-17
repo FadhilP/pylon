@@ -972,7 +972,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     for (const [packageId, settings] of [
       ["pi-advisor", { kind: "advisor", mode: "session" }],
       ["pi-scout", { kind: "scout", mode: "session", webSearch: true }],
-      ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic", thinkingLevels: ["medium", "high"] as any }],
+      ["pi-grunt", { kind: "grunt", mode: "session", executionMode: "dynamic", thinkingLevels: ["medium", "high"] as any, maxTurns: 40 }],
     ] as const) {
       const updated = await driver.updatePackageSettings({ packageId, settings });
       assert.equal(updated.sessionGeneration, generation);
@@ -988,7 +988,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     });
     const gruntDisabled = await driver.updatePackageSettings({
       packageId: "pi-grunt",
-      settings: { kind: "grunt", mode: "disabled", executionMode: "dynamic", thinkingLevels: ["medium", "high"] },
+      settings: { kind: "grunt", mode: "disabled", executionMode: "dynamic", thinkingLevels: ["medium", "high"], maxTurns: 40 },
     });
     assert.equal(scoutDisabled.sessionGeneration, generation);
     assert.equal(gruntDisabled.sessionGeneration, generation);
@@ -996,11 +996,11 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     await driver.updatePackageSettings({
       packageId: "pi-grunt",
-      settings: { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"] },
+      settings: { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"], maxTurns: 12 },
     });
     assert.deepEqual(
       (await driver.listPackages()).packages.find((item) => item.id === "pi-grunt")?.settings,
-      { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"] },
+      { kind: "grunt", mode: "session", executionMode: "direct", thinkingLevels: ["low", "high"], maxTurns: 12 },
     );
 
     await assert.rejects(driver.updatePackageSettings({

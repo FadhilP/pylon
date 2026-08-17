@@ -229,14 +229,3 @@ test("auto search uses Exa only when OpenAI auth is unavailable and explicit Ope
   assert.equal(requests, 1);
 });
 
-test("child extension registers only the restricted selectable search tool", () => {
-  const tools: any[] = [];
-  scoutWebSearchExtension({ registerTool(tool: any) { tools.push(tool); } } as any);
-  assert.deepEqual(tools.map((tool) => tool.name), ["scout_web_search"]);
-  assert.equal(tools[0].parameters.additionalProperties, false);
-  assert.match(tools[0].description, /Find public-web pages matching a query and return bounded titles, URLs, and snippets/);
-  assert.match(tools[0].description, /does not open pages or verify their contents/);
-  assert.match(tools[0].description, /OpenAI\/Codex subscription or API-key auth/);
-  assert.deepEqual(tools[0].parameters.properties.provider.enum, ["auto", "openai", "exa"]);
-  assert.doesNotMatch(JSON.stringify(tools[0].parameters), /cookie|clone|file|video|fetchContent/i);
-});

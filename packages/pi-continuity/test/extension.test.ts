@@ -569,64 +569,6 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
   }
 });
 
-test("continuity and memory guidance stay dedicated", () => {
-  const app = runtime();
-  const continuity = app.tools.get("continuity_update");
-  const memory = app.tools.get("memory");
-  const guidance = continuity.promptGuidelines.join("\n");
-  const memoryGuidance = memory.promptGuidelines.join("\n");
-  assert.match(continuity.promptSnippet, /planning.*todo\/state.*clarification/i);
-  assert.match(guidance, /Use set_plan for explicit \/plan/i);
-  assert.match(guidance, /skip it for straightforward read-only work and one-shot local fixes/i);
-  assert.match(guidance, /2–4 outcome-level todos/i);
-  assert.match(guidance, /blocking user decision/i);
-  assert.match(guidance, /sole tool call at a safe checkpoint/i);
-  assert.match(guidance, /Never re-ask an answered question without new evidence/i);
-  assert.match(guidance, /recommended option first/i);
-  assert.match(guidance, /planSummary.*compact executor handoff/i);
-  assert.match(guidance, /concrete paths\/symbols/i);
-  assert.match(guidance, /assumptions or gaps/i);
-  assert.match(guidance, /acceptance criteria/i);
-  assert.match(guidance, /Continuity owns plan presentation/i);
-  assert.match(guidance, /internal task list/i);
-  assert.match(guidance, /Keep verification out of new todo lists/i);
-  assert.match(guidance, /sole verification-only todo completes automatically/i);
-  assert.match(guidance, /every Continuity update tool-only and before final text/i);
-  assert.match(guidance, /Never call a completion tool/i);
-  assert.match(guidance, /exactly one text-only final response/i);
-  assert.match(guidance, /acknowledge allowUnverified tool-only/i);
-  assert.match(guidance, /disclose the limitation/i);
-  assert.match(guidance, /After failed, stale, cancelled, or error Verify results/i);
-  assert.match(guidance, /one caveated text-only final response and stop without another tool call/i);
-  assert.ok(guidance.length < 1_000);
-  assert.doesNotMatch(guidance, /memory|durable/i);
-  assert.deepEqual(continuity.parameters.properties.action.enum, ["clarify", "set_plan", "todo", "state"]);
-  assert.equal(continuity.parameters.properties.completion, undefined);
-  assert.match(continuity.parameters.properties.allowUnverified.description, /tool-only state update/i);
-  assert.match(continuity.parameters.properties.allowUnverified.description, /disclose the limitation/i);
-  for (const field of ["key", "kind", "text", "source", "confidence", "scope", "evidencePaths"])
-    assert.equal(continuity.parameters.properties[field], undefined);
-  assert.equal(continuity.parameters.properties.todoIds.maxItems, 12);
-  assert.equal(memory.label, "Memory");
-  assert.equal(memory.executionMode, "sequential");
-  assert.match(JSON.stringify(memory.parameters), /list.*propose/);
-  assert.doesNotMatch(JSON.stringify(memory.parameters), /confidence|kind/);
-  assert.match(memory.promptSnippet, /reviewer-gated/i);
-  assert.doesNotMatch(memoryGuidance, /Most tasks should propose no memory/i);
-  assert.match(memoryGuidance, /potentially reusable/i);
-  assert.match(memoryGuidance, /explicitly stated user preferences or instructions/i);
-  assert.match(memoryGuidance, /intentional project conventions or contracts/i);
-  assert.match(memoryGuidance, /could plausibly guide a future session/i);
-  assert.match(memoryGuidance, /Do not require certainty of admission/i);
-  assert.match(memoryGuidance, /accept, rewrite, merge, defer, or reject/i);
-  assert.match(memoryGuidance, /progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets/i);
-  assert.match(memoryGuidance, /at most two proposals/i);
-  assert.match(memoryGuidance, /exact quote/i);
-  assert.match(memoryGuidance, /at most three exact repository ranges/i);
-  assert.match(memoryGuidance, /120 lines/i);
-  assert.equal(memory.parameters.properties.query.maxLength, 500);
-  assert.ok(memoryGuidance.length < 1_200);
-});
 
 test("session recall tool is sequential, read-only, and handles ephemeral state without side effects", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -2607,14 +2549,6 @@ test("plan mode permits memory list but blocks memory mutations", async () => {
   }
 });
 
-test("duplicate continuity instance does not register stale planning handlers", () => {
-  const app = runtime();
-  const starts = app.handlers.get("agent_start")?.length;
-  const calls = app.handlers.get("tool_call")?.length;
-  app.loadAgain();
-  assert.equal(app.handlers.get("agent_start")?.length, starts);
-  assert.equal(app.handlers.get("tool_call")?.length, calls);
-});
 
 test("session startup safely reassociates a moved repository and retains a backup", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;

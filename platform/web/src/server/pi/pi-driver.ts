@@ -3,7 +3,7 @@ import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/proto
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -182,6 +182,10 @@ export interface UpdateHookSettingsInput {
   settings: HookSettingsReadModel;
 }
 
+export interface SetExtensionEnabledInput { extensionId: string; enabled: boolean; }
+export interface ExtensionPackageInput { source: string; scope: "user" | "project"; }
+export interface SetProjectTrustInput { trusted: boolean; }
+
 export interface SetModelInput {
   provider: string;
   modelId: string;
@@ -324,6 +328,7 @@ export interface PiDriver {
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
+  listExtensions?(): Promise<ExtensionListSnapshot>;
   listHookSettings?(): Promise<HookSettingsSnapshot>;
   prompt(input: PromptInput): Promise<AcceptedCommand>;
   queuePrompt(input: PromptInput): Promise<AcceptedCommand>;
@@ -358,6 +363,11 @@ export interface PiDriver {
   updateToolPolicy?(input: UpdateToolPolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
+  setExtensionEnabled?(input: SetExtensionEnabledInput): Promise<ReplacementResult>;
+  installExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
+  removeExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
+  setProjectTrust?(input: SetProjectTrustInput): Promise<ReplacementResult>;
+  reloadExtensions?(): Promise<ReplacementResult>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
   rebuildDiscoverIndex(): Promise<void>;
   setModel(input: SetModelInput): Promise<void>;

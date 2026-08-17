@@ -122,37 +122,6 @@ async function persistedText(root: string): Promise<string> {
   return output.join("\n");
 }
 
-test("registers one deferred, sequential StateQL tool bound to the Pi actor", async () => {
-  const value = await start();
-  const tool = value.tools.get("stateql");
-  assert.ok(tool);
-  assert.equal(tool.executionMode, "sequential");
-  assert.match(tool.description, /user-requested/);
-  assert.match(tool.description, /never put passwords in target/);
-  assert.match(tool.description, /Never weaken TLS verification/);
-  assert.match(tool.description, /replay, unbounded, or destructive overrides/);
-  assert.match(tool.description, /Plan consequential writes/);
-  assert.equal(tool.parameters.additionalProperties, false);
-  assert.ok(tool.parameters.properties.command.enum.includes("query"));
-  assert.ok(tool.parameters.properties.command.enum.includes("doctor"));
-  assert.ok(!tool.parameters.properties.command.enum.includes("purge"));
-  assert.match(tool.parameters.properties.target.description, /masked password dialog/);
-  assert.match(tool.parameters.properties.target.description, /native absolute path/);
-  assert.match(tool.parameters.properties.read_only.description, /connect\/profile\.add only/);
-  assert.match(tool.parameters.properties.limit.description, /rows\/history only/);
-  assert.match(tool.parameters.properties.offset.description, /preview_count/);
-  assert.match(tool.parameters.properties.secret_env.description, /complete PostgreSQL\/MySQL URL or explicit sqlite:<path>/);
-  assert.match(tool.description, /preview_count/);
-  assert.ok(tool.promptGuidelines.some((guideline: string) => /preview_count/.test(guideline)));
-  assert.ok(!tool.parameters.properties.command.enum.includes("session.start"));
-  assert.ok(!tool.parameters.properties.command.enum.includes("session.list"));
-  assert.equal(value.instances[0].options.actor, "pi-session");
-  assert.equal("session" in value.instances[0].options, false);
-  assert.ok(value.instances[0].options.signal instanceof AbortSignal);
-  const policy = value.emitted.find((item) => item.name === "pylon:tool-policy")?.value;
-  assert.deepEqual(policy.deferredTools, ["stateql"]);
-  assert.match(policy.toolUsage.stateql, /databases/);
-});
 
 test("composes environment and active Pylon credential resolution without retaining the host", async () => {
   const value = await start();

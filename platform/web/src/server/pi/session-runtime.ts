@@ -41,7 +41,7 @@ import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
 import type { ChangedFileReadModel, CompactionDisplayReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isPapercutListPage, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
@@ -70,8 +70,11 @@ import type {
   RuntimeHandle,
   RuntimeTarget,
   RenameSessionInput,
-  SetModelInput,
+  SetExtensionEnabledInput,
+  ExtensionPackageInput,
+  SetProjectTrustInput,
   SetPackageEnabledInput,
+  SetModelInput,
   SetSessionActiveInput,
   SetSessionPinnedInput,
   SetThinkingLevelInput,
@@ -91,6 +94,7 @@ import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiRespons
 import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-factory.ts";
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
+import { PiExtensionManager } from "./pi-extension-manager.ts";
 import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
@@ -661,6 +665,7 @@ export class SessionRuntime implements PiDriver {
   private storedProviderIds = new Set<string>();
   private packageCatalog?: PackageCatalog;
   private packageState?: PackageCatalogState;
+  private extensionManager?: PiExtensionManager;
   private packageUpdate = false;
   private indexUpdate = false;
   private sessionMutation?: "lifecycle" | "delete";
@@ -761,6 +766,7 @@ export class SessionRuntime implements PiDriver {
             : SessionManager.create(target.cwd, undefined, target.parentSessionPath ? { parentSession: target.parentSessionPath } : undefined),
       });
       this.runtime = runtime;
+      this.extensionManager = new PiExtensionManager(target.cwd, target.agentDir, runtime.services.settingsManager, this.packageState?.packages.flatMap((item) => item.extensionPaths));
       this.runtimeDisposable = true;
       this.installRuntimeHooks(runtime);
       this.loadRuntimePolicy(runtime.session.sessionId);
@@ -934,6 +940,13 @@ export class SessionRuntime implements PiDriver {
       sessionGeneration: this.gate.generation,
       packages,
     };
+  }
+
+  async listExtensions(): Promise<ExtensionListSnapshot> {
+    const manager = this.extensionManager;
+    const runtime = this.requireRuntime();
+    if (!manager || !this.gate.ready) throw new Error("runtime is not ready");
+    return manager.list(runtime.services.resourceLoader.getExtensions(), this.gate.generation);
   }
 
   async listHookSettings(): Promise<HookSettingsSnapshot> {
@@ -1745,6 +1758,57 @@ export class SessionRuntime implements PiDriver {
       }
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
+  }
+
+  async setExtensionEnabled(input: SetExtensionEnabledInput): Promise<ReplacementResult> {
+    const manager = this.extensionManager;
+    const runtime = this.requireRuntime();
+    if (!manager) throw new Error("runtime is not ready");
+    return this.withSettingsUpdate(async () => {
+      if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
+      await manager.setEnabled(input.extensionId, input.enabled);
+      return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
+    });
+  }
+
+  async installExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
+    return this.updateExtensionPackage(input, "install");
+  }
+  async removeExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
+    return this.updateExtensionPackage(input, "remove");
+  }
+  async setProjectTrust(input: SetProjectTrustInput): Promise<ReplacementResult> {
+    const manager = this.extensionManager;
+    const runtime = this.requireRuntime();
+    if (!manager) throw new Error("runtime is not ready");
+    return this.withSettingsUpdate(async () => {
+      if (!this.canSleep()) throw new Error("project trust can only change while the session is idle");
+      await manager.setProjectTrusted(input.trusted);
+      return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
+    });
+  }
+
+  private async updateExtensionPackage(input: ExtensionPackageInput, action: "install" | "remove"): Promise<ReplacementResult> {
+    const manager = this.extensionManager;
+    const runtime = this.requireRuntime();
+    if (!manager) throw new Error("runtime is not ready");
+    return this.withSettingsUpdate(async () => {
+      if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
+      if (action === "install") await manager.install(input.source, input.scope);
+      else await manager.remove(input.source, input.scope);
+      return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
+    });
+  }
+
+  async reloadExtensions(): Promise<ReplacementResult> {
+    const runtime = this.requireRuntime();
+    const manager = this.extensionManager;
+    if (!manager || !this.canSleep()) throw new Error("extensions can only reload while the session is idle");
+    runtime.services.settingsManager.setProjectTrusted(manager.projectTrusted());
+    await runtime.session.reload();
+    this.extensionManager = new PiExtensionManager(manager.cwd, manager.agentDir, runtime.services.settingsManager, [...manager.excludedPaths]);
+    this.refreshSnapshot();
+    return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
   }
 
   async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
@@ -2674,6 +2738,7 @@ export class SessionRuntime implements PiDriver {
         },
       });
       this.runtime = runtime;
+      this.extensionManager = new PiExtensionManager(session.cwd, target.agentDir, runtime.services.settingsManager, this.packageState?.packages.flatMap((item) => item.extensionPaths));
       this.runtimeDisposable = true;
       this.installRuntimeHooks(runtime);
       await this.bindSession(runtime.session, generation);

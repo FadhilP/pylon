@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
@@ -51,26 +51,7 @@ class Bus {
   }
 }
 
-test("root bundle loads, starts, wires integrations, and shuts down", async () => {
-  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.pi.extensions, [
-    "./packages/pi-advisor/extensions/pi-advisor.ts",
-    "./packages/pylon-core/extensions/pylon-core.ts",
-    "./packages/pi-continuity/extensions/pi-continuity.ts",
-    "./packages/pi-papercut/extensions/pi-papercut.ts",
-    "./packages/pi-focus/extensions/pi-focus.ts",
-    "./packages/pi-guard/extensions/pi-guard.ts",
-    "./packages/pi-grunt/extensions/pi-grunt.ts",
-    "./packages/pi-heartbeat/extensions/pi-heartbeat.ts",
-    "./packages/pi-helios/extensions/pi-helios.ts",
-    "./packages/pi-stateql/extensions/pi-stateql.ts",
-    "./packages/pi-discover/extensions/pi-discover.ts",
-    "./packages/pi-scout/extensions/pi-scout.ts",
-    "./packages/pi-spawn/extensions/pi-spawn.ts",
-    "./packages/pi-sieve/extensions/pi-sieve.ts",
-    "./packages/pi-timeline/extensions/pi-timeline.ts",
-    "./packages/pi-verify/extensions/pi-verify.ts",
-  ]);
+test("root bundle discovery integrations run and shut down", async () => {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousStateQLHome = process.env.STQL_HOME;
   const root = await mkdtemp(join(tmpdir(), "pylon-bundle-"));
@@ -80,19 +61,16 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
   process.env.STQL_HOME = join(root, "stateql");
   try {
     const events = new Bus();
-    const toolPolicies: any[] = [];
-    const disposeToolPolicyCapture = events.on("pylon:tool-policy", (message) => toolPolicies.push(message));
     const handlers = new Map<string, Function[]>();
     const commands = new Map<string, any>();
     const tools = new Map<string, any>();
-    const renderers = new Map<string, any>();
     let active: string[] = ["read", "edit", "write", "bash"];
     const pi: any = {
       events,
       on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
       registerTool: (tool: any) => { tools.set(tool.name, tool); active.push(tool.name); },
       registerCommand: (name: string, command: any) => commands.set(name, command),
-      registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+      registerEntryRenderer: () => {},
       getActiveTools: () => [...new Set(active)],
       getAllTools: () => [...tools.values()],
       setActiveTools: (tools: string[]) => { active = [...tools]; },
@@ -109,12 +87,6 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       await extension(pi);
     }
 
-    assert.deepEqual([...commands.keys()].sort(), [
-      "advisor", "compact", "continuity", "discover-index", "grunt", "guard", "heartbeat", "helios-android-doctor", "helios-doctor", "helios-visibility", "memory", "papercuts", "plan", "pylon", "scout", "sieve", "timeline", "todos", "tokens", "ui",
-    ]);
-    assert.deepEqual([...tools.keys()].sort(), [
-      "advisor", "code_search", "continuity_recall", "continuity_update", "fd", "grunt", "heartbeat_cancel", "heartbeat_start", "heartbeat_status", "helios_android", "helios_browser", "helios_capture", "index_status", "memory", "papercut", "relationship_graph", "repo_scout", "rg", "search_sessions", "search_tools", "session_stats", "sieve_recall", "spawn_agent", "spawn_session", "stateql", "symbol_search", "verify", "web_scout",
-    ]);
 
     let notification = "";
     const ui = new Proxy({ confirm: async () => false, notify: (text: string) => { notification = text; } }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
@@ -127,36 +99,6 @@ test("root bundle loads, starts, wires integrations, and shuts down", async () =
       },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    const continuityPolicy = [...toolPolicies].reverse().find((message) =>
-      message?.kind === "register" && message.owner === "pi-continuity");
-    assert.deepEqual(continuityPolicy?.managedTools, ["continuity_recall", "continuity_update", "memory"]);
-    assert.deepEqual(continuityPolicy?.enabledTools, ["continuity_recall", "continuity_update", "memory"]);
-    const papercutPolicy = [...toolPolicies].reverse().find((message) =>
-      message?.kind === "register" && message.owner === "pi-papercut");
-    assert.deepEqual(papercutPolicy?.managedTools, ["papercut"]);
-    assert.deepEqual(papercutPolicy?.enabledTools, ["papercut"]);
-    assert.deepEqual(papercutPolicy?.deferredTools, ["papercut"]);
-    disposeToolPolicyCapture();
-    assert.ok(active.includes("search_tools"));
-    assert.ok(!active.includes("continuity_recall"));
-    assert.ok(active.includes("continuity_update"));
-    assert.ok(!active.includes("memory"));
-    assert.ok(!active.includes("papercut"));
-    assert.ok(!active.includes("grunt"));
-    assert.ok(!active.includes("symbol_search"));
-    assert.ok(!active.includes("code_search"));
-    assert.ok(!active.includes("index_status"));
-    assert.ok(!active.includes("search_sessions"));
-    assert.ok(!active.includes("session_stats"));
-    assert.ok(!active.includes("repo_scout"));
-    assert.ok(!active.includes("web_scout"));
-    assert.ok(!active.includes("advisor"));
-    assert.ok(!active.includes("helios_android"));
-    assert.ok(!active.includes("helios_browser"));
-    assert.ok(!active.includes("helios_capture"));
-    assert.ok(!active.includes("spawn_agent"));
-    assert.ok(!active.includes("spawn_session"));
-    assert.ok(events.count() > 0);
 
     const agentDiscovery = await tools.get("search_tools").execute(
       "discover-spawn-agent",

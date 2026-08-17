@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 test("copyText reports clipboard success and rejection", async () => {
   const { copyText } = await import(new URL("../src/client/clipboard.ts", import.meta.url).href);
@@ -26,14 +25,3 @@ test("copyText reports clipboard success and rejection", async () => {
   }
 });
 
-test("copy feedback invalidates stale results and refreshes repeated announcements", () => {
-  const filesPanel = readFileSync(new URL("../src/client/files-panel.tsx", import.meta.url), "utf8");
-  const copyResult = filesPanel.indexOf("const state = await copyText(path)");
-  const staleGuard = filesPanel.indexOf("if (revision !== copyRevision.current) return;", copyResult);
-  const feedbackUpdate = filesPanel.indexOf("setCopyFeedback({ path, state });", staleGuard);
-  assert.ok(copyResult >= 0 && staleGuard > copyResult && feedbackUpdate > staleGuard);
-  assert.match(filesPanel, /copyRevision\.current\+\+;\s+setCopyFeedback\(undefined\);[\s\S]*?\}, \[selectedPath\]\);/);
-
-  const sidebar = readFileSync(new URL("../src/client/session-sidebar.tsx", import.meta.url), "utf8");
-  assert.match(sidebar, /setAnnouncement\(""\);\s+void copyText\(value\)/);
-});

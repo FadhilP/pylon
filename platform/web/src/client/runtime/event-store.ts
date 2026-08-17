@@ -6,9 +6,9 @@ import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/pro
 import type { HeliosAndroidToolingInput, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
 import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, DelegatedAgentRunUpdateReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
+import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isExtensionListSnapshot, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
 import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
@@ -684,6 +684,40 @@ export class RuntimeEventStore {
       throw new Error("Package list is stale or invalid");
     }
     return packages;
+  }
+
+  async listExtensions(): Promise<ExtensionListSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const extensions = await this.api.extensions();
+    if (!isExtensionListSnapshot(extensions) || extensions.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Extension list is stale or invalid");
+    }
+    return extensions;
+  }
+
+  async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "setExtensionEnabled", extensionId, enabled, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async installExtensionPackage(source: string, scope: "user" | "project"): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "installExtensionPackage", source, scope, confirmed: true, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async removeExtensionPackage(source: string, scope: "user" | "project"): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "removeExtensionPackage", source, scope, confirmed: true, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async setProjectTrust(trusted: boolean): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "setProjectTrust", trusted, confirmed: true, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
+  }
+
+  async reloadExtensions(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({ type: "reloadExtensions", confirmed: true, commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
 
   async listHookSettings(): Promise<HookSettingsSnapshot> {

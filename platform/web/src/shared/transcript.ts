@@ -45,12 +45,24 @@ export function toolElapsedDuration(tool: MessageReadModel, now = Date.now()): n
   return Number.isNaN(startedAt) ? activity.durationMs : Math.max(0, now - startedAt);
 }
 
-export function aggregateToolDuration(tools: MessageReadModel[], now = Date.now()): number | undefined {
-  const running = tools.filter((tool) => tool.tool?.status === "running");
-  const durations = (running.length ? running : tools)
-    .map((tool) => toolElapsedDuration(tool, now))
-    .filter((duration): duration is number => duration !== undefined);
-  return durations.length ? Math.max(...durations) : undefined;
+export function aggregateToolTiming(
+  tools: MessageReadModel[],
+  now = Date.now(),
+): { durationMs: number; status: "running" | "completed" | "failed" } | undefined {
+  const running = tools.flatMap((tool) => {
+    if (tool.tool?.status !== "running") return [];
+    const durationMs = toolElapsedDuration(tool, now);
+    return durationMs === undefined ? [] : [{ durationMs, status: "running" as const }];
+  });
+  if (running.length) return running.reduce((longest, item) => item.durationMs > longest.durationMs ? item : longest);
+  for (let index = tools.length - 1; index >= 0; index--) {
+    const tool = tools[index]!;
+    const durationMs = toolElapsedDuration(tool, now);
+    if (durationMs !== undefined && tool.tool?.status && tool.tool.status !== "running") {
+      return { durationMs, status: tool.tool.status };
+    }
+  }
+  return undefined;
 }
 
 export function terminalActivityStatus(
@@ -101,6 +113,26 @@ export function liveToolMessage(tool: ToolActivityReadModel): MessageReadModel {
       status: tool.status,
       ...(tool.startedAt ? { startedAt: tool.startedAt } : {}),
       ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
+    },
+  };
+}
+
+
+export function reconcileToolActivity(message: MessageReadModel, activity: ToolActivityReadModel): MessageReadModel {
+  if (!message.tool || message.tool.id !== activity.id) return message;
+  const startedAt = activity.startedAt ?? message.tool.startedAt;
+  const durationMs = activity.durationMs ?? message.tool.durationMs;
+  return {
+    ...message,
+    text: activity.summary ?? message.text,
+    streaming: activity.status === "running",
+    tool: {
+      ...message.tool,
+      name: activity.name || message.tool.name,
+      input: activity.input ?? message.tool.input,
+      status: activity.status,
+      ...(startedAt ? { startedAt } : {}),
+      ...(durationMs === undefined ? {} : { durationMs }),
     },
   };
 }

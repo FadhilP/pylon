@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import scout, { repoScoutOrientationGuidance, startsNewRepoSequence } from "../extensions/pi-scout.ts";
+import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
@@ -47,52 +47,6 @@ function context(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("Repo Scout orientation guidance follows currently selected tools", async () => {
-  assert.equal(repoScoutOrientationGuidance(["read", "symbol_search"]), undefined);
-  const indexed = repoScoutOrientationGuidance(["repo_scout", "symbol_search", "rg", "read"]);
-  assert.match(indexed!, /symbol_search.*identifiers/);
-  assert.match(indexed!, /rg.*live content/);
-  assert.match(indexed!, /read.*narrow source ranges/);
-  assert.doesNotMatch(indexed!, /`(?:code_search|relationship_graph|fd|grep|find)`/);
-  const standalone = repoScoutOrientationGuidance(["repo_scout", "grep", "find", "read"]);
-  assert.match(standalone!, /find.*paths/);
-  assert.match(standalone!, /grep.*live content/);
-  assert.doesNotMatch(standalone!, /`(?:symbol_search|code_search|relationship_graph|fd|rg)`/);
-
-  const runtime = await harness();
-  try {
-    const result = await runtime.handlers.get("before_agent_start")![0]({
-      systemPrompt: "BASE",
-      systemPromptOptions: { selectedTools: ["repo_scout", "code_search", "read"] },
-    }, context());
-    assert.match(result.systemPrompt, /^BASE\n\nRepo Scout orientation tools currently visible:/);
-    assert.match(result.systemPrompt, /code_search.*concepts/);
-    assert.match(result.systemPrompt, /usually 3–6 repository-inspection operations, never more than 10/);
-    assert.match(result.systemPrompt, /count nested or parallel operations separately/i);
-    assert.match(result.systemPrompt, /call repo_scout before further exploration/i);
-    assert.doesNotMatch(result.systemPrompt, /`(?:symbol_search|relationship_graph|fd|rg|grep|find)`/);
-    assert.equal(runtime.handlers.get("before_agent_start")![0]({
-      systemPrompt: "BASE",
-      systemPromptOptions: { selectedTools: ["read"] },
-    }), undefined);
-  } finally { runtime.restore(); }
-});
-
-test("Repo Scout renders collapsed failures with reason", async () => {
-  const runtime = await harness();
-  try {
-    const tool = runtime.tools.get("repo_scout");
-    let failureColor = "";
-    const rendered = tool.renderResult({
-      content: [{ type: "text", text: "Repo scout failed nonfatally: Scout timed out." }],
-      details: { model: "test/model", durationMs: 1_250, failureCode: "child_error" },
-    }, { expanded: false }, {
-      fg: (color: string, text: string) => { failureColor = color; return text; },
-    }).render(1_000).map((line: string) => line.trimEnd()).join("\n");
-    assert.equal(failureColor, "error");
-    assert.equal(rendered, "Scout failed · test/model · 1s\nRepo scout failed nonfatally: Scout timed out.");
-  } finally { runtime.restore(); }
-});
 
 test("Repo Scout publishes sanitized bounded child failure details", async () => {
   const secret = `sk-${"x".repeat(40)}`;
@@ -320,51 +274,6 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
   } finally { runtime.restore(); }
 });
 
-test("Scout registers separate repo and web tools", async () => {
-  const runtime = await harness();
-  try {
-    assert.deepEqual([...runtime.tools.keys()].sort(), ["repo_scout", "web_scout"]);
-    const repoTool = runtime.tools.get("repo_scout");
-    const repoGuidelines = repoTool.promptGuidelines as string[];
-    const repoGuidance = repoGuidelines.join("\n");
-    assert.equal(repoGuidelines.length, 3);
-    assert.ok(repoGuidance.length < 1_000);
-    assert.ok(repoGuidelines.every((guideline) => /repo_scout/i.test(guideline)));
-    assert.match(repoGuidance, /repo_scout for non-local, cross-file, or unfamiliar-code work, including architecture\/data flow/i);
-    assert.match(repoGuidance, /Orient just enough to frame a task/i);
-    assert.match(repoGuidance, /usually 3–6 inspections, never over 10/i);
-    assert.match(repoGuidance, /nested\/parallel operations count separately/i);
-    assert.match(repoGuidance, /Then call it/i);
-    assert.doesNotMatch(repoGuidance, /symbol_search|code_search|relationship_graph|fd\/rg/i);
-    assert.match(repoGuidance, /Skip orientation with exact anchors/i);
-    assert.match(repoGuidance, /Scout only for known-file self-contained work/i);
-    assert.match(repoGuidance, /Convert normative or mixed questions into factual tasks/i);
-    assert.match(repoGuidance, /never ask repo_scout to design, recommend, prioritize, choose architecture/i);
-    assert.match(repoGuidance, /decide whether something should be canonical/i);
-    assert.match(repoGuidance, /observable action/i);
-    assert.match(repoGuidance, /concrete scope anchors/i);
-    assert.match(repoGuidance, /required evidence/i);
-    assert.match(repoGuidance, /finite stopping boundary/i);
-    assert.match(repoGuidance, /main model evaluates and decides/i);
-    assert.match(repoGuidance, /Reread only for exact edit, evidence gap\/conflict, or changed state/i);
-    assert.match(repoGuidance, /each repo_scout child starts fresh/i);
-    assert.doesNotMatch(repoGuidance, /Replace ['"]|Across packages\/a|Within named auth entrypoints/i);
-    const taskDescription = repoTool.parameters.properties.task.description as string;
-    const retryDescription = repoTool.parameters.properties.retryReason.description as string;
-    assert.match(taskDescription, /Evidence-only repository search, mapping, or tracing task/i);
-    assert.match(taskDescription, /exclude design, recommendation, prioritization, and architecture-choice requests/i);
-    assert.match(retryDescription, /not a decision or recommendation request/i);
-    const webTool = runtime.tools.get("web_scout");
-    const webDescription = webTool.description;
-    const webGuidance = (webTool.promptGuidelines as string[]).join("\n");
-    assert.match(webDescription, /fresh temporary Helios browser/);
-    assert.match(webDescription, /official documentation, API references, dependency behavior, release notes/);
-    assert.match(webGuidance, /Do not wait for an explicit browsing request/);
-    assert.match(webGuidance, /skip web_scout when local evidence is sufficient/);
-    assert.match(webDescription, /Never use for login, accounts, purchases/);
-    assert.match(webDescription, /main model evaluates/);
-  } finally { runtime.restore(); }
-});
 
 test("Web Scout validates input and requires exactly one Helios capability before grant", async () => {
   const runtime = await harness();

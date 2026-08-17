@@ -44,11 +44,11 @@ test("work durations are validated", () => {
   assert.equal(parseWorkDuration({ ...valid, padding: "x".repeat(1_024) }), undefined);
 });
 
-
-test("tool durations are validated", () => {
-  const valid = { version: 1, toolCallId: "call-1", durationMs: 1_250 };
+test("tool durations accept provider IDs and reject unsafe bounds", () => {
+  const valid = { version: 1, toolCallId: "call_h4vNJBk3x4Tca1eaI8kOlmab|fc_0051fc92ddf5b487", durationMs: 1_250 };
   assert.deepEqual(parseToolDuration(valid), valid);
-  assert.equal(parseToolDuration({ ...valid, toolCallId: "../call" }), undefined);
+  assert.equal(parseToolDuration({ ...valid, toolCallId: "call\u0000one" }), undefined);
+  assert.equal(parseToolDuration({ ...valid, toolCallId: "x".repeat(129) }), undefined);
   assert.equal(parseToolDuration({ ...valid, durationMs: -1 }), undefined);
   assert.equal(parseToolDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }), undefined);
 });
@@ -92,6 +92,7 @@ test("tool durations survive reload and follow the active branch", async () => {
   await Promise.all([mkdir(cwd), mkdir(sessionDir)]);
   try {
     const session = SessionManager.create(cwd, sessionDir);
+    const toolCallId = "call_h4vNJBk3x4Tca1eaI8kOlmab|fc_0051fc92ddf5b487";
     const userEntryId = session.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Read the file" }],
@@ -99,16 +100,16 @@ test("tool durations survive reload and follow the active branch", async () => {
     });
     session.appendMessage({
       ...assistant(""),
-      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } }],
+      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: { path: "a.ts" } }],
     });
-    assert.equal(appendToolDuration(session, "call-1", 1_250), true);
-    assert.equal(appendToolDuration(session, "call-1", 2_500), true);
-    assert.equal(appendToolDuration(session, "../call", 1), false);
+    assert.equal(appendToolDuration(session, toolCallId, 1_250), true);
+    assert.equal(appendToolDuration(session, toolCallId, 2_500), true);
+    assert.equal(appendToolDuration(session, "call\u0000one", 1), false);
 
     const resumed = SessionManager.open(session.getSessionFile()!);
-    assert.equal(readPersistedToolDurations(resumed).get("call-1"), 2_500);
+    assert.equal(readPersistedToolDurations(resumed).get(toolCallId), 2_500);
     resumed.branch(userEntryId);
-    assert.equal(readPersistedToolDurations(resumed).has("call-1"), false);
+    assert.equal(readPersistedToolDurations(resumed).has(toolCallId), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
