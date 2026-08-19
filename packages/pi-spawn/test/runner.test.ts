@@ -56,10 +56,26 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
   assert.deepEqual(run.usage, usage.at(-1));
   assert.deepEqual(run.sessionUsage, { input: 30, output: 12, cacheRead: 20, cacheWrite: 1, cost: .9 });
   assert.deepEqual(activity, ["call-read:call:read", "call-read:result:read"]);
+  assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
+  assert.equal(run.activity[1]?.durationMs !== undefined && run.activity[1].durationMs >= 0, true);
   assert.deepEqual(states.at(-1), { model: "fake/model", thinking: "high" });
   assert.equal(run.model, "fake/model");
   assert.equal(run.thinking, "high");
   assert.equal(run.error, undefined);
+});
+
+test("runner streams bounded assistant text with a message-end fallback", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({type:'message_start',message:{role:'assistant',content:[]}});
+    emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Hello '},usage:{}});
+    emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'world'},usage:{}});
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Hello world'}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  const text: string[] = [];
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation, onText: value => text.push(value) });
+  assert.deepEqual(text, ["", "Hello ", "Hello world", "Hello world"]);
+  assert.equal(run.text, "Hello world");
 });
 
 test("runner waits for a Continuity turn triggered after asynchronous compaction", async () => {

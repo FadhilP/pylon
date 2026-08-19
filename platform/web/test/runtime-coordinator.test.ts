@@ -48,6 +48,109 @@ function runtime(sessionId: string, messages: RuntimeSnapshot["conversation"]["m
   };
 }
 
+test("project and session policies defer effective changes until a running turn settles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-deferred-policy-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const registry = new ProjectRegistry(join(agentDir, "pylon-web", "projects.json"), root);
+  await registry.load([cwd]);
+  const projectId = projectIdForCwd(cwd);
+  const coordinator = new RuntimeCoordinator({ projectRegistry: registry });
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.projectRegistry = registry;
+  const promptedWithGuard: boolean[] = [];
+
+  const makeSlot = (id: string, initialState: "idle" | "running") => {
+    let state = initialState;
+    let snapshot = { ...runtime(id), runtimePolicy: registry.runtimePolicy(projectId, id) };
+    const applied: any[] = [];
+    const slot: any = {
+      id,
+      target: { cwd, agentDir, repositoryRoot: root, projectId },
+      innerGeneration: 1,
+      eventRevision: 0,
+      lastActivityAt: Date.now(),
+      receivedInput: true,
+      pinned: false,
+      lastState: state,
+      nativeQueue: { steering: 0, followUp: 0 },
+      queuedPrompts: [],
+      displayPendingPrompts: [],
+      unsubscribe: () => {},
+      driver: {
+        canSleep: () => state === "idle",
+        runtimeState: () => state,
+        runtimeDetails: () => ({ sessionId: id, generation: 1, cwd, userMessageCount: 1, workStartedAt: state === "running" ? "turn" : undefined }),
+        snapshot: async () => snapshot,
+        applyRuntimePolicy: (policy: any) => {
+          snapshot = { ...snapshot, runtimePolicy: structuredClone(policy) };
+          applied.push(structuredClone(policy));
+        },
+        prompt: async (input: any) => {
+          promptedWithGuard.push(snapshot.runtimePolicy.effective.guardEnabled);
+          return { commandId: input.commandId, sessionGeneration: 1, accepted: true };
+        },
+        timelineRelocationReady: async () => {},
+      },
+      setState: (value: "idle" | "running") => { state = value; slot.lastState = value; },
+      policy: () => snapshot.runtimePolicy,
+      applied,
+    };
+    return slot;
+  };
+
+  const selected = makeSlot("selected", "running");
+  const idle = makeSlot("idle", "idle");
+  internal.selectedId = selected.id;
+  internal.slots.set(selected.id, selected);
+  internal.slots.set(idle.id, idle);
+  const projectPolicy = registry.runtimePolicy(projectId, selected.id);
+
+  await coordinator.updateRuntimePolicy({
+    type: "updateRuntimePolicy",
+    scope: "project",
+    verify: projectPolicy.project.verify,
+    timeline: "inherit",
+    guard: "disabled",
+    guardRules: {},
+    workspace: "inherit",
+    guardTimeoutSeconds: "inherit",
+    clarifyTimeoutSeconds: "inherit",
+    expectedRevision: projectPolicy.revision,
+    commandId: "policy",
+    expectedGeneration: 1,
+  });
+
+  assert.equal(selected.policy().project.guardEnabled, false);
+  assert.equal(selected.policy().effective.guardEnabled, true);
+  assert.equal(idle.policy().effective.guardEnabled, false);
+  selected.queuedPrompts.push({ id: "next", commandId: "next", message: "next", planMode: false, state: "queued", sequence: 1 });
+  selected.setState("idle");
+  await internal.settleAgentRun(selected);
+  assert.deepEqual(promptedWithGuard, [false]);
+  assert.equal(selected.policy().effective.guardEnabled, false);
+
+  selected.setState("running");
+  await coordinator.updateToolPolicy({
+    type: "updateToolPolicy",
+    scope: "session",
+    tool: "bash",
+    mode: "disabled",
+    expectedRevision: selected.policy().revision,
+    commandId: "tool-policy",
+    expectedGeneration: 1,
+  });
+  assert.equal(selected.policy().session.toolOverrides.bash, "disabled");
+  assert.equal(selected.policy().effective.toolOverrides.bash, undefined);
+  selected.setState("idle");
+  await internal.settleAgentRun(selected);
+  assert.equal(selected.policy().effective.toolOverrides.bash, "disabled");
+
+  await rm(root, { recursive: true, force: true });
+});
+
 test("session selection publishes before its workspace refresh completes", async () => {
   const coordinator = new RuntimeCoordinator();
   const internal = coordinator as any;
@@ -500,11 +603,27 @@ test("running spawned sessions route through their parent until the child turn e
     session._emit({
       type: "tool_execution_end", toolCallId: "spawn-session", toolName: "spawn_session", isError: false,
       result: {
+        content: [{ type: "text", text: "Started in background" }],
+        details: { piSpawn: marker, runId, background: true, status: "running", state: "running" },
+      },
+    });
+    assert.equal((coordinator as any).externalSpawnRuns.has(child.getSessionId()), true);
+    session._emit({
+      type: "spawn_progress", phase: "end", toolCallId: "spawn-session", toolName: "spawn_session",
+      result: {
         content: [{ type: "text", text: "Session completed" }],
-        details: { piSpawn: marker, runId, status: "completed" },
+        details: { piSpawn: marker, runId, background: true, status: "completed" },
       },
     });
     await waitFor(() => !(coordinator as any).externalSpawnRuns.has(child.getSessionId()));
+    session._emit({
+      type: "tool_execution_end", toolCallId: "spawn-session", toolName: "spawn_session", isError: false,
+      result: {
+        content: [{ type: "text", text: "Late background start result" }],
+        details: { piSpawn: marker, runId, background: true, status: "running", state: "running" },
+      },
+    });
+    assert.equal((coordinator as any).externalSpawnRuns.has(child.getSessionId()), false);
     const completed = await coordinator.listSessions();
     assert.equal(completed.projects.flatMap((project) => project.sessions)
       .find((item) => item.id === child.getSessionId())?.runningUnderParentSessionId, undefined);
@@ -1547,18 +1666,24 @@ test("new sessions apply the effective workspace policy before the first prompt"
     assert.equal(registry.workspaceForSession(created.sessionId)?.mode, "local");
 
     const policy = registry.runtimePolicy(projectId, created.sessionId);
-    await registry.updateRuntimePolicy({
+    await driver.updateRuntimePolicy({
+      type: "updateRuntimePolicy",
       scope: "project",
-      projectId,
-      sessionId: created.sessionId,
       verify: policy.project.verify,
-      timeline: "inherit", guard: "inherit",
+      timeline: "inherit", guard: "inherit", guardRules: {},
       workspace: "worktree",
       guardTimeoutSeconds: "inherit",
       clarifyTimeoutSeconds: "inherit",
       expectedRevision: policy.revision,
+      commandId: "workspace-policy",
+      expectedGeneration: created.sessionGeneration,
     });
-    const isolated = await driver.newSession({ expectedGeneration: created.sessionGeneration });
+    const movedSnapshot = await driver.snapshot();
+    assert.equal(movedSnapshot.workspace?.mode, movedSnapshot.runtimePolicy.effective.workspace);
+    assert.equal(movedSnapshot.workspace?.mode, "worktree");
+    assert.equal(registry.workspaceForSession(movedSnapshot.sessionId)?.mode, "worktree");
+
+    const isolated = await driver.newSession({ expectedGeneration: movedSnapshot.sessionGeneration });
     const isolatedSnapshot = await driver.snapshot();
     assert.equal(isolatedSnapshot.workspace?.mode, isolatedSnapshot.runtimePolicy.effective.workspace);
     assert.equal(isolatedSnapshot.workspace?.mode, "worktree");

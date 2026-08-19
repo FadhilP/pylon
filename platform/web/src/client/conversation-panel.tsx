@@ -1829,12 +1829,11 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
 function ToolTurnGroup({ tools, running, now, onExpand }: { tools: MessageReadModel[]; running: boolean; now: number; onExpand?: () => void }) {
   const names = latestUniqueToolNames(tools);
   const timing = aggregateToolTiming(tools, now);
-  const active = running && tools.some((tool) => tool.tool?.status === "running");
   const timingLabel = timing?.status === "running"
     ? "Longest running tool duration"
     : `Latest ${timing?.status ?? "completed"} tool duration`;
   return <AnimatedDetails
-    className={`tool-turn-group${active ? " is-running" : ""}`}
+    className={`tool-turn-group${running ? " is-running" : ""}`}
     summary={<>
       <IconTool size={15} />
       <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>

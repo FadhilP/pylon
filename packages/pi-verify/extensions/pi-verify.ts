@@ -72,7 +72,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     pi.events.emit("pi-verify:catalog", value);
   };
   const disposePolicy = pi.events.on?.("pylon:runtime-policy", (value: any) => {
-    if (value?.version !== 1 || value.sessionId !== currentSessionId) return;
+    if (value?.version !== 2 || value.sessionId !== currentSessionId) return;
     const verify = value.verify;
     if (verify?.mode === "auto") policy = { mode: "auto" };
     else if (verify?.mode === "selected" && Array.isArray(verify.checks)) {

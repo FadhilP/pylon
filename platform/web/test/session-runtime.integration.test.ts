@@ -477,6 +477,75 @@ test("runtime snapshots retain live delegated agents while the session is not se
   }
 });
 
+test("runtime accepts only correlated background spawn progress", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-background-spawn-progress-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const runtime = (driver as any).runtime;
+    const session = runtime.session;
+    const toolCallId = "spawn-background";
+    const childId = "child-session";
+    const runId = "run-1";
+    const marker = { version: 1, kind: "session", id: childId, path: join(root, "child.jsonl"), cwd };
+    session._emit({
+      type: "tool_execution_start", toolCallId, toolName: "spawn_session",
+      args: { action: "create", prompt: "Inspect auth", background: true },
+    });
+    session._emit({
+      type: "tool_execution_end", toolCallId, toolName: "spawn_session", isError: false,
+      result: { content: [{ type: "text", text: "Started" }], details: {
+        piSpawn: marker, runId, background: true, status: "running", state: "running", startedAt: "2026-08-01T10:00:00.000Z",
+      } },
+    });
+    const progress = (overrides: Record<string, unknown> = {}) => ({
+      version: 1, parentSessionId: session.sessionId, toolCallId, kind: "session", id: childId, runId,
+      phase: "update", result: { content: [], details: {
+        piSpawn: marker, runId, background: true, status: "running", state: "running", startedAt: "2026-08-01T10:00:00.000Z",
+        partialResponse: "Reading auth…",
+        usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.01 },
+        activityDelta: [{ id: "read-1", kind: "call", tool: "read", text: "{}" }],
+      } },
+      ...overrides,
+    });
+
+    (driver as any).eventBus.emit("pylon:spawn-progress", progress({ parentSessionId: "wrong-parent" }));
+    let [run] = (await driver.snapshot()).conversation.delegatedRuns;
+    assert.equal(run?.response, undefined);
+    (driver as any).eventBus.emit("pylon:spawn-progress", progress());
+    [run] = (await driver.snapshot()).conversation.delegatedRuns;
+    assert.deepEqual({ status: run?.status, response: run?.response, output: run?.usage?.output, activity: run?.activity.length }, {
+      status: "running", response: "Reading auth…", output: 3, activity: 1,
+    });
+
+    (driver as any).eventBus.emit("pylon:spawn-progress", progress({ runId: "stale-run" }));
+    assert.equal((await driver.snapshot()).conversation.delegatedRuns[0]?.runId, runId);
+    (driver as any).eventBus.emit("pylon:spawn-progress", progress({
+      phase: "end",
+      result: { content: [{ type: "text", text: "Done" }], details: {
+        piSpawn: marker, runId, background: true, status: "completed",
+        usage: { input: 4, output: 6, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+        sessionUsage: { input: 40, output: 60, cacheRead: 10, cacheWrite: 0, cost: 0.2 },
+        activity: [
+          { id: "read-1", kind: "call", tool: "read", text: "{}" },
+          { id: "read-1", kind: "result", tool: "read", text: "source" },
+        ],
+      } },
+    }));
+    [run] = (await driver.snapshot()).conversation.delegatedRuns;
+    assert.deepEqual({ status: run?.status, response: run?.response, sessionOutput: run?.sessionUsage?.output, activity: run?.activity.length }, {
+      status: "completed", response: "Done", sessionOutput: 60, activity: 2,
+    });
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("StateQL snapshot bridge claims one bounded session-scoped response", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-stateql-bridge-"));
   const cwd = join(root, "workspace");

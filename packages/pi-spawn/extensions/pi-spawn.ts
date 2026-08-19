@@ -36,6 +36,7 @@ const agentActions = ["create", "continue", "status", "cancel", "recent", "list"
 const sessionActions = ["create", "adopt", "continue", "status", "cancel", "list"] as const;
 const SPECIALIST_TOOLS = ["advisor", "grunt", "repo_scout", "web_scout"];
 const SPAWN_TOOLS = ["spawn_agent", "spawn_session"];
+const SPAWN_PROGRESS_CHANNEL = "pylon:spawn-progress";
 const MAX_DEPTH = 4;
 const AGENT_PROMPT_GUIDELINES = [
   "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
@@ -249,6 +250,8 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
   const SessionParameters = createSessionParameters();
   type BackgroundRun = {
     kind: SpawnKind;
+    parentSessionId: string;
+    toolCallId: string;
     id: string;
     path: string;
     cwd: string;
@@ -261,6 +264,18 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     result?: any;
   };
   const backgroundRuns = new Map<string, BackgroundRun>();
+  const emitBackgroundProgress = (run: BackgroundRun, phase: "update" | "end", result: unknown) => {
+    pi.events.emit(SPAWN_PROGRESS_CHANNEL, {
+      version: 1,
+      parentSessionId: run.parentSessionId,
+      toolCallId: run.toolCallId,
+      kind: run.kind,
+      id: run.id,
+      runId: run.runId,
+      phase,
+      result,
+    });
+  };
   let shuttingDown = false;
   const pruneBackgroundRuns = () => {
     const terminal = [...backgroundRuns.values()].filter((run) => run.state !== "running").sort((a, b) => b.started - a.started);
@@ -363,6 +378,10 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
             content: [{ type: "text", text: `${kind === "agent" ? "Subagent" : "Session"} usage updated` }],
             details: { ...runningDetails(), durationMs: Date.now() - started, usage },
           }),
+          onText: (text) => update({
+            content: [],
+            details: { ...runningDetails(), durationMs: Date.now() - started, partialResponse: text },
+          }),
           onState: (state) => {
             model = state.model ?? model;
             thinking = state.thinking ?? thinking;
@@ -418,6 +437,8 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     cwd: string,
     prompt: string,
     policy: AgentPolicy | SpawnMarker | undefined,
+    toolCallId: string,
+    parentSessionId: string,
     ctx: any,
   ) => {
     if (shuttingDown)
@@ -428,15 +449,16 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     const started = Date.now();
     const controller = new AbortController();
     const entry = {
-      kind, id, path, cwd, runId, agentName: scientistName(id), started, controller,
+      kind, id, path, cwd, runId, parentSessionId, toolCallId, agentName: scientistName(id), started, controller,
       state: "running" as const, promise: Promise.resolve(undefined),
     } as BackgroundRun;
     backgroundRuns.set(runId, entry);
-    entry.promise = executeTurn(kind, id, path, cwd, prompt, policy, controller.signal, undefined, ctx, undefined, runId, true)
+    entry.promise = executeTurn(kind, id, path, cwd, prompt, policy, controller.signal, (result: unknown) => emitBackgroundProgress(entry, "update", result), ctx, undefined, runId, true)
       .then((result) => {
         entry.result = result;
         entry.state = result.details?.status === "completed" ? "completed"
           : result.details?.status === "cancelled" ? "cancelled" : "failed";
+        emitBackgroundProgress(entry, "end", result);
         pruneBackgroundRuns();
         return result;
       });
@@ -513,7 +535,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     description: "Create, continue, inspect, or list private persistent subagent threads owned by the current parent-session branch. Set background true on create or continue to return immediately, then use status or cancel with the returned thread and run IDs. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups. Use recent for bounded read-only transcript inspection without prompting the child, and list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
     ...(agentAvailability === "active" ? { promptGuidelines: AGENT_PROMPT_GUIDELINES } : {}),
     parameters: AgentParameters,
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("agent", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
       const selectedModel = params.action === "create" ? params.model ?? defaultModel(ctx, allowedModels) : undefined;
@@ -552,7 +574,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
         };
         const created = createPrivateAgent(ctx.cwd, parent, policy, params.name?.trim() || defaultName(params.prompt!), agentDir);
         return params.background
-          ? startBackground("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, ctx)
+          ? startBackground("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, toolCallId, parent.id, ctx)
           : executeTurn("agent", created.info.id, created.info.path, ctx.cwd, params.prompt!, created.policy, signal, onUpdate, ctx);
       }
       const matches = await listPrivateAgents(ctx.cwd, parent, allowed, agentDir);
@@ -573,7 +595,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const policy = agentPolicy(selected.manager, parent);
       if (!policy) return { content: [{ type: "text" as const, text: "Private subagent policy is invalid." }], details: { ...resultDetails("agent", selected.info.id), failureCode: "invalid_policy" } };
       return params.background
-        ? startBackground("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, ctx)
+        ? startBackground("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, toolCallId, parent.id, ctx)
         : executeTurn("agent", selected.info.id, selected.info.path, ctx.cwd, params.prompt!, policy, signal, onUpdate, ctx);
     },
   });
@@ -585,7 +607,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
     description: "Create, adopt, continue, or list ordinary Pi sessions when the child must be inspectable or openable separately. Set background true on create, adopt, or continue to return immediately, then use status or cancel with the returned session and run IDs. Use create with a self-contained kickoff and purpose-based name, continue the returned ID for follow-ups, and list only to recover sessions available from the current parent branch. Set project only when the user explicitly requests another project; relative paths resolve from the current project. Adopt only on the user's explicit request with an exact session ID from the current or selected project; adoption claims and immediately prompts that transcript while preserving its model and metadata. Never prompt or adopt a session open in another Pi process. Sessions use the selected project's normal runtime and cannot customize system instructions, thinking, tools, or extensions; use spawn_agent for a private customized runtime.",
     ...(sessionAvailability === "active" ? { promptGuidelines: SESSION_PROMPT_GUIDELINES } : {}),
     parameters: SessionParameters,
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const invalid = invalidInput("session", params);
       if (invalid) return { content: [{ type: "text" as const, text: invalid }], details: { failureCode: "invalid" } };
       const selectedModel = params.action === "create" ? params.model ?? defaultModel(ctx, allowedModels) : undefined;
@@ -621,7 +643,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
           hooks: requestSpawnHooks(pi),
         });
         return params.background
-          ? startBackground("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, ctx)
+          ? startBackground("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, toolCallId, parent.id, ctx)
           : executeTurn("session", created.info.id, created.info.path, cwd, params.prompt!, created.policy, signal, onUpdate, ctx);
       }
       if (params.action === "adopt") {
@@ -635,7 +657,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
             return { content: [{ type: "text" as const, text: "Spawned thread is already running in this Pi process." }], details: { failureCode: "busy" } };
           if (params.background) {
             claimSpawnedSession(existing.path, existing.id, parent, hooks);
-            return startBackground("session", existing.id, existing.path, cwd, params.prompt!, sessionPolicy(SessionManager.open(existing.path), parent), ctx);
+            return startBackground("session", existing.id, existing.path, cwd, params.prompt!, sessionPolicy(SessionManager.open(existing.path), parent), toolCallId, parent.id, ctx);
           }
           return executeTurn("session", existing.id, existing.path, cwd, params.prompt!, undefined, signal, onUpdate, ctx, () => claimSpawnedSession(existing.path, existing.id, parent, hooks));
         } catch (error) {
@@ -650,7 +672,7 @@ export default async function spawnExtension(pi: ExtensionAPI, runChild: RunChil
       const policy = sessionPolicy(manager, parent);
       if (!policy) return { content: [{ type: "text" as const, text: "Spawned session policy is invalid." }], details: { ...resultDetails("session", info.id), failureCode: "invalid_policy" } };
       return params.background
-        ? startBackground("session", info.id, info.path, info.cwd, params.prompt!, policy, ctx)
+        ? startBackground("session", info.id, info.path, info.cwd, params.prompt!, policy, toolCallId, parent.id, ctx)
         : executeTurn("session", info.id, info.path, info.cwd, params.prompt!, policy, signal, onUpdate, ctx);
     },
   });

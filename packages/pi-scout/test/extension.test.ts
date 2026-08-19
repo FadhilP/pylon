@@ -174,7 +174,7 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
     assert.ok(childArgs.every((args) => !args.includes("--continue")));
     assert.ok(childArgs.every((args) => args.includes("--system-prompt")));
     assert.ok(childArgs.every((args) => !args.includes("--append-system-prompt")));
-    assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,grep,find,ls")));
+    assert.ok(childArgs.every((args) => args.includes("read,search_excerpt,ls")));
     assert.ok(childOptions.every((options) => options.resultMaxBytes === false));
     assert.ok(childOptions.every((options) => options.env.PI_SCOUT_CHILD === "1"));
     assert.ok(childOptions.every((options) => options.concurrent === true));
@@ -239,13 +239,13 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
   try {
     await runtime.tools.get("repo_scout").execute("one", { task: "map symbol" }, undefined, undefined, context());
     assert.ok(childArgs[0].includes(childExtensionPath));
-    assert.ok(childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,symbol_search,code_search,index_status,grep,find,ls"));
+    assert.ok(childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,symbol_search,code_search,index_status,ls"));
     assert.equal(childArgs[0].filter((arg) => arg === "-e").length, 2);
 
     runtime.events.on("pi-discover:child-tools-capability", (request) => respond(request));
     await runtime.tools.get("repo_scout").execute("two", { task: "map symbol again" }, undefined, undefined, context());
     assert.ok(!childArgs[1].includes(childExtensionPath));
-    assert.ok(childArgs[1].includes("read,search_excerpt,grep,find,ls"));
+    assert.ok(childArgs[1].includes("read,search_excerpt,ls"));
     assert.equal(childArgs[1].filter((arg) => arg === "-e").length, 1);
   } finally { runtime.restore(); }
 });

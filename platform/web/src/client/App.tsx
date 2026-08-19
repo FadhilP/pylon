@@ -19,6 +19,7 @@ import type { MessageReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { ExtensionListSnapshot, HookSettingsReadModel, NativeExtensionReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { latestProjectDraft, readComposerDrafts, writeComposerDrafts, type ComposerDraft } from "../shared/composer-drafts";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { useAgentColors } from "./agent-color";
@@ -48,6 +49,7 @@ type PendingSession = {
   expectedGeneration?: number;
   phase: "preparing" | "failed";
   error?: string;
+  recoveredDraftSessionId?: string;
 };
 type SidebarAction = {
   key: string;
@@ -73,6 +75,11 @@ const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
 const DEFAULT_TERMINAL_HEIGHT = 280;
 const MAX_RETAINED_TERMINALS = 8;
 
+
+function initialComposerDrafts(): Map<string, ComposerDraft> {
+  try { return readComposerDrafts(localStorage); }
+  catch { return new Map(); }
+}
 function runtimeRequestStillCurrent(snapshot: RuntimeStoreSnapshot, sessionId: string, sessionGeneration: number): boolean {
   return snapshot.connection === "connected"
     && snapshot.runtime?.ready === true
@@ -130,6 +137,7 @@ function useMediaQuery(query: string) {
 }
 
 export function App() {
+  const [initialDrafts] = useState(initialComposerDrafts);
   const [view, setView] = useState<ViewId>("overview");
   const [theme, setTheme] = useState<Theme>(readInitialTheme);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -194,13 +202,28 @@ export function App() {
   const sessionListApplied = useRef(false);
   const sessionPagesRef = useRef<SessionProjectPage[]>([]);
   const sessionPagesQuery = useRef("");
-  const composerDrafts = useRef(new Map<string, string>());
+  const composerDrafts = useRef(initialDrafts);
+  const composerDraftProjects = useRef(new Map([...initialDrafts.values()].map((draft) => [draft.sessionId, draft.projectId])));
   const pendingSessionRequest = useRef(0);
   const pendingSessionDraft = useRef("");
   const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
   const pendingSessionInFlight = useRef(false);
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
+  const persistComposerDrafts = () => {
+    try { writeComposerDrafts(localStorage, composerDrafts.current); }
+    catch { /* Drafts still survive for the current page when storage is unavailable or full. */ }
+  };
+  const updateComposerDraft = (sessionId: string, projectId: string | undefined, text: string) => {
+    const resolvedProjectId = projectId ?? composerDraftProjects.current.get(sessionId) ?? composerDrafts.current.get(sessionId)?.projectId ?? "";
+    if (text) {
+      if (resolvedProjectId) composerDraftProjects.current.set(sessionId, resolvedProjectId);
+      composerDrafts.current.set(sessionId, { sessionId, projectId: resolvedProjectId, text, updatedAt: Date.now() });
+    } else {
+      composerDrafts.current.delete(sessionId);
+    }
+    persistComposerDrafts();
+  };
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
@@ -256,6 +279,20 @@ export function App() {
     });
   };
   const applySessionList = (result: SessionListSnapshot, appliedQuery = query.trim()) => {
+    let draftsChanged = false;
+    const rememberProject = (session: SessionSummary) => {
+      composerDraftProjects.current.set(session.id, session.projectId);
+      const draft = composerDrafts.current.get(session.id);
+      if (draft && draft.projectId !== session.projectId) {
+        composerDrafts.current.set(session.id, { ...draft, projectId: session.projectId });
+        draftsChanged = true;
+      }
+    };
+    for (const project of result.projects) {
+      for (const session of project.sessions) rememberProject(session);
+    }
+    for (const session of result.activeSessions) rememberProject(session);
+    if (draftsChanged) persistComposerDrafts();
     sessionPagesRef.current = result.projects;
     sessionPagesQuery.current = appliedQuery;
     setSessionPages(result.projects);
@@ -450,7 +487,15 @@ export function App() {
       || runtime.sessionGeneration !== pendingSession.expectedGeneration
       || runtime.sessionId === pendingSession.previousSessionId) return;
     const draft = pendingSessionDraft.current;
-    if (draft) composerDrafts.current.set(runtime.sessionId, draft);
+    composerDraftProjects.current.set(runtime.sessionId, pendingSession.project.id);
+    if (pendingSession.recoveredDraftSessionId) composerDrafts.current.delete(pendingSession.recoveredDraftSessionId);
+    if (draft) composerDrafts.current.set(runtime.sessionId, {
+      sessionId: runtime.sessionId,
+      projectId: pendingSession.project.id,
+      text: draft,
+      updatedAt: Date.now(),
+    });
+    persistComposerDrafts();
     if (document.activeElement instanceof HTMLTextAreaElement && document.activeElement.id === "runtime-prompt") {
       pendingSessionSelection.current = {
         start: document.activeElement.selectionStart,
@@ -644,16 +689,43 @@ export function App() {
 
   const newSession = async (project: SessionProject, retry = false) => {
     if (pendingSessionInFlight.current || sessionBusy || sessionDeleting || projectBusy) return;
+    let recoveredDraft: ComposerDraft | undefined;
+    if (!retry) {
+      const draft = latestProjectDraft(composerDrafts.current, project.id);
+      if (draft && draft.sessionId === live.runtime?.sessionId) {
+        setComposerFocusTarget(draft.sessionId);
+        if (mobile) setSidebarOpen(false);
+        return;
+      }
+      if (draft) {
+        pendingSessionInFlight.current = true;
+        setSessionBusy(draft.sessionId);
+        setSessionTransition(true);
+        try {
+          await runtimeStore.switchSession(draft.sessionId);
+          setComposerFocusTarget(draft.sessionId);
+          if (mobile) setSidebarOpen(false);
+          return;
+        } catch {
+          recoveredDraft = draft;
+        } finally {
+          pendingSessionInFlight.current = false;
+          setSessionBusy("");
+          setSessionTransition(false);
+        }
+      }
+    }
     pendingSessionInFlight.current = true;
     const requestId = retry && pendingSession ? pendingSession.requestId : ++pendingSessionRequest.current;
     if (!retry) {
-      pendingSessionDraft.current = "";
+      pendingSessionDraft.current = recoveredDraft?.text ?? "";
       pendingSessionSelection.current = undefined;
     }
     setPendingSession({
       requestId,
       project,
       previousSessionId: live.runtime?.sessionId,
+      recoveredDraftSessionId: retry ? pendingSession?.recoveredDraftSessionId : recoveredDraft?.sessionId,
       phase: "preparing",
     });
     setTerminalOpen(false);
@@ -684,6 +756,8 @@ export function App() {
     try {
       await runtimeStore.deleteSession(session.id);
       composerDrafts.current.delete(session.id);
+      composerDraftProjects.current.delete(session.id);
+      persistComposerDrafts();
       setActiveSessions((current) => current.filter((candidate) => candidate.id !== session.id));
       updateSessionPages((current) => current.map((page) => ({
         ...page,
@@ -728,6 +802,13 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.removeProject(project.id);
+      for (const [sessionId, draft] of composerDrafts.current) {
+        if (draft.projectId === project.id) {
+          composerDrafts.current.delete(sessionId);
+          composerDraftProjects.current.delete(sessionId);
+        }
+      }
+      persistComposerDrafts();
       setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to remove project");
@@ -1188,7 +1269,7 @@ export function App() {
             } : undefined}
             initialDraft={pendingSession
               ? pendingSessionDraft.current
-              : live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId) : undefined}
+              : live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId)?.text : undefined}
             restoreComposerFocus={composerFocusTarget === live.runtime?.sessionId}
             restoreComposerSelection={composerFocusTarget === live.runtime?.sessionId ? pendingSessionSelection.current : undefined}
             onComposerFocusRestored={() => {
@@ -1198,20 +1279,21 @@ export function App() {
             onDraftChange={(draft) => {
               if (pendingSession) {
                 pendingSessionDraft.current = draft;
+                if (pendingSession.recoveredDraftSessionId) {
+                  updateComposerDraft(pendingSession.recoveredDraftSessionId, pendingSession.project.id, draft);
+                }
                 const runtime = live.runtime;
                 if (pendingSession.expectedGeneration !== undefined
                   && runtime?.ready === true
                   && runtime.sessionGeneration === pendingSession.expectedGeneration
                   && runtime.sessionId !== pendingSession.previousSessionId) {
-                  if (draft) composerDrafts.current.set(runtime.sessionId, draft);
-                  else composerDrafts.current.delete(runtime.sessionId);
+                  updateComposerDraft(runtime.sessionId, pendingSession.project.id, draft);
                 }
                 return;
               }
               const sessionId = live.runtime?.sessionId;
               if (!sessionId) return;
-              if (draft) composerDrafts.current.set(sessionId, draft);
-              else composerDrafts.current.delete(sessionId);
+              updateComposerDraft(sessionId, activeSession?.projectId, draft);
             }}
             onSelectAgent={(id) => {
               setSelectedAgentId(id);

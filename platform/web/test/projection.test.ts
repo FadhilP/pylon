@@ -534,7 +534,7 @@ test("live delegated activity appends correlated deltas without replacing prior 
         partialResult: {
           details: {
             state: "running",
-            activityDelta: [{ id: `child-${index}`, kind, tool: "read", text: String(index) }],
+            activityDelta: [{ id: `child-${index}`, kind, tool: "read", text: String(index), ...(kind === "call" ? { startedAt: "2026-01-01T00:00:00.000Z" } : { durationMs: index * 10 }) }],
           },
         },
       }));
@@ -543,8 +543,8 @@ test("live delegated activity appends correlated deltas without replacing prior 
   const activity = projection.snapshot().conversation.delegatedRuns[0]?.activity ?? [];
   assert.equal(activity.length, 250);
   assert.deepEqual(activity.slice(-2), [
-    { id: "child-124", kind: "call", tool: "read", text: "124" },
-    { id: "child-124", kind: "result", tool: "read", text: "124" },
+    { id: "child-124", kind: "call", tool: "read", text: "124", startedAt: "2026-01-01T00:00:00.000Z" },
+    { id: "child-124", kind: "result", tool: "read", text: "124", durationMs: 1_240 },
   ]);
   const updates = published.filter((event) => event.type === "delegate.update").slice(1);
   assert.equal(updates.length, 250);
@@ -627,6 +627,7 @@ test("background pi-spawn controls update the original delegated run without dup
     id: "spawn-start", status: "completed", response: "Done", durationMs: 2_000, output: 6, sessionOutput: 60, activity: 1,
   });
 
+
   projection.apply(session({
     type: "tool_execution_start", toolCallId: "spawn-stale", toolName: "spawn_agent",
     args: { action: "status", id: "child-agent", runId: "run-1" },
@@ -641,6 +642,52 @@ test("background pi-spawn controls update the original delegated run without dup
   assert.equal(projection.snapshot().conversation.delegatedRuns.length, 1);
   assert.deepEqual({ status: retained?.status, response: retained?.response, output: retained?.usage?.output, activity: retained?.activity.length }, {
     status: "completed", response: "Done", output: 6, activity: 1,
+  });
+});
+
+test("background spawn progress updates one delegated run through completion", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  const marker = { version: 1, kind: "session", id: "child-session", path: "/sessions/child.jsonl", cwd: "/repo" };
+  projection.apply(session({
+    type: "tool_execution_start", toolCallId: "spawn-start", toolName: "spawn_session",
+    args: { action: "create", prompt: "Inspect auth", background: true },
+  }));
+  projection.apply(session({
+    type: "tool_execution_end", toolCallId: "spawn-start", toolName: "spawn_session",
+    result: { content: [{ type: "text", text: "Started" }], details: {
+      piSpawn: marker, runId: "run-1", background: true, status: "running", state: "running", startedAt: "2026-08-01T10:00:00.000Z",
+    } },
+  }));
+  projection.apply(session({
+    type: "spawn_progress", phase: "update", toolCallId: "spawn-start", toolName: "spawn_session",
+    result: { content: [], details: {
+      piSpawn: marker, runId: "run-1", background: true, status: "running", state: "running", startedAt: "2026-08-01T10:00:00.000Z",
+      partialResponse: "Checking auth…",
+      usage: { input: 2, output: 3, cacheRead: 1, cacheWrite: 0, cost: 0.01 },
+      activityDelta: [{ id: "read-1", kind: "call", tool: "read", text: "{\"path\":\"auth.ts\"}" }],
+    } },
+  }));
+  let [run] = projection.snapshot().conversation.delegatedRuns;
+  assert.deepEqual({ id: run?.id, status: run?.status, response: run?.response, output: run?.usage?.output, activity: run?.activity.length }, {
+    id: "spawn-start", status: "running", response: "Checking auth…", output: 3, activity: 1,
+  });
+
+  projection.apply(session({
+    type: "spawn_progress", phase: "end", toolCallId: "spawn-start", toolName: "spawn_session",
+    result: { content: [{ type: "text", text: "Done" }], details: {
+      piSpawn: marker, runId: "run-1", background: true, status: "completed",
+      usage: { input: 4, output: 6, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
+      sessionUsage: { input: 40, output: 60, cacheRead: 10, cacheWrite: 0, cost: 0.2 },
+      activity: [
+        { id: "read-1", kind: "call", tool: "read", text: "{}" },
+        { id: "read-1", kind: "result", tool: "read", text: "source" },
+      ],
+    } },
+  }));
+  [run] = projection.snapshot().conversation.delegatedRuns;
+  assert.equal(projection.snapshot().conversation.delegatedRuns.length, 1);
+  assert.deepEqual({ status: run?.status, response: run?.response, output: run?.usage?.output, sessionOutput: run?.sessionUsage?.output, activity: run?.activity.length }, {
+    status: "completed", response: "Done", output: 6, sessionOutput: 60, activity: 2,
   });
 });
 

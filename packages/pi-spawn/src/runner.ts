@@ -17,6 +17,8 @@ export type SpawnActivity = {
   tool: string;
   text: string;
   isError?: boolean;
+  startedAt?: string;
+  durationMs?: number;
 };
 
 export type SpawnUiRequest =
@@ -53,6 +55,7 @@ export type RunSpawnOptions = {
   env?: NodeJS.ProcessEnv;
   onActivity?: (item: SpawnActivity, all: readonly SpawnActivity[]) => void;
   onUsage?: (usage: SpawnUsage) => void;
+  onText?: (text: string) => void;
   onState?: (state: { model?: string; thinking?: string }) => void;
   onUiRequest?: (request: SpawnUiRequest, signal: AbortSignal) => Promise<SpawnUiResponse>;
 };
@@ -178,10 +181,12 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   });
   const messages: any[] = [];
   const activity: SpawnActivity[] = [];
+  const activityStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
   const usage = emptyUsage();
   let cumulativeUsage: SpawnUsage | undefined;
   let effectiveState: { model?: string; thinking?: string } | undefined;
   let stdout = "", stderr = "", commandError = "", timedOut = false, aborted = false;
+  let streamedText = "";
   let settled = false, settlementFinished = false, commandId = 0;
   let activeCompactions = 0, settlementDeferred = false, postCompactionContinuationExpected = false;
   let initialStateCommandId: string | undefined;
@@ -343,21 +348,40 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       } else beginSettlement();
       return;
     }
+    if (event.type === "message_start" && event.message?.role === "assistant") {
+      streamedText = "";
+      try { options.onText?.(streamedText); } catch { /* Progress observers must not control the child. */ }
+      return;
+    }
+    if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
+      streamedText = truncateHead(`${streamedText}${event.assistantMessageEvent.delta}`, { maxBytes: 50 * 1024, maxLines: 2000 }).content;
+      try { options.onText?.(streamedText); } catch { /* Progress observers must not control the child. */ }
+      return;
+    }
+
     if (event.type === "tool_execution_start") {
       const text = truncateHead(JSON.stringify(event.args ?? {}), { maxBytes: 2000, maxLines: 40 }).content;
-      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "call", tool: event.toolName, text });
+      const startedAtMs = Date.now();
+      const startedAt = new Date(startedAtMs).toISOString();
+      if (typeof event.toolCallId === "string") activityStarts.set(event.toolCallId, { startedAt, startedAtMs });
+      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "call", tool: event.toolName, text, startedAt });
       return;
     }
     if (event.type === "tool_execution_end") {
       const text = textContent(event.result);
       const bounded = truncateHead(text, { maxBytes: 2000, maxLines: 40 }).content;
-      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "result", tool: event.toolName, text: bounded, ...(event.isError ? { isError: true } : {}) });
+      const timing = typeof event.toolCallId === "string" ? activityStarts.get(event.toolCallId) : undefined;
+      if (typeof event.toolCallId === "string") activityStarts.delete(event.toolCallId);
+      const durationMs = timing ? Math.max(0, Date.now() - timing.startedAtMs) : undefined;
+      pushActivity({ ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}), kind: "result", tool: event.toolName, text: bounded, ...(event.isError ? { isError: true } : {}), ...(durationMs === undefined ? {} : { durationMs }) });
       return;
     }
     if (event.type === "message_end" && event.message?.role === "assistant") {
       const message = event.message;
       const item = message.usage ?? {};
       messages.push(message);
+      streamedText = truncateHead(textContent(message), { maxBytes: 50 * 1024, maxLines: 2000 }).content;
+      try { options.onText?.(streamedText); } catch { /* Progress observers must not control the child. */ }
       usage.input += validNumber(item.input);
       usage.output += validNumber(item.output);
       usage.cacheRead += validNumber(item.cacheRead);

@@ -33,7 +33,7 @@ test("child invocation does not mistake an embedding web host for the Pi CLI", a
 test("runner selects final assistant, sums usage, and exposes activity", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-runner-"));
   const script = join(dir, "fake.mjs");
-  await writeFile(script, `console.log(JSON.stringify({type:'tool_execution_start',toolName:'edit',args:{path:'a.ts'}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`);
+  await writeFile(script, `console.log(JSON.stringify({type:'tool_execution_start',toolCallId:'edit-1',toolName:'edit',args:{path:'a.ts'}})); console.log(JSON.stringify({type:'tool_execution_end',toolCallId:'edit-1',toolName:'edit',result:{content:[{type:'text',text:'updated'}]}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`);
   const usage: any[] = [];
   const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, onUsage: item => usage.push(item) });
   assert.equal(run.text, "turn 2");
@@ -41,7 +41,11 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
   assert.equal(run.turns, 2);
   assert.deepEqual(usage.map((item) => item.input), [1, 3]);
   assert.deepEqual(run.usage, usage.at(-1));
-  assert.equal(run.activity[0]?.tool, "edit");
+  assert.equal(run.activity[0]?.id, "edit-1");
+  assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
+  assert.equal(run.activity[1]?.id, "edit-1");
+  assert.equal(run.activity[1]?.text, "updated");
+  assert.ok((run.activity[1]?.durationMs ?? -1) >= 0);
 });
 
 test("usage observer failures do not control the worker", async () => {

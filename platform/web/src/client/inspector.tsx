@@ -237,7 +237,6 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
 
   const idle = live.connection === "connected"
     && runtime.ready
-    && !runtime.conversation.workStartedAt
     && !live.pendingUi
     && !busy;
   const inheritedFrom = scope === "project" ? "Global" : "Project";
@@ -491,15 +490,22 @@ function Memory({ live, memoryEnabled, papercutEnabled, reviewerConfigured, onOp
   onOpenReviewerSettings: () => void;
 }) {
   const [view, setView] = useState<"memory" | "papercuts">(memoryEnabled ? "memory" : "papercuts");
+  const continuity = live.runtime?.operational.continuity;
+  const memoryCount = continuity ? continuity.memory.length + continuity.globalMemory.length : undefined;
+  const papercutCount = live.runtime?.operational.papercuts.counts.total;
   useEffect(() => {
     if (view === "memory" && !memoryEnabled && papercutEnabled) setView("papercuts");
     if (view === "papercuts" && !papercutEnabled && memoryEnabled) setView("memory");
   }, [memoryEnabled, papercutEnabled, view]);
   return <div className="memory-page">
-    {memoryEnabled && papercutEnabled && <div className="policy-scope memory-view-scope" role="group" aria-label="Memory view">
-      <button type="button" aria-pressed={view === "memory"} className={view === "memory" ? "is-active" : ""} onClick={() => setView("memory")}>Memory</button>
-      <button type="button" aria-pressed={view === "papercuts"} className={view === "papercuts" ? "is-active" : ""} onClick={() => setView("papercuts")}>Papercuts</button>
-    </div>}
+    {memoryEnabled && papercutEnabled && <nav className="memory-archive-nav" aria-label="Memory view">
+      <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>
+        <span><strong>Memory</strong><span className="mono">{memoryCount ?? "–"}</span></span><small>Guidance retained across sessions</small>
+      </button>
+      <button type="button" aria-pressed={view === "papercuts"} onClick={() => setView("papercuts")}>
+        <span><strong>Papercuts</strong><span className="mono">{papercutCount ?? "–"}</span></span><small>Workflow friction to resolve</small>
+      </button>
+    </nav>}
     {view === "memory" && memoryEnabled && <ContinuityMemory live={live} reviewerConfigured={reviewerConfigured} onOpenReviewerSettings={onOpenReviewerSettings} />}
     {view === "papercuts" && papercutEnabled && <Papercuts live={live} />}
   </div>;
@@ -603,9 +609,9 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
       const isEditing = editing === record.id;
       return <details className="memory-ledger-row papercut-row" key={record.id} open={isEditing || undefined}>
         <summary>
-          <div><strong>{record.message}</strong><span>{record.status}</span>{record.occurrences > 1 && <span>seen {record.occurrences}×</span>}</div>
+          <span className="memory-archive-kind">{record.status}{record.occurrences > 1 ? ` · ${record.occurrences}×` : ""}</span>
+          <div className="memory-archive-copy"><strong>{record.message}</strong><p>{outcome(record) ?? `Last seen ${displayTime(record.lastSeenAt)}`}</p></div>
           <IconChevronDown className="memory-ledger-chevron" size={13} />
-          <p>{outcome(record) ?? `Last seen ${displayTime(record.lastSeenAt)}`}</p>
         </summary>
         <div className="memory-ledger-detail">{isEditing ? <div className="memory-editor">
           <label>Message<textarea value={draft} maxLength={500} rows={4} disabled={Boolean(busy)} onChange={(event) => setDraft(event.target.value)} /></label>
@@ -693,9 +699,9 @@ function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: 
     const isEditing = editing === key;
     return <details className="memory-ledger-row" key={key} open={isEditing || undefined}>
       <summary>
-        <div><strong>{note.trigger}</strong><span>{note.authority.replaceAll("_", " ")}</span></div>
+        <span className="memory-archive-kind">{note.scope === "user" ? "Global" : "Project"}</span>
+        <div className="memory-archive-copy"><strong>{note.trigger}</strong><p>{note.guidance}</p></div>
         <IconChevronDown className="memory-ledger-chevron" size={13} />
-        <p>{note.guidance}</p>
       </summary>
       <div className="memory-ledger-detail">
         {isEditing ? <div className="memory-editor">
@@ -733,18 +739,8 @@ function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: 
       <input type="search" value={search} placeholder={`Search ${total} note${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} />
       <span className="mono">{query ? `${shown}/${total}` : total}</span>
     </label>
-    <section className="memory-ledger-scope" aria-labelledby="global-memory-title">
-      <header><strong id="global-memory-title"><span className="memory-scope-dot global" />Global</strong><span>Global · editable across projects</span></header>
-      <div className="memory-ledger-list">{rows(visibleGlobalMemory)}
-        {!query && globalMemory.length === 0 && <div className="memory-ledger-empty"><strong>No global memory</strong><span>Continuity has not saved durable user notes.</span></div>}
-      </div>
-    </section>
-    <section className="memory-ledger-scope" aria-labelledby="project-memory-title">
-      <header><strong id="project-memory-title"><span className="memory-scope-dot" />Project</strong><span>Project · editable</span></header>
-      <div className="memory-ledger-list">{rows(visibleMemory)}
-        {!query && memory.length === 0 && <div className="memory-ledger-empty"><strong>No project memory</strong><span>Continuity has not saved durable notes for this project.</span></div>}
-      </div>
-    </section>
+    {shown > 0 && <section className="memory-ledger-list" aria-label="Memory archive">{rows([...visibleMemory, ...visibleGlobalMemory])}</section>}
+    {!query && total === 0 && <div className="memory-ledger-empty"><strong>No saved memory</strong><span>Continuity has not saved durable guidance for this project or user.</span></div>}
     {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a trigger, guidance, authority, origin, or related path.</span></div>}
     {!idle && total > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
     {error && <p className="ui-request-error" role="alert">{error}</p>}
@@ -1186,7 +1182,7 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
     .filter((group) => group.tools.length);
   const directOverrides = scope === "project" ? runtime?.runtimePolicy.project.toolOverrides : runtime?.runtimePolicy.session.toolOverrides;
   const effectiveOverrides = runtime?.runtimePolicy.effective.toolOverrides ?? {};
-  const disabled = live.connection !== "connected" || !runtime?.ready || Boolean(live.pendingUi) || Boolean(runtime.conversation.workStartedAt);
+  const disabled = live.connection !== "connected" || !runtime?.ready || Boolean(live.pendingUi);
   return <div className="tools-page">
     <InspectorSection title="Tool Overrides" meta={`${runtime?.availableTools.length ?? 0}`} className="tool-overrides-panel">
       <div className="tool-override-toolbar">

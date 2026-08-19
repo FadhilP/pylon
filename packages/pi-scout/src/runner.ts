@@ -15,7 +15,15 @@ export type ChildTurnUsage = ChildUsage & {
   model?: string;
   stopReason?: string;
 };
-export type ScoutActivity = { kind: "call" | "result"; tool: string; text: string; isError?: boolean };
+export type ScoutActivity = {
+  id?: string;
+  kind: "call" | "result";
+  tool: string;
+  text: string;
+  isError?: boolean;
+  startedAt?: string;
+  durationMs?: number;
+};
 export type ScoutRun = {
   text: string;
   model?: string;
@@ -153,6 +161,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   const turns: ChildTurnUsage[] = [];
   const usage = emptyUsage();
   const activity: ScoutActivity[] = [];
+  const activityStarts = new Map<string, { startedAtMs: number }>();
   let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false;
   let commandError: string | undefined;
   let agentSettled = false;
@@ -210,12 +219,19 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
         return;
       }
       if (event.type === "tool_execution_start") {
-        pushActivity({ kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}) });
+        const startedAtMs = Date.now();
+        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+        if (id) activityStarts.set(id, { startedAtMs });
+        pushActivity({ ...(id ? { id } : {}), kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}), startedAt: new Date(startedAtMs).toISOString() });
         return;
       }
       if (event.type === "tool_execution_end") {
         const text = (event.result?.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-        pushActivity({ kind: "result", tool: event.toolName, text: capText(text, 2000, 40).text, ...(event.isError ? { isError: true } : {}) });
+        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+        const timing = id ? activityStarts.get(id) : undefined;
+        if (id) activityStarts.delete(id);
+        const durationMs = timing ? Math.max(0, Date.now() - timing.startedAtMs) : undefined;
+        pushActivity({ ...(id ? { id } : {}), kind: "result", tool: event.toolName, text: capText(text, 2000, 40).text, ...(event.isError ? { isError: true } : {}), ...(durationMs === undefined ? {} : { durationMs }) });
         return;
       }
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;

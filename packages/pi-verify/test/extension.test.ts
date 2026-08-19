@@ -396,7 +396,7 @@ test("runtime policy overrides model-supplied Verify checks", async () => {
     sessionManager: { getSessionId: () => "session", getEntries: () => [] },
   });
   eventHandlers.get("pylon:runtime-policy")!({
-    version: 1,
+    version: 2,
     sessionId: "session",
     verify: { mode: "selected", checks: ["npm:lint"] },
   });
@@ -407,7 +407,7 @@ test("runtime policy overrides model-supplied Verify checks", async () => {
   assert.deepEqual(commands, [process.platform === "win32" ? "/d /s /c npm run lint" : "run lint"]);
 
   eventHandlers.get("pylon:runtime-policy")!({
-    version: 1,
+    version: 2,
     sessionId: "session",
     verify: { mode: "selected", checks: [] },
   });

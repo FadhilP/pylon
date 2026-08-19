@@ -90,6 +90,8 @@ export interface DelegatedAgentActivityReadModel {
   tool: string;
   text?: string;
   isError?: boolean;
+  startedAt?: string;
+  durationMs?: number;
 }
 
 export interface DelegatedAgentUsageReadModel {

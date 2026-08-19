@@ -7,7 +7,15 @@ import { truncateUtf8 } from "pylon-core/utf8";
 export const GRUNT_CONTEXT_LIMIT = 262_144;
 
 export type ChildUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
-export type WorkerActivity = { kind: "call" | "result"; tool: string; text: string; isError?: boolean };
+export type WorkerActivity = {
+  id?: string;
+  kind: "call" | "result";
+  tool: string;
+  text: string;
+  isError?: boolean;
+  startedAt?: string;
+  durationMs?: number;
+};
 export type WorkerRun = {
   text: string;
   cwd?: string;
@@ -96,6 +104,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
   const messages: any[] = [];
   const usage = emptyUsage();
   const activity: WorkerActivity[] = [];
+  const activityStarts = new Map<string, { startedAtMs: number }>();
   let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false, protocolMalformed = false;
   let budgetExceeded = "", contextExceeded = "";
   const processLine = (line: string) => {
@@ -103,12 +112,19 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     try {
       const event = JSON.parse(line);
       if (event.type === "tool_execution_start") {
-        const item: WorkerActivity = { kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}) };
+        const startedAtMs = Date.now();
+        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+        if (id) activityStarts.set(id, { startedAtMs });
+        const item: WorkerActivity = { ...(id ? { id } : {}), kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}), startedAt: new Date(startedAtMs).toISOString() };
         activity.push(item); if (activity.length > 100) activity.shift(); options.onActivity?.(item, activity); return;
       }
       if (event.type === "tool_execution_end") {
         const raw = (event.result?.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-        const item: WorkerActivity = { kind: "result", tool: event.toolName, text: capText(raw, 2000).text, ...(event.isError ? { isError: true } : {}) };
+        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+        const timing = id ? activityStarts.get(id) : undefined;
+        if (id) activityStarts.delete(id);
+        const durationMs = timing ? Math.max(0, Date.now() - timing.startedAtMs) : undefined;
+        const item: WorkerActivity = { ...(id ? { id } : {}), kind: "result", tool: event.toolName, text: capText(raw, 2000).text, ...(event.isError ? { isError: true } : {}), ...(durationMs === undefined ? {} : { durationMs }) };
         activity.push(item); if (activity.length > 100) activity.shift(); options.onActivity?.(item, activity); return;
       }
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;

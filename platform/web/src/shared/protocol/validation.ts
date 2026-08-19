@@ -668,7 +668,8 @@ function validDelegatedRun(value: unknown): boolean {
     && ["call", "result"].includes(String(item.kind))
     && boundedString(item.tool, 200)
     && (item.text === undefined || typeof item.text === "string" && item.text.length <= 2_000)
-    && (item.isError === undefined || typeof item.isError === "boolean"));
+    && (item.isError === undefined || typeof item.isError === "boolean")
+    && validOptionalToolTiming(item));
 }
 
 function validCompactionDisplay(value: unknown): boolean {

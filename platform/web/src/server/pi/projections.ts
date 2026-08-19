@@ -262,12 +262,16 @@ function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | 
         .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted>")
         .slice(0, MAX_AGENT_ACTIVITY_TEXT);
     }
+    const startedAt = createdAt(raw.startedAt);
+    const durationMs = boundedNumber(raw.durationMs, 7 * 24 * 60 * 60 * 1_000);
     result.push({
       ...(activityId ? { id: activityId } : {}),
       kind: raw.kind,
       tool,
       ...(activityText ? { text: activityText } : {}),
       ...(raw.isError === true ? { isError: true } : {}),
+      ...(startedAt ? { startedAt } : {}),
+      ...(durationMs === undefined ? {} : { durationMs }),
     });
   }
   return result;
@@ -348,7 +352,8 @@ function updateDelegatedRun(
     : activityDelta?.length ? [...previousActivity, ...activityDelta] : previousActivity;
   const nextStatus = previous && previous.status !== "running" && status === "running" ? previous.status : status;
   const request = delegatedRequest(input);
-  const response = status === "running" ? undefined : messageText(raw);
+  const partialResponse = status === "running" ? text(details.partialResponse) : "";
+  const response = status === "running" ? partialResponse || previous?.response : messageText(raw);
   const agentName = text(details.agentName, 24) || undefined;
   const startedAt = typeof details.startedAt === "string" && !Number.isNaN(Date.parse(details.startedAt))
     ? details.startedAt
@@ -849,6 +854,7 @@ export class RuntimeProjection {
     if (kind === "continuity_compaction_interruption") return this.removeActiveMessage(raw);
     if (kind === "tool_execution_start" || kind === "tool_start" || kind === "tool_call_start") return this.toolStart(raw);
     if (kind === "tool_execution_end" || kind === "tool_end" || kind === "tool_call_end" || kind === "tool_result") return this.toolEnd(raw);
+    if (kind === "spawn_progress") return this.spawnProgress(raw);
     if (kind === "tool_execution_update") return this.toolUpdate(raw);
     if (kind === "queue" || kind === "queue_update") return this.queue(raw);
     if (kind === "auto_retry_start" || kind === "auto_retry_end" || kind === "retry" || kind === "retry_start" || kind === "retry_end") return this.retry(raw, kind);
@@ -1110,6 +1116,21 @@ export class RuntimeProjection {
     this.activeMessageId = undefined;
     this.runtime.conversation.streaming = false;
     this.publish("message.remove", { id: messageId });
+  }
+
+  private spawnProgress(raw: Record<string, unknown>): void {
+    const toolId = id(raw.toolCallId, "tool");
+    const previous = this.delegatedRuns.get(toolId);
+    if (!previous || (raw.phase !== "update" && raw.phase !== "end")) return;
+    const name = text(raw.toolName, 200);
+    const event = raw.phase === "update"
+      ? { toolCallId: toolId, toolName: name, partialResult: raw.result }
+      : { toolCallId: toolId, toolName: name, result: raw.result };
+    const run = projectDelegatedToolEvent(raw.phase, toolId, previous, event, this.runtime.metrics.userMessages);
+    if (!run) return;
+    const appendsActivity = raw.phase === "update" && Array.isArray(object(object(raw.result).details).activityDelta);
+    this.setDelegatedRun(run, previous, appendsActivity);
+    if (run.runId) this.spawnRunIds.set(run.runId, run.id);
   }
 
   private toolStart(raw: Record<string, unknown>): void {

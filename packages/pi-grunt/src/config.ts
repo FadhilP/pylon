@@ -21,7 +21,7 @@ export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
 export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
 export const isGruntEnabled = (config: GruntConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
-export const DEFAULT_GRUNT_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_GRUNT_TIMEOUT_MS = 60 * 60 * 1000;
 export const DEFAULT_GRUNT_MAX_TURNS = 40;
 export const DEFAULT_GRUNT_MAX_COST_USD = 2;
 export const DEFAULT_GRUNT_PARENT_CONTEXT_CHARS = 0;

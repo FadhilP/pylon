@@ -380,7 +380,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         const childToolNames = [
           "read", "search_excerpt",
           ...(discoverTools?.toolNames ?? []),
-          "grep", "find", "ls",
+          "ls",
         ].join(",");
         const timeoutMs = repoTimeoutMs();
         const maxCostUsd = scoutMaxCostUsd();

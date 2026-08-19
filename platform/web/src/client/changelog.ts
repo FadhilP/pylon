@@ -8,6 +8,23 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.11.0",
+    date: "Aug 19, 2026",
+    title: "Live agents, durable drafts, and active policy controls",
+    summary: "Pylon makes delegated work easier to follow, preserves unfinished prompts across reloads, and lets runtime and tool policies change without waiting for active sessions to finish.",
+    notes: [
+      "Streamed live partial responses, usage, activity, and terminal results from background spawned agents and sessions into their original delegated runs, with strict parent, child, tool-call, and run correlation.",
+      "Recorded live and completed tool-call durations for Grunt, Scout, and Spawn, and redesigned the Agents drawer with status filters, aggregate counts and cost, clearer run rows, conversation-style spawned threads, and timed expandable tool details.",
+      "Persisted per-session composer drafts in browser storage, reopened the latest draft when starting work in the same project, recovered drafts whose original session is unavailable, and removed stored drafts with deleted sessions or projects.",
+      "Allowed runtime and tool policies to be edited while sessions are working, published configured values immediately, and safely activated effective policy and workspace changes when each affected session becomes idle.",
+      "Refined the Memory inspector into a unified, searchable archive with Memory and Papercuts counts, compact scope and status labels, and clearer empty states.",
+      "Raised Grunt's default execution timeout from 15 minutes to one hour for longer delegated implementation tasks.",
+    ],
+  },
+
+
+
+  {
     version: "1.10.0",
     date: "Aug 17, 2026",
     title: "General conversations and native extension management",

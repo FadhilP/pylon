@@ -215,14 +215,16 @@ test("synchronous mode remains the default and waits for completion", async () =
   } finally { f.restore(); }
 });
 
-test("background agent runs return immediately, report status, and preserve thread locking", async () => {
+test("background agent runs stream correlated progress, report status, and preserve thread locking", async () => {
   let release!: () => void;
+  let childOptions: any;
   const f = await fixture((_args, options) => new Promise<SpawnRun>((resolve) => {
+    childOptions = options;
     release = () => resolve(completed(`done:${options.prompt}`));
   }));
   try {
     const tool = f.tools.get("spawn_agent");
-    const started = await tool.execute("create", {
+    const started = await tool.execute("spawn-call", {
       action: "create", prompt: "work independently", background: true,
     }, undefined, undefined, f.ctx);
     assert.equal(started.details.status, "running");
@@ -230,6 +232,17 @@ test("background agent runs return immediately, report status, and preserve thre
     const id = started.details.piSpawn.id;
     const runId = started.details.runId;
     persist(f.parent, "spawn_agent", started);
+
+    const activity = { id: "read-1", kind: "call", tool: "read", text: "{}" };
+    childOptions.onActivity(activity, [activity]);
+    childOptions.onText("Partial reply");
+    childOptions.onUsage({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1 });
+    const progress = f.emitted.filter((event) => event.name === "pylon:spawn-progress").map((event) => event.value);
+    assert.ok(progress.length >= 4);
+    assert.ok(progress.every((event) => event.parentSessionId === f.parent.getSessionId()
+      && event.toolCallId === "spawn-call" && event.id === id && event.runId === runId && event.phase === "update"));
+    assert.equal(progress.find((event) => event.result.details?.partialResponse)?.result.details.partialResponse, "Partial reply");
+    assert.equal(progress.find((event) => event.result.details?.activityDelta)?.result.details.activityDelta[0].id, "read-1");
 
     const running = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
     assert.equal(running.details.status, "running");
@@ -242,6 +255,9 @@ test("background agent runs return immediately, report status, and preserve thre
     assert.match(context.messages.at(-1).content, new RegExp(runId));
     release();
     await new Promise((resolve) => setImmediate(resolve));
+    const terminal = [...f.emitted].reverse().find((event) => event.name === "pylon:spawn-progress")?.value;
+    assert.equal(terminal.phase, "end");
+    assert.equal(terminal.result.details.status, "completed");
     const completedRun = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
     assert.equal(completedRun.details.status, "completed");
     assert.match(completedRun.content[0].text, /done:work independently/);
@@ -322,7 +338,7 @@ test("spawn activity progress sends correlated deltas and returns the complete i
     const activity: any[] = [];
     for (let index = 0; index < 125; index++) {
       for (const kind of ["call", "result"] as const) {
-        const item = { id: `call-${index}`, kind, tool: "read", text: String(index) };
+        const item = { id: `call-${index}`, kind, tool: "read", text: String(index), ...(kind === "call" ? { startedAt: "2026-01-01T00:00:00.000Z" } : { durationMs: index * 10 }) };
         activity.push(item);
         options.onActivity?.(item, activity);
       }
@@ -340,6 +356,8 @@ test("spawn activity progress sends correlated deltas and returns the complete i
     assert.equal(result.details.activity.length, 250);
     assert.equal(result.details.activity[0].id, "call-0");
     assert.equal(result.details.activity.at(-1).id, "call-124");
+    assert.equal(result.details.activity[0].startedAt, "2026-01-01T00:00:00.000Z");
+    assert.equal(result.details.activity.at(-1).durationMs, 1_240);
   } finally { f.restore(); }
 });
 

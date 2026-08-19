@@ -1138,17 +1138,29 @@ export class SessionRuntime implements PiDriver {
   applyRuntimePolicy(policy: RuntimePolicyReadModel): void {
     this.runtimePolicy = {
       ...policy,
-      global: { ...policy.global, toolOverrides: cloneToolOverrides(policy.global.toolOverrides) },
-      project: { ...policy.project, verify: cloneVerifyPolicy(policy.project.verify), toolOverrides: cloneToolOverrides(policy.project.toolOverrides) },
+      global: { ...policy.global, guardRules: { ...DEFAULT_GUARD_RULES, ...policy.global.guardRules }, toolOverrides: cloneToolOverrides(policy.global.toolOverrides) },
+      project: {
+        ...policy.project,
+        verify: cloneVerifyPolicy(policy.project.verify),
+        ...(policy.project.guardRules ? { guardRules: { ...policy.project.guardRules } } : {}),
+        toolOverrides: cloneToolOverrides(policy.project.toolOverrides),
+      },
       session: {
         toolOverrides: cloneToolOverrides(policy.session.toolOverrides),
         ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
         ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
+        ...(policy.session.guardEnabled !== undefined ? { guardEnabled: policy.session.guardEnabled } : {}),
+        ...(policy.session.guardRules ? { guardRules: { ...policy.session.guardRules } } : {}),
         ...(policy.session.workspace ? { workspace: policy.session.workspace } : {}),
         ...(policy.session.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: policy.session.guardTimeoutSeconds } : {}),
         ...(policy.session.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: policy.session.clarifyTimeoutSeconds } : {}),
       },
-      effective: { ...policy.effective, verify: cloneVerifyPolicy(policy.effective.verify), toolOverrides: cloneToolOverrides(policy.effective.toolOverrides) },
+      effective: {
+        ...policy.effective,
+        verify: cloneVerifyPolicy(policy.effective.verify),
+        guardRules: { ...DEFAULT_GUARD_RULES, ...policy.effective.guardRules },
+        toolOverrides: cloneToolOverrides(policy.effective.toolOverrides),
+      },
       availableVerifyChecks: policy.availableVerifyChecks.map((check) => ({ ...check })),
     };
     this.publishRuntimePolicy();
@@ -3073,6 +3085,52 @@ export class SessionRuntime implements PiDriver {
     return readGitBranch(this.displayProject(cwd, sessionId)?.cwd ?? cwd);
   }
 
+  private captureSpawnProgress(payload: unknown, generation: number): void {
+    if (!this.gate.accepts(generation) || !this.runtime || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
+    const raw = payload as Record<string, unknown>;
+    const sessionId = this.runtime.session.sessionId;
+    const toolCallId = typeof raw.toolCallId === "string" && raw.toolCallId.length <= 256 ? raw.toolCallId : undefined;
+    const childId = typeof raw.id === "string" && raw.id.length <= 128 ? raw.id : undefined;
+    const runId = typeof raw.runId === "string" && raw.runId.length <= 128 ? raw.runId : undefined;
+    const spawnKind = raw.kind === "agent" || raw.kind === "session" ? raw.kind : undefined;
+    const phase = raw.phase === "update" || raw.phase === "end" ? raw.phase : undefined;
+    if (raw.version !== 1 || raw.parentSessionId !== sessionId || !toolCallId || !childId || !runId || !spawnKind || !phase) return;
+    const result = raw.result && typeof raw.result === "object" && !Array.isArray(raw.result)
+      ? raw.result as Record<string, unknown>
+      : undefined;
+    const details = result?.details && typeof result.details === "object" && !Array.isArray(result.details)
+      ? result.details as Record<string, unknown>
+      : undefined;
+    const marker = details?.piSpawn && typeof details.piSpawn === "object" && !Array.isArray(details.piSpawn)
+      ? details.piSpawn as Record<string, unknown>
+      : undefined;
+    if (!result || !details || details.background !== true || details.runId !== runId
+      || marker?.version !== 1 || marker.kind !== spawnKind || marker.id !== childId) return;
+    const previous = this.liveDelegatedRuns.get(toolCallId);
+    const toolName = spawnKind === "agent" ? "spawn_agent" : "spawn_session";
+    if (!previous || previous.kind !== toolName || previous.status !== "running"
+      || previous.threadId && previous.threadId !== childId || previous.runId && previous.runId !== runId) return;
+    const event = phase === "update"
+      ? { toolCallId, toolName, partialResult: result }
+      : { toolCallId, toolName, result };
+    const run = projectDelegatedToolEvent(
+      phase,
+      toolCallId,
+      previous,
+      event,
+      this.lastSnapshot?.metrics.userMessages ?? this.runtime.session.getSessionStats().userMessages,
+    );
+    if (!run || run.threadId !== childId || run.runId !== runId) return;
+    this.liveDelegatedRuns.set(toolCallId, structuredClone(run));
+    this.emit({
+      type: "session.event",
+      sessionId,
+      sessionGeneration: generation,
+      payload: { type: "spawn_progress", phase, toolCallId, toolName, result },
+    });
+  }
+
+
   private installBusHooks(generation: number): void {
     this.detachBus();
     this.busUnsubscribers.push(this.eventBus.on("pi-discover:index-state", (payload) => {
@@ -3144,6 +3202,9 @@ export class SessionRuntime implements PiDriver {
         rules: { ...(policy.guardRules ?? DEFAULT_GUARD_RULES) },
         timeoutSeconds: policy.guardTimeoutSeconds,
       });
+    }));
+    this.busUnsubscribers.push(this.eventBus.on("pylon:spawn-progress", (payload) => {
+      this.captureSpawnProgress(payload, generation);
     }));
     for (const channel of ["pi-verify:lifecycle", "pi-verify:result", "pi-heartbeat:job", "pi-guard:decision", "pylon:tool-policy", "pi-continuity:state-change", "pi-papercut:state-change", "pi-timeline:state-change", "pi-sieve:state-change"]) {
       this.busUnsubscribers.push(this.eventBus.on(channel, (payload) => {
