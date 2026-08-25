@@ -2161,10 +2161,10 @@ export class SessionRuntime implements PiDriver {
     if (!this.runtime || !this.gate.ready) return;
     this.refreshSnapshot();
     this.emit({
-      type: "session.event",
+      type: "provider.auth",
       sessionId: this.runtime.session.sessionId,
       sessionGeneration: this.gate.generation,
-      payload: { type: "provider_auth_changed" },
+      providerAuth: this.providerAuthSnapshot(),
     });
   }
 

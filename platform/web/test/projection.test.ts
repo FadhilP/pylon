@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { agentColorId } from "../src/shared/format.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ProviderAuthReadModel } from "../src/shared/protocol/events.ts";
 import { decodeHistoryCursor, encodeHistoryCursor, latestVisibleUserIndex, projectConversation, projectConversationTurnIndex, projectMessages, RuntimeProjection } from "../src/server/pi/projections.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 
@@ -42,6 +43,39 @@ function session(payload: Record<string, unknown>) {
 function ui(method: string, payload: Record<string, unknown>, requestId = method) {
   return { type: "ui.event" as const, sessionId: "session", sessionGeneration: 1, payload: { kind: "request", requestId, method, payload, createdAt: new Date().toISOString() } };
 }
+
+test("provider auth driver events publish live sign-in links", () => {
+  const published: Array<{ type: string; payload: unknown }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  const providerAuth: ProviderAuthReadModel = {
+    providers: [{
+      id: "openai-codex",
+      name: "OpenAI Codex",
+      configured: false,
+      stored: false,
+      methods: [{ type: "oauth", name: "OpenAI (ChatGPT Plus/Pro)", interactive: true }],
+    }],
+    flow: {
+      id: "auth-flow",
+      providerId: "openai-codex",
+      providerName: "OpenAI Codex",
+      authType: "oauth",
+      status: "running",
+      message: "Complete login in your browser.",
+      authUrl: "https://auth.openai.com/oauth/authorize",
+    },
+  };
+
+  projection.apply({
+    type: "provider.auth",
+    sessionId: "session",
+    sessionGeneration: 1,
+    providerAuth,
+  });
+
+  assert.deepEqual(projection.snapshot().providerAuth, providerAuth);
+  assert.deepEqual(published, [{ type: "provider.auth", payload: providerAuth }]);
+});
 
 test("metrics projection retains bounded per-tool usage", () => {
   const projection = new RuntimeProjection(runtime(), () => undefined);

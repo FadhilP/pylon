@@ -823,6 +823,12 @@ export class RuntimeProjection {
       this.publish("workspace.revision", this.runtime.workspace);
       return;
     }
+    if (event.type === "provider.auth") {
+      this.runtime.providerAuth = structuredClone(event.providerAuth);
+      this.publish("provider.auth", this.runtime.providerAuth);
+      return;
+    }
+
     if (event.type === "ui.closed") {
       if (this.pendingUi?.requestId === event.requestId) this.pendingUi = undefined;
       this.publish("ui.closed", { requestId: event.requestId.slice(0, 128) });
