@@ -8,6 +8,16 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.12.1",
+    date: "Aug 25, 2026",
+    title: "Provider sign-in reliability",
+    summary: "A maintenance release restores live OAuth sign-in links and device codes in provider settings.",
+    notes: [
+      "Fixed provider authentication updates so browser sign-in links, device codes, status changes, and completion state reach the web client while login is in progress.",
+    ],
+  },
+
+  {
     version: "1.12.0",
     date: "Aug 25, 2026",
     title: "Attachment previews and richer code review",
