@@ -1761,15 +1761,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
         if (questions.length === 1) {
           const [answer] = answers;
           return {
-            content: [{ type: "text", text: answer.answer }],
+            content: [{
+              type: "text",
+              text: `${answer.answer}\n\nThe user answered the clarification. Continue the current task now without waiting for another user message.`,
+            }],
             details: { clarification: answer },
           };
         }
         return {
           content: [{
             type: "text",
-            text: answers.map((answer, index) =>
-              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n"),
+            text: `${answers.map((answer, index) =>
+              `${index + 1}. ${answer.question}\nAnswer: ${answer.answer}`).join("\n")}\n\nThe user answered the clarifications. Continue the current task now without waiting for another user message.`,
           }],
           details: { clarifications: answers },
         };

@@ -304,6 +304,33 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
   assert.equal(messages[3]?.text, "done");
 });
 
+test("new attachment projection exposes metadata while legacy entries remain count-only", () => {
+  const fileContent = "prefix\nhello\nsuffix";
+  const messages = projectMessages([
+    {
+      role: "user",
+      entryId: "user-entry",
+      content: [
+        { type: "text", text: "Review these" },
+        { type: "image", mimeType: "image/png", data: "eA==", pylonAttachmentVersion: 2 },
+      ],
+    },
+    {
+      role: "custom",
+      entryId: "file-entry",
+      customType: "pylon-prompt-files",
+      display: false,
+      content: fileContent,
+      details: { version: 2, files: [{ name: "notes.txt", size: 5, mimeType: "text/plain", contentStart: 7, contentEnd: 12 }] },
+    },
+  ]);
+  assert.deepEqual(messages[0]?.attachments, [
+    { sourceEntryId: "user-entry", index: 0, kind: "image", name: "Image 1", mimeType: "image/png", size: 1 },
+    { sourceEntryId: "file-entry", index: 0, kind: "file", name: "notes.txt", mimeType: "text/plain", size: 5 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(messages), /eA==|hello/);
+});
+
 test("Continuity compaction interruptions stay persisted but are omitted from Web history", () => {
   const interruption = {
     role: "assistant",
@@ -1001,6 +1028,7 @@ test("projection publishes live session names and agent timing metadata", () => 
     modelName: "GPT-5",
     thinkingLevel: "high",
     gitBranch: "main",
+    turnGitBranch: "feature/turn-branches",
     metrics: { userMessages: 1, cost: 0.25 },
     assistantMessage: { id: "history-2", entryId: "assistant-entry", role: "assistant", text: "Done", streaming: false },
   }));
@@ -1021,6 +1049,7 @@ test("projection publishes live session names and agent timing metadata", () => 
   assert.equal(snapshot.conversation.messages.at(-1)?.workDurationMs, 1_234);
   assert.equal(snapshot.conversation.messages.at(-1)?.modelName, "GPT-5");
   assert.equal(snapshot.conversation.messages.at(-1)?.thinkingLevel, "high");
+  assert.equal(snapshot.conversation.messages.at(-1)?.gitBranch, "feature/turn-branches");
   assert.deepEqual(snapshot.conversation.messages.at(-1)?.changedFiles, [
     { path: "src/app.ts", additions: 4, deletions: 2 },
   ]);
@@ -1029,6 +1058,7 @@ test("projection publishes live session names and agent timing metadata", () => 
   ]);
   assert.equal((published.find((event) => event.type === "agent.start")?.payload as { startedAt: string }).startedAt, startedAt);
   assert.equal((published.find((event) => event.type === "agent.end")?.payload as { durationMs: number }).durationMs, 1_234);
+  assert.equal((published.find((event) => event.type === "agent.end")?.payload as { turnGitBranch: string }).turnGitBranch, "feature/turn-branches");
   assert.ok(published.some((event) => event.type === "turn.changes"));
 });
 

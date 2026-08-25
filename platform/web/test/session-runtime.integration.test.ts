@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSessionContext, estimateTokens, SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { appendToolDuration, appendWorkDuration } from "pylon-core/src/work-duration.ts";
+import { appendToolDuration, appendTurnGitBranch, appendWorkDuration } from "pylon-core/src/work-duration.ts";
 import { correlatePendingUserMessageStart, deferUserMessageEndEntryId, deleteSessionFile, SessionRuntime, terminalAgentError } from "../src/server/pi/session-runtime.ts";
 import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
+import { PROMPT_IMAGE_ATTACHMENT_VERSION, promptFilesMessage } from "../src/server/pi/prompt-attachments.ts";
 import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
 import type { DialogMethod, StateQLCredentialHost, StateQLCredentialRequest, UiRequest } from "../src/server/pi/remote-ui-context.ts";
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
@@ -366,7 +367,7 @@ test("runtime publishes usage after a completed message is persisted", async () 
   }
 });
 
-test("completed work duration survives runtime restart", { timeout: 45_000 }, async () => {
+test("completed work metadata survives runtime restart", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-duration-"));
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
@@ -375,12 +376,14 @@ test("completed work duration survives runtime restart", { timeout: 45_000 }, as
   const session = SessionManager.create(cwd, sessionDir);
   const assistantEntryId = persistSession(session, "Timed response");
   appendWorkDuration(session, assistantEntryId, 12_345);
+  appendTurnGitBranch(session, assistantEntryId, "feature/persisted-turn");
   const driver = new SessionRuntime();
 
   try {
     await driver.start({ cwd, agentDir, repositoryRoot, sessionPath: session.getSessionFile()! });
     const message = (await driver.snapshot()).conversation.messages.find((item) => item.entryId === assistantEntryId);
     assert.equal(message?.workDurationMs, 12_345);
+    assert.equal(message?.gitBranch, "feature/persisted-turn");
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
@@ -1340,6 +1343,64 @@ test("existing long sessions keep the latest user turn and every tool result", {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("driver serves only versioned attachment content from the active branch", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-attachments-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const session = SessionManager.create(cwd);
+  const imageEntryId = session.appendMessage({
+    role: "user",
+    content: [
+      { type: "text", text: "Review these" },
+      { type: "image", mimeType: "image/png", data: "eA==", pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION } as any,
+    ],
+    timestamp: Date.now(),
+  });
+  const fileMessage = promptFilesMessage([{ name: "notes.txt", mimeType: "text/plain", text: "hello", size: 5 }]);
+  const fileEntryId = session.appendCustomMessageEntry(fileMessage.customType, fileMessage.content, fileMessage.display, fileMessage.details);
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Done" }],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+
+  const driver = new SessionRuntime();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
+    const snapshot = await driver.snapshot();
+    assert.deepEqual(snapshot.conversation.messages[0]?.attachments?.map(({ sourceEntryId, kind, name }) => ({ sourceEntryId, kind, name })), [
+      { sourceEntryId: imageEntryId, kind: "image", name: "Image 1" },
+      { sourceEntryId: fileEntryId, kind: "file", name: "notes.txt" },
+    ]);
+    assert.doesNotMatch(JSON.stringify(snapshot), /eA==|hello/);
+    assert.deepEqual(await driver.conversationAttachment({ sourceEntryId: imageEntryId, index: 0 }), {
+      protocolVersion: snapshot.protocolVersion,
+      sessionId: snapshot.sessionId,
+      sessionGeneration: snapshot.sessionGeneration,
+      kind: "image",
+      name: "Image 1",
+      mimeType: "image/png",
+      size: 1,
+      data: "eA==",
+    });
+    const fileAttachment = await driver.conversationAttachment({ sourceEntryId: fileEntryId, index: 0 });
+    assert.equal(fileAttachment.kind, "file");
+    assert.equal(fileAttachment.kind === "file" ? fileAttachment.text : undefined, "hello");
+    await assert.rejects(() => driver.conversationAttachment({ sourceEntryId: imageEntryId, index: 1 }), /unavailable/);
+  } finally {
+    await driver.dispose();
+    await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("driver pages the complete visible branch after compaction", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-history-"));

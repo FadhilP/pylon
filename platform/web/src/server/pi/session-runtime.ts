@@ -5,9 +5,11 @@ import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   appendToolDuration,
+  appendTurnGitBranch,
   appendWorkDuration,
   MAX_WORK_DURATION_MS,
   readPersistedToolDurations,
+  readPersistedTurnGitBranches,
   readPersistedWorkDurations,
 } from "pylon-core/src/work-duration.ts";
 import {
@@ -41,7 +43,7 @@ import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
 import type { ChangedFileReadModel, CompactionDisplayReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isPapercutListPage, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
@@ -95,7 +97,7 @@ import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-fa
 import { applyOperationalEvent, cloneOperational, initialOperational, withOperationalCapabilities } from "./operational-projections.ts";
 import { PackageCatalog, type PackageCatalogState } from "./package-catalog.ts";
 import { PiExtensionManager } from "./pi-extension-manager.ts";
-import { PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
+import { PROMPT_FILES_CUSTOM_TYPE, PROMPT_IMAGE_ATTACHMENT_VERSION, PromptAttachmentBridge, promptFilesMessage } from "./prompt-attachments.ts";
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
@@ -677,6 +679,8 @@ export class SessionRuntime implements PiDriver {
   private projectRegistry?: ProjectRegistry;
   private readonly workDurations = new Map<string, number>();
   private workDurationsLeafId: string | null | undefined;
+  private readonly turnGitBranches = new Map<string, string>();
+  private turnGitBranchesLeafId: string | null | undefined;
   private readonly toolDurations = new Map<string, number>();
   private toolDurationsLeafId: string | null | undefined;
   private readonly activeToolStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
@@ -800,6 +804,7 @@ export class SessionRuntime implements PiDriver {
     const cursor = decodeHistoryCursor(input.cursor);
     if (cursor === undefined) throw new Error("history cursor is invalid");
     this.hydrateToolDurations(runtime.session);
+    this.hydrateTurnGitBranches(runtime.session);
     const messages = this.transcriptMessages(runtime.session);
     const limit = Math.min(HISTORY_PAGE_SIZE, Math.max(1, input.limit ?? HISTORY_PAGE_SIZE));
     const direction = input.direction ?? "before";
@@ -816,7 +821,11 @@ export class SessionRuntime implements PiDriver {
       end = Math.min(cursor, messages.length);
       start = Math.max(0, end - limit);
     }
-    const projected = projectConversation(messages, { start, end, includeDelegated: false, toolDurations: this.toolDurations }).messages;
+    const projected = projectConversation(messages, { start, end, includeDelegated: false, toolDurations: this.toolDurations }).messages
+      .map((message) => {
+        const gitBranch = message.entryId ? this.turnGitBranches.get(message.entryId) : undefined;
+        return gitBranch === undefined ? message : { ...message, gitBranch };
+      });
     return {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: runtime.session.sessionId,
@@ -829,6 +838,54 @@ export class SessionRuntime implements PiDriver {
       atStart: start === 0,
       atEnd: end === messages.length,
     };
+  }
+
+  async conversationAttachment(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    const entry = runtime.session.sessionManager.getBranch().find((item) => item.id === input.sourceEntryId);
+    if (!entry) throw new Error("attachment is not on the active branch");
+    if (entry.type === "message" && entry.message.role === "user" && Array.isArray(entry.message.content)) {
+      const images = entry.message.content.filter((part) => part.type === "image");
+      const image = images[input.index] as unknown as Record<string, unknown> | undefined;
+      if (!image || image.pylonAttachmentVersion !== PROMPT_IMAGE_ATTACHMENT_VERSION
+        || typeof image.data !== "string" || !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(String(image.mimeType))) {
+        throw new Error("attachment is unavailable");
+      }
+      const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: runtime.session.sessionId,
+        sessionGeneration: this.gate.generation,
+        kind: "image",
+        name: `Image ${input.index + 1}`,
+        mimeType: image.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif",
+        size: image.data.length / 4 * 3 - padding,
+        data: image.data,
+      };
+    }
+    if (entry.type === "custom_message" && entry.customType === PROMPT_FILES_CUSTOM_TYPE
+      && typeof entry.content === "string" && entry.details && typeof entry.details === "object") {
+      const details = entry.details as { version?: unknown; files?: unknown };
+      const files = Array.isArray(details.files) ? details.files : [];
+      const file = files[input.index] as Record<string, unknown> | undefined;
+      if (details.version !== 2 || !file || typeof file.name !== "string" || !Number.isSafeInteger(file.size)
+        || !Number.isSafeInteger(file.contentStart) || !Number.isSafeInteger(file.contentEnd)
+        || Number(file.contentStart) < 0 || Number(file.contentEnd) < Number(file.contentStart) || Number(file.contentEnd) > entry.content.length) {
+        throw new Error("attachment is unavailable");
+      }
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: runtime.session.sessionId,
+        sessionGeneration: this.gate.generation,
+        kind: "file",
+        name: file.name.slice(0, 255),
+        mimeType: typeof file.mimeType === "string" && file.mimeType ? file.mimeType.slice(0, 120) : "text/plain",
+        size: Number(file.size),
+        text: entry.content.slice(Number(file.contentStart), Number(file.contentEnd)),
+      };
+    }
+    throw new Error("attachment is unavailable");
   }
 
   async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
@@ -1036,7 +1093,7 @@ export class SessionRuntime implements PiDriver {
       };
       void session.prompt(input.message, {
         source: "rpc",
-        images: input.images?.map((image) => ({ type: "image", ...image })),
+        images: input.images?.map((image) => ({ type: "image", ...image, pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION })),
         preflightResult: finish,
       }).then(() => {
         if (commandPending) complete(this.nextTurnId > turnAtStart);
@@ -1071,7 +1128,7 @@ export class SessionRuntime implements PiDriver {
     const session = this.sessionFor(input.expectedGeneration);
     this.pendingUserMessageIds.push(input.commandId);
     try {
-      await session.steer(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+      await session.steer(input.message, input.images?.map((image) => ({ type: "image", ...image, pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION })));
     } catch (error) {
       this.removePendingUserMessage(input.commandId);
       throw error;
@@ -1086,7 +1143,7 @@ export class SessionRuntime implements PiDriver {
     const session = this.sessionFor(input.expectedGeneration);
     this.pendingUserMessageIds.push(input.commandId);
     try {
-      await session.followUp(input.message, input.images?.map((image) => ({ type: "image", ...image })));
+      await session.followUp(input.message, input.images?.map((image) => ({ type: "image", ...image, pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION })));
     } catch (error) {
       this.removePendingUserMessage(input.commandId);
       throw error;
@@ -2350,6 +2407,8 @@ export class SessionRuntime implements PiDriver {
       this.workStartedAtMs = undefined;
       this.workDurations.clear();
       this.workDurationsLeafId = undefined;
+      this.turnGitBranches.clear();
+      this.turnGitBranchesLeafId = undefined;
       this.toolDurations.clear();
       this.toolDurationsLeafId = undefined;
       this.activeToolStarts.clear();
@@ -2574,16 +2633,26 @@ export class SessionRuntime implements PiDriver {
           ? latestAssistantEntryId
           : undefined;
         const messageId = assistantEntryId ? `history-${assistantIndex}` : undefined;
+        this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
+        const turnGitBranch = this.projectRegistry?.workspaceForSession(session.sessionId)?.mode === "local"
+          ? this.gitBranch
+          : undefined;
         if (assistantEntryId) {
           this.workDurations.set(assistantEntryId, duration);
+          if (turnGitBranch) this.turnGitBranches.set(assistantEntryId, turnGitBranch);
           try {
             if (!appendWorkDuration(session.sessionManager, assistantEntryId, duration)) {
               this.recordError(new Error("could not persist completed work duration"));
             }
+            if (turnGitBranch && !appendTurnGitBranch(session.sessionManager, assistantEntryId, turnGitBranch)) {
+              this.recordError(new Error("could not persist completed turn Git branch"));
+            }
           } catch (error) {
             this.recordError(error);
           }
-          this.workDurationsLeafId = session.sessionManager.getLeafId();
+          const leafId = session.sessionManager.getLeafId();
+          this.workDurationsLeafId = leafId;
+          this.turnGitBranchesLeafId = leafId;
         }
         if (messageId) {
           this.turnControls.set(messageId, {
@@ -2613,7 +2682,6 @@ export class SessionRuntime implements PiDriver {
         if (session.sessionFile)
           this.sessionIndex.invalidateSession(session.sessionId, session.sessionFile, session.sessionManager.getCwd());
         invalidateFileSuggestions(session.sessionManager.getCwd());
-        this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
         this.refreshSnapshot();
         const assistantMessage = messageId
           ? this.lastSnapshot?.conversation.messages.find((message) => message.id === messageId)
@@ -2625,6 +2693,7 @@ export class SessionRuntime implements PiDriver {
           modelName,
           thinkingLevel,
           gitBranch: this.gitBranch,
+          turnGitBranch,
           metrics: this.lastSnapshot?.metrics,
           stopped,
           userEntryId,
@@ -2875,6 +2944,7 @@ export class SessionRuntime implements PiDriver {
     }));
     const session = runtime.session;
     this.hydrateWorkDurations(session);
+    this.hydrateTurnGitBranches(session);
     this.hydrateToolDurations(session);
     this.hydrateTurnChanges(session);
     this.requestPackageStates(session.sessionId);
@@ -2896,13 +2966,15 @@ export class SessionRuntime implements PiDriver {
     const delegatedRuns = mergeDelegatedRuns(projectedConversation.delegatedRuns, [...this.liveDelegatedRuns.values()]);
     const projectedMessages = projectedConversation.messages.map((message) => {
       const workDurationMs = message.entryId ? this.workDurations.get(message.entryId) : undefined;
+      const gitBranch = message.entryId ? this.turnGitBranches.get(message.entryId) : undefined;
       const controls = this.turnControls.get(message.id);
       const changedFiles = message.entryId ? this.turnChanges.get(message.entryId) : undefined;
-      return workDurationMs === undefined && !controls && !changedFiles
+      return workDurationMs === undefined && gitBranch === undefined && !controls && !changedFiles
         ? message
         : {
             ...message,
             ...(workDurationMs === undefined ? {} : { workDurationMs }),
+            ...(gitBranch === undefined ? {} : { gitBranch }),
             ...controls,
             ...(changedFiles ? { changedFiles: changedFiles.map((file) => ({ ...file })) } : {}),
           };
@@ -3274,6 +3346,16 @@ export class SessionRuntime implements PiDriver {
       this.workDurations.set(entryId, durationMs);
     }
     this.workDurationsLeafId = leafId;
+  }
+
+  private hydrateTurnGitBranches(session: AgentSession): void {
+    const leafId = session.sessionManager.getLeafId();
+    if (this.turnGitBranchesLeafId === leafId) return;
+    this.turnGitBranches.clear();
+    for (const [entryId, gitBranch] of readPersistedTurnGitBranches(session.sessionManager)) {
+      this.turnGitBranches.set(entryId, gitBranch);
+    }
+    this.turnGitBranchesLeafId = leafId;
   }
 
   private hydrateToolDurations(session: AgentSession): void {

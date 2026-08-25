@@ -6,7 +6,7 @@ import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/pro
 import type { HeliosAndroidToolingInput, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
 import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, DelegatedAgentRunUpdateReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isExtensionListSnapshot, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
@@ -553,6 +553,16 @@ export class RuntimeEventStore {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({ type: "addProject", commandId: commandId(), expectedGeneration: runtime.sessionGeneration });
   }
+
+  async conversationAttachment(sourceEntryId: string, index: number, signal?: AbortSignal): Promise<ConversationAttachmentContent> {
+    const runtime = this.requireReadyRuntime();
+    const attachment = await this.api.conversationAttachment(sourceEntryId, index, runtime.sessionGeneration, signal);
+    if (attachment.sessionId !== runtime.sessionId || attachment.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Attachment response is stale");
+    }
+    return attachment;
+  }
+
 
   async loadEarlierMessages(all = false): Promise<void> {
     const runtime = this.requireReadyRuntime();
@@ -1401,22 +1411,24 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
       return { ...runtime, conversation: { ...conversation, streaming: true, messages: replaceConversationMessage(conversation.messages, item) } };
     }
     case "message.update": {
-      const update = payload as { id?: string; text?: string; fileAttachmentCount?: number };
+      const update = payload as { id?: string; text?: string; fileAttachmentCount?: number; attachments?: MessageReadModel["attachments"] };
       if (!update.id) return runtime;
       const messages = conversation.messages.map((message) => message.id === update.id ? {
         ...message,
         text: typeof update.text === "string" ? update.text : message.text,
         ...(update.fileAttachmentCount === undefined ? {} : { fileAttachmentCount: update.fileAttachmentCount }),
+        ...(update.attachments === undefined ? {} : { attachments: update.attachments }),
         streaming: true,
       } : message);
       return { ...runtime, conversation: { ...conversation, streaming: true, messages } };
     }
     case "message.end": {
-      const update = payload as { id?: string; text?: string; entryId?: string };
+      const update = payload as { id?: string; text?: string; entryId?: string; attachments?: MessageReadModel["attachments"] };
       const messages = conversation.messages.map((message) => message.id === update.id ? {
         ...message,
         text: typeof update.text === "string" ? update.text : message.text,
         ...(typeof update.entryId === "string" ? { entryId: update.entryId } : {}),
+        ...(update.attachments === undefined ? {} : { attachments: update.attachments }),
         streaming: false,
       } : message);
       return { ...runtime, conversation: { ...conversation, streaming: false, messages } };
@@ -1585,6 +1597,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
       const willRetry = info.willRetry === true && info.stopped !== true;
       const durationMs = Number.isSafeInteger(info.durationMs) ? info.durationMs as number : undefined;
       const messageId = typeof info.messageId === "string" ? info.messageId : undefined;
+      const turnGitBranch = typeof info.turnGitBranch === "string" ? info.turnGitBranch.slice(0, 200) || undefined : undefined;
       const assistant = willRetry ? undefined : finalAssistant(info.assistantMessage);
       const settledMessages = reconcileFinalAssistant(conversation.messages, assistant);
       const messages = willRetry || durationMs === undefined || !messageId
@@ -1592,6 +1605,7 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         : settledMessages.map((message) => message.id === messageId || Boolean(assistant?.entryId && message.entryId === assistant.entryId) ? {
             ...message,
             workDurationMs: durationMs,
+            gitBranch: turnGitBranch,
             modelName: typeof info.modelName === "string" ? info.modelName : undefined,
             thinkingLevel: typeof info.thinkingLevel === "string" ? info.thinkingLevel as MessageReadModel["thinkingLevel"] : undefined,
           } : message);

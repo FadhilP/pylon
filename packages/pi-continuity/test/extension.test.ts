@@ -1347,7 +1347,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     const answered = await tool.execute("answer", {
       ...params, question: "Pick scope?",
     }, undefined, undefined, ctx);
-    assert.equal(answered.content[0].text, "Small");
+    assert.match(answered.content[0].text, /^Small\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/);
     assert.deepEqual(answered.details.clarification, {
       question: "Pick scope?", answer: "Small",
     });
@@ -1355,7 +1355,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     const secondAnswer = await tool.execute("second-answer", {
       ...params, question: "Pick deployment scope?",
     }, undefined, undefined, ctx);
-    assert.equal(secondAnswer.content[0].text, "Full — Broader change");
+    assert.match(secondAnswer.content[0].text, /^Full — Broader change\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/);
     assert.deepEqual(secondAnswer.details.clarification, {
       question: "Pick deployment scope?", answer: "Full — Broader change",
     });
@@ -1365,7 +1365,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     const custom = await tool.execute("custom-answer", {
       ...params, question: "Any constraints?",
     }, undefined, undefined, ctx);
-    assert.equal(custom.content[0].text, "Only API changes");
+    assert.match(custom.content[0].text, /^Only API changes\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/);
     assert.deepEqual(custom.details.clarification, {
       question: "Any constraints?", answer: "Only API changes",
     });
@@ -1432,7 +1432,7 @@ test("standalone and bulk clarification use the effective timeout without creati
       question: "Scope?",
       options: [{ label: "Small" }, { label: "Large" }],
     }, undefined, undefined, ctx);
-    assert.equal(single.content[0].text, "Small");
+    assert.match(single.content[0].text, /^Small\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/);
     assert.deepEqual(selectionOptions, []);
 
     const bulk = await tool.execute("bulk", {
@@ -1443,6 +1443,7 @@ test("standalone and bulk clarification use the effective timeout without creati
       ],
     }, undefined, undefined, ctx);
     assert.match(bulk.content[0].text, /1\. Scope\?/);
+    assert.match(bulk.content[0].text, /The user answered the clarifications\. Continue the current task now without waiting for another user message\.$/);
     assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }, { timeout: 120_000 }]);
     assert.equal(app.appended.some((entry) => entry.customType.includes("run")), false);
   } finally {

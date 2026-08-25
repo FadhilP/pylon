@@ -1,3 +1,4 @@
+import type { FileDiffContentsLoader } from "@pierre/diffs";
 import {
   IconAlertTriangle,
   IconArrowBackUp,
@@ -15,11 +16,12 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
+import { createPierreLoadedDiffFiles } from "../shared/pierre-code-viewer-model";
 import type {
   WorkspaceFileContent,
   WorkspaceFileDiff,
@@ -31,6 +33,7 @@ import { copyText } from "./clipboard";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 type FileView = "current" | "base" | "diff";
+const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
 export function FilesPanel({ live, requestedPath, onClose, onError }: {
   live: RuntimeStoreSnapshot;
@@ -269,7 +272,7 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
               <button className="icon-button" onClick={() => { setSelectedPath(undefined); setSelectedLine(undefined); }} aria-label="Close file"><IconX size={14} /></button>
             </span>
           </div>
-          <FileContent value={viewerLoading ? undefined : content} view={view} targetLine={selectedLine} />
+          <FileContent value={viewerLoading ? undefined : content} view={view} targetLine={selectedLine} onError={onError} />
         </>
       </div>}
     </div>
@@ -447,31 +450,70 @@ function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
   </button>;
 }
 
-function FileContent({ value, view, targetLine }: { value?: WorkspaceFileContent | WorkspaceFileDiff; view: FileView; targetLine?: number }) {
-  const targetRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (!value || !targetLine) return;
-    const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
-    return () => cancelAnimationFrame(frame);
-  }, [targetLine, value]);
-  const rendered = useMemo(() => {
-    const text = value?.text ?? "";
-    return {
-      lines: text.split("\n"),
-      highlighted: value ? DOMPurify.sanitize(highlightSource(text, value.path, view === "diff")) : "",
+function FileContent({ value, view, targetLine, onError }: {
+  value?: WorkspaceFileContent | WorkspaceFileDiff;
+  view: FileView;
+  targetLine?: number;
+  onError: (error: unknown, fallback: string) => void;
+}) {
+  const loadDiffFiles = useMemo<FileDiffContentsLoader | undefined>(() => {
+    if (!value || view !== "diff") return undefined;
+    const { path, revision } = value;
+    return async () => {
+      try {
+        // Each read snapshots the workspace revision; keep them sequential so two
+        // read-only expansions never contend for Git's index lock.
+        const base = await runtimeStore.workspaceFile(path, "base");
+        const current = await runtimeStore.workspaceFile(path, "current");
+        return createPierreLoadedDiffFiles({ path, revision, base, current });
+      } catch (error) {
+        onError(error, "Unable to load full diff context");
+        throw error;
+      }
     };
-  }, [value?.text, value?.path, view]);
+  }, [onError, value?.path, value?.revision, view]);
   if (!value) return <div className="files-empty large">Loading…</div>;
   if (value.state !== "available" && !value.text) {
     return <div className="files-empty large">{value.state === "deleted" ? "File deleted" : value.state === "binary" ? "Binary file" : "File is too large to display"}</div>;
   }
-  const { lines, highlighted } = rendered;
-  return <pre className={`file-code${view === "diff" ? " is-diff" : ""}`}>
-    <span className="file-line-numbers" aria-hidden="true">{lines.map((_, index) => {
+  const text = value.text ?? "";
+  if (view === "diff" && !text) return <div className="files-empty large">No changes</div>;
+  if (value.truncated) return <RawFileContent text={text} path={value.path} diff={view === "diff"} targetLine={targetLine} truncated />;
+  return <Suspense fallback={<div className="files-empty large">Rendering…</div>}>
+    <PierreCodeViewer
+      mode={view === "diff" ? "diff" : "file"}
+      path={value.path}
+      text={text}
+      revision={value.revision}
+      targetLine={targetLine}
+      loadDiffFiles={loadDiffFiles}
+    />
+  </Suspense>;
+}
+
+function RawFileContent({ text, path, diff, targetLine, truncated = false }: {
+  text: string;
+  path: string;
+  diff: boolean;
+  targetLine?: number;
+  truncated?: boolean;
+}) {
+  const targetRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!targetLine) return;
+    const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [targetLine, text]);
+  const rendered = useMemo(() => ({
+    lines: text.split("\n"),
+    highlighted: DOMPurify.sanitize(highlightSource(text, path, diff)),
+  }), [diff, path, text]);
+  return <pre className={`file-code${diff ? " is-diff" : ""}`}>
+    <span className="file-line-numbers" aria-hidden="true">{rendered.lines.map((_, index) => {
       const line = index + 1;
       return <i key={line} ref={line === targetLine ? targetRef : undefined} className={line === targetLine ? "is-target" : undefined}>{line}</i>;
     })}</span>
-    <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-    {value.truncated && <small>Output truncated</small>}
+    <code dangerouslySetInnerHTML={{ __html: rendered.highlighted }} />
+    {truncated && <small>Output truncated</small>}
   </pre>;
 }

@@ -290,6 +290,34 @@ export interface BootstrapSnapshot {
   pendingUi?: UiRequestReadModel;
 }
 
+export interface ConversationAttachmentQuery {
+  sourceEntryId: string;
+  index: number;
+}
+
+export type ConversationAttachmentContent =
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      sessionId: string;
+      sessionGeneration: number;
+      kind: "image";
+      name: string;
+      mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+      size: number;
+      data: string;
+    }
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      sessionId: string;
+      sessionGeneration: number;
+      kind: "file";
+      name: string;
+      mimeType: string;
+      size: number;
+      text: string;
+    };
+
+
 export interface ConversationHistoryQuery {
   cursor: string;
   direction?: "before" | "after" | "around";

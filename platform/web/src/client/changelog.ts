@@ -8,6 +8,23 @@ type Release = {
 
 export const RELEASES: Release[] = [
   {
+    version: "1.12.0",
+    date: "Aug 25, 2026",
+    title: "Attachment previews and richer code review",
+    summary: "Pylon makes conversation attachments directly inspectable, upgrades file and diff review, and preserves the Git branch associated with each completed turn.",
+    notes: [
+      "Made conversation image and text-file attachments inspectable from their original messages with lazy image thumbnails, metadata, full previews, retry handling, and downloads, while loading content only from the active session branch.",
+      "Upgraded workspace files and Timeline checkpoint diffs with theme-aware code rendering, unified diffs, expandable context, line selection, and line-centered navigation, while retaining safe fallbacks for truncated or unsupported content.",
+      "Prevented read-only workspace file and diff loading from contending with Git index locks, improving reliability while other Git operations are active.",
+      "Recorded the Git branch for each completed local turn, persisted it across runtime restarts and branch navigation, and displayed it beside the turn duration in the conversation.",
+      "Taught Continuity clarification results to explicitly resume the current task after the user answers instead of waiting for another message.",
+      "Updated the bundled Pi runtime compatibility to 0.84.3.",
+    ],
+  },
+
+
+
+  {
     version: "1.11.0",
     date: "Aug 19, 2026",
     title: "Live agents, durable drafts, and active policy controls",

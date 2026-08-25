@@ -7,7 +7,7 @@ import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protoco
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import type { HeliosAndroidToolingCommand } from "../src/shared/protocol/helios-android-tooling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { ArchiveListSnapshot, ConversationHistoryPage, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PapercutMutationResult, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
+import type { ArchiveListSnapshot, ConversationAttachmentContent, ConversationHistoryPage, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PapercutMutationResult, RuntimeSnapshot, SessionListSnapshot, StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type { DriverEvent, DriverEventListener, EditPromptInput, ForkInput, PapercutMutationInput, PiDriver, PromptInput, QueueMutationInput, ReplacementResult, RewindPromptInput, RuntimeHandle, RuntimeTarget, SetSessionControlsInput, UpdateHookSettingsInput } from "../src/server/pi/pi-driver.ts";
@@ -95,6 +95,18 @@ class FakeDriver implements PiDriver {
       sessionGeneration: this.current.sessionGeneration,
       messages: [{ id: "history-0", role: "user", text: "Earlier message", streaming: false }],
       remaining: 0,
+    });
+  }
+  conversationAttachment(): Promise<ConversationAttachmentContent> {
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.current.sessionId,
+      sessionGeneration: this.current.sessionGeneration,
+      kind: "image",
+      name: "Image 1",
+      mimeType: "image/png",
+      size: 1,
+      data: "eA==",
     });
   }
   fileSuggestions(): Promise<FileSuggestionList> {
@@ -689,6 +701,12 @@ test("transport enforces origin, CSRF, size, generation, readiness, idempotency,
     assert.equal(staleHistory.status, 409);
     const invalidHistory = await fetch(`${origin}/api/v1/conversation-history?cursor=not-valid&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(invalidHistory.status, 400);
+    const attachment = await fetch(`${origin}/api/v1/conversation-attachment?entry=user-entry&index=0&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(attachment.status, 200);
+    assert.deepEqual(await body(attachment), { protocolVersion: PROTOCOL_VERSION, sessionId: "session-1", sessionGeneration: 1, kind: "image", name: "Image 1", mimeType: "image/png", size: 1, data: "eA==" });
+    assert.equal((await fetch(`${origin}/api/v1/conversation-attachment?entry=user-entry&index=0&generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/conversation-attachment?entry=user-entry&index=-1&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } })).status, 400);
+    assert.equal((await fetch(`${origin}/api/v1/conversation-attachment?entry=user-entry&index=0&generation=1`, { headers: { cookie, "x-pylon-tab-id": "unknown-tab" } })).status, 403);
     const files = await fetch(`${origin}/api/v1/file-suggestions?q=src&generation=1`, { headers: { cookie, "x-pylon-tab-id": tab } });
     assert.equal(files.status, 200);
     assert.deepEqual((await body(files)).paths, ["src/index.ts"]);

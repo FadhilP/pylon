@@ -20,6 +20,7 @@ export { default as IconClock } from "@tabler/icons-react/dist/esm/icons/IconClo
 export { default as IconCopy } from "@tabler/icons-react/dist/esm/icons/IconCopy.mjs";
 export { default as IconDatabase } from "@tabler/icons-react/dist/esm/icons/IconDatabase.mjs";
 export { default as IconDots } from "@tabler/icons-react/dist/esm/icons/IconDots.mjs";
+export { default as IconDownload } from "@tabler/icons-react/dist/esm/icons/IconDownload.mjs";
 export { default as IconExternalLink } from "@tabler/icons-react/dist/esm/icons/IconExternalLink.mjs";
 export { default as IconFile } from "@tabler/icons-react/dist/esm/icons/IconFile.mjs";
 export { default as IconFiles } from "@tabler/icons-react/dist/esm/icons/IconFiles.mjs";

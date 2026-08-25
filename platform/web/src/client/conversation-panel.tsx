@@ -1,4 +1,4 @@
-import { IconArrowBackUp, IconArrowUp, IconBulb, IconCheck, IconChevronDown, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconBotId, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBotId, IconBulb, IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { aggregateToolTiming, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, reconcileToolActivity, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
@@ -7,7 +7,7 @@ import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
-import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
+import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageAttachmentReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -81,6 +81,7 @@ export function ConversationPanel({
   agentColors,
   onOpenLogin,
   onOpenCompaction,
+  onOpenAttachment,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
@@ -94,6 +95,7 @@ export function ConversationPanel({
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
   onOpenCompaction: (message: MessageReadModel) => void;
+  onOpenAttachment: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -720,8 +722,7 @@ export function ConversationPanel({
                 ? <PromptEditor edit={edit} disabled={submitting} onChange={setEdit} onCancel={() => setEdit(undefined)} onSubmit={() => void submitEdit()} />
                 : <>
                   {block.text && <MarkdownContent text={block.text} />}
-                  {Boolean(block.attachmentCount) && <span className="message-attachments"><IconPhoto size={14} />{block.attachmentCount} {block.attachmentCount === 1 ? "image" : "images"}</span>}
-                  {Boolean(block.fileAttachmentCount) && <span className="message-attachments"><IconFileText size={14} />{block.fileAttachmentCount} {block.fileAttachmentCount === 1 ? "file" : "files"}</span>}
+                  <MessageAttachments message={block} onOpen={onOpenAttachment} />
                 </>}
             </article>
             {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
@@ -1698,7 +1699,7 @@ function MessageFooter({
   return <footer className="message-footer">
     {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
     {canCopy && <CopyMessageButton text={message.text} label={`Copy ${message.role === "user" ? "prompt" : "response"}`} />}
-    {message.role === "assistant" && message.workDurationMs !== undefined && <WorkTimer durationMs={message.workDurationMs} modelName={message.modelName} thinkingLevel={message.thinkingLevel} />}
+    {message.role === "assistant" && message.workDurationMs !== undefined && <WorkTimer durationMs={message.workDurationMs} modelName={message.modelName} thinkingLevel={message.thinkingLevel} gitBranch={message.gitBranch} />}
     {onEdit && <button type="button" disabled={disabled} onClick={onEdit} aria-label="Edit prompt" title="Edit prompt"><IconPencil size={14} /></button>}
     {onUndo && <button
       type="button"
@@ -1762,7 +1763,7 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
   </section>;
 }
 
-export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; stopped?: boolean }) {
+export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, gitBranch, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; gitBranch?: string; stopped?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!startedAt) return;
@@ -1776,6 +1777,7 @@ export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, sto
     {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
     {modelName && <> · {modelName}</>}
     {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+    {gitBranch && <> · {gitBranch}</>}
   </span>;
 }
 
@@ -1847,6 +1849,71 @@ function ToolTurnGroup({ tools, running, now, onExpand }: { tools: MessageReadMo
     </div>
   </AnimatedDetails>;
 }
+
+function MessageAttachments({ message, onOpen }: {
+  message: MessageReadModel;
+  onOpen: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
+}) {
+  const attachments = message.attachments ?? [];
+  const imageDescriptors = attachments.filter((attachment) => attachment.kind === "image").length;
+  const fileDescriptors = attachments.filter((attachment) => attachment.kind === "file").length;
+  const legacyImages = Math.max(0, (message.attachmentCount ?? 0) - imageDescriptors);
+  const legacyFiles = Math.max(0, (message.fileAttachmentCount ?? 0) - fileDescriptors);
+  return <>
+    {attachments.length > 0 && <div className="message-attachment-list" aria-label={`${attachments.length} viewable attachments`}>
+      {attachments.map((attachment) => <button
+        className="message-attachment-row"
+        type="button"
+        key={`${attachment.sourceEntryId}:${attachment.index}`}
+        onClick={(event) => onOpen(attachment, event.currentTarget)}
+        aria-label={`Open ${attachment.name}`}
+      >
+        <AttachmentThumbnail attachment={attachment} />
+        <span className="message-attachment-copy"><strong title={attachment.name}>{attachment.name}</strong><small>{attachment.mimeType} · {formatBytes(attachment.size)}</small></span>
+        <IconChevronRight className="message-attachment-chevron" size={15} aria-hidden="true" />
+      </button>)}
+    </div>}
+    {Boolean(legacyImages) && <span className="message-attachments"><IconPhoto size={14} />{legacyImages} historical {legacyImages === 1 ? "image" : "images"}</span>}
+    {Boolean(legacyFiles) && <span className="message-attachments"><IconFileText size={14} />{legacyFiles} historical {legacyFiles === 1 ? "file" : "files"}</span>}
+  </>;
+}
+
+function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentReadModel }) {
+  const elementRef = useRef<HTMLSpanElement>(null);
+  const [source, setSource] = useState("");
+
+  useEffect(() => {
+    if (attachment.kind !== "image") return;
+    const controller = new AbortController();
+    const load = () => {
+      void runtimeStore.conversationAttachment(attachment.sourceEntryId, attachment.index, controller.signal)
+        .then((content) => {
+          if (content.kind === "image") setSource(`data:${content.mimeType};base64,${content.data}`);
+        })
+        .catch(() => undefined);
+    };
+    const element = elementRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      load();
+      return () => controller.abort();
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      load();
+    }, { rootMargin: "120px" });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      controller.abort();
+    };
+  }, [attachment.kind, attachment.sourceEntryId, attachment.index]);
+
+  return <span ref={elementRef} className={`message-attachment-kind${source ? " has-preview" : ""}`}>
+    {source ? <img src={source} alt="" /> : attachment.kind === "image" ? <IconPhoto size={15} /> : <IconFileText size={15} />}
+  </span>;
+}
+
 
 function TranscriptActivity({
   kind,

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import { copyFile, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { activeAssistantEntryIds } from "./work-duration.ts";
@@ -87,6 +87,20 @@ async function temporaryIndex<T>(run: (env: Record<string, string>) => Promise<T
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function currentIndexTree(root: string): Promise<string> {
+  const source = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+  return temporaryIndex(async (env) => {
+    const target = env.GIT_INDEX_FILE!;
+    try {
+      await copyFile(source, target);
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      await git(root, ["read-tree", "--empty"], env);
+    }
+    return git(root, ["write-tree"], env);
+  });
 }
 
 async function currentTree(root: string, head?: string, changedPaths?: string[]): Promise<string> {
@@ -468,7 +482,9 @@ export async function captureCheckoutState(cwd: string, validateForMutation = fa
   const workspace = await inspectGitWorkspace(cwd);
   if (!workspace) throw Error("Workspace is not a Git checkout.");
   if (validateForMutation) await assertSafeCheckout(workspace);
-  const indexTree = await git(workspace.root, ["write-tree"]);
+  const indexTree = validateForMutation
+    ? await git(workspace.root, ["write-tree"])
+    : await currentIndexTree(workspace.root);
   const worktreeTree = await currentTree(workspace.root, workspace.head);
   return { ...workspace, indexTree, worktreeTree };
 }

@@ -80,6 +80,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-attachment") return await this.conversationAttachment(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-turns") return await this.conversationTurnIndex(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions") return await this.fileSuggestions(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/files") return await this.workspaceFiles(request, response, url);
@@ -391,6 +392,25 @@ export class ServerTransport {
     const result = await this.driver.conversationHistory({ cursor, limit, direction: direction as "before" | "after" | "around" });
     if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading history");
     this.send(response, 200, result);
+  }
+
+  private async conversationAttachment(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const sourceEntryId = url.searchParams.get("entry") ?? "";
+    const index = Number(url.searchParams.get("index"));
+    const generation = Number(url.searchParams.get("generation"));
+    if (!sourceEntryId || sourceEntryId.length > 128) throw httpError(400, "invalid attachment entry");
+    if (!Number.isSafeInteger(index) || index < 0 || index >= 100) throw httpError(400, "invalid attachment index");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.driver.conversationAttachment) throw httpError(404, "conversation attachments are unavailable");
+    try {
+      const result = await this.driver.conversationAttachment({ sourceEntryId, index });
+      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading attachment");
+      this.send(response, 200, result);
+    } catch (error) {
+      if (error instanceof Error && /attachment is|attachments are/i.test(error.message)) throw httpError(404, error.message);
+      throw error;
+    }
   }
 
   private async conversationTurnIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {

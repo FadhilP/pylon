@@ -228,6 +228,29 @@ test("local workspace files report all uncommitted changes against HEAD", async 
   }
 });
 
+test("read-only workspace files do not contend for the checkout index lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-locked-index-files-"));
+  try {
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    await writeFile(join(root, "tracked.txt"), "current\n");
+    await writeFile(join(root, ".git", "index.lock"), "");
+
+    const [base, current] = await Promise.all([
+      readWorkspaceFile({ cwd: root, path: "tracked.txt", view: "base" }),
+      readWorkspaceFile({ cwd: root, path: "tracked.txt", view: "current" }),
+    ]);
+    assert.equal(base.text, "base");
+    assert.equal(current.text, "current\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("local workspace files use the empty tree before the first commit", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-unborn-files-"));
   try {

@@ -1,7 +1,7 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationAttachmentContent, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -80,6 +80,15 @@ export class ApiClient {
     return json<ConversationHistoryPage>(await fetch(`/api/v1/conversation-history?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId },
       credentials: "same-origin",
+    }));
+  }
+
+  async conversationAttachment(sourceEntryId: string, index: number, generation: number, signal?: AbortSignal): Promise<ConversationAttachmentContent> {
+    const query = new URLSearchParams({ entry: sourceEntryId, index: String(index), generation: String(generation) });
+    return json<ConversationAttachmentContent>(await fetch(`/api/v1/conversation-attachment?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+      signal,
     }));
   }
 

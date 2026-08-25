@@ -23,7 +23,7 @@ import {
   IconThinkingMedium
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS, mergeGuardRules, resolveGuardRule, type GuardAction, type GuardRuleOverrides } from "../shared/guard-policy";
 import { highlightSource } from "../shared/markdown";
@@ -39,6 +39,7 @@ import { buildStateQLActivity, filterStateQLActivity, stateqlActivityStatus, typ
 export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
 type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
+const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
 const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
   { id: "overview", label: "Overview", icon: IconLayoutDashboard },
@@ -1117,8 +1118,13 @@ function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
   if (!value) return <div className="timeline-diff-empty">Loading diff…</div>;
   if (value.state !== "text" || !value.text)
     return <div className="timeline-diff-empty">{value.state === "binary" ? "Binary file" : value.state === "oversized" ? "Diff is too large to display" : "Diff unavailable"}</div>;
-  const highlighted = DOMPurify.sanitize(highlightSource(value.text, value.path, true));
-  return <pre className="file-code timeline-diff"><code dangerouslySetInnerHTML={{ __html: highlighted }} />{value.truncated && <small>Output truncated</small>}</pre>;
+  if (value.truncated) {
+    const highlighted = DOMPurify.sanitize(highlightSource(value.text, value.path, true));
+    return <pre className="file-code timeline-diff"><code dangerouslySetInnerHTML={{ __html: highlighted }} /><small>Output truncated</small></pre>;
+  }
+  return <Suspense fallback={<div className="timeline-diff-empty">Rendering diff…</div>}>
+    <PierreCodeViewer mode="diff" path={value.path} text={value.text} revision={value.checkpointId} />
+  </Suspense>;
 }
 
 function oneLine(value: string, max = 120): string {

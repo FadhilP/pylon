@@ -30,7 +30,7 @@ import {
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import { listSessionInventory } from "pylon-core/session-inventory";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -300,6 +300,15 @@ export class RuntimeCoordinator implements PiDriver {
     const page = await slot.driver.conversationHistory(input);
     this.assertSelected(slot, generation, "loading history");
     return { ...page, sessionGeneration: generation };
+  }
+
+  async conversationAttachment(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.conversationAttachment) throw new Error("conversation attachments are unavailable");
+    const attachment = await slot.driver.conversationAttachment(input);
+    this.assertSelected(slot, generation, "loading attachment");
+    return { ...attachment, sessionGeneration: generation };
   }
 
   async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {

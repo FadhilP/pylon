@@ -52,6 +52,18 @@ function validOptionalToolTiming(value: Record<string, unknown>): boolean {
       && (value.durationMs as number) >= 0 && (value.durationMs as number) <= 7 * 24 * 60 * 60 * 1_000);
 }
 
+function validMessageAttachments(value: unknown): boolean {
+  return value === undefined || Array.isArray(value) && value.length <= MAX_IMAGES + MAX_TEXT_FILES
+    && value.every((attachment) => record(attachment)
+      && identifier(attachment.sourceEntryId)
+      && Number.isSafeInteger(attachment.index) && (attachment.index as number) >= 0 && (attachment.index as number) < MAX_TEXT_FILES
+      && (attachment.kind === "image" || attachment.kind === "file")
+      && typeof attachment.name === "string" && attachment.name.length > 0 && attachment.name.length <= 255
+      && typeof attachment.mimeType === "string" && attachment.mimeType.length > 0 && attachment.mimeType.length <= 120
+      && Number.isSafeInteger(attachment.size) && (attachment.size as number) > 0
+      && (attachment.size as number) <= MAX_IMAGE_TOTAL_BYTES);
+}
+
 function validImages(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES) return false;
@@ -721,6 +733,7 @@ function validHistoryMessage(message: unknown): boolean {
       && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
     && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount)
       && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
+    && validMessageAttachments(message.attachments)
     && (message.systemSource === undefined || typeof message.systemSource === "string" && message.systemSource.length <= 200)
     && (message.compaction === undefined || validCompactionMessage(message.compaction))
     && (message.tool === undefined || record(message.tool)
@@ -909,8 +922,10 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
     && (message.canForkWithTimeline === undefined || typeof message.canForkWithTimeline === "boolean")
     && (message.attachmentCount === undefined || Number.isSafeInteger(message.attachmentCount) && (message.attachmentCount as number) >= 0 && (message.attachmentCount as number) <= MAX_IMAGES)
     && (message.fileAttachmentCount === undefined || Number.isSafeInteger(message.fileAttachmentCount) && (message.fileAttachmentCount as number) >= 0 && (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)
+    && validMessageAttachments(message.attachments)
     && (message.workDurationMs === undefined || Number.isSafeInteger(message.workDurationMs)
       && (message.workDurationMs as number) >= 0 && (message.workDurationMs as number) <= 7 * 24 * 60 * 60 * 1_000)
+    && (message.gitBranch === undefined || typeof message.gitBranch === "string" && message.gitBranch.length > 0 && message.gitBranch.length <= 200)
     && (message.modelName === undefined || typeof message.modelName === "string" && message.modelName.length <= 200)
     && (message.thinkingLevel === undefined || thinkingLevels.has(String(message.thinkingLevel)))
     && (message.changedFiles === undefined || Array.isArray(message.changedFiles) && message.changedFiles.length <= 100

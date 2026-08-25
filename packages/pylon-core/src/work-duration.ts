@@ -67,6 +67,58 @@ export function readPersistedWorkDurations(
   return durations;
 }
 
+export const TURN_GIT_BRANCH_ENTRY_TYPE = "pylon-turn-git-branch";
+
+export interface PersistedTurnGitBranch {
+  version: 1;
+  assistantEntryId: string;
+  gitBranch: string;
+}
+
+export function parseTurnGitBranch(value: unknown): PersistedTurnGitBranch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  try {
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES) return undefined;
+  } catch {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1
+    || typeof raw.assistantEntryId !== "string"
+    || !/^[A-Za-z0-9._:-]{1,128}$/.test(raw.assistantEntryId)
+    || typeof raw.gitBranch !== "string"
+    || raw.gitBranch.length < 1
+    || raw.gitBranch.length > 200
+    || /[\u0000-\u001f\u007f]/.test(raw.gitBranch)) return undefined;
+  return { version: 1, assistantEntryId: raw.assistantEntryId, gitBranch: raw.gitBranch };
+}
+
+export function appendTurnGitBranch(
+  session: { appendCustomEntry(customType: string, data?: unknown): string },
+  assistantEntryId: string,
+  gitBranch: string,
+): boolean {
+  const branch = parseTurnGitBranch({ version: 1, assistantEntryId, gitBranch });
+  if (!branch) return false;
+  session.appendCustomEntry(TURN_GIT_BRANCH_ENTRY_TYPE, branch);
+  return true;
+}
+
+export function readPersistedTurnGitBranches(
+  session: { getBranch(): unknown[]; getEntries(): unknown[] },
+): Map<string, string> {
+  const activeAssistants = activeAssistantEntryIds(session.getBranch());
+  const branches = new Map<string, string>();
+  for (const value of session.getEntries()) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Record<string, unknown>;
+    if (entry.type !== "custom" || entry.customType !== TURN_GIT_BRANCH_ENTRY_TYPE) continue;
+    const branch = parseTurnGitBranch(entry.data);
+    if (!branch || !activeAssistants.has(branch.assistantEntryId)) continue;
+    branches.set(branch.assistantEntryId, branch.gitBranch);
+  }
+  return branches;
+}
 export const TOOL_DURATION_ENTRY_TYPE = "pylon-tool-duration";
 
 export interface PersistedToolDuration {

@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   appendToolDuration,
+  appendTurnGitBranch,
   appendWorkDuration,
   MAX_WORK_DURATION_MS,
   parseToolDuration,
+  parseTurnGitBranch,
   parseWorkDuration,
   readPersistedToolDurations,
+  readPersistedTurnGitBranches,
   readPersistedWorkDurations,
 } from "../src/work-duration.ts";
 
@@ -42,6 +45,15 @@ test("work durations are validated", () => {
   assert.equal(parseWorkDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }), undefined);
   assert.equal(parseWorkDuration({ ...valid, durationMs: 1.5 }), undefined);
   assert.equal(parseWorkDuration({ ...valid, padding: "x".repeat(1_024) }), undefined);
+});
+
+test("turn Git branches are validated", () => {
+  const valid = { version: 1, assistantEntryId: "assistant-1", gitBranch: "feature/turn-branches" };
+  assert.deepEqual(parseTurnGitBranch(valid), valid);
+  assert.equal(parseTurnGitBranch({ ...valid, assistantEntryId: "../assistant" }), undefined);
+  assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "" }), undefined);
+  assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "x".repeat(201) }), undefined);
+  assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "feature\nunsafe" }), undefined);
 });
 
 test("tool durations accept provider IDs and reject unsafe bounds", () => {
@@ -84,6 +96,36 @@ test("work durations survive reload and follow the active branch", async () => {
   }
 });
 
+test("turn Git branches survive reload and follow the active branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-branch-"));
+  const cwd = join(root, "workspace");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(sessionDir)]);
+  try {
+    const session = SessionManager.create(cwd, sessionDir);
+    const userEntryId = session.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Do work" }],
+      timestamp: Date.now(),
+    });
+    const assistantEntryId = session.appendMessage(assistant("Done"));
+    assert.equal(appendTurnGitBranch(session, assistantEntryId, "feature/one"), true);
+    assert.equal(appendTurnGitBranch(session, assistantEntryId, "feature/two"), true);
+    assert.equal(appendTurnGitBranch(session, "../assistant", "feature/unsafe"), false);
+
+    const resumed = SessionManager.open(session.getSessionFile()!);
+    assert.equal(readPersistedTurnGitBranches(resumed).get(assistantEntryId), "feature/two");
+
+    resumed.branch(userEntryId);
+    const otherAssistantEntryId = resumed.appendMessage(assistant("Different branch"));
+    assert.equal(appendTurnGitBranch(resumed, otherAssistantEntryId, "feature/other"), true);
+    const branches = readPersistedTurnGitBranches(resumed);
+    assert.equal(branches.has(assistantEntryId), false);
+    assert.equal(branches.get(otherAssistantEntryId), "feature/other");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("tool durations survive reload and follow the active branch", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-tool-duration-"));

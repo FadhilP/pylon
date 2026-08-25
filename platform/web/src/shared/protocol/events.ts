@@ -35,6 +35,16 @@ export interface CompactionMessageReadModel {
   display?: CompactionDisplayReadModel;
 }
 
+export interface MessageAttachmentReadModel {
+  sourceEntryId: string;
+  index: number;
+  kind: "image" | "file";
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+
 export interface MessageReadModel {
   id: string;
   entryId?: string;
@@ -46,7 +56,9 @@ export interface MessageReadModel {
   canForkWithTimeline?: boolean;
   attachmentCount?: number;
   fileAttachmentCount?: number;
+  attachments?: MessageAttachmentReadModel[];
   workDurationMs?: number;
+  gitBranch?: string;
   modelName?: string;
   thinkingLevel?: ThinkingLevelReadModel;
   changedFiles?: ChangedFileReadModel[];

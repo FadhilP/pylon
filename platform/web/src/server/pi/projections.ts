@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
-import type { CompactionDisplayReadModel, ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
+import type { CompactionDisplayReadModel, ConversationReadModel, DelegatedAgentActivityReadModel, DelegatedAgentKind, DelegatedAgentRunReadModel, DelegatedAgentUsageReadModel, MessageAttachmentReadModel, MessageReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel, UiStatusReadModel, UiWidgetReadModel } from "../../shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.ts";
 import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
-import { PROMPT_FILES_CUSTOM_TYPE } from "./prompt-attachments.ts";
+import { PROMPT_FILES_CUSTOM_TYPE, PROMPT_IMAGE_ATTACHMENT_VERSION } from "./prompt-attachments.ts";
 import { settleRunningActivities, terminalActivityStatus } from "../../shared/transcript.ts";
 import { MAX_UNSEEN_COMPLETIONS, validCompletionSessionId } from "../../shared/session-completions.ts";
 
@@ -87,6 +87,50 @@ function promptFileCount(value: unknown): number | undefined {
   if (raw.customType !== PROMPT_FILES_CUSTOM_TYPE) return undefined;
   const files = object(raw.details).files;
   return Array.isArray(files) && files.length > 0 ? Math.min(100, files.length) : undefined;
+}
+function imageBytes(data: string): number {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.max(0, data.length / 4 * 3 - padding);
+}
+function imageAttachments(value: unknown, sourceEntryId?: unknown): MessageAttachmentReadModel[] | undefined {
+  if (typeof sourceEntryId !== "string" || !sourceEntryId) return undefined;
+  const content = object(value).content;
+  if (!Array.isArray(content)) return undefined;
+  const attachments = content.flatMap((part, index) => {
+    const image = object(part);
+    if (image.type !== "image" || image.pylonAttachmentVersion !== PROMPT_IMAGE_ATTACHMENT_VERSION
+      || typeof image.data !== "string" || typeof image.mimeType !== "string") return [];
+    const imageIndex = content.slice(0, index).filter((item) => object(item).type === "image").length;
+    return [{
+      sourceEntryId: id(sourceEntryId, ""),
+      index: imageIndex,
+      kind: "image" as const,
+      name: `Image ${imageIndex + 1}`,
+      mimeType: text(image.mimeType, 120),
+      size: imageBytes(image.data),
+    }];
+  });
+  return attachments.length ? attachments : undefined;
+}
+function promptFileAttachments(value: unknown, sourceEntryId?: unknown): MessageAttachmentReadModel[] | undefined {
+  const raw = object(value);
+  const details = object(raw.details);
+  if (raw.customType !== PROMPT_FILES_CUSTOM_TYPE || details.version !== 2
+    || typeof sourceEntryId !== "string" || !sourceEntryId || !Array.isArray(details.files)) return undefined;
+  const attachments = details.files.flatMap((value, index) => {
+    const file = object(value);
+    if (typeof file.name !== "string" || !file.name || !Number.isSafeInteger(file.size) || Number(file.size) <= 0
+      || !Number.isSafeInteger(file.contentStart) || !Number.isSafeInteger(file.contentEnd)) return [];
+    return [{
+      sourceEntryId: id(sourceEntryId, ""),
+      index,
+      kind: "file" as const,
+      name: text(file.name, 255),
+      mimeType: text(file.mimeType, 120) || "text/plain",
+      size: Number(file.size),
+    }];
+  });
+  return attachments.length ? attachments : undefined;
 }
 function compactionDisplay(value: unknown): CompactionDisplayReadModel | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -498,7 +542,11 @@ export function projectConversation(
     if (messageRole === "user") userTurn++;
     const fileCount = promptFileCount(raw);
     if (fileCount) {
-      if (latestProjectedUser) latestProjectedUser.fileAttachmentCount = fileCount;
+      if (latestProjectedUser) {
+        latestProjectedUser.fileAttachmentCount = fileCount;
+        const attachments = promptFileAttachments(raw, raw.entryId);
+        if (attachments) latestProjectedUser.attachments = [...(latestProjectedUser.attachments ?? []), ...attachments];
+      }
       continue;
     }
     const unmatchedCalls: MessageReadModel[] = [];
@@ -576,6 +624,7 @@ export function projectConversation(
     }
     if (index < start && index !== pinnedUserIndex) continue;
     const images = attachmentCount(raw);
+    const attachments = imageAttachments(raw, raw.entryId);
     const compaction = compactionMessage(raw.compaction);
     const result: MessageReadModel = {
       id: `history-${index}`,
@@ -586,6 +635,7 @@ export function projectConversation(
       ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
       ...(messageRole === "user" && raw.canUndo === true ? { canUndo: true } : {}),
       ...(images ? { attachmentCount: images } : {}),
+      ...(attachments ? { attachments } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string" ? { systemSource: text(raw.customType, 200) } : {}),
       ...(compaction ? { compaction } : {}),
     };
@@ -941,10 +991,13 @@ export class RuntimeProjection {
         this.turnMessages.set(turnId, assistant.id);
         trimMap(this.turnMessages, 20);
       }
-      if (!willRetry && assistant && durationMs !== undefined) {
-        assistant.workDurationMs = durationMs;
-        assistant.modelName = text(raw.modelName, 200) || undefined;
-        assistant.thinkingLevel = thinkingLevel(raw.thinkingLevel);
+      if (!willRetry && assistant) {
+        if (durationMs !== undefined) {
+          assistant.workDurationMs = durationMs;
+          assistant.modelName = text(raw.modelName, 200) || undefined;
+          assistant.thinkingLevel = thinkingLevel(raw.thinkingLevel);
+        }
+        assistant.gitBranch = text(raw.turnGitBranch, 200) || undefined;
         this.messages.set(assistant.id, assistant);
       }
       if (!willRetry) {
@@ -981,6 +1034,7 @@ export class RuntimeProjection {
         modelName: assistant?.modelName,
         thinkingLevel: assistant?.thinkingLevel,
         gitBranch: this.runtime.gitBranch,
+        turnGitBranch: assistant?.gitBranch,
         stopped,
         userEntryId: this.runtime.conversation.stoppedRun?.userEntryId,
       });
@@ -1037,8 +1091,10 @@ export class RuntimeProjection {
       const user = [...this.messages.values()].reverse().find((item) => item.role === "user");
       if (user) {
         user.fileAttachmentCount = fileCount;
+        const attachments = promptFileAttachments(message, raw.entryId ?? message.entryId);
+        if (attachments) user.attachments = [...(user.attachments ?? []), ...attachments];
         this.messages.set(user.id, user);
-        this.publish("message.update", { id: user.id, text: user.text, fileAttachmentCount: fileCount });
+        this.publish("message.update", { id: user.id, text: user.text, fileAttachmentCount: fileCount, ...(attachments ? { attachments: user.attachments } : {}) });
       }
       return;
     }
@@ -1057,6 +1113,7 @@ export class RuntimeProjection {
       streaming: true,
       createdAt: createdAt(message.timestamp ?? raw.timestamp) ?? new Date().toISOString(),
       ...(attachmentCount(message) ? { attachmentCount: attachmentCount(message) } : {}),
+      ...(imageAttachments(message, raw.entryId ?? message.entryId) ? { attachments: imageAttachments(message, raw.entryId ?? message.entryId) } : {}),
       ...(typeof message.customType === "string" ? { systemSource: text(message.customType, 200) } : {}),
     };
     if (item.role === "tool") {
@@ -1101,12 +1158,14 @@ export class RuntimeProjection {
       if (finalText) current.text = finalText;
       const entryId = raw.entryId ?? object(raw.message).entryId;
       if (typeof entryId === "string") current.entryId = id(entryId, current.id);
+      const attachments = imageAttachments(raw.message, entryId);
+      if (attachments) current.attachments = attachments;
       current.streaming = false;
       this.messages.set(messageId, current);
     }
     this.activeMessageId = undefined;
     this.runtime.conversation.streaming = false;
-    this.publish("message.end", { id: messageId, text: current?.text ?? "", entryId: current?.entryId });
+    this.publish("message.end", { id: messageId, text: current?.text ?? "", entryId: current?.entryId, ...(current?.attachments ? { attachments: current.attachments } : {}) });
   }
   private removeActiveMessage(raw: Record<string, unknown>): void {
     this.flush();

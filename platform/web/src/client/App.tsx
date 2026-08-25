@@ -15,13 +15,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import type { FileReference } from "../shared/file-reference";
 import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
 import { GENERAL_PROJECT_ID } from "../shared/general-session";
-import type { MessageReadModel } from "../shared/protocol/events";
+import type { MessageAttachmentReadModel, MessageReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { ExtensionListSnapshot, HookSettingsReadModel, NativeExtensionReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { latestProjectDraft, readComposerDrafts, writeComposerDrafts, type ComposerDraft } from "../shared/composer-drafts";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
+import { AttachmentPanel } from "./attachment-panel";
 import { useAgentColors } from "./agent-color";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
@@ -38,10 +39,11 @@ import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | null;
+type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | "attachment" | null;
 type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
 type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
+type SelectedAttachment = { sessionId: string; attachment: MessageAttachmentReadModel; trigger: HTMLButtonElement };
 type PendingSession = {
   requestId: number;
   project: SessionProject;
@@ -151,6 +153,7 @@ export function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
+  const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -341,7 +344,8 @@ export function App() {
   useEffect(() => {
     setSelectedAgentId(undefined);
     setSelectedCompaction(undefined);
-    setRightPanel((current) => current === "compaction" ? null : current);
+    setSelectedAttachment(undefined);
+    setRightPanel((current) => current === "compaction" || current === "attachment" ? null : current);
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
   useEffect(() => {
@@ -405,6 +409,11 @@ export function App() {
 
   useEffect(() => {
     if (!previousRightPanel.current || rightPanel) {
+      previousRightPanel.current = rightPanel;
+      return;
+    }
+    if (previousRightPanel.current === "attachment") {
+      selectedAttachment?.trigger.focus();
       previousRightPanel.current = rightPanel;
       return;
     }
@@ -1305,6 +1314,12 @@ export function App() {
               setSelectedCompaction({ sessionId, message });
               setRightPanel("compaction");
             }}
+            onOpenAttachment={(attachment, trigger) => {
+              const sessionId = live.runtime?.sessionId;
+              if (!sessionId) return;
+              setSelectedAttachment({ sessionId, attachment, trigger });
+              setRightPanel("attachment");
+            }}
             agentColors={agentColors}
             onOpenLogin={(provider) => {
               setSettingsTab("providers");
@@ -1369,6 +1384,11 @@ export function App() {
           {rightPanel === "compaction" && selectedCompaction && selectedCompaction.sessionId === live.runtime?.sessionId && <CompactionPanel
             key={`compaction:${selectedCompaction.message.id}`}
             message={selectedCompaction.message}
+            onClose={() => setRightPanel(null)}
+          />}
+          {rightPanel === "attachment" && selectedAttachment && selectedAttachment.sessionId === live.runtime?.sessionId && <AttachmentPanel
+            key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`}
+            attachment={selectedAttachment.attachment}
             onClose={() => setRightPanel(null)}
           />}
           {rightPanel === "files" && <FilesPanel
