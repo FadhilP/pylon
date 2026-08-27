@@ -1,5 +1,13 @@
 import type { WorkspaceFilePage, WorkspaceFileReadModel } from "./protocol/snapshots.ts";
 
+export function workspaceInventoryCacheIsFresh(
+  cachedRevision: string | undefined,
+  expiresAt: number,
+  workspaceRevision: string | undefined,
+  now = Date.now(),
+): boolean {
+  return expiresAt > now && cachedRevision === workspaceRevision;
+}
 export async function drainWorkspaceFiles(
   fetchPage: (cursor?: string) => Promise<WorkspaceFilePage>,
   signal: AbortSignal,

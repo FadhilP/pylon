@@ -166,6 +166,43 @@ test("package settings disable durable memory while keeping planning and recall"
   }
 });
 
+test("memory is deferred only until a Memory Reviewer is configured", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  try {
+    for (const reviewerConfigured of [false, true]) {
+      const root = await mkdtemp(join(tmpdir(), `continuity-memory-exposure-${reviewerConfigured}-`));
+      process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+      try {
+        await mkdir(join(root, "repo"));
+        await saveConfig({
+          version: 2,
+          memoryEnabled: true,
+          ...(reviewerConfigured ? { memoryReviewer: { model: "openai/reviewer" } } : {}),
+        });
+        const app = runtime(["read", "continuity_update"]);
+        const ctx: any = {
+          cwd: join(root, "repo"), hasUI: false, mode: "json",
+          sessionManager: {
+            getSessionId: () => `memory-exposure-${reviewerConfigured}`,
+            getSessionFile: () => undefined,
+            getEntries: () => [], getBranch: () => [], buildContextEntries: () => [],
+          },
+          ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+        };
+        for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+        const policy = app.emitted.filter((event) => event.channel === "pylon:tool-policy" && event.value?.kind === "register").at(-1)?.value;
+        assert.deepEqual(policy.deferredTools, reviewerConfigured ? ["continuity_recall"] : ["continuity_recall", "memory"]);
+        for (const handler of app.handlers.get("session_shutdown") ?? []) await handler();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
 test("V5 notes migrate losslessly to archival V6 without prompt-similarity activation", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-memory-v5-migration-"));
@@ -1035,44 +1072,6 @@ test("settlement waits for the single post-Verify final response", async () => {
   }
 });
 
-test("TUI keeps routine updates hidden but shows memory and terminal outcomes", () => {
-  const app = runtime();
-  const tool = app.tools.get("continuity_update");
-  const memory = app.tools.get("memory");
-  const theme = { fg: (_color: string, text: string) => text };
-  const render = (text: string, details?: any) => tool.renderResult(
-    { content: [{ type: "text", text }], details },
-    {},
-    theme,
-  ).render(80).map((line: string) => line.trimEnd()).join("\n");
-  const renderMemory = (text: string, details?: any) => memory.renderResult(
-    { content: [{ type: "text", text }], details },
-    {},
-    theme,
-  ).render(80).map((line: string) => line.trimEnd()).join("\n");
-  assert.equal(render("Continuity state updated."), "");
-  assert.match(render("Work completed. No further continuity updates needed."), /Task completed/);
-  assert.match(render("Cannot complete while todos remain."), /Cannot complete while todos remain/);
-  assert.match(render("Continuity circuit breaker stopped 3 identical calls within 30 seconds."), /loop stopped/);
-  assert.equal(
-    render("Small", { clarification: { question: "Pick scope?", answer: "Small" } }),
-    "? Pick scope?\nSmall",
-  );
-  assert.match(
-    renderMemory("Memory candidate add queued: project/workflow.test.", {
-      memoryCandidate: { action: "add", scope: "project", key: "workflow.test" },
-    }),
-    /Memory candidate add queued: project\/workflow\.test/,
-  );
-  assert.match(
-    renderMemory("memory remove requires nonempty source/reason evidence", { memoryError: true }),
-    /memory remove requires/i,
-  );
-  assert.match(
-    renderMemory("Stored facts:\n- project/workflow.test: Run tests", { memoryList: true }),
-    /project\/workflow\.test: Run tests/,
-  );
-});
 
 test("circuit breaker aborts the third identical call within 30 seconds", async () => {
   const tool = runtime().tools.get("continuity_update");

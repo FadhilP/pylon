@@ -29,6 +29,20 @@ export function createPierreCodeViewItem({
   }
 }
 
+/** Parses a raw unified diff that may contain any number of files into viewer items. */
+export function createPierreDiffItems({ id, text, revision }: {
+  id: string;
+  text: string;
+  revision: string;
+}): CodeViewItem[] {
+  try {
+    return parsePatchFiles(text, `${revision}:${id}`).flatMap((patch) => patch.files)
+      .map((fileDiff, index) => ({ id: `${id}:${index}`, type: "diff" as const, fileDiff }));
+  } catch {
+    return [];
+  }
+}
+
 export function createPierreLoadedDiffFiles({ path, revision, base, current }: {
   path: string;
   revision: string;

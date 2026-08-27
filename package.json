@@ -89,10 +89,12 @@
     "@playwright/cli": "0.1.18",
     "jiti": "^2.7.0",
     "node-pty": "^1.1.0",
+    "pi-sieve": "0.1.0",
     "pylon-core": "0.1.0",
     "ws": "^8.21.1"
   },
   "bundleDependencies": [
+    "pi-sieve",
     "pylon-core"
   ],
   "peerDependencies": {

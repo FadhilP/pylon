@@ -3,7 +3,7 @@ import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/proto
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { ProviderAuthReadModel, QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffQuery, TurnDiffResult, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -319,6 +319,7 @@ export interface PiDriver {
   terminalTarget?(): TerminalTarget;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   conversationAttachment?(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent>;
+  turnDiff?(input: TurnDiffQuery): Promise<TurnDiffResult>;
   conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;

@@ -100,7 +100,7 @@ The worker receives:
 - Optional redacted parent conversation context when `PI_GRUNT_PARENT_CONTEXT_CHARS` is greater than `0`. This uses at most the latest 10 user/assistant text or summary entries, caps each at 1,200 characters, removes tool payloads, applies pattern-based secret redaction, then enforces the configured total character limit.
 - Tool results generated after the worker chooses to inspect or execute something.
 
-The isolated repository snapshot is available on disk but is not inserted into the model prompt. Extensions, skills, prompt templates, context files, and persistent child sessions are disabled. Parent conversation context is disabled by default.
+The isolated repository snapshot is available on disk but is not inserted into the model prompt. Unrelated extensions, skills, prompt templates, context files, and persistent child sessions are disabled. Grunt explicitly loads its line-edit extension and Pi Sieve so bulky `bash`, `grep`, `find`, and `ls` results can be pruned from later worker turns and recovered with `sieve_recall`. Parent conversation context is disabled by default.
 
 The worker must stop when it encounters architectural ownership, public API decisions, security-sensitive behavior, destructive migrations, conflicting requirements, or material scope expansion. It must not commit, stash, reset, clean, install dependencies, publish, or use network commands.
 

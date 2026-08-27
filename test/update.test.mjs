@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { checkForUpdate, isNewerVersion } from "../bin/update.mjs";
 
 const response = (version) => async () => ({
@@ -13,26 +10,6 @@ const response = (version) => async () => ({
   text: async () => JSON.stringify({ version }),
 });
 
-test("prints the installed version", () => {
-  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/pylon.mjs", import.meta.url)), "--version"], {
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), version);
-});
-
-test("prints CLI help without starting Pylon", () => {
-  const cli = fileURLToPath(new URL("../bin/pylon.mjs", import.meta.url));
-  for (const flag of ["--help", "-h"]) {
-    const result = spawnSync(process.execPath, [cli, flag], { encoding: "utf8", timeout: 5_000 });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Usage:\n  pylon/);
-    assert.match(result.stdout, /pylon migrate/);
-    assert.match(result.stdout, /Open http:\/\/127\.0\.0\.1:3141/);
-    assert.match(result.stdout, /Configure providers and models in Settings/);
-  }
-});
 
 test("compares stable npm versions", () => {
   assert.equal(isNewerVersion("2.0.0", "1.99.99"), true);

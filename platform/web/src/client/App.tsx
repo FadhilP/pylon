@@ -1,35 +1,49 @@
 import {
+  IconArchive,
   IconBrandGit,
+  IconCopy,
   IconGitBranch,
   IconLayoutDashboard,
   IconDatabase,
+  IconDots,
+  IconPencil,
+  IconPin,
+  IconPlus,
+  IconPower,
   IconFiles,
   IconMenu2,
+  IconMessageCircle,
   IconMoon,
   IconSun,
   IconUsers,
   IconWorld,
   IconX,
+  IconTrash,
 } from "@tabler/icons-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReference } from "../shared/file-reference";
+import { formatSessionActivity } from "../shared/format";
 import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
 import { GENERAL_PROJECT_ID } from "../shared/general-session";
 import type { MessageAttachmentReadModel, MessageReadModel } from "../shared/protocol/events";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
 import type { ExtensionListSnapshot, HookSettingsReadModel, NativeExtensionReadModel, PackageSettingsReadModel, PackageSummary, SessionListSnapshot, SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { listSessionsPreservingPages, SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
+import { showSessionRuntimeState } from "../shared/session-completions";
 import { latestProjectDraft, readComposerDrafts, writeComposerDrafts, type ComposerDraft } from "../shared/composer-drafts";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { AttachmentPanel } from "./attachment-panel";
 import { useAgentColors } from "./agent-color";
+import { copyText } from "./clipboard";
 import { ArchiveDialog } from "./archive-dialog";
 import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
 import { CompactionPanel } from "./compaction-panel";
 import { BrowserPanel } from "./browser-panel";
 import { DatabasePanel } from "./database-panel";
-import { FilesPanel } from "./files-panel";
+import { FilesPanel, type FileView } from "./files-panel";
+import { FileWorkspace, type FileWorkspaceContentStore } from "./file-workspace";
+import type { FileWorkspaceState } from "../shared/file-workspace-state";
 import { Inspector, type ViewId } from "./inspector";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -39,8 +53,10 @@ import { TerminalPanel } from "./terminal-panel";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type Theme = "light" | "dark";
-type RightPanel = "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | "attachment" | null;
-type RequestedFile = FileReference & { requestId: number; view?: "current" | "diff" };
+type RightPanel = "chat" | "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | "attachment" | null;
+type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
+type WorkspaceMode = "chat" | "files";
+type FileNavigation = "explorer" | "sessions";
 type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
 type SelectedAttachment = { sessionId: string; attachment: MessageAttachmentReadModel; trigger: HTMLButtonElement };
@@ -152,6 +168,8 @@ export function App() {
   const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("chat");
+  const [fileNavigation, setFileNavigation] = useState<FileNavigation>("explorer");
   const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
   const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
@@ -190,6 +208,7 @@ export function App() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
+  const chatToggleRef = useRef<HTMLButtonElement>(null);
   const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const databaseToggleRef = useRef<HTMLButtonElement>(null);
   const agentsToggleRef = useRef<HTMLButtonElement>(null);
@@ -199,6 +218,7 @@ export function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
   const previousRightPanel = useRef(rightPanel);
+  const previousChatModePanel = useRef<RightPanel>(rightPanel);
   const browserToolSession = useRef<string | undefined>(undefined);
   const observedBrowserTools = useRef(new Set<string>());
   const sessionListRequest = useRef(0);
@@ -211,6 +231,8 @@ export function App() {
   const pendingSessionDraft = useRef("");
   const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
   const pendingSessionInFlight = useRef(false);
+  const fileWorkspaceStates = useRef(new Map<string, FileWorkspaceState>());
+  const fileWorkspaceContents = useRef<FileWorkspaceContentStore>(new Map());
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const persistComposerDrafts = () => {
@@ -417,15 +439,17 @@ export function App() {
       previousRightPanel.current = rightPanel;
       return;
     }
-    const trigger = previousRightPanel.current === "database"
-      ? databaseToggleRef.current
-      : previousRightPanel.current === "agents"
-        ? agentsToggleRef.current
-        : previousRightPanel.current === "files"
-          ? filesToggleRef.current
-          : previousRightPanel.current === "browser"
-            ? browserToggleRef.current
-            : inspectorToggleRef.current;
+    const trigger = previousRightPanel.current === "chat"
+      ? chatToggleRef.current
+      : previousRightPanel.current === "database"
+        ? databaseToggleRef.current
+        : previousRightPanel.current === "agents"
+          ? agentsToggleRef.current
+          : previousRightPanel.current === "files"
+            ? filesToggleRef.current
+            : previousRightPanel.current === "browser"
+              ? browserToggleRef.current
+              : inspectorToggleRef.current;
     trigger?.focus();
     previousRightPanel.current = rightPanel;
   }, [rightPanel]);
@@ -446,12 +470,12 @@ export function App() {
           ? detail as FileReference & { view?: "current" | "diff" }
           : undefined;
       if (!reference) return;
-      setRequestedFile({ ...reference, requestId: Date.now() });
-      setRightPanel("files");
+      setRequestedFile({ ...reference, sessionId: runtimeStore.getSnapshot().runtime?.sessionId, requestId: Date.now() });
+      if (workspaceMode !== "files") setRightPanel("files");
     };
     window.addEventListener("pylon:open-file", open);
     return () => window.removeEventListener("pylon:open-file", open);
-  }, []);
+  }, [workspaceMode]);
 
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
@@ -1074,14 +1098,296 @@ export function App() {
     }
   };
 
+  const currentProjectPage = sessionPages.find((page) => page.id === activeSession?.projectId);
+  const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : projects[0] ?? general;
+  const toggleTerminal = () => {
+    if (terminalOpen) setTerminalOpen(false);
+    else if (live.runtime?.ready) {
+      const terminal = {
+        sessionId: live.runtime.sessionId,
+        generation: live.runtime.sessionGeneration,
+        cwdLabel: live.runtime.cwdLabel,
+      };
+      setRetainedTerminals((current) => {
+        const existing = current.find((item) => item.sessionId === terminal.sessionId);
+        return [...current.filter((item) => item.sessionId !== terminal.sessionId), existing ?? terminal]
+          .slice(-MAX_RETAINED_TERMINALS);
+      });
+      setTerminalSessionId(terminal.sessionId);
+      setTerminalOpen(true);
+    }
+    if (mobile) setSidebarOpen(false);
+  };
+  const openSettings = () => {
+    setSettingsTab("packages");
+    setSettingsProviderQuery("");
+    setSettingsPackageQuery("");
+    setSettingsOpen(true);
+    if (mobile) setSidebarOpen(false);
+  };
+  const requestDeleteSession = (session: SessionSummary) => setSidebarAction({
+    key: `delete-session-${session.id}`,
+    title: `Delete “${sessionTitle(session)}”?`,
+    description: "This removes saved history. If system trash is unavailable, deletion is permanent.",
+    confirmLabel: "Delete session",
+    busyLabel: "Deleting…",
+    danger: true,
+    onConfirm: () => void deleteSession(session),
+  });
+  const requestRenameSession = (session: SessionSummary) => setSidebarAction({
+    key: `rename-session-${session.id}`,
+    title: "Rename session",
+    description: "Choose a name that makes this session easy to find.",
+    confirmLabel: "Save name",
+    busyLabel: "Saving…",
+    inputLabel: "Session name",
+    initialValue: sessionTitle(session),
+    onConfirm: (value: string) => void renameSession(session, value),
+  });
+  const changeWorkspaceMode = (mode: WorkspaceMode) => {
+    const changingMode = mode !== workspaceMode;
+    setWorkspaceMode(mode);
+    setSidebarOpen(false);
+    if (mode === "files") {
+      if (changingMode) {
+        previousChatModePanel.current = rightPanel;
+        setRightPanel("chat");
+      }
+    } else if (changingMode && rightPanel === "chat") {
+      setRightPanel(previousChatModePanel.current);
+    }
+  };
+  const topbar = <Topbar
+    live={live}
+    session={activeSession}
+    pendingSession={pendingSession}
+    theme={theme}
+    workspaceMode={workspaceMode}
+    onWorkspaceMode={changeWorkspaceMode}
+    onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+    menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
+    rightPanel={rightPanel}
+    menuButtonRef={navigationToggleRef}
+    chatButtonRef={chatToggleRef}
+    inspectorButtonRef={inspectorToggleRef}
+    databaseButtonRef={databaseToggleRef}
+    agentsButtonRef={agentsToggleRef}
+    filesButtonRef={filesToggleRef}
+    browserButtonRef={browserToggleRef}
+    browserAvailable={browserAvailable}
+    databaseAvailable={stateqlEnabled}
+    browserActive={browserActive}
+    onToggleMenu={toggleSidebar}
+    onToggleChat={() => toggleRightPanel("chat")}
+    onToggleInspector={() => toggleRightPanel("inspector")}
+    onToggleDatabase={() => toggleRightPanel("database")}
+    onToggleAgents={() => toggleRightPanel("agents")}
+    onToggleFiles={() => toggleRightPanel("files")}
+    onToggleBrowser={() => toggleRightPanel("browser")}
+  />;
+  const conversationPanel = <ConversationPanel
+    key={pendingSession
+      ? `conversation:pending:${pendingSession.requestId}`
+      : `conversation:${live.runtime?.sessionId ?? "loading"}:${workspaceMode}`}
+    live={live}
+    projectAvailable={live.runtime?.projectAvailable !== false}
+    pendingSession={pendingSession ? {
+      phase: pendingSession.phase,
+      projectLabel: pendingSession.project.label,
+      error: pendingSession.error,
+      onRetry: () => void newSession(pendingSession.project, true),
+    } : undefined}
+    initialDraft={pendingSession
+      ? pendingSessionDraft.current
+      : live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId)?.text : undefined}
+    restoreComposerFocus={composerFocusTarget === live.runtime?.sessionId}
+    restoreComposerSelection={composerFocusTarget === live.runtime?.sessionId ? pendingSessionSelection.current : undefined}
+    onComposerFocusRestored={() => {
+      pendingSessionSelection.current = undefined;
+      setComposerFocusTarget((current) => current === live.runtime?.sessionId ? undefined : current);
+    }}
+    onDraftChange={(draft) => {
+      if (pendingSession) {
+        pendingSessionDraft.current = draft;
+        if (pendingSession.recoveredDraftSessionId) updateComposerDraft(pendingSession.recoveredDraftSessionId, pendingSession.project.id, draft);
+        const runtime = live.runtime;
+        if (pendingSession.expectedGeneration !== undefined
+          && runtime?.ready === true
+          && runtime.sessionGeneration === pendingSession.expectedGeneration
+          && runtime.sessionId !== pendingSession.previousSessionId) updateComposerDraft(runtime.sessionId, pendingSession.project.id, draft);
+        return;
+      }
+      const sessionId = live.runtime?.sessionId;
+      if (sessionId) updateComposerDraft(sessionId, activeSession?.projectId, draft);
+    }}
+    onSelectAgent={(id) => {
+      setSelectedAgentId(id);
+      setRightPanel("agents");
+    }}
+    onOpenCompaction={(message) => {
+      const sessionId = live.runtime?.sessionId;
+      if (!sessionId) return;
+      setSelectedCompaction({ sessionId, message });
+      setRightPanel("compaction");
+    }}
+    onOpenAttachment={(attachment, trigger) => {
+      const sessionId = live.runtime?.sessionId;
+      if (!sessionId) return;
+      setSelectedAttachment({ sessionId, attachment, trigger });
+      setRightPanel("attachment");
+    }}
+    agentColors={agentColors}
+    onOpenLogin={(provider) => {
+      setSettingsTab("providers");
+      setSettingsProviderQuery(provider ?? "");
+      setSettingsPackageQuery("");
+      setSettingsOpen(true);
+    }}
+  />;
+
+
+  const sidePanel = <>
+    {rightPanel && inspectorOverlay && <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />}
+    {rightPanel && <PanelResizer
+      container={workspaceRef}
+      width={rightPanel === "database" ? databasePanelWidth : rightPanelWidth}
+      onCommit={(width) => {
+        const database = rightPanel === "database";
+        if (database) setDatabasePanelWidth(width);
+        else setRightPanelWidth(width);
+        try { localStorage.setItem(database ? DATABASE_PANEL_WIDTH_KEY : RIGHT_PANEL_WIDTH_KEY, String(width)); }
+        catch { /* Resizing still works for the current page. */ }
+      }}
+    />}
+    {rightPanel === "chat" && <aside id="chat-panel" className="inspector workspace-chat-panel is-open" aria-labelledby="chat-panel-title">
+      <header>
+        <div><IconMessageCircle size={18} /><strong id="chat-panel-title">Chat</strong></div>
+        <button className="icon-button" type="button" onClick={() => setRightPanel(null)} aria-label="Close chat"><IconX size={17} /></button>
+      </header>
+      <div className="workspace-chat-panel-body">{conversationPanel}</div>
+    </aside>}
+    {rightPanel === "inspector" && <Inspector
+      key={`inspector:${live.runtime?.sessionId ?? "loading"}`}
+      current={view}
+      live={live}
+      availableViews={availableViews}
+      timelineEnabled={timelineEnabled}
+      memoryReviewerConfigured={memoryReviewerConfigured}
+      memoryEnabled={memoryEnabled}
+      papercutEnabled={papercutEnabled}
+      overlay={inspectorOverlay}
+      onClose={() => setRightPanel(null)}
+      onNavigate={selectView}
+      onOpenGlobalPolicy={() => {
+        setRightPanel(null);
+        setSettingsTab("policy");
+        setSettingsProviderQuery("");
+        setSettingsPackageQuery("");
+        setSettingsOpen(true);
+      }}
+      onOpenMemoryReviewerSettings={() => {
+        setRightPanel(null);
+        setSettingsTab("packages");
+        setSettingsProviderQuery("");
+        setSettingsPackageQuery("continuity");
+        setSettingsOpen(true);
+      }}
+    />}
+    {rightPanel === "database" && <DatabasePanel key={`database:${live.runtime?.sessionId ?? "loading"}`} live={live} onClose={() => setRightPanel(null)} />}
+    {rightPanel === "agents" && <AgentPanel
+      key={`agents:${live.runtime?.sessionId ?? "loading"}`}
+      runs={live.runtime?.conversation.delegatedRuns ?? []}
+      models={live.runtime?.sessionControls.models ?? []}
+      colors={agentColors}
+      selectedId={selectedAgentId}
+      onSelect={setSelectedAgentId}
+      onClose={() => setRightPanel(null)}
+    />}
+    {rightPanel === "compaction" && selectedCompaction && selectedCompaction.sessionId === live.runtime?.sessionId && <CompactionPanel key={`compaction:${selectedCompaction.message.id}`} message={selectedCompaction.message} onClose={() => setRightPanel(null)} />}
+    {rightPanel === "attachment" && selectedAttachment && selectedAttachment.sessionId === live.runtime?.sessionId && <AttachmentPanel key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`} attachment={selectedAttachment.attachment} onClose={() => setRightPanel(null)} />}
+    {rightPanel === "files" && <FilesPanel
+      key={`files:${live.runtime?.sessionId ?? "loading"}`}
+      live={live}
+      requestedPath={requestedFile}
+      onClose={() => setRightPanel(null)}
+      onExpand={(path, fileView) => {
+        if (path) setRequestedFile({ path, view: fileView, sessionId: live.runtime?.sessionId, requestId: Date.now() });
+        setRightPanel(null);
+        changeWorkspaceMode("files");
+      }}
+      onError={reportError}
+    />}
+    {rightPanel === "browser" && <BrowserPanel
+      key={`browser:${live.runtime?.sessionId ?? "loading"}`}
+      connected={live.connection === "connected" && live.runtime?.ready === true}
+      generation={live.runtime?.sessionGeneration}
+      mirrorRequest={browserMirrorRequest}
+      onActiveChange={setBrowserActive}
+      onClose={() => setRightPanel(null)}
+      onError={reportError}
+    />}
+  </>;
+
+
+  const terminalChrome = <>
+    {terminalOpen && !mobile && <TerminalResizer
+      container={appShellRef}
+      height={terminalDrawerHeight}
+      onCommit={(height) => {
+        setTerminalDrawerHeight(height);
+        try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height)); }
+        catch { /* Resizing still works for the current page. */ }
+      }}
+    />}
+    {retainedTerminals.map((terminal) => <TerminalPanel
+      key={`terminal:${terminal.sessionId}`}
+      open={terminalOpen && terminalSessionId === terminal.sessionId}
+      generation={terminal.generation}
+      cwdLabel={terminal.cwdLabel}
+      onClose={() => setTerminalOpen(false)}
+      onShutdown={() => {
+        setRetainedTerminals((current) => current.filter((item) => item.sessionId !== terminal.sessionId));
+        setTerminalOpen(false);
+        setTerminalSessionId(undefined);
+      }}
+    />)}
+  </>;
+
+
   return (
     <div
       ref={appShellRef}
-      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app-shell has-session-strip ${sidebarCollapsed ? "sidebar-collapsed" : ""}${workspaceMode === "files" ? " is-files-mode" : ""}`}
       style={{ "--sidebar-width": `${leftPanelWidth}px`, "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px" } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <SessionSidebar
+      <ActiveSessionStrip
+        sessions={activeSessions}
+        unseenCompletions={live.unseenCompletions}
+        selectedId={pendingSession ? undefined : live.runtime?.sessionId}
+        pendingLabel={pendingSession?.project.label}
+        busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
+        busySessionId={sessionBusy}
+        deletingSessionId={sessionDeleting}
+        onSelect={(session) => void switchSession(session)}
+        onDelete={requestDeleteSession}
+        onRename={requestRenameSession}
+        onArchive={(session) => void archiveSession(session)}
+        onSetActive={(session, active) => void setSessionActive(session, active)}
+        onSetPinned={(session, pinned) => void setSessionPinned(session, pinned)}
+        onNew={() => {
+          if (!currentProject) return;
+          changeWorkspaceMode("chat");
+          void newSession(currentProject);
+        }}
+        onAllSessions={() => {
+          if (workspaceMode === "files") setFileNavigation("sessions");
+          else changeWorkspaceMode("chat");
+          setSidebarCollapsed(false);
+          if (mobile) setSidebarOpen(true);
+        }}
+      />
+      {(workspaceMode === "chat" || fileNavigation === "sessions") && <SessionSidebar
         activeSessions={activeSessions}
         unseenCompletions={live.unseenCompletions}
         projects={projects}
@@ -1096,7 +1402,12 @@ export function App() {
         projectBusy={projectBusy}
         isOpen={sidebarOpen}
         mobile={mobile}
+        contextual
         onClose={() => setSidebarOpen(false)}
+        onShowFiles={workspaceMode === "files" ? () => {
+          setFileNavigation("explorer");
+          if (mobile) setSidebarOpen(false);
+        } : undefined}
         onQuery={setQuery}
         onToggleProject={(projectId) => setExpandedProjects((current) => {
           const next = new Set(current);
@@ -1105,25 +1416,8 @@ export function App() {
           return next;
         })}
         onSelectSession={(session) => void switchSession(session)}
-        onDeleteSession={(session) => setSidebarAction({
-          key: `delete-session-${session.id}`,
-          title: `Delete “${sessionTitle(session)}”?`,
-          description: "This removes saved history. If system trash is unavailable, deletion is permanent.",
-          confirmLabel: "Delete session",
-          busyLabel: "Deleting…",
-          danger: true,
-          onConfirm: () => void deleteSession(session),
-        })}
-        onRenameSession={(session) => setSidebarAction({
-          key: `rename-session-${session.id}`,
-          title: "Rename session",
-          description: "Choose a name that makes this session easy to find.",
-          confirmLabel: "Save name",
-          busyLabel: "Saving…",
-          inputLabel: "Session name",
-          initialValue: sessionTitle(session),
-          onConfirm: (value) => void renameSession(session, value),
-        })}
+        onDeleteSession={requestDeleteSession}
+        onRenameSession={requestRenameSession}
         onSetSessionActive={(session, active) => void setSessionActive(session, active)}
         onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
         onLoadMore={(project) => void loadMoreSessions(project)}
@@ -1136,31 +1430,8 @@ export function App() {
         }}
         terminalOpen={terminalOpen}
         terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
-        onToggleTerminal={() => {
-          if (terminalOpen) setTerminalOpen(false);
-          else if (live.runtime?.ready) {
-            const terminal = {
-              sessionId: live.runtime.sessionId,
-              generation: live.runtime.sessionGeneration,
-              cwdLabel: live.runtime.cwdLabel,
-            };
-            setRetainedTerminals((current) => {
-              const existing = current.find((item) => item.sessionId === terminal.sessionId);
-              return [...current.filter((item) => item.sessionId !== terminal.sessionId), existing ?? terminal]
-                .slice(-MAX_RETAINED_TERMINALS);
-            });
-            setTerminalSessionId(terminal.sessionId);
-            setTerminalOpen(true);
-          }
-          if (mobile) setSidebarOpen(false);
-        }}
-        onOpenSettings={() => {
-          setSettingsTab("packages");
-          setSettingsProviderQuery("");
-          setSettingsPackageQuery("");
-          setSettingsOpen(true);
-          if (mobile) setSidebarOpen(false);
-        }}
+        onToggleTerminal={toggleTerminal}
+        onOpenSettings={openSettings}
         onArchiveProject={(project) => void archiveProject(project)}
         onRenameProject={(project) => setSidebarAction({
           key: `rename-project-${project.id}`,
@@ -1214,7 +1485,7 @@ export function App() {
             reportError(cause, "Unable to reorder active session");
             throw cause;
           })}
-      />
+      />}
       {!mobile && !sidebarCollapsed && <SidebarResizer
         container={appShellRef}
         width={leftPanelWidth}
@@ -1224,33 +1495,10 @@ export function App() {
           catch { /* Resizing still works for the current page. */ }
         }}
       />}
-      {mobile && sidebarOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
+      {mobile && sidebarOpen && (workspaceMode === "chat" || fileNavigation === "sessions") && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
 
-      <main className="content-card" id="main-content">
-        <Topbar
-          live={live}
-          session={activeSession}
-          pendingSession={pendingSession}
-          theme={theme}
-          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-          menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
-          rightPanel={rightPanel}
-          menuButtonRef={navigationToggleRef}
-          inspectorButtonRef={inspectorToggleRef}
-          databaseButtonRef={databaseToggleRef}
-          agentsButtonRef={agentsToggleRef}
-          filesButtonRef={filesToggleRef}
-          browserButtonRef={browserToggleRef}
-          browserAvailable={browserAvailable}
-          databaseAvailable={stateqlEnabled}
-          browserActive={browserActive}
-          onToggleMenu={toggleSidebar}
-          onToggleInspector={() => toggleRightPanel("inspector")}
-          onToggleDatabase={() => toggleRightPanel("database")}
-          onToggleAgents={() => toggleRightPanel("agents")}
-          onToggleFiles={() => toggleRightPanel("files")}
-          onToggleBrowser={() => toggleRightPanel("browser")}
-        />
+      {workspaceMode === "chat" ? <main className="content-card" id="main-content">
+        {topbar}
         {(toast || live.connection === "disconnected" || live.recovery) && <div className="app-toast-stack">
           {live.connection === "disconnected" && !live.recovery && <div className="app-connection-toast" role="status">Disconnected. Waiting to reconnect…</div>}
           {live.recovery && <RecoveryToast recovery={live.recovery} onAction={() => {
@@ -1264,173 +1512,36 @@ export function App() {
           className={`workspace-layout ${rightPanel ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
           style={{ "--inspector-width": `${rightPanel === "database" ? databasePanelWidth : rightPanelWidth}px` } as CSSProperties}
         >
-          <ConversationPanel
-            key={pendingSession
-              ? `conversation:pending:${pendingSession.requestId}`
-              : `conversation:${live.runtime?.sessionId ?? "loading"}`}
-            live={live}
-            projectAvailable={live.runtime?.projectAvailable !== false}
-            pendingSession={pendingSession ? {
-              phase: pendingSession.phase,
-              projectLabel: pendingSession.project.label,
-              error: pendingSession.error,
-              onRetry: () => void newSession(pendingSession.project, true),
-            } : undefined}
-            initialDraft={pendingSession
-              ? pendingSessionDraft.current
-              : live.runtime?.sessionId ? composerDrafts.current.get(live.runtime.sessionId)?.text : undefined}
-            restoreComposerFocus={composerFocusTarget === live.runtime?.sessionId}
-            restoreComposerSelection={composerFocusTarget === live.runtime?.sessionId ? pendingSessionSelection.current : undefined}
-            onComposerFocusRestored={() => {
-              pendingSessionSelection.current = undefined;
-              setComposerFocusTarget((current) => current === live.runtime?.sessionId ? undefined : current);
-            }}
-            onDraftChange={(draft) => {
-              if (pendingSession) {
-                pendingSessionDraft.current = draft;
-                if (pendingSession.recoveredDraftSessionId) {
-                  updateComposerDraft(pendingSession.recoveredDraftSessionId, pendingSession.project.id, draft);
-                }
-                const runtime = live.runtime;
-                if (pendingSession.expectedGeneration !== undefined
-                  && runtime?.ready === true
-                  && runtime.sessionGeneration === pendingSession.expectedGeneration
-                  && runtime.sessionId !== pendingSession.previousSessionId) {
-                  updateComposerDraft(runtime.sessionId, pendingSession.project.id, draft);
-                }
-                return;
-              }
-              const sessionId = live.runtime?.sessionId;
-              if (!sessionId) return;
-              updateComposerDraft(sessionId, activeSession?.projectId, draft);
-            }}
-            onSelectAgent={(id) => {
-              setSelectedAgentId(id);
-              setRightPanel("agents");
-            }}
-            onOpenCompaction={(message) => {
-              const sessionId = live.runtime?.sessionId;
-              if (!sessionId) return;
-              setSelectedCompaction({ sessionId, message });
-              setRightPanel("compaction");
-            }}
-            onOpenAttachment={(attachment, trigger) => {
-              const sessionId = live.runtime?.sessionId;
-              if (!sessionId) return;
-              setSelectedAttachment({ sessionId, attachment, trigger });
-              setRightPanel("attachment");
-            }}
-            agentColors={agentColors}
-            onOpenLogin={(provider) => {
-              setSettingsTab("providers");
-              setSettingsProviderQuery(provider ?? "");
-              setSettingsPackageQuery("");
-              setSettingsOpen(true);
-            }}
-          />
-          {rightPanel && inspectorOverlay && <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />}
-          {rightPanel && <PanelResizer
-            container={workspaceRef}
-            width={rightPanel === "database" ? databasePanelWidth : rightPanelWidth}
-            onCommit={(width) => {
-              const database = rightPanel === "database";
-              if (database) setDatabasePanelWidth(width);
-              else setRightPanelWidth(width);
-              try { localStorage.setItem(database ? DATABASE_PANEL_WIDTH_KEY : RIGHT_PANEL_WIDTH_KEY, String(width)); }
-              catch { /* Resizing still works for the current page. */ }
-            }}
-          />}
-          {rightPanel === "inspector" && <Inspector
-              key={`inspector:${live.runtime?.sessionId ?? "loading"}`}
-              current={view}
-              live={live}
-              availableViews={availableViews}
-              timelineEnabled={timelineEnabled}
-              memoryReviewerConfigured={memoryReviewerConfigured}
-              memoryEnabled={memoryEnabled}
-              papercutEnabled={papercutEnabled}
-              overlay={inspectorOverlay}
-              onClose={() => setRightPanel(null)}
-              onNavigate={selectView}
-              onOpenGlobalPolicy={() => {
-                setRightPanel(null);
-                setSettingsTab("policy");
-                setSettingsProviderQuery("");
-                setSettingsPackageQuery("");
-                setSettingsOpen(true);
-              }}
-              onOpenMemoryReviewerSettings={() => {
-                setRightPanel(null);
-                setSettingsTab("packages");
-                setSettingsProviderQuery("");
-                setSettingsPackageQuery("continuity");
-                setSettingsOpen(true);
-              }}
-            />}
-          {rightPanel === "database" && <DatabasePanel
-            key={`database:${live.runtime?.sessionId ?? "loading"}`}
-            live={live}
-            onClose={() => setRightPanel(null)}
-          />}
-          {rightPanel === "agents" && <AgentPanel
-            key={`agents:${live.runtime?.sessionId ?? "loading"}`}
-            runs={live.runtime?.conversation.delegatedRuns ?? []}
-            models={live.runtime?.sessionControls.models ?? []}
-            colors={agentColors}
-            selectedId={selectedAgentId}
-            onSelect={setSelectedAgentId}
-            onClose={() => setRightPanel(null)}
-          />}
-          {rightPanel === "compaction" && selectedCompaction && selectedCompaction.sessionId === live.runtime?.sessionId && <CompactionPanel
-            key={`compaction:${selectedCompaction.message.id}`}
-            message={selectedCompaction.message}
-            onClose={() => setRightPanel(null)}
-          />}
-          {rightPanel === "attachment" && selectedAttachment && selectedAttachment.sessionId === live.runtime?.sessionId && <AttachmentPanel
-            key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`}
-            attachment={selectedAttachment.attachment}
-            onClose={() => setRightPanel(null)}
-          />}
-          {rightPanel === "files" && <FilesPanel
-            key={`files:${live.runtime?.sessionId ?? "loading"}`}
-            live={live}
-            requestedPath={requestedFile}
-            onClose={() => setRightPanel(null)}
-            onError={reportError}
-          />}
-          {rightPanel === "browser" && <BrowserPanel
-            key={`browser:${live.runtime?.sessionId ?? "loading"}`}
-            connected={live.connection === "connected" && live.runtime?.ready === true}
-            generation={live.runtime?.sessionGeneration}
-            mirrorRequest={browserMirrorRequest}
-            onActiveChange={setBrowserActive}
-            onClose={() => setRightPanel(null)}
-            onError={reportError}
-          />}
+          {conversationPanel}
+          {sidePanel}
         </div>
-        {terminalOpen && !mobile && <TerminalResizer
-          container={appShellRef}
-          height={terminalDrawerHeight}
-          onCommit={(height) => {
-            setTerminalDrawerHeight(height);
-            try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height)); }
-            catch { /* Resizing still works for the current page. */ }
-          }}
-        />}
-        {retainedTerminals.map((terminal) => <TerminalPanel
-          key={`terminal:${terminal.sessionId}`}
-          open={terminalOpen && terminalSessionId === terminal.sessionId}
-          generation={terminal.generation}
-          cwdLabel={terminal.cwdLabel}
-          onClose={() => setTerminalOpen(false)}
-          onShutdown={() => {
-            setRetainedTerminals((current) => current.filter((item) => item.sessionId !== terminal.sessionId));
-            setTerminalOpen(false);
-            setTerminalSessionId(undefined);
-          }}
-        />)}
         {(sessionTransition || packageBusy) && <div className="session-transition" role="status"><span className="status-orb success" />{packageBusy ? "Reloading packages..." : "Changing session..."}</div>}
-      </main>
+      </main> : <FileWorkspace
+        live={live}
+        requestedPath={requestedFile}
+        stateStore={fileWorkspaceStates}
+        contentStore={fileWorkspaceContents}
+        header={topbar}
+        workspaceRef={workspaceRef}
+        sidePanel={sidePanel}
+        terminalOpen={terminalOpen}
+        terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
+        rightPanelOpen={Boolean(rightPanel)}
+        inspectorWidth={rightPanel === "database" ? databasePanelWidth : rightPanelWidth}
+        showExplorer={fileNavigation === "explorer" && (mobile || !sidebarCollapsed)}
+        navigationOpen={sidebarOpen}
+        mobile={mobile}
+        onCloseNavigation={() => setSidebarOpen(false)}
+        onToggleTerminal={toggleTerminal}
+        onOpenSettings={openSettings}
+        onSessions={() => {
+          setFileNavigation("sessions");
+          setSidebarCollapsed(false);
+          if (mobile) setSidebarOpen(true);
+        }}
+        onError={reportError}
+      />}
+      <div className="terminal-layer">{terminalChrome}</div>
 
       {sidebarAction && <ActionDialog
         key={sidebarAction.key}
@@ -1693,7 +1804,143 @@ function RecoveryToast({ recovery, onAction }: {
   </div>;
 }
 
-function Topbar({ live, session, pendingSession, theme, menuOpen, rightPanel, menuButtonRef, inspectorButtonRef, databaseButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, databaseAvailable, browserActive, onToggleTheme, onToggleMenu, onToggleInspector, onToggleDatabase, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; pendingSession?: PendingSession; theme: Theme; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; databaseButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; databaseAvailable: boolean; browserActive: boolean; onToggleTheme: () => void; onToggleMenu: () => void; onToggleInspector: () => void; onToggleDatabase: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
+function ActiveSessionStrip({ sessions, unseenCompletions, selectedId, pendingLabel, busy, busySessionId, deletingSessionId, onSelect, onDelete, onArchive, onRename, onSetActive, onSetPinned, onNew, onAllSessions }: {
+  sessions: SessionSummary[];
+  unseenCompletions?: Record<string, true>;
+  selectedId?: string;
+  pendingLabel?: string;
+  busy: boolean;
+  busySessionId: string;
+  deletingSessionId: string;
+  onSelect: (session: SessionSummary) => void;
+  onDelete: (session: SessionSummary) => void;
+  onArchive: (session: SessionSummary) => void;
+  onRename: (session: SessionSummary) => void;
+  onSetActive: (session: SessionSummary, active: boolean) => void;
+  onSetPinned: (session: SessionSummary, pinned: boolean) => void;
+  onNew: () => void;
+  onAllSessions: () => void;
+}) {
+  const stripRef = useRef<HTMLElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const menuTrigger = useRef<HTMLButtonElement | null>(null);
+  const [menu, setMenu] = useState<{ sessionId: string; left: number }>();
+  const [announcement, setAnnouncement] = useState("");
+  const menuSession = sessions.find((session) => session.id === menu?.sessionId);
+  useEffect(() => {
+    if (!selectedId) return;
+    listRef.current?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedId]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(undefined);
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest(".active-session-options, .active-session-menu-popover")) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      close();
+      menuTrigger.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", close);
+    listRef.current?.addEventListener("scroll", close);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", close);
+      listRef.current?.removeEventListener("scroll", close);
+    };
+  }, [menu]);
+  const working = sessions.some((session) => session.workStartedAt);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), working ? 1_000 : 60_000);
+    return () => window.clearInterval(interval);
+  }, [working]);
+  const toggleMenu = (session: SessionSummary, trigger: HTMLButtonElement) => {
+    menuTrigger.current = trigger;
+    if (menu?.sessionId === session.id) {
+      setMenu(undefined);
+      return;
+    }
+    const stripRect = stripRef.current?.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuWidth = 168;
+    const maxLeft = Math.max(8, (stripRect?.width ?? window.innerWidth) - menuWidth - 8);
+    setMenu({
+      sessionId: session.id,
+      left: Math.min(Math.max(triggerRect.right - (stripRect?.left ?? 0) - menuWidth, 8), maxLeft),
+    });
+  };
+  const closeAndRun = (action: (session: SessionSummary) => void) => {
+    if (!menuSession) return;
+    setMenu(undefined);
+    action(menuSession);
+  };
+  const copySessionId = () => {
+    if (!menuSession) return;
+    const id = menuSession.id;
+    setMenu(undefined);
+    setAnnouncement("");
+    void copyText(id).then((copied) => setAnnouncement(copied ? "Session ID copied" : "Copying session ID failed"));
+  };
+  const sleeping = menuSession?.runtimeState === "sleeping";
+  return <nav ref={stripRef} className="active-session-strip" aria-label="Active sessions">
+    <div className="active-session-brand"><span className="brand-mark" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></span><strong>Pylon</strong></div>
+    <div ref={listRef} className="active-session-tabs">
+      {sessions.map((session) => {
+        const completed = Boolean(unseenCompletions?.[session.id]);
+        const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
+        const preview = `${session.parentSession ? `Spawned from ${session.parentSession.title} · ` : ""}${session.cwdLabel} · ${activity}`;
+        const menuOpen = menu?.sessionId === session.id;
+        return <div key={session.id} data-session-id={session.id} className={`active-session-tab-shell${session.id === selectedId ? " is-active" : ""}`}>
+          <button
+            type="button"
+            className={`active-session-tab${session.id === selectedId ? " is-active" : ""}`}
+            disabled={busy}
+            onClick={() => { setMenu(undefined); onSelect(session); }}
+          >
+            <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
+            <span title={preview}>{preview}</span>
+            {(busySessionId === session.id || deletingSessionId === session.id)
+              ? <i className="active-session-state status-orb success" aria-label={deletingSessionId === session.id ? "Deleting" : "Updating"} />
+              : showSessionRuntimeState(session.runtimeState, completed) && <i
+                  className={`active-session-state session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
+                  aria-label={completed ? "New response" : session.runtimeState}
+                  title={completed ? "New response" : session.runtimeState}
+                />}
+          </button>
+          <button
+            className="active-session-options"
+            type="button"
+            aria-label={`More options for ${sessionTitle(session)}`}
+            aria-expanded={menuOpen}
+            aria-controls="active-session-options-menu"
+            title="More options"
+            onClick={(event) => toggleMenu(session, event.currentTarget)}
+          ><IconDots size={15} /></button>
+        </div>;
+      })}
+      {pendingLabel && <button type="button" className="active-session-tab is-active" disabled><strong>New session</strong><span>{pendingLabel}</span></button>}
+      <button className="active-session-new" type="button" disabled={busy} onClick={onNew} aria-label="New session" title="New session"><IconPlus size={17} /></button>
+    </div>
+    <button className="active-session-all" type="button" onClick={onAllSessions} aria-label="All sessions" title="All sessions"><IconDots size={18} /></button>
+    {menuSession && <div id="active-session-options-menu" className="session-menu-popover active-session-menu-popover" role="menu" style={{ left: menu?.left }}>
+      <button role="menuitem" type="button" disabled={busy} onClick={() => closeAndRun(onRename)}><IconPencil size={14} />Rename</button>
+      <button role="menuitem" type="button" onClick={copySessionId}><IconCopy size={14} />Copy session ID</button>
+      <button role="menuitem" type="button" disabled={busy} onClick={() => closeAndRun((session) => onSetPinned(session, !session.pinned))}><IconPin size={14} />{menuSession.pinned ? "Unpin" : "Pin"}</button>
+      <button role="menuitem" type="button" disabled={busy} onClick={() => closeAndRun(onArchive)}><IconArchive size={14} />Archive</button>
+      <button role="menuitem" type="button" disabled={busy || menuSession.active || menuSession.pinned} title={menuSession.active ? "The selected session must remain active" : menuSession.pinned ? "Unpin before deactivating" : undefined} onClick={() => closeAndRun((session) => onSetActive(session, sleeping))}><IconPower size={14} />{sleeping ? "Activate" : "Deactivate"}</button>
+      <button role="menuitem" className="is-danger" type="button" disabled={busy || menuSession.active} title={menuSession.active ? "Active session cannot be deleted" : undefined} onClick={() => closeAndRun(onDelete)}><IconTrash size={14} />Delete</button>
+    </div>}
+    <span className="sr-only" aria-live="polite">{announcement}</span>
+  </nav>;
+}
+
+function Topbar({ live, session, pendingSession, theme, workspaceMode, menuOpen, rightPanel, menuButtonRef, chatButtonRef, inspectorButtonRef, databaseButtonRef, agentsButtonRef, filesButtonRef, browserButtonRef, browserAvailable, databaseAvailable, browserActive, onWorkspaceMode, onToggleTheme, onToggleMenu, onToggleChat, onToggleInspector, onToggleDatabase, onToggleAgents, onToggleFiles, onToggleBrowser }: { live: RuntimeStoreSnapshot; session?: SessionSummary; pendingSession?: PendingSession; theme: Theme; workspaceMode: WorkspaceMode; menuOpen: boolean; rightPanel: RightPanel; menuButtonRef: React.RefObject<HTMLButtonElement | null>; chatButtonRef: React.RefObject<HTMLButtonElement | null>; inspectorButtonRef: React.RefObject<HTMLButtonElement | null>; databaseButtonRef: React.RefObject<HTMLButtonElement | null>; agentsButtonRef: React.RefObject<HTMLButtonElement | null>; filesButtonRef: React.RefObject<HTMLButtonElement | null>; browserButtonRef: React.RefObject<HTMLButtonElement | null>; browserAvailable: boolean; databaseAvailable: boolean; browserActive: boolean; onWorkspaceMode: (mode: WorkspaceMode) => void; onToggleTheme: () => void; onToggleMenu: () => void; onToggleChat: () => void; onToggleInspector: () => void; onToggleDatabase: () => void; onToggleAgents: () => void; onToggleFiles: () => void; onToggleBrowser: () => void }) {
   const runtime = pendingSession ? undefined : live.runtime;
   const sessionName = pendingSession ? "New session" : runtime?.sessionName || (session ? sessionTitle(session) : "New session");
   const branch = pendingSession ? (pendingSession.phase === "failed" ? "setup failed" : "workspace pending") : runtime?.gitBranch || "No Git branch";
@@ -1704,6 +1951,10 @@ function Topbar({ live, session, pendingSession, theme, menuOpen, rightPanel, me
     <header className="topbar">
       <div className="topbar-left">
         <button ref={menuButtonRef} className="icon-button navigation-toggle" onClick={onToggleMenu} aria-label="Toggle project navigation" aria-controls="primary-navigation" aria-expanded={menuOpen}><IconMenu2 size={18} /></button>
+        <nav className="workspace-mode-switch" aria-label="Session view">
+          <button type="button" className={workspaceMode === "chat" ? "is-active" : ""} onClick={() => onWorkspaceMode("chat")}>Chat</button>
+          <button type="button" className={workspaceMode === "files" ? "is-active" : ""} disabled={Boolean(pendingSession)} onClick={() => onWorkspaceMode("files")}>Files</button>
+        </nav>
         <div className="repo-crumb">
           <IconBrandGit size={16} stroke={1.7} />
           <span>{pendingSession?.project.label || runtime?.cwdLabel || "Pylon"} / <strong>{sessionName.slice(0, 128)}</strong></span>
@@ -1712,17 +1963,21 @@ function Topbar({ live, session, pendingSession, theme, menuOpen, rightPanel, me
         <div className="branch-label"><IconGitBranch size={14} /><span>{pendingSession ? branch : `${branch} · Turn ${turn}`}</span></div>
       </div>
       <div className="topbar-actions">
+        {workspaceMode === "files" && <button ref={chatButtonRef} className={`agents-trigger ${rightPanel === "chat" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleChat} aria-label="Chat" aria-controls="chat-panel" aria-expanded={rightPanel === "chat"}>
+          <IconMessageCircle size={16} />
+          <span>Chat</span>
+        </button>}
         <button ref={inspectorButtonRef} className={`agents-trigger ${rightPanel === "inspector" ? "is-active" : ""}`} disabled={Boolean(pendingSession)} onClick={onToggleInspector} aria-label="Inspector" aria-controls="session-inspector" aria-expanded={rightPanel === "inspector"}><IconLayoutDashboard size={16} /><span>Inspector</span></button>
         <button ref={agentsButtonRef} className={`agents-trigger ${rightPanel === "agents" ? "is-active" : ""} ${activeAgents ? "is-live" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleAgents} aria-label={`Agents, ${delegatedRuns.length} runs${activeAgents ? `, ${activeAgents} active` : ""}`} aria-controls="agents-panel" aria-expanded={rightPanel === "agents"}>
           <IconUsers size={16} />
           <span>Agents</span>
           <small>{delegatedRuns.length}</small>
         </button>
-        <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
+        {workspaceMode === "chat" && <button ref={filesButtonRef} className={`agents-trigger ${rightPanel === "files" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleFiles} aria-label="Files" aria-controls="files-panel" aria-expanded={rightPanel === "files"}>
           <IconFiles size={16} />
           <span>Files</span>
           <small>{runtime?.workspace?.changedCount ?? 0}</small>
-        </button>
+        </button>}
         {databaseAvailable && <button ref={databaseButtonRef} className={`agents-trigger ${rightPanel === "database" ? "is-active" : ""}`} type="button" disabled={Boolean(pendingSession)} onClick={onToggleDatabase} aria-label="Database" aria-controls="database-panel" aria-expanded={rightPanel === "database"}>
           <IconDatabase size={16} />
           <span>Database</span>

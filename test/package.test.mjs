@@ -68,6 +68,7 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "bin", "storage.mjs")));
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
+    assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
 
     const adapterCheck = spawnSync(process.execPath, [
       "--input-type=module",
@@ -82,6 +83,7 @@ test("packed package installs and launches its production web app", { timeout: 2
        const settings = await jiti.import(join(packageRoot, "packages", "pi-advisor", "src", "web-settings.ts"));
        const tokenMeter = await jiti.import(installedRequire.resolve("pylon-core/token-meter"));
        installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
+       installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
        if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function") process.exit(1);`,
       packageRoot,
     ], { encoding: "utf8", timeout: 30_000 });

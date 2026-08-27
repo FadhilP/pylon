@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { collectPlainWorkspaceFiles } from "pylon-core/src/worktree.ts";
 
 const CACHE_MS = 30_000;
 const MAX_BUFFER = 2 * 1024 * 1024;
 const MAX_PATHS = 20_000;
 const MAX_CACHES = 25;
+const MAX_EMBEDDED_REPO_DEPTH = 4;
 
 interface CacheEntry {
   expiresAt: number;
@@ -68,13 +69,13 @@ async function inventory(cwd: string): Promise<string[] | undefined> {
   return paths;
 }
 
-function gitFiles(cwd: string): Promise<string[] | undefined> {
-  return new Promise((resolve, reject) => {
+async function gitFiles(cwd: string, depth = 0): Promise<string[] | undefined> {
+  const stdout = await new Promise<string | undefined>((resolve, reject) => {
     execFile(
       "git",
       ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
       { cwd, windowsHide: true, encoding: "utf8", maxBuffer: MAX_BUFFER },
-      (error, stdout) => {
+      (error, output) => {
         if (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT" || "code" in error && error.code === 128) {
             resolve(undefined);
@@ -83,9 +84,21 @@ function gitFiles(cwd: string): Promise<string[] | undefined> {
           reject(error);
           return;
         }
-        const paths = stdout.split("\0").filter(validRelativePath);
-        resolve(paths.length > MAX_PATHS ? paths.slice(0, MAX_PATHS) : paths);
+        resolve(output);
       },
     );
   });
+  if (stdout === undefined) return undefined;
+  const paths: string[] = [];
+  for (const entry of stdout.split("\0").filter((path) => path.length > 0)) {
+    if (entry.endsWith("/") && depth < MAX_EMBEDDED_REPO_DEPTH) {
+      // Collapsed embedded repository: list it from its own checkout.
+      const nested = await gitFiles(join(cwd, entry), depth + 1);
+      if (nested !== undefined) paths.push(...nested.map((path) => entry + path));
+      continue;
+    }
+    if (!validRelativePath(entry)) continue;
+    paths.push(entry);
+  }
+  return paths.length > MAX_PATHS ? paths.slice(0, MAX_PATHS) : paths;
 }

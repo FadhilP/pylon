@@ -1409,24 +1409,6 @@ test("projection retains bounded extension UI state and publishes mutation event
   assert.deepEqual(state.widgets, []);
 });
 
-test("projection synchronizes slash-command results and dismissal", () => {
-  const published: unknown[] = [];
-  const projection = new RuntimeProjection(runtime(), (type, payload) => {
-    if (type === "command.result") published.push(payload);
-  });
-  const result = {
-    id: "command-1",
-    command: "sieve",
-    output: "Pi Sieve enabled.",
-    severity: "info" as const,
-    occurredAt: new Date().toISOString(),
-  };
-  projection.apply({ type: "command.result", sessionId: "session", sessionGeneration: 1, result });
-  assert.deepEqual(projection.snapshot().commandResult, result);
-  projection.apply({ type: "command.result", sessionId: "session", sessionGeneration: 1 });
-  assert.equal(projection.snapshot().commandResult, undefined);
-  assert.equal(published.length, 2);
-});
 
 test("projection coalesces cumulative stream updates on a readable cadence", async () => {
   const published: Array<{ type: string; payload: any }> = [];

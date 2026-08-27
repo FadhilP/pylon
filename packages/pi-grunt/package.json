@@ -8,7 +8,8 @@
   "files": ["extensions", "src", "README.md", "LICENSE"],
   "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
   "pi": { "extensions": ["./extensions/pi-grunt.ts"] },
-  "dependencies": { "pylon-core": "0.1.0" },
+  "dependencies": { "pi-sieve": "0.1.0", "pylon-core": "0.1.0" },
+  "bundledDependencies": ["pi-sieve"],
   "pylon": { "settings": "./src/web-settings.ts" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

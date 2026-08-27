@@ -282,7 +282,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
 
   child.stdout!.on("data", (data) => {
     stdout += data;
-    if (Buffer.byteLength(stdout) > 1024 * 1024) {
+    if (Buffer.byteLength(stdout) > 1024 * 1024 * 5) {
       protocolOverflow = true;
       stdout = "";
       terminate(child);
@@ -329,7 +329,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   const finalizationFailure = finalizationFailed || incompleteFinalization;
   const finalizationLabel = finalizationReason === "deadline" ? "deadline finalization" : "budget finalization";
   const error = protocolOverflow
-    ? "Scout protocol output exceeded 1 MiB."
+    ? "Scout protocol buffer exceeded 5 MiB."
     : aborted
       ? "Scout aborted."
       : timedOut

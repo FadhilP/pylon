@@ -81,6 +81,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/sessions") return await this.sessionList(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history") return await this.conversationHistory(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-attachment") return await this.conversationAttachment(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/turn-diff") return await this.turnDiff(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-turns") return await this.conversationTurnIndex(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions") return await this.fileSuggestions(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/files") return await this.workspaceFiles(request, response, url);
@@ -412,6 +413,24 @@ export class ServerTransport {
       throw error;
     }
   }
+
+  private async turnDiff(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    const entryId = url.searchParams.get("entry") ?? "";
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(entryId)) throw httpError(400, "invalid turn entry ID");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.driver.turnDiff) throw httpError(404, "turn diffs are unavailable");
+    try {
+      const result = await this.driver.turnDiff({ entryId });
+      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while loading turn diff");
+      this.send(response, 200, result);
+    } catch (error) {
+      if (error instanceof Error && /unavailable/i.test(error.message)) throw httpError(404, error.message);
+      throw error;
+    }
+  }
+
 
   private async conversationTurnIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);

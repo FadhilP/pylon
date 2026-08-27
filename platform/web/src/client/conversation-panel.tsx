@@ -1,6 +1,6 @@
-import { IconArrowBackUp, IconArrowUp, IconBotId, IconBulb, IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowBackUp, IconArrowUp, IconBotId, IconBulb, IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconSearch, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { aggregateToolTiming, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, reconcileToolActivity, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
 import { formatCompactNumber, formatToolDuration, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
@@ -15,6 +15,9 @@ import { agentColor, type AgentColorMap } from "./agent-color";
 import { matrixSelectionAtPoint, matrixThinkingAxis, moveMatrixSelection } from "../shared/model-matrix";
 import { AnimatedDetails } from "./animated-details";
 import { UiDialog } from "./ui-dialog";
+import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
+
+const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
 const markdownTags = ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"];
 const markdownAttributes = ["alt", "checked", "class", "data-language", "disabled", "href", "src", "title", "type"];
@@ -725,7 +728,7 @@ export function ConversationPanel({
                   <MessageAttachments message={block} onOpen={onOpenAttachment} />
                 </>}
             </article>
-            {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} />}
+            {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} entryId={block.entryId} />}
             {pending ? <div className="pending-message-footer" role="status">
               <span><IconLoader2 className="pending-message-spinner" size={12} />{pending.state === "queued" ? "Waiting to send" : "Sending"}</span>
               {pending.planMode && <span>Plan mode</span>}
@@ -1094,15 +1097,31 @@ function ModelControl({
   const [modelKey, setModelKey] = useState("");
   const [level, setLevel] = useState<ThinkingLevelReadModel>("off");
   const [dragging, setDragging] = useState(false);
-  const models = controls?.models ?? [];
-  const axisLevels = useMemo(() => matrixThinkingAxis(models), [controls?.models]);
+  const [modelQuery, setModelQuery] = useState("");
+  const hiddenModels = useHiddenModels();
+  const models = useMemo(() => {
+    const base = visibleModels(controls?.models ?? [], hiddenModels);
+    for (const applied of [controls?.model, controls?.pending?.model]) {
+      if (applied && !base.some((model) => toModelKey(model) === toModelKey(applied))) {
+        const original = (controls?.models ?? []).find((model) => toModelKey(model) === toModelKey(applied));
+        if (original) base.push(original);
+      }
+    }
+    const query = modelQuery.trim().toLowerCase();
+    if (!query) return base;
+    const matched = base.filter((model) => `${model.provider} ${model.id} ${model.name}`.toLowerCase().includes(query));
+    const selected = base.find((model) => `${model.provider}/${model.id}` === modelKey);
+    if (selected && !matched.includes(selected)) matched.push(selected);
+    return matched;
+  }, [controls?.models, controls?.model, controls?.pending?.model, hiddenModels, modelKey, modelQuery]);
+  const axisLevels = useMemo(() => matrixThinkingAxis(models), [controls?.models, hiddenModels, modelQuery]);
   const selectedModelIndex = Math.max(0, models.findIndex((model) => `${model.provider}/${model.id}` === modelKey));
   const selectedModel = models[selectedModelIndex];
   const selectedLevelIndex = Math.max(0, axisLevels.indexOf(level));
   const selectedCellId = `model-matrix-cell-${selectedModelIndex}-${selectedLevelIndex}`;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setModelQuery(""); return; }
     const selectedControls = controls?.pending ?? controls;
     const currentKey = selectedControls?.model ? `${selectedControls.model.provider}/${selectedControls.model.id}` : "";
     const currentModel = models.find((model) => `${model.provider}/${model.id}` === currentKey) ?? models[0];
@@ -1237,6 +1256,11 @@ function ModelControl({
       <IconChevronDown size={14} />
     </button>
     {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy}>
+      <div className="model-search">
+        <IconSearch size={13} />
+        <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Filter models…" aria-label="Filter models" autoComplete="off" spellCheck={false} />
+        {modelQuery && <button type="button" onClick={() => setModelQuery("")} aria-label="Clear filter"><IconX size={12} /></button>}
+      </div>
       <div
         ref={matrixRef}
         className={`model-matrix${dragging ? " is-dragging" : ""}`}
@@ -1254,6 +1278,7 @@ function ModelControl({
           <span role="columnheader">Model</span>
           {axisLevels.map((item) => <span role="columnheader" key={item} title={thinkingLabel(item)}>{matrixThinkingLabel(item)}</span>)}
         </div>
+        {!models.length && <p className="model-matrix-empty">No matching models. Clear the filter or hide fewer models in Settings → Models.</p>}
         <div
           ref={matrixBodyRef}
           className="model-matrix-body"
@@ -1744,8 +1769,39 @@ function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
   return result;
 }
 
-function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedFiles"]> }) {
+function TurnDiffView({ entryId }: { entryId: string }) {
+  const [state, setState] = useState<{ loading: boolean; error?: string; text?: string; truncated?: boolean }>({ loading: true });
+  useEffect(() => {
+    let active = true;
+    setState({ loading: true });
+    runtimeStore.turnDiff(entryId).then((result) => {
+      if (!active) return;
+      if (result.state === "binary") setState({ loading: false, error: "Binary changes" });
+      else setState({ loading: false, text: result.text ?? "", truncated: result.truncated === true });
+    }).catch((error) => {
+      if (active) setState({ loading: false, error: error instanceof Error ? error.message : String(error) });
+    });
+    return () => { active = false; };
+  }, [entryId]);
+  if (state.loading) return <p role="status">Loading turn diff…</p>;
+  if (state.error) return <p className="changed-file-error" role="alert">{state.error}</p>;
+  return <>
+    {state.truncated && <p role="note">Turn diff is too large — showing the first portion.</p>}
+    <Suspense fallback={<p role="status">Rendering turn diff…</p>}>
+      <PierreCodeViewer
+        mode="diff"
+        path={`turn:${entryId}`}
+        text={state.text ?? ""}
+        revision={entryId}
+        unifiedDiff={state.text ?? ""}
+      />
+    </Suspense>
+  </>;
+}
+
+function ChangedFiles({ files, entryId }: { files: NonNullable<MessageReadModel["changedFiles"]>; entryId?: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const visible = expanded ? files : files.slice(0, 3);
   const remaining = files.length - 3;
   return <section className="changed-files" aria-label="Files changed in this turn">
@@ -1760,6 +1816,11 @@ function ChangedFiles({ files }: { files: NonNullable<MessageReadModel["changedF
       {expanded ? "Show less" : `Show ${remaining} more`}
       <IconChevronDown className={expanded ? "is-expanded" : ""} size={14} />
     </button>}
+    {entryId && <button type="button" aria-expanded={showDiff} onClick={() => setShowDiff((current) => !current)}>
+      {showDiff ? "Hide turn diff" : "Show turn diff"}
+      <IconChevronDown className={showDiff ? "is-expanded" : ""} size={14} />
+    </button>}
+    {showDiff && entryId && <TurnDiffView entryId={entryId} />}
   </section>;
 }
 

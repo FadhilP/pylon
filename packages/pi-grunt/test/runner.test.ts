@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { GRUNT_CONTEXT_LIMIT, contextTokensFromUsage, getPiInvocation, runPi } from "../src/runner.ts";
+import { GRUNT_CONTEXT_LIMIT, GRUNT_PROTOCOL_MAX_BYTES, contextTokensFromUsage, getPiInvocation, runPi } from "../src/runner.ts";
 
 test("child invocation does not mistake an embedding web host for the Pi CLI", async () => {
   const originalScript = process.argv[1];
@@ -75,6 +75,15 @@ test("runner fails closed on malformed protocol despite a later normal stop", as
   const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
   assert.equal(run.failure, "child_error");
   assert.match(run.error ?? "", /malformed JSON/);
+});
+
+test("runner aborts oversized protocol buffers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "grunt-overflow-"));
+  const script = join(dir, "overflow.mjs");
+  await writeFile(script, `process.stdout.write('x'.repeat(${GRUNT_PROTOCOL_MAX_BYTES}+1));setTimeout(()=>{},10000);`);
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, timeoutMs: 5000 });
+  assert.equal(run.failure, "child_error");
+  assert.equal(run.error, "Worker protocol buffer exceeded 5 MiB.");
 });
 
 test("runner stops before another turn when budget is exhausted", async () => {

@@ -74,6 +74,8 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
 
 
   for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+  const policy = app.emitted.find((item) => item.channel === "pylon:tool-policy" && item.value?.kind === "register")?.value;
+  assert.deepEqual(policy.deferredTools, []);
   let response: Promise<any> | undefined;
   app.pi.events.emit("pylon:papercut-list-request", {
     version: 1,

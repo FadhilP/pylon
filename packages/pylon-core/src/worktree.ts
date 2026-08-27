@@ -215,6 +215,8 @@ export interface WorkspaceFile {
   additions?: number;
   deletions?: number;
   binary?: boolean;
+  /** Registered submodule folders without inventoried files; clients render them as non-selectable folders. */
+  kind?: "submodule";
 }
 
 export interface WorkspaceFilePage {
@@ -227,9 +229,18 @@ export interface WorkspaceFilePage {
 
 export type WorkspaceFileInventory = Omit<WorkspaceFilePage, "nextCursor">;
 
+export interface WorkspaceFileDelta {
+  revision: string;
+  upserted: WorkspaceFile[];
+  removed: string[];
+  reconcileRequired: boolean;
+}
+
 export interface WorkspaceChangeList {
   revision: string;
   files: WorkspaceFile[];
+  /** Nested checkout content that cannot be represented by the parent repository's gitlink tree. */
+  unapplicableSubmoduleChanges?: boolean;
 }
 
 export interface WorkspaceApplyConflict {
@@ -262,10 +273,19 @@ const MAX_SUMMARY_BYTES = 64 * 1024;
 const MAX_SUMMARY_FILES = 100;
 const MAX_WORKSPACE_FILES = 10_000;
 
+export interface TurnAnchor {
+  root: string;
+  beforeTree: string;
+  afterTree: string;
+}
+
 export interface PersistedWorktreeSummary {
   version: 1;
   assistantEntryId: string;
   files: WorktreeFileChange[];
+  root?: string;
+  beforeTree?: string;
+  afterTree?: string;
 }
 
 function validSummaryPath(path: string): boolean {
@@ -280,9 +300,15 @@ function validSummaryPath(path: string): boolean {
 export function createWorktreeSummary(
   assistantEntryId: string,
   values: WorktreeFileChange[],
+  anchor?: TurnAnchor,
 ): PersistedWorktreeSummary | undefined {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(assistantEntryId)) return undefined;
-  const summary: PersistedWorktreeSummary = { version: 1, assistantEntryId, files: [] };
+  const anchored = anchor
+    && typeof anchor.root === "string" && anchor.root.length > 0 && anchor.root.length <= 1024
+    && objectId.test(anchor.beforeTree) && objectId.test(anchor.afterTree)
+    ? { root: anchor.root, beforeTree: anchor.beforeTree, afterTree: anchor.afterTree }
+    : {};
+  const summary: PersistedWorktreeSummary = { version: 1, assistantEntryId, files: [], ...anchored };
   for (const value of values.slice(0, MAX_SUMMARY_FILES)) {
     const path = value.path.replaceAll("\\", "/").slice(0, 500);
     if (!validSummaryPath(path)) continue;
@@ -318,6 +344,14 @@ export function parseWorktreeSummary(value: unknown): PersistedWorktreeSummary |
     || raw.files.length === 0
     || raw.files.length > MAX_SUMMARY_FILES) return undefined;
 
+  let anchor: TurnAnchor | undefined;
+  if (raw.root !== undefined || raw.beforeTree !== undefined || raw.afterTree !== undefined) {
+    if (typeof raw.root !== "string" || raw.root.length === 0 || raw.root.length > 1024
+      || typeof raw.beforeTree !== "string" || !objectId.test(raw.beforeTree)
+      || typeof raw.afterTree !== "string" || !objectId.test(raw.afterTree)) return undefined;
+    anchor = { root: raw.root, beforeTree: raw.beforeTree, afterTree: raw.afterTree };
+  }
+
   const files: WorktreeFileChange[] = [];
   for (const value of raw.files) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -336,7 +370,7 @@ export function parseWorktreeSummary(value: unknown): PersistedWorktreeSummary |
       deletions: Number(file.deletions),
     });
   }
-  return { version: 1, assistantEntryId: raw.assistantEntryId, files };
+  return { version: 1, assistantEntryId: raw.assistantEntryId, files, ...anchor };
 }
 
 export function readPersistedWorktreeSummaries(
@@ -455,6 +489,81 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspace | u
 export function sessionWorktreeBranch(opaqueId: string): string {
   if (!worktreeId.test(opaqueId)) throw Error("Invalid worktree identifier.");
   return `refs/heads/pylon-session-${opaqueId}`;
+}
+
+/** Turn-snapshot branch for one agent session. Shares the pylon-session-* namespace with workspace branches; only the opaque identifier distinguishes them. */
+export function turnsBranchForSession(sessionId: string): string | undefined {
+  return worktreeId.test(sessionId) ? `refs/heads/pylon-session-${sessionId}` : undefined;
+}
+
+export async function appendTurnCommit(
+  repositoryRootPath: string,
+  branch: string,
+  tree: string,
+): Promise<string | undefined> {
+  if (!ownedBranch.test(branch) || !objectId.test(tree)) return undefined;
+  try {
+    const root = await realpath(repositoryRootPath);
+    const previous = await git(root, ["rev-parse", "--verify", `${branch}^{commit}`]).catch(() => undefined);
+    if (previous !== undefined && !objectId.test(previous)) return undefined;
+    if (previous) {
+      // Already anchored: an identical tip tree needs no duplicate commit.
+      const tipTree = await git(root, ["rev-parse", "--verify", `${previous}^{tree}`]).catch(() => undefined);
+      if (tipTree === tree) return previous;
+    }
+    const commit = await git(root, [
+      "commit-tree", tree,
+      ...(previous ? ["-p", previous] : []),
+      "-m", "Pylon turn snapshot",
+    ], ident);
+    if (!objectId.test(commit)) return undefined;
+    await git(root, ["update-ref", branch, commit, ...(previous ? [previous] : [""])], ident);
+    return commit;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function removeSessionRef(repositoryRootPath: string, branch: string): Promise<void> {
+  if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  try {
+    await git(await realpath(repositoryRootPath), ["update-ref", "-d", branch]);
+  } catch {
+    // Best-effort cleanup: a missing checkout or stale ref must not fail session deletion.
+  }
+}
+
+export type TurnTreeDiff =
+  | { state: "binary" }
+  | { state: "available" | "oversized"; text: string; truncated?: boolean };
+
+export async function turnTreeDiff(cwd: string, beforeTree: string, afterTree: string): Promise<TurnTreeDiff> {
+  const maxBytes = 2 * 1024 * 1024;
+  const maxLines = 20_000;
+  if (!objectId.test(beforeTree) || !objectId.test(afterTree)) throw Error("Invalid turn snapshot trees.");
+  const root = await realpath(cwd);
+  let output: string;
+  try {
+    output = await git(root, [
+      "diff", "--no-ext-diff", "--no-renames", "--unified=3", beforeTree, afterTree,
+    ], {}, maxBytes + 1);
+  } catch (error) {
+    // execFile aborts once stdout exceeds maxBuffer; salvage the captured prefix instead of failing.
+    const captured = typeof (error as { stdout?: unknown })?.stdout === "string" ? String((error as { stdout?: string }).stdout) : "";
+    if (!captured) throw Error("turn diff is unavailable");
+    output = captured;
+  }
+  if (output.includes("Binary files ") || output.includes("GIT binary patch")) return { state: "binary" };
+  const lines = output.split(/\r?\n/);
+  if (Buffer.byteLength(output, "utf8") > maxBytes || lines.length > maxLines) {
+    const bounded = lines.slice(0, maxLines).join("\n");
+    return {
+      state: "oversized",
+      text: Buffer.from(bounded).subarray(0, maxBytes).toString("utf8"),
+      truncated: true,
+    };
+  }
+  return { state: "available", text: output };
 }
 
 async function createSessionBaseline(
@@ -779,27 +888,202 @@ export async function snapshotSessionBranch(
   return snapshot;
 }
 
+async function emptyTreeOf(cwd: string): Promise<string> {
+  return temporaryIndex(async (env) => {
+    await git(cwd, ["read-tree", "--empty"], env);
+    return git(cwd, ["write-tree"], env);
+  });
+}
+
 async function workspaceBaseline(cwd: string, baselineTree?: string): Promise<string> {
   if (baselineTree) return baselineTree;
   try {
     return await git(cwd, ["rev-parse", "--verify", "HEAD^{tree}"]);
   } catch (error) {
     if (!await headRef(cwd)) throw error;
-    return temporaryIndex(async (env) => {
-      await git(cwd, ["read-tree", "--empty"], env);
-      return git(cwd, ["write-tree"], env);
-    });
+    return emptyTreeOf(cwd);
   }
 }
 
-async function workspaceRevision(cwd: string, baselineTree: string) {
-  if (!objectId.test(baselineTree)) throw Error("Invalid workspace baseline.");
+const GITLINK_MODE = "160000";
+
+/** Registered submodule gitlinks (mode 160000) taken only from index and baseline tree metadata; never .gitmodules URLs or arbitrary embedded repositories. */
+async function registeredGitlinks(cwd: string, baselineTree?: string): Promise<Map<string, string>> {
+  const links = new Map<string, string>();
+  const stage = splitNul(await git(cwd, ["ls-files", "-z", "-s"]).catch(() => ""));
+  for (const record of stage) {
+    const tab = record.indexOf("\t");
+    if (tab < 0 || record.slice(0, record.indexOf(" ")) !== GITLINK_MODE) continue;
+    links.set(record.slice(tab + 1), "");
+  }
+  if (!baselineTree) return links;
+  const tree = splitNul(await git(cwd, ["ls-tree", "-rz", baselineTree]).catch(() => ""));
+  for (const record of tree) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, , object] = record.slice(0, tab).split(" ");
+    if (mode !== GITLINK_MODE || !object || !objectId.test(object)) continue;
+    links.set(record.slice(tab + 1), object);
+  }
+  return links;
+}
+
+interface SubmoduleNode {
+  /** Flat workspace-relative prefix of the submodule checkout. */
+  path: string;
+  /** Physical root of the initialized submodule checkout. */
+  root: string;
+  /** Nested baseline tree/commit recorded by the parent's gitlink, or the nested repo's empty tree when absent. */
+  baselineTree: string;
+  current: CheckoutState;
+}
+
+/** Recursively discovers initialized registered submodules whose checkouts stay confined under the canonical top workspace root. */
+async function discoverSubmodules(topRoot: string, baselineTree: string): Promise<{
+  nodes: SubmoduleNode[];
+  markers: string[];
+  /** Per repository level (prefix "" = superproject) the relative gitlink names registered in its index/baseline tree. */
+  levels: Map<string, Set<string>>;
+}> {
+  const physicalTop = await realpath(topRoot);
+  const nodes: SubmoduleNode[] = [];
+  const markers: string[] = [];
+  const levels = new Map<string, Set<string>>();
+  async function walk(prefix: string, cwd: string, baseline?: string): Promise<void> {
+    const links = await registeredGitlinks(cwd, baseline);
+    levels.set(prefix, new Set([...links.keys()].filter((name) => {
+      try {
+        safeRelativePath(name);
+        return true;
+      } catch {
+        return false;
+      }
+    })));
+    for (const name of [...links.keys()].sort((left, right) => left.localeCompare(right))) {
+      let safe: string;
+      try {
+        safe = safeRelativePath(name);
+      } catch {
+        continue;
+      }
+      const full = prefix ? `${prefix}/${safe}` : safe;
+      markers.push(full);
+      const absolute = resolve(cwd, safe);
+      const info = await lstat(absolute).catch(() => undefined);
+      if (!info?.isDirectory() || info.isSymbolicLink()) continue;
+      // Confinement: the submodule checkout must physically stay beneath the top workspace root.
+      const physical = await realpath(absolute);
+      if (outside(physicalTop, physical)) continue;
+      // Only an initialized submodule rooted here qualifies; never follow arbitrary nested repositories.
+      const topLevel = await git(absolute, ["rev-parse", "--show-toplevel"]).catch(() => undefined);
+      if (!topLevel || canonical(await realpath(topLevel)) !== canonical(physical)) continue;
+      const current = await captureCheckoutState(absolute).catch(() => undefined);
+      if (!current) continue;
+      const recorded = links.get(name)!;
+      nodes.push({
+        path: full,
+        root: current.root,
+        baselineTree: recorded || await emptyTreeOf(current.root),
+        current,
+      });
+      await walk(full, current.root, recorded || undefined);
+    }
+  }
+  await walk("", physicalTop, baselineTree);
+  markers.sort((left, right) => left.localeCompare(right));
+  nodes.sort((left, right) => left.path.localeCompare(right.path));
+  return { nodes, markers, levels };
+}
+
+const underAnyMarker = (markers: string[]) => (path: string) =>
+  markers.some((marker) => path === marker || path.startsWith(`${marker}/`));
+
+function owningSubmodule(nodes: SubmoduleNode[], path: string): SubmoduleNode | undefined {
+  let owner: SubmoduleNode | undefined;
+  for (const node of nodes) {
+    if (path.startsWith(`${node.path}/`) && (!owner || node.path.length > owner.path.length)) owner = node;
+  }
+  return owner;
+}
+
+interface WorkspaceScope {
+  current: CheckoutState;
+  baseline: string;
+  submodules: SubmoduleNode[];
+  markers: string[];
+  /** Per repository level (prefix "" = superproject) the relative registered gitlink names. */
+  levels: Map<string, Set<string>>;
+  underSubmodule(path: string): boolean;
+  ownerOf(path: string): SubmoduleNode | undefined;
+  revision: string;
+  unapplicableSubmoduleChanges: boolean;
+}
+
+async function workspaceScope(cwd: string, baselineTree?: string): Promise<WorkspaceScope> {
+  const baseline = await workspaceBaseline(cwd, baselineTree);
   const current = await captureCheckoutState(cwd);
-  const revision = createHash("sha256")
-    .update(`${baselineTree}\n${current.worktreeTree}\n${current.indexTree}`)
-    .digest("base64url")
-    .slice(0, 24);
-  return { current, revision };
+  const { nodes, markers, levels } = await discoverSubmodules(current.root, baseline);
+  // Nested state aggregates into the revision so nested-only changes refresh the Files views.
+  const hash = createHash("sha256")
+    .update(`${baseline}\n${current.worktreeTree}\n${current.indexTree}`);
+  let unapplicableSubmoduleChanges = false;
+  for (const node of nodes) {
+    hash.update(`\n${node.path}\n${node.current.worktreeTree}\n${node.current.indexTree}`);
+    const headTree = await git(node.root, ["rev-parse", "--verify", "HEAD^{tree}"])
+      .catch(() => emptyTreeOf(node.root));
+    if (node.current.worktreeTree !== headTree || node.current.indexTree !== headTree) {
+      unapplicableSubmoduleChanges = true;
+    }
+  }
+  return {
+    current,
+    baseline,
+    submodules: nodes,
+    markers,
+    levels,
+    underSubmodule: underAnyMarker(markers),
+    ownerOf: (path) => owningSubmodule(nodes, path),
+    revision: hash.digest("base64url").slice(0, 24),
+    unapplicableSubmoduleChanges,
+  };
+}
+
+async function scopeChanges(scope: WorkspaceScope): Promise<WorkspaceFile[]> {
+  const files = (await changesBetween(scope.current.root, scope.baseline, scope.current.worktreeTree))
+    .filter((file) => !scope.underSubmodule(file.path));
+  for (const node of scope.submodules) {
+    try {
+      const nested = await changesBetween(node.root, node.baselineTree, node.current.worktreeTree);
+      for (const file of nested) {
+        const path = `${node.path}/${file.path}`;
+        if (!scope.underSubmodule(path) || scope.ownerOf(path)?.path === node.path) files.push({ ...file, path });
+      }
+    } catch {
+      // A missing nested baseline commit degrades to no nested change entries rather than misreading through the parent.
+    }
+  }
+  return files;
+}
+
+async function scopeListings(scope: WorkspaceScope): Promise<{ present: string[]; base: string[] }> {
+  const gitlinksAt = (prefix: string) => scope.levels.get(prefix) ?? new Set<string>();
+  // Each repository level only strips its own direct gitlink entries; nested submodule contents stay inventoried flat.
+  const present = splitNul(await git(scope.current.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]))
+    .filter((path) => !gitlinksAt("").has(path));
+  const base = splitNul(await git(scope.current.root, ["ls-tree", "-rz", "--name-only", scope.baseline]))
+    .filter((path) => !gitlinksAt("").has(path));
+  for (const node of scope.submodules) {
+    const prefix = `${node.path}/`;
+    const links = gitlinksAt(node.path);
+    present.push(...splitNul(await git(node.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]))
+      .filter((path) => !links.has(path))
+      .map((path) => `${prefix}${path}`));
+    const nestedBase = await git(node.root, ["ls-tree", "-rz", "--name-only", node.baselineTree]).catch(() => "");
+    base.push(...splitNul(nestedBase)
+      .filter((path) => !links.has(path))
+      .map((path) => `${prefix}${path}`));
+  }
+  return { present, base };
 }
 
 async function changesBetween(cwd: string, baselineTree: string, tree: string): Promise<WorkspaceFile[]> {
@@ -834,11 +1118,11 @@ async function changesBetween(cwd: string, baselineTree: string, tree: string): 
 }
 
 export async function inspectWorkspaceChanges(cwd: string, baselineTree?: string): Promise<WorkspaceChangeList> {
-  const baseline = await workspaceBaseline(cwd, baselineTree);
-  const { current, revision } = await workspaceRevision(cwd, baseline);
+  const scope = await workspaceScope(cwd, baselineTree);
   return {
-    revision,
-    files: (await changesBetween(current.root, baseline, current.worktreeTree)).slice(0, 5_000),
+    revision: scope.revision,
+    files: (await scopeChanges(scope)).slice(0, 5_000),
+    ...(scope.unapplicableSubmoduleChanges ? { unapplicableSubmoduleChanges: true } : {}),
   };
 }
 
@@ -853,24 +1137,77 @@ export async function collectWorkspaceFiles(options: {
   query?: string;
 }): Promise<WorkspaceFileInventory> {
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
-  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
-  const { current, revision } = await workspaceRevision(options.cwd, baseline);
-  const present = splitNul(await git(current.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
-  const base = splitNul(await git(current.root, ["ls-tree", "-rz", "--name-only", baseline]));
-  const changed = new Map((await changesBetween(current.root, baseline, current.worktreeTree)).map((file) => [file.path, file]));
-  const allPaths = [...new Set([...present, ...base])]
-    .map(safeRelativePath)
+  const scope = await workspaceScope(options.cwd, options.baselineTree);
+  const { present, base } = await scopeListings(scope);
+  const changed = new Map((await scopeChanges(scope)).map((file) => [file.path, file]));
+  const files = [...new Set([...present, ...base])].map(safeRelativePath);
+  // Registered-but-empty submodules stay visible as non-selectable folders instead of disappearing.
+  const folders = new Set(scope.markers
+    .filter((marker) => !files.some((path) => path === marker || path.startsWith(`${marker}/`))));
+  const allPaths = [...new Set([...files, ...folders])]
     .filter((path) => !query || path.toLocaleLowerCase().includes(query))
     .sort((left, right) => Number(changed.has(right)) - Number(changed.has(left))
       || left.localeCompare(right));
   const truncated = allPaths.length > MAX_WORKSPACE_FILES;
   const paths = allPaths.slice(0, MAX_WORKSPACE_FILES);
   return {
-    revision,
-    files: paths.map((path) => changed.get(path) ?? { path }),
+    revision: scope.revision,
+    files: paths.map((path) => changed.get(path)
+      ?? (folders.has(path) ? { path, kind: "submodule" as const } : { path })),
     totalCount: paths.length,
     truncated,
   };
+}
+
+/** Authoritatively refreshes exact file paths without rebuilding the full workspace listing. */
+export async function collectWorkspaceFileDelta(options: {
+  cwd: string;
+  baselineTree?: string;
+  paths: string[];
+}): Promise<WorkspaceFileDelta> {
+  const paths = [...new Set(options.paths.slice(0, 100).map(safeRelativePath))];
+  const scope = await workspaceScope(options.cwd, options.baselineTree);
+  const changed = new Map((await scopeChanges(scope)).map((file) => [file.path, file]));
+  const upserted: WorkspaceFile[] = [];
+  const removed: string[] = [];
+  let reconcileRequired = options.paths.length > 100;
+  for (const path of paths) {
+    const owner = scope.ownerOf(path);
+    if (!owner && scope.underSubmodule(path)) {
+      reconcileRequired = true;
+      continue;
+    }
+    const inner = owner ? path.slice(owner.path.length + 1) : path;
+    const root = owner ? owner.root : scope.current.root;
+    const baseline = owner ? owner.baselineTree : scope.baseline;
+    const absolute = resolve(root, inner);
+    if (outside(root, absolute)) {
+      reconcileRequired = true;
+      continue;
+    }
+    const current = await lstat(absolute).catch(() => undefined);
+    if (current?.isDirectory()) {
+      reconcileRequired = true;
+      continue;
+    }
+    const baseType = await git(root, ["cat-file", "-t", `${baseline}:${inner}`]).catch(() => undefined);
+    if (baseType && baseType !== "blob") {
+      reconcileRequired = true;
+      continue;
+    }
+    const change = changed.get(path);
+    if (change) {
+      upserted.push(change);
+    } else if (current && baseType === "blob") {
+      upserted.push({ path });
+    } else if (!current && !baseType) {
+      removed.push(path);
+    } else {
+      // A one-sided path without a bounded change record may have fallen outside Git's change cap.
+      reconcileRequired = true;
+    }
+  }
+  return { revision: scope.revision, upserted, removed, reconcileRequired };
 }
 
 function pageWorkspaceFiles(
@@ -913,31 +1250,37 @@ export async function readWorkspaceFile(options: {
   maxBytes?: number;
 }): Promise<WorkspaceFileContent> {
   const maxBytes = Math.min(1024 * 1024, Math.max(1, options.maxBytes ?? 1024 * 1024));
-  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
-  const { current, revision } = await workspaceRevision(options.cwd, baseline);
   const path = safeRelativePath(options.path);
+  const scope = await workspaceScope(options.cwd, options.baselineTree);
+  const owner = scope.ownerOf(path);
+  // Descendant paths route through the deepest owning initialized submodule; everything else stays in the superproject.
+  if (!owner && scope.underSubmodule(path)) {
+    return { revision: scope.revision, path, state: "deleted" };
+  }
+  const inner = owner ? path.slice(owner.path.length + 1) : path;
+  const root = owner ? owner.root : scope.current.root;
   let content: Buffer;
   if (options.view === "base") {
-    const object = `${baseline}:${path}`;
-    const rawSize = await git(current.root, ["cat-file", "-s", object]).catch(() => undefined);
-    if (rawSize === undefined) return { revision, path, state: "deleted" };
+    const object = `${owner ? owner.baselineTree : scope.baseline}:${inner}`;
+    const rawSize = await git(root, ["cat-file", "-s", object]).catch(() => undefined);
+    if (rawSize === undefined) return { revision: scope.revision, path, state: "deleted" };
     const size = Number(rawSize);
-    if (!Number.isSafeInteger(size) || size > maxBytes) return { revision, path, state: "oversized" };
-    content = Buffer.from(await git(current.root, ["show", object], {}, maxBytes + 1));
+    if (!Number.isSafeInteger(size) || size > maxBytes) return { revision: scope.revision, path, state: "oversized" };
+    content = Buffer.from(await git(root, ["show", object], {}, maxBytes + 1));
   } else {
     try {
-      const file = await confinedFile(current.root, path);
+      const file = await confinedFile(root, inner);
       const size = (await stat(file)).size;
-      if (size > maxBytes) return { revision, path, state: "oversized" };
+      if (size > maxBytes) return { revision: scope.revision, path, state: "oversized" };
       content = await readFile(file);
     } catch (error: any) {
-      if (error?.code === "ENOENT") return { revision, path, state: "deleted" };
+      if (error?.code === "ENOENT") return { revision: scope.revision, path, state: "deleted" };
       throw error;
     }
   }
-  if (binary(content)) return { revision, path, state: "binary" };
-  if (content.byteLength > maxBytes) return { revision, path, state: "oversized" };
-  return { revision, path, state: "available", text: content.toString("utf8") };
+  if (binary(content)) return { revision: scope.revision, path, state: "binary" };
+  if (content.byteLength > maxBytes) return { revision: scope.revision, path, state: "oversized" };
+  return { revision: scope.revision, path, state: "available", text: content.toString("utf8") };
 }
 
 export async function diffWorkspaceFile(options: {
@@ -950,27 +1293,33 @@ export async function diffWorkspaceFile(options: {
   const maxBytes = Math.min(2 * 1024 * 1024, Math.max(1, options.maxBytes ?? 2 * 1024 * 1024));
   const maxLines = Math.min(20_000, Math.max(1, options.maxLines ?? 20_000));
   const path = safeRelativePath(options.path);
-  const baseline = await workspaceBaseline(options.cwd, options.baselineTree);
-  const { current, revision } = await workspaceRevision(options.cwd, baseline);
-  const output = await git(current.root, [
+  const scope = await workspaceScope(options.cwd, options.baselineTree);
+  const owner = scope.ownerOf(path);
+  // Uninitialized registered submodules degrade to an empty diff instead of misreading gitlink output through the parent.
+  if (!owner && scope.underSubmodule(path)) {
+    return { revision: scope.revision, path, state: "available" };
+  }
+  const inner = owner ? path.slice(owner.path.length + 1) : path;
+  const output = await git(owner ? owner.root : scope.current.root, [
     "diff", "--no-ext-diff", "--no-renames", "--unified=3",
-    baseline, current.worktreeTree, "--", path,
+    owner ? owner.baselineTree : scope.baseline,
+    owner ? owner.current.worktreeTree : scope.current.worktreeTree, "--", inner,
   ], {}, maxBytes + 1);
   if (output.includes("Binary files ") || output.includes("GIT binary patch")) {
-    return { revision, path, state: "binary" };
+    return { revision: scope.revision, path, state: "binary" };
   }
   const lines = output.split(/\r?\n/);
   if (Buffer.byteLength(output, "utf8") > maxBytes || lines.length > maxLines) {
     const bounded = lines.slice(0, maxLines).join("\n");
     return {
-      revision,
+      revision: scope.revision,
       path,
       state: "oversized",
       text: Buffer.from(bounded).subarray(0, maxBytes).toString("utf8"),
       truncated: true,
     };
   }
-  return { revision, path, state: "available", text: output };
+  return { revision: scope.revision, path, state: "available", text: output };
 }
 
 export async function collectPlainWorkspaceFiles(options: {

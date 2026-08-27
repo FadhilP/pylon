@@ -5,6 +5,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { truncateUtf8 } from "pylon-core/utf8";
 
 export const GRUNT_CONTEXT_LIMIT = 262_144;
+export const GRUNT_PROTOCOL_MAX_BYTES = 5 * 1024 * 1024;
 
 export type ChildUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 export type WorkerActivity = {
@@ -149,7 +150,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
   };
   child.stdout!.on("data", (data) => {
     stdout += data;
-    if (Buffer.byteLength(stdout) > 1024 * 1024) { protocolOverflow = true; stdout = ""; terminate(child); return; }
+    if (Buffer.byteLength(stdout) > GRUNT_PROTOCOL_MAX_BYTES) { protocolOverflow = true; stdout = ""; terminate(child); return; }
     const lines = stdout.split("\n"); stdout = lines.pop() ?? ""; for (const line of lines) processLine(line);
   });
   child.stderr!.on("data", (data) => {
@@ -171,7 +172,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
   const incomplete = final?.stopReason !== "stop";
   const failure = aborted ? "aborted" : timedOut ? "timed_out" : contextExceeded ? "context_exceeded"
     : budgetExceeded ? "budget_exceeded" : protocolOverflow || protocolMalformed || exitCode !== 0 || incomplete || !rawText ? "child_error" : undefined;
-  const error = protocolOverflow ? "Worker protocol output exceeded 1 MiB."
+  const error = protocolOverflow ? "Worker protocol buffer exceeded 5 MiB."
     : protocolMalformed ? "Worker emitted malformed JSON protocol output."
     : aborted ? "Worker aborted; edits may remain."
     : timedOut ? "Worker timed out; edits may remain."

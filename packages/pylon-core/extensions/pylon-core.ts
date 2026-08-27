@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+// TODO: remove this test comment
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -22,8 +23,10 @@ import {
   recordVerificationOutcome,
 } from "../src/token-meter.ts";
 import {
+  appendTurnCommit,
   createWorktreeSummary,
   WORKTREE_SUMMARY_ENTRY_TYPE,
+  turnsBranchForSession,
   worktreeDiff,
   worktreeFingerprint,
   worktreeSnapshot,
@@ -430,8 +433,19 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       .reverse()
       .find((entry: any) => entry?.type === "message" && entry.message?.role === "assistant")
       ?.id;
+    let anchor;
+    if (files?.length && before && after && typeof assistantEntryId === "string") {
+      // Best-effort: anchor both boundary trees via a commit chain so diffs survive git gc.
+      // The before-tree anchors first because external edits between turns can orphan it;
+      // identical trees short-circuit inside appendTurnCommit. Failures degrade silently.
+      const branch = turnsBranchForSession(String(ctx.sessionManager?.getSessionId?.() ?? ""));
+      if (branch && await appendTurnCommit(before.root, branch, before.tree)
+        && await appendTurnCommit(before.root, branch, after.tree)) {
+        anchor = { root: before.root, beforeTree: before.tree, afterTree: after.tree };
+      }
+    }
     const summary = files && typeof assistantEntryId === "string"
-      ? createWorktreeSummary(assistantEntryId, files)
+      ? createWorktreeSummary(assistantEntryId, files, anchor)
       : undefined;
     if (summary?.files.length) {
       try { pi.appendEntry(WORKTREE_SUMMARY_ENTRY_TYPE, summary); }

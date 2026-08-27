@@ -1,7 +1,7 @@
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
-import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationAttachmentContent, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, BootstrapSnapshot, ConversationAttachmentContent, ConversationHistoryPage, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffResult, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -137,6 +137,15 @@ export class ApiClient {
       credentials: "same-origin",
     }));
   }
+
+  async turnDiff(generation: number, entryId: string): Promise<TurnDiffResult> {
+    const query = new URLSearchParams({ generation: String(generation), entry: entryId });
+    return json<TurnDiffResult>(await fetch(`/api/v1/turn-diff?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+    }));
+  }
+
 
   async timelineCheckpointFiles(generation: number, checkpointId: string): Promise<TimelineCheckpointFiles> {
     const query = new URLSearchParams({ generation: String(generation), checkpointId });

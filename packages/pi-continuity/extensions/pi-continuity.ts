@@ -262,6 +262,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     savedTools: string[] | undefined,
     lastPrompt = "",
     memoryEnabled = true,
+    memoryReviewerConfigured = false,
     memoryActivationEnabled = true,
     legacyMigrationAvailable = false,
     activeSessionContext: any,
@@ -756,7 +757,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       owner: "pi-continuity",
       managedTools: continuityTools,
       enabledTools: enabledContinuityTools(),
-      deferredTools: enabledContinuityTools().filter((tool) => tool === "continuity_recall" || tool === "memory"),
+      deferredTools: enabledContinuityTools().filter((tool) => tool === "continuity_recall" || tool === "memory" && !memoryReviewerConfigured),
       toolUsage: Object.fromEntries(enabledContinuityTools().map((tool) => [tool, tool === "continuity_recall"
         ? "recall bounded historical evidence omitted from the active context"
         : tool === "memory" ? "inspect durable notes or propose grounded reviewer-gated memory changes"
@@ -879,7 +880,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
     currentCwd = ctx.cwd;
     activeSessionContext = ctx;
     approvalContext = ctx;
-    memoryEnabled = (await loadConfig()).memoryEnabled !== false;
+    const config = await loadConfig();
+    memoryEnabled = config.memoryEnabled !== false;
+    memoryReviewerConfigured = Boolean(config.memoryReviewer);
     recentCalls.clear();
     pendingMutations.clear();
     deniedToolCalls.clear();
@@ -2249,6 +2252,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (value === "reset") {
         await updateConfig((current) => { const next = { ...current }; delete next[role]; return next; });
+        if (role === "memoryReviewer") {
+          memoryReviewerConfigured = false;
+          gate(work?.mode === "planning");
+        }
         ctx.ui.notify(
           role === "memoryReviewer"
             ? "Memory Reviewer reset; memory proposals are unavailable."
@@ -2294,6 +2301,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ...current,
         [role]: { model: modelName(model), ...(thinking ? { thinking } : {}) },
       }));
+      if (role === "memoryReviewer") {
+        memoryReviewerConfigured = true;
+        gate(work?.mode === "planning");
+      }
       ctx.ui.notify(
         `${role}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`,
         "info",

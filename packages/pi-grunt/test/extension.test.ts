@@ -137,10 +137,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.equal(childArgs[childArgs.indexOf("--thinking") + 1], "medium");
     assert.ok(childArgs.includes("--no-session"));
     assert.ok(childArgs.includes("--no-extensions"));
-    const lineEditExtension = childArgs[childArgs.indexOf("--extension") + 1] ?? "";
+    const extensionIndexes = childArgs.flatMap((arg, index) => arg === "--extension" ? [index] : []);
+    const lineEditExtension = childArgs[extensionIndexes[0]! + 1] ?? "";
+    const sieveExtension = childArgs[extensionIndexes[1]! + 1] ?? "";
     assert.match(lineEditExtension.replace(/\\/g, "/"), /\/pylon-core\/extensions\/line-edit\.ts$/);
+    assert.match(sieveExtension.replace(/\\/g, "/"), /\/pi-sieve\/extensions\/pi-sieve\.ts$/);
     await access(lineEditExtension);
-    assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash");
+    await access(sieveExtension);
+    assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash,sieve_recall");
     assert.ok(childArgs.includes("--system-prompt"));
     assert.ok(!childArgs.includes("--append-system-prompt"));
     assert.match(childArgs.at(-1) ?? "", /Targeted context.*exported-constant convention/s);

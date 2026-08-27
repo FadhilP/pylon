@@ -6,7 +6,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   createSessionWorktreeFromState,
   claimSessionCheckout,
@@ -16,6 +16,7 @@ import {
   inspectTreeChanges,
   mergeWorkspaceChanges,
   collectWorkspaceFiles,
+  collectWorkspaceFileDelta,
   collectPlainWorkspaceFiles,
   readWorkspaceFile,
   readPlainWorkspaceFile,
@@ -30,7 +31,7 @@ import {
 import type { CheckoutState } from "pylon-core/src/worktree.ts";
 import { listSessionInventory } from "pylon-core/session-inventory";
 import type { ModelOptionReadModel, QueueReadModel, SessionRuntimeState } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffQuery, TurnDiffResult, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "../../shared/protocol/snapshots.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
@@ -214,6 +215,9 @@ interface RuntimeSlot {
   lastApply?: NonNullable<WorkspaceReadModel["lastApply"]>;
   workspace?: WorkspaceReadModel;
   workspaceRefresh?: Promise<void>;
+  workspaceTouchedPaths?: Set<string>;
+  workspaceReconcileRequired?: boolean;
+  workspaceToolTouches?: Map<string, { path?: string; exact: boolean }>;
   provisional?: {
     previous: RuntimeSlot;
     projectId: string;
@@ -232,6 +236,23 @@ interface RuntimeSlot {
   };
 }
 
+const workspaceReadOnlyTools = new Set([
+  "advisor", "continuity_update", "fd", "read", "repo_scout", "rg", "search_tools", "sieve_recall",
+]);
+
+function workspaceRelativeToolPath(cwd: string, value: unknown): string | undefined {
+  if (typeof value !== "string" || !value || value.length > 1_024) return undefined;
+  const absolute = isAbsolute(value) ? resolve(value) : resolve(cwd, value);
+  const path = relative(cwd, absolute).replaceAll("\\", "/");
+  if (!path || path.length > 500 || path.startsWith("../") || isAbsolute(path)
+    || path.split("/").some((part) => !part || part === "." || part === "..")) return undefined;
+  return path;
+}
+
+function sortWorkspaceFiles(files: WorkspaceFileReadModel[]): void {
+  files.sort((left, right) => Number(Boolean(right.status)) - Number(Boolean(left.status))
+    || left.path.localeCompare(right.path));
+}
 /** Keeps visited SDK sessions alive while preserving one server-wide selection. */
 export class RuntimeCoordinator implements PiDriver {
   private readonly slots = new Map<string, RuntimeSlot>();
@@ -253,6 +274,7 @@ export class RuntimeCoordinator implements PiDriver {
   private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
 
   constructor(private readonly options: RuntimeCoordinatorOptions = {}) {}
+
 
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.target || this.disposed) throw new Error("driver cannot be started twice");
@@ -310,6 +332,16 @@ export class RuntimeCoordinator implements PiDriver {
     this.assertSelected(slot, generation, "loading attachment");
     return { ...attachment, sessionGeneration: generation };
   }
+
+  async turnDiff(input: TurnDiffQuery): Promise<TurnDiffResult> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.turnDiff) throw new Error("turn diffs are unavailable");
+    const result = await slot.driver.turnDiff(input);
+    this.assertSelected(slot, generation, "loading turn diff");
+    return { ...result, sessionGeneration: generation };
+  }
+
 
   async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
     const slot = this.selected();
@@ -424,9 +456,31 @@ export class RuntimeCoordinator implements PiDriver {
     const record = this.registry().workspaceForSession(slot.id);
     const cwd = slot.driver.runtimeDetails().cwd;
     const inventoryKey = workspaceInventoryKey(cwd, record?.baselineTree);
-    if (input.refresh) this.workspaceInventories.delete(inventoryKey);
+    if (input.refresh) slot.workspaceReconcileRequired = true;
     let inventory = this.workspaceInventories.get(inventoryKey);
-    if (!inventory || inventory.expiresAt <= Date.now()
+    const touchedPaths = [...(slot.workspaceTouchedPaths ?? [])];
+    if (touchedPaths.length && !slot.workspace?.gitAvailable) slot.workspaceReconcileRequired = true;
+    if (inventory && !input.refresh && slot.workspace?.gitAvailable && touchedPaths.length
+      && !slot.workspaceReconcileRequired && inventory.expiresAt > Date.now()) {
+      const delta = await collectWorkspaceFileDelta({ cwd, baselineTree: record?.baselineTree, paths: touchedPaths });
+      if (!delta.reconcileRequired && !(inventory.truncated && delta.removed.length)) {
+        const files = new Map(inventory.files.map((file) => [file.path, file]));
+        for (const path of delta.removed) files.delete(path);
+        for (const file of delta.upserted) files.set(file.path, file);
+        const patched = [...files.values()];
+        sortWorkspaceFiles(patched);
+        inventory = {
+          ...inventory,
+          expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
+          revision: delta.revision,
+          files: patched.slice(0, 10_000),
+        };
+        this.workspaceInventories.set(inventoryKey, inventory);
+      } else {
+        slot.workspaceReconcileRequired = true;
+      }
+    }
+    if (!inventory || input.refresh || slot.workspaceReconcileRequired || inventory.expiresAt <= Date.now()
       || inventory.cwd !== cwd || inventory.baselineTree !== record?.baselineTree) {
       await this.refreshWorkspace(slot, true);
       const collected = await (slot.workspace?.gitAvailable
@@ -446,6 +500,8 @@ export class RuntimeCoordinator implements PiDriver {
         this.workspaceInventories.delete(this.workspaceInventories.keys().next().value!);
       }
     }
+    slot.workspaceTouchedPaths?.clear();
+    slot.workspaceReconcileRequired = false;
     const query = (input.query ?? "").trim().toLocaleLowerCase();
     const filtered = query
       ? inventory.files.filter((file) => file.path.toLocaleLowerCase().includes(query))
@@ -1702,6 +1758,9 @@ export class RuntimeCoordinator implements PiDriver {
     const sourceChanges = await inspectWorkspaceChanges(source.root, record.baselineTree);
     if (sourceChanges.revision !== expectedRevision) throw new Error("session changes changed before they could be applied");
     if (!sourceChanges.files.length) throw new Error("this session has no changes to apply");
+    if (sourceChanges.unapplicableSubmoduleChanges) {
+      throw new Error("Apply changes cannot include uncommitted files inside submodules.");
+    }
 
     const target: CheckoutState = record.mode === "checkout"
       ? this.parkedCheckout(record)
@@ -1847,6 +1906,9 @@ export class RuntimeCoordinator implements PiDriver {
     }
     const source = await inspectWorkspaceChanges(slot.driver.runtimeDetails().cwd, record.baselineTree);
     if (!source.files.length) return { available: false, reason: "This session has no changes to apply." };
+    if (source.unapplicableSubmoduleChanges) {
+      return { available: false, reason: "Commit or discard changes inside submodules before applying this workspace." };
+    }
     const targetBranch = record.mode === "checkout"
       ? branchLabel(record.parkedHeadRef)
       : branchLabel((await inspectGitWorkspace(project.cwd))?.headRef);
@@ -2367,8 +2429,42 @@ export class RuntimeCoordinator implements PiDriver {
       const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
         ? event.payload as Record<string, unknown>
         : {};
-      if (String(payload.type ?? "").replace(/-/g, "_") === "agent_end") {
-        this.invalidateWorkspaceInventory(slot);
+      const kind = String(payload.type ?? "").replace(/-/g, "_");
+      if (kind === "agent_start") {
+        slot.workspaceTouchedPaths = new Set();
+        slot.workspaceReconcileRequired = false;
+        slot.workspaceToolTouches = new Map();
+      } else if (kind === "tool_execution_start") {
+        const toolId = typeof payload.toolCallId === "string" ? payload.toolCallId : undefined;
+        const name = String(payload.toolName ?? payload.name ?? "").split(".").at(-1) ?? "";
+        const input = payload.args ?? payload.input;
+        const args = input && typeof input === "object" && !Array.isArray(input)
+          ? input as Record<string, unknown>
+          : {};
+        if (toolId) {
+          const path = name === "write" || name === "edit"
+            ? workspaceRelativeToolPath(slot.driver.runtimeDetails().cwd, args.path)
+            : undefined;
+          slot.workspaceToolTouches ??= new Map();
+          slot.workspaceToolTouches.set(toolId, {
+            path,
+            exact: Boolean(path) || workspaceReadOnlyTools.has(name),
+          });
+        }
+      } else if (kind === "tool_execution_end") {
+        const toolId = typeof payload.toolCallId === "string" ? payload.toolCallId : undefined;
+        const touch = toolId ? slot.workspaceToolTouches?.get(toolId) : undefined;
+        if (toolId) slot.workspaceToolTouches?.delete(toolId);
+        const failed = payload.isError === true || payload.failed === true || Boolean(payload.error);
+        if (!touch?.exact || failed && Boolean(touch.path)) {
+          slot.workspaceReconcileRequired = true;
+        } else if (touch.path) {
+          slot.workspaceTouchedPaths ??= new Set();
+          if (slot.workspaceTouchedPaths.size < 100) slot.workspaceTouchedPaths.add(touch.path);
+          else slot.workspaceReconcileRequired = true;
+        }
+      } else if (kind === "agent_end") {
+        if (slot.workspaceToolTouches?.size) slot.workspaceReconcileRequired = true;
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
         const willRetry = payload.willRetry === true && payload.stopped !== true;
         const completed = !willRetry && payload.stopped !== true;
@@ -2377,8 +2473,18 @@ export class RuntimeCoordinator implements PiDriver {
           () => this.publishStatus(slot.id, completed, completionCue),
           () => this.publishStatus(slot.id),
         ));
-      } else if (String(payload.type ?? "").replace(/-/g, "_") === "worktree_summary") {
-        this.invalidateWorkspaceInventory(slot);
+      } else if (kind === "worktree_summary") {
+        if (Array.isArray(payload.files)) {
+          slot.workspaceTouchedPaths ??= new Set();
+          for (const value of payload.files.slice(0, 100)) {
+            const raw = value && typeof value === "object" && !Array.isArray(value)
+              ? (value as Record<string, unknown>).path
+              : undefined;
+            const path = workspaceRelativeToolPath(slot.driver.runtimeDetails().cwd, raw);
+            if (path && slot.workspaceTouchedPaths.size < 100) slot.workspaceTouchedPaths.add(path);
+            else if (!path || slot.workspaceTouchedPaths.size >= 100) slot.workspaceReconcileRequired = true;
+          }
+        }
         queueMicrotask(() => void this.refreshWorkspace(slot, true).catch(() => undefined));
       }
     }
@@ -2556,22 +2662,25 @@ export class RuntimeCoordinator implements PiDriver {
           canMoveToCheckout,
           canMoveToWorktree: record.mode === "checkout" && idle,
           canApplyChanges: idle && !slot.applyState && changes.files.length > 0
+            && !changes.unapplicableSubmoduleChanges
             && Boolean(applyTargetBranch) && sameRepository && (record.mode === "checkout" || !owner),
           ...(applyTargetBranch ? { applyTargetBranch } : {}),
           ...(applyTargetChangedCount !== undefined ? { applyTargetChangedCount } : {}),
           ...(!changes.files.length
             ? { applyUnavailableReason: "This session has no changes to apply." }
-            : !idle
-              ? { applyUnavailableReason: "Session must be idle before applying changes." }
-              : slot.applyState
-                ? { applyUnavailableReason: "Session changes are already being applied." }
-                : owner
-                  ? { applyUnavailableReason: "Another session currently owns the project folder." }
-                  : !applyTargetBranch
-                    ? { applyUnavailableReason: "The target project checkout is not on a branch." }
-                    : !sameRepository
-                      ? { applyUnavailableReason: "The project folder belongs to a different Git repository." }
-                      : {}),
+            : changes.unapplicableSubmoduleChanges
+              ? { applyUnavailableReason: "Commit or discard changes inside submodules before applying this workspace." }
+              : !idle
+                ? { applyUnavailableReason: "Session must be idle before applying changes." }
+                : slot.applyState
+                  ? { applyUnavailableReason: "Session changes are already being applied." }
+                  : owner
+                    ? { applyUnavailableReason: "Another session currently owns the project folder." }
+                    : !applyTargetBranch
+                      ? { applyUnavailableReason: "The target project checkout is not on a branch." }
+                      : !sameRepository
+                        ? { applyUnavailableReason: "The project folder belongs to a different Git repository." }
+                        : {}),
           ...(slot.applyState ? { applyState: slot.applyState } : {}),
           ...(slot.lastApply ? { lastApply: slot.lastApply } : {}),
           ...(reason ? { handoffUnavailableReason: reason } : {}),

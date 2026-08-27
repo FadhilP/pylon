@@ -200,9 +200,9 @@ test("runner sanitizes reported costs before aggregating usage", async () => {
   assert.deepEqual(run.turns.map((turn) => turn.cost), [0, 0, 0.2, 0]); assert.equal(run.usage.cost, 0.2);
 });
 
-test("runner aborts oversized protocol lines", async () => {
+test("runner aborts oversized protocol buffers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-overflow-")); const script = join(dir, "fake.mjs");
-  await writeFile(script, `process.stdout.write('x'.repeat(1024*1024+1));setTimeout(()=>{},10000);`);
+  await writeFile(script, `process.stdout.write('x'.repeat(1024*1024*5+1));setTimeout(()=>{},10000);`);
   const run = await runPi([], { cwd: dir, prompt: "x", invocation: { command: process.execPath, args: [script] }, timeoutMs: 5000 });
-  assert.equal(run.error, "Scout protocol output exceeded 1 MiB.");
+  assert.equal(run.error, "Scout protocol buffer exceeded 5 MiB.");
 });

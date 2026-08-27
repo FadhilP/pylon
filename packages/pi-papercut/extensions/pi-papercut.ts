@@ -134,7 +134,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
       owner: "pi-papercut",
       managedTools,
       enabledTools: managedTools,
-      deferredTools: managedTools,
+      deferredTools: [],
       toolUsage: { papercut: "capture or manage durable project workflow-friction notes" },
     });
     try {

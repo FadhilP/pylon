@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { realpath, unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  activeAssistantEntryIds,
   appendToolDuration,
   appendTurnGitBranch,
   appendWorkDuration,
@@ -13,8 +14,13 @@ import {
   readPersistedWorkDurations,
 } from "pylon-core/src/work-duration.ts";
 import {
+  inspectGitWorkspace,
   parseWorktreeSummary,
   readPersistedWorktreeSummaries,
+  removeSessionRef,
+  turnTreeDiff,
+  turnsBranchForSession,
+  WORKTREE_SUMMARY_ENTRY_TYPE,
 } from "pylon-core/src/worktree.ts";
 import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts";
 import { listSessionInventory, resolveUniqueSession, type SessionInventoryEntry } from "pylon-core/session-inventory";
@@ -43,7 +49,7 @@ import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from
 import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
 import { MAX_COMPACTION_DISPLAY_HISTORY_ITEMS, MAX_COMPACTION_DISPLAY_PATH, MAX_COMPACTION_DISPLAY_RECORDS, MAX_COMPACTION_DISPLAY_SOURCE_ID, MAX_COMPACTION_DISPLAY_TEXT } from "../../shared/protocol/events.ts";
 import type { ChangedFileReadModel, CompactionDisplayReadModel, DelegatedAgentRunReadModel, MessageReadModel, ModelOptionReadModel, ProviderAuthReadModel, ProviderAuthType, SessionRuntimeState, SlashCommandResultReadModel, ToolUsageReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, DiscoverIndexReadModel, ExtensionListSnapshot, FileSuggestionList, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeDiagnostic, RuntimePolicyReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffQuery, TurnDiffResult, VerifyPolicyReadModel } from "../../shared/protocol/snapshots.ts";
 import { isPapercutListPage, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
@@ -887,6 +893,42 @@ export class SessionRuntime implements PiDriver {
     }
     throw new Error("attachment is unavailable");
   }
+  async turnDiff(input: TurnDiffQuery): Promise<TurnDiffResult> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    if (!activeAssistantEntryIds(runtime.session.sessionManager.getBranch()).has(input.entryId)) {
+      throw new Error("turn diff is unavailable");
+    }
+    const entries: unknown[] = runtime.session.sessionManager.getEntries();
+    for (const value of entries) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const entry = value as Record<string, unknown>;
+      if (entry.type !== "custom" || entry.customType !== WORKTREE_SUMMARY_ENTRY_TYPE) continue;
+      const summary = parseWorktreeSummary(entry.data);
+      if (!summary || summary.assistantEntryId !== input.entryId) continue;
+      if (!summary.root || !summary.beforeTree || !summary.afterTree) break; // found but unanchored
+      // The stored root must be the live session's repository before any git access.
+      const workspace = await inspectGitWorkspace(runtime.cwd);
+      const storedRoot = await realpath(summary.root).catch(() => undefined);
+      if (!workspace || !storedRoot
+        || resolve(storedRoot).replaceAll("\\", "/").toLowerCase() !== resolve(workspace.root).replaceAll("\\", "/").toLowerCase()) {
+        break;
+      }
+      try {
+        const diff = await turnTreeDiff(workspace.root, summary.beforeTree, summary.afterTree);
+        return {
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: runtime.session.sessionId,
+          sessionGeneration: this.gate.generation,
+          ...diff,
+        };
+      } catch {
+        break; // stale anchor or unreadable objects surface as unavailable
+      }
+    }
+    throw new Error("turn diff is unavailable");
+  }
+
 
   async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
     const runtime = this.requireRuntime();
@@ -1659,6 +1701,8 @@ export class SessionRuntime implements PiDriver {
       const activeFile = runtime.session.sessionManager.getSessionFile();
       if (activeFile && resolve(session.path) === resolve(activeFile)) throw new Error("cannot delete the currently active session");
       await deleteSessionFile(session.path);
+      const turnsBranch = turnsBranchForSession(input.sessionId);
+      if (turnsBranch) await removeSessionRef(session.cwd, turnsBranch);
       this.sessionIndex.remove(input.sessionId);
     });
   }

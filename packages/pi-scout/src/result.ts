@@ -2,7 +2,7 @@ import { truncateUtf8 } from "pylon-core/utf8";
 
 export const MAX_BYTES = 16 * 1024;
 /** Repo Scout's final child report budget; other callers retain the general default. */
-export const SCOUT_REPORT_MAX_BYTES = 12 * 1024;
+export const SCOUT_REPORT_MAX_BYTES = 32 * 1024;
 
 export function repoResult(finalText: string, error?: string): string {
   return error ? `Repo scout failed nonfatally: ${error}` : finalText;

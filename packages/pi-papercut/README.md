@@ -44,7 +44,7 @@ Session transcript review is intentionally not included.
 
 ## Pylon Web settings
 
-The package appears in **Settings → Packages** with the standard package on/off switch. Its `papercut` tool is published under **Tool exposure**, where it can inherit the default or be set to active, deferred, or disabled.
+The package appears in **Settings → Packages** with the standard package on/off switch. Its `papercut` tool is active by default so workflow friction can be captured when it occurs. Under **Tool exposure**, it can instead be set to deferred or disabled.
 
 ## Storage and privacy
 

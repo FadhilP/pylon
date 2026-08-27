@@ -10,12 +10,12 @@ import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
+import { modelKey, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
 
-export type SettingsTab = "providers" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
+export type SettingsTab = "providers" | "models" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = ["providers", "packages", "extensions", "hooks", "policy", "notifications", "appearance"];
+const SETTINGS_TABS: SettingsTab[] = ["providers", "models", "packages", "extensions", "hooks", "policy", "notifications", "appearance"];
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
   initialProviderQuery?: string;
@@ -63,6 +63,7 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
   const [packageQuery, setPackageQuery] = useState(initialPackageQuery);
+  const [modelQuery, setModelQuery] = useState("");
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
   const [toolPolicyBusy, setToolPolicyBusy] = useState("");
   const filteredPackages = packages.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()));
@@ -74,6 +75,17 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
     { id: "connected", label: "Connected", providers: filteredProviders.filter((provider) => provider.configured) },
     { id: "available", label: "Available", providers: filteredProviders.filter((provider) => !provider.configured) },
   ];
+  const hiddenModelKeys = useHiddenModels();
+  const filteredModels = models.filter((item) => `${item.provider} ${item.id} ${item.name}`.toLowerCase().includes(modelQuery.trim().toLowerCase()));
+  const modelGroups: { provider: string; items: ModelOptionReadModel[] }[] = [];
+  for (const item of filteredModels) {
+    const last = modelGroups[modelGroups.length - 1];
+    if (last && last.provider === item.provider) last.items.push(item);
+    else modelGroups.push({ provider: item.provider, items: [item] });
+  }
+  const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
+    for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
+  };
   const authFlow = providerAuth?.flow;
   const authRunning = authFlow?.status === "running";
   const providerPrompt = pendingUi?.payload.context === "provider-auth" ? pendingUi : undefined;
@@ -284,6 +296,34 @@ export function SettingsDialog({ initialTab = "packages", initialProviderQuery =
               <div><span><strong>Turn complete</strong><small>Played after the assistant finishes a turn.</small></span><button type="button" onClick={() => playSound("turn-complete")}>Play preview</button></div>
               <div><span><strong>Attention required</strong><small>Played when Pylon needs approval or clarification.</small></span><button type="button" onClick={() => playSound("attention")}>Play preview</button></div>
             </div>
+          </section>
+
+          <section id="settings-panel-models" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-models" hidden={activeTab !== "models"}>
+            <div className="settings-pane-header">
+              <div><h2>Models</h2><p>Choose which models appear in the model selector. The active session model always stays visible.</p></div>
+              <input type="search" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Filter models" aria-label="Filter models" />
+            </div>
+            {models.length === 0 && <div className="settings-empty"><strong>No models available</strong><span>Connect a provider first.</span></div>}
+            {models.length > 0 && filteredModels.length === 0 && <div className="settings-empty"><strong>No matching models</strong><span>Try a different filter.</span></div>}
+            {filteredModels.length > 0 && <div className="settings-provider-groups">{modelGroups.map((group) => {
+              const allVisible = group.items.every((item) => !hiddenModelKeys.has(`${item.provider}/${item.id}`));
+              return <section className="settings-provider-group" key={group.provider} aria-labelledby={`model-group-${group.provider}`}>
+                <header>
+                  <h3 id={`model-group-${group.provider}`}>{group.provider}</h3>
+                  <label className="settings-model-all">
+                    <input type="checkbox" checked={allVisible} onChange={(event) => setProviderVisible(group.items, event.target.checked)} />
+                    Show all
+                  </label>
+                </header>
+                <div className="settings-provider-list">{group.items.map((item) => {
+                  const key = `${item.provider}/${item.id}`;
+                  return <label className="settings-model-row" key={key}>
+                    <input type="checkbox" checked={!hiddenModelKeys.has(key)} onChange={(event) => setHiddenModelVisible(key, event.target.checked)} />
+                    <span><strong>{item.name}</strong><small>{item.id}</small></span>
+                  </label>;
+                })}</div>
+              </section>;
+            })}</div>}
           </section>
 
           <section id="settings-panel-appearance" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-appearance" hidden={activeTab !== "appearance"}>
@@ -611,10 +651,14 @@ function ModelChoices({ value, models, disabled, onChange }: {
 }
 
 function ModelModeField({ value, models, disabled, onChange }: { value: string; models: ModelOptionReadModel[]; disabled: boolean; onChange: (value: string) => void }) {
+  const hiddenModels = useHiddenModels();
+  const options = visibleModels(models, hiddenModels);
+  const selected = models.find((model) => modelKey(model) === value);
+  if (selected && !options.some((model) => modelKey(model) === value)) options.push(selected);
   return <label>Model<select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
     <option value="disabled">Disabled</option>
     <option value="session">Use session model</option>
-    {models.map((model) => <option value={`${model.provider}/${model.id}`} key={`${model.provider}/${model.id}`}>{model.name}</option>)}
+    {options.map((model) => <option value={modelKey(model)} key={modelKey(model)}>{model.name}</option>)}
   </select></label>;
 }
 

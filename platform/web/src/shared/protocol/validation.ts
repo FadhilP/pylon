@@ -508,7 +508,8 @@ export function isWorkspaceFilePage(value: unknown): value is WorkspaceFilePage 
     && (file.status === undefined || ["added", "modified", "deleted"].includes(String(file.status)))
     && (file.binary === undefined || typeof file.binary === "boolean")
     && (file.additions === undefined || Number.isSafeInteger(file.additions) && (file.additions as number) >= 0)
-    && (file.deletions === undefined || Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0));
+    && (file.deletions === undefined || Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0)
+    && (file.kind === undefined || file.kind === "submodule"));
 }
 
 export function isWorkspaceFileContent(value: unknown): value is WorkspaceFileContent {

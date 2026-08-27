@@ -117,6 +117,8 @@ export interface WorkspaceFileReadModel {
   additions?: number;
   deletions?: number;
   binary?: boolean;
+  /** Registered submodule folders without inventoried files; rendered as non-selectable directories. */
+  kind?: "submodule";
 }
 
 export interface WorkspaceFilePage {
@@ -315,6 +317,26 @@ export type ConversationAttachmentContent =
       mimeType: string;
       size: number;
       text: string;
+    };
+
+export interface TurnDiffQuery {
+  entryId: string;
+}
+
+export type TurnDiffResult =
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      sessionId: string;
+      sessionGeneration: number;
+      state: "binary";
+    }
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      sessionId: string;
+      sessionGeneration: number;
+      state: "available" | "oversized";
+      text: string;
+      truncated?: boolean;
     };
 
 

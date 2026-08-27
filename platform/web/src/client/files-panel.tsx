@@ -2,23 +2,47 @@ import type { FileDiffContentsLoader } from "@pierre/diffs";
 import {
   IconAlertTriangle,
   IconArrowBackUp,
+  IconBrandDocker,
+  IconBrandGolang,
+  IconBrandNpm,
+  IconBrandPython,
   IconCheck,
   IconCopy,
   IconDatabase,
+  IconExternalLink,
   IconFile,
+  IconFileCode,
   IconFiles,
+  IconFileSettings,
+  IconFileText,
+  IconFileTypeCss,
+  IconFileTypeHtml,
+  IconFileTypeJs,
+  IconFileTypeJsx,
+  IconFileTypePdf,
+  IconFileTypeRs,
+  IconFileTypeSql,
+  IconFileTypeSvg,
+  IconFileTypeTs,
+  IconFileTypeTsx,
+  IconFileTypeZip,
   IconFolder,
   IconGitCompare,
   IconGitMerge,
+  IconJson,
   IconLoader2,
+  IconMarkdown,
+  IconPhoto,
   IconRefresh,
   IconSearch,
+  IconTerminal2,
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
+import { fileIconKind } from "../shared/file-icon";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import { createPierreLoadedDiffFiles } from "../shared/pierre-code-viewer-model";
@@ -32,13 +56,44 @@ import { displayTime } from "./format";
 import { copyText } from "./clipboard";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
-type FileView = "current" | "base" | "diff";
+export type FileView = "current" | "base" | "diff";
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
-export function FilesPanel({ live, requestedPath, onClose, onError }: {
+export function FileTypeIcon({ path, size = 14 }: { path: string; size?: number }) {
+  const kind = fileIconKind(path);
+  const props = { className: `file-type-icon is-${kind}`, size, "aria-hidden": true } as const;
+  switch (kind) {
+    case "typescript": return <IconFileTypeTs {...props} />;
+    case "tsx": return <IconFileTypeTsx {...props} />;
+    case "javascript": return <IconFileTypeJs {...props} />;
+    case "jsx": return <IconFileTypeJsx {...props} />;
+    case "html": return <IconFileTypeHtml {...props} />;
+    case "css": return <IconFileTypeCss {...props} />;
+    case "json": return <IconJson {...props} />;
+    case "markdown": return <IconMarkdown {...props} />;
+    case "python": return <IconBrandPython {...props} />;
+    case "go": return <IconBrandGolang {...props} />;
+    case "rust": return <IconFileTypeRs {...props} />;
+    case "sql": return <IconFileTypeSql {...props} />;
+    case "svg": return <IconFileTypeSvg {...props} />;
+    case "image": return <IconPhoto {...props} />;
+    case "pdf": return <IconFileTypePdf {...props} />;
+    case "archive": return <IconFileTypeZip {...props} />;
+    case "config": return <IconFileSettings {...props} />;
+    case "shell": return <IconTerminal2 {...props} />;
+    case "code": return <IconFileCode {...props} />;
+    case "text": return <IconFileText {...props} />;
+    case "npm": return <IconBrandNpm {...props} />;
+    case "docker": return <IconBrandDocker {...props} />;
+    default: return <IconFile {...props} />;
+  }
+}
+
+export function FilesPanel({ live, requestedPath, onClose, onExpand, onError }: {
   live: RuntimeStoreSnapshot;
-  requestedPath?: FileReference & { requestId: number; view?: "current" | "diff" };
+  requestedPath?: FileReference & { requestId: number; view?: FileView };
   onClose: () => void;
+  onExpand?: (selectedPath?: string, view?: FileView) => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
@@ -80,8 +135,6 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     }
     const controller = new AbortController();
     const revision = ++requestRevision.current;
-    setFiles([]);
-    setTruncated(false);
     setInventoryProgress(undefined);
     setInventoryLoading(true);
     void (async () => {
@@ -184,7 +237,10 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
   return <><aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
     <header>
       <div><IconFiles size={18} /><strong id="files-title">Files</strong></div>
-      <button className="icon-button" type="button" onClick={onClose} aria-label="Close files"><IconX size={17} /></button>
+      <span>
+        {onExpand && <button className="files-expand-button" type="button" onClick={() => onExpand(selectedPath, view)}><IconExternalLink size={14} />Open workspace</button>}
+        <button className="icon-button" type="button" onClick={onClose} aria-label="Close files"><IconX size={17} /></button>
+      </span>
     </header>
     <div className="files-workspace-bar">
       <span title={workspace?.mode === "worktree"
@@ -233,8 +289,8 @@ export function FilesPanel({ live, requestedPath, onClose, onError }: {
     <label className="files-search"><IconSearch size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" /></label>
     <div className={`files-panel-body${selectedPath ? "" : " is-list-only"}`}>
       <div className="files-list" aria-label={tab === "changes" ? "Changed files" : "Project files"}>
-        {inventoryLoading && !inventoryProgress && <span className="files-empty">Indexing workspace…</span>}
-        {inventoryLoading && inventoryProgress && <span className="files-progress">
+        {inventoryLoading && !files.length && !inventoryProgress && <span className="files-empty">Indexing workspace…</span>}
+        {inventoryLoading && !files.length && inventoryProgress && <span className="files-progress">
           Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
         </span>}
         {!inventoryLoading && !visible.length && <span className="files-empty">{tab === "changes" ? "No session changes" : "No files found"}</span>}
@@ -390,7 +446,7 @@ interface FileTreeNode {
   directories: Map<string, FileTreeNode>;
 }
 
-function FileTree({ files, selectedPath, onSelect }: {
+export function FileTree({ files, selectedPath, onSelect }: {
   files: WorkspaceFileReadModel[];
   selectedPath?: string;
   onSelect: (path: string) => void;
@@ -400,6 +456,18 @@ function FileTree({ files, selectedPath, onSelect }: {
     for (const file of files) {
       const parts = file.path.split("/");
       let node = value;
+      // Registered submodule folders render as non-selectable directory chains, never as selectable rows.
+      if (file.kind === "submodule") {
+        for (const part of parts) {
+          let child = node.directories.get(part);
+          if (!child) {
+            child = { files: [], directories: new Map() };
+            node.directories.set(part, child);
+          }
+          node = child;
+        }
+        continue;
+      }
       for (const directory of parts.slice(0, -1)) {
         let child = node.directories.get(directory);
         if (!child) {
@@ -431,7 +499,7 @@ function TreeNode({ node, selectedPath, onSelect }: {
   </>;
 }
 
-function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
+export function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
   file: WorkspaceFileReadModel;
   selectedPath?: string;
   onSelect: (path: string) => void;
@@ -443,14 +511,14 @@ function FileRow({ file, selectedPath, onSelect, fullPath = false }: {
     event.dataTransfer.setData(WORKSPACE_FILE_DRAG_TYPE, file.path);
   };
   return <button type="button" draggable className={selectedPath === file.path ? "is-active" : ""} onDragStart={startDrag} onClick={() => onSelect(file.path)}>
-    <IconFile size={14} />
+    <FileTypeIcon path={file.path} size={14} />
     <span title={file.path}>{fullPath ? file.path : name}</span>
     {file.status && <small className={`is-${file.status}`}>{file.status[0].toUpperCase()}</small>}
     {file.binary ? <em>binary</em> : file.status && <em><ins>+{file.additions ?? 0}</ins><del>-{file.deletions ?? 0}</del></em>}
   </button>;
 }
 
-function FileContent({ value, view, targetLine, onError }: {
+export function FileContent({ value, view, targetLine, onError }: {
   value?: WorkspaceFileContent | WorkspaceFileDiff;
   view: FileView;
   targetLine?: number;

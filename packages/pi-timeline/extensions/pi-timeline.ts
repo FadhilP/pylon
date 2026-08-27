@@ -449,7 +449,7 @@ export default function timelineExtension(
               headers: auth.headers,
               env: auth.env,
               maxTokens: 32,
-              timeoutMs: 10_000,
+              timeoutMs: 30_000,
               sessionId,
             },
           );

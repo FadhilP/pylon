@@ -5,18 +5,24 @@ import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  appendTurnCommit,
   captureCheckoutState,
   createSessionWorktree,
   createWorktreeSummary,
+  collectWorkspaceFileDelta,
   diffWorkspaceFile,
+  inspectWorkspaceChanges,
   listWorkspaceFiles,
   mergeWorkspaceChanges,
   parseWorktreeSummary,
   readWorkspaceFile,
   recreateSessionWorktree,
+  removeSessionRef,
   removeSessionWorktree,
   restoreCheckoutState,
   readPersistedWorktreeSummaries,
+  turnTreeDiff,
+  turnsBranchForSession,
   worktreeDiff,
   worktreeSnapshot,
 } from "../src/worktree.ts";
@@ -149,6 +155,61 @@ test("persisted summaries are validated and follow the active branch", () => {
   assert.deepEqual(readPersistedWorktreeSummaries(session).get("assistant-1"), valid.files);
   assert.equal(readPersistedWorktreeSummaries({ ...session, getBranch: () => [] }).size, 0);
 });
+
+test("turn anchors persist in summaries", () => {
+  const anchor = { root: "/repo", beforeTree: "1".repeat(40), afterTree: "2".repeat(40) };
+  const summary = createWorktreeSummary("assistant-anchor", [{ path: "src/a.ts", additions: 1, deletions: 0 }], anchor);
+  assert.ok(summary);
+  assert.equal(summary.root, anchor.root);
+  const parsed = parseWorktreeSummary(summary);
+  assert.equal(parsed?.beforeTree, anchor.beforeTree);
+  assert.equal(parsed?.afterTree, anchor.afterTree);
+  // Invalid anchors degrade to an unanchored summary rather than dropping files.
+  const unanchored = createWorktreeSummary("assistant-anchor", [{ path: "a.ts", additions: 1, deletions: 0 }],
+    { ...anchor, root: "" });
+  assert.ok(unanchored);
+  assert.equal(unanchored.root, undefined);
+  const valid = {
+    version: 1,
+    assistantEntryId: "a-1",
+    files: [{ path: "a.ts", additions: 1, deletions: 0 }],
+  };
+  assert.deepEqual(parseWorktreeSummary(valid), valid); // v1 entries without anchors still parse
+  assert.equal(parseWorktreeSummary({ ...valid, root: "/repo", beforeTree: "z".repeat(40), afterTree: "2".repeat(40) }), undefined);
+});
+
+test("turn commits chain on one session branch and diffs stay readable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-anchor-"));
+  try {
+    await git(root, ["init", "-q"]);
+    assert.equal(turnsBranchForSession("short"), undefined);
+    const branch = turnsBranchForSession("session1234");
+    assert.ok(branch);
+    await writeFile(join(root, "one.txt"), "one\n");
+    const first = await captureCheckoutState(root, true);
+    const firstCommit = await appendTurnCommit(root, branch!, first.worktreeTree);
+    assert.ok(firstCommit);
+    await writeFile(join(root, "one.txt"), "two\n");
+    const second = await captureCheckoutState(root, true);
+    const secondCommit = await appendTurnCommit(root, branch!, second.worktreeTree);
+    assert.ok(secondCommit && secondCommit !== firstCommit);
+    // The second commit's parent must be the first (chained history keeps every turn reachable).
+    const parentOfSecond = await new Promise<string>((resolve, reject) =>
+      execFile("git", ["rev-parse", "--verify", `${secondCommit}^`], { cwd: root, windowsHide: true },
+        (error, stdout) => error ? reject(error) : resolve(String(stdout).trim())));
+    assert.equal(parentOfSecond, firstCommit);
+    // Re-anchoring an unchanged tip tree is idempotent.
+    assert.equal(await appendTurnCommit(root, branch!, second.worktreeTree), secondCommit);
+    const diff = await turnTreeDiff(root, first.worktreeTree, second.worktreeTree);
+    assert.equal(diff.state, "available");
+    assert.ok(diff.text?.includes("+two"));
+    await removeSessionRef(root, branch!);
+    await assert.rejects(git(root, ["rev-parse", "--verify", branch!]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("session worktrees isolate a dirty baseline and expose bounded files", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-session-worktree-"));
@@ -396,5 +457,114 @@ test("conflicting session changes leave both checkout states untouched", async (
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(owned, { recursive: true, force: true });
+  }
+});
+
+test("registered submodules are inventoried, routed, and aggregate nested state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-submodule-root-"));
+  const originRoot = await mkdtemp(join(tmpdir(), "pylon-submodule-origin-"));
+  try {
+    await git(originRoot, ["init", "-q"]);
+    await git(originRoot, ["config", "user.email", "pylon@test.local"]);
+    await git(originRoot, ["config", "user.name", "Pylon"]);
+    await writeFile(join(originRoot, "lib.txt"), "lib\n");
+    await git(originRoot, ["add", "."]);
+    await git(originRoot, ["commit", "-qm", "origin"]);
+    const secondOrigin = join(originRoot, "second");
+    await mkdir(secondOrigin);
+    await git(secondOrigin, ["init", "-q"]);
+    await git(secondOrigin, ["config", "user.email", "pylon@test.local"]);
+    await git(secondOrigin, ["config", "user.name", "Pylon"]);
+    await writeFile(join(secondOrigin, "nested.txt"), "fresh\n");
+    await git(secondOrigin, ["add", "."]);
+    await git(secondOrigin, ["commit", "-qm", "second"]);
+    await git(originRoot, [
+      "-c", "protocol.file.allow=always", "submodule", "add",
+      secondOrigin.replaceAll("\\", "/"), "nested",
+    ]);
+    await git(originRoot, ["commit", "-qm", "nested submodule"]);
+
+    await git(root, ["init", "-q"]);
+    await git(root, ["config", "user.email", "pylon@test.local"]);
+    await git(root, ["config", "user.name", "Pylon"]);
+    await writeFile(join(root, "tracked.txt"), "parent\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const addSubmodule = (url: string, path: string) => git(root, [
+      "-c", "protocol.file.allow=always", "submodule", "add",
+      url.replaceAll("\\", "/"), path.replaceAll("\\", "/"),
+    ]);
+
+    // Gitlink entries never surface as leaf files; submodule contents are inventoried flat.
+    await addSubmodule(originRoot, join("vendor", "lib"));
+    await git(root, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    await git(root, ["commit", "-qm", "submodule"]);
+    const submodulePath = join(root, "vendor", "lib");
+    const clean = await listWorkspaceFiles({ cwd: root });
+    assert.deepEqual(clean.files.map((file) => [file.path, file.status]), [
+      [".gitmodules", undefined],
+      ["tracked.txt", undefined],
+      ["vendor/lib/.gitmodules", undefined],
+      ["vendor/lib/lib.txt", undefined],
+      ["vendor/lib/nested/nested.txt", undefined],
+    ]);
+    assert.equal((await inspectWorkspaceChanges(root)).unapplicableSubmoduleChanges, undefined);
+
+    // Nested dirty and untracked state appears with workspace-relative paths.
+    await writeFile(join(submodulePath, "lib.txt"), "lib\ndirty\n");
+    await writeFile(join(submodulePath, "extra.txt"), "untracked\n");
+    const dirty = await listWorkspaceFiles({ cwd: root });
+    assert.deepEqual(dirty.files.map((file) => [file.path, file.status]), [
+      ["vendor/lib/extra.txt", "added"],
+      ["vendor/lib/lib.txt", "modified"],
+      [".gitmodules", undefined],
+      ["tracked.txt", undefined],
+      ["vendor/lib/.gitmodules", undefined],
+      ["vendor/lib/nested/nested.txt", undefined],
+    ]);
+    assert.equal(dirty.files.find((file) => file.path === "vendor/lib/lib.txt")?.additions, 1);
+    assert.notEqual(dirty.revision, clean.revision);
+    assert.equal((await inspectWorkspaceChanges(root)).unapplicableSubmoduleChanges, true);
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "vendor/lib/nested/nested.txt", view: "base" })).text?.trim(),
+      "fresh");
+    const delta = await collectWorkspaceFileDelta({
+      cwd: root,
+      paths: ["vendor/lib/lib.txt", "vendor/lib/extra.txt", "vendor/lib/nested/nested.txt"],
+    });
+    assert.equal(delta.reconcileRequired, false);
+    assert.deepEqual(delta.upserted.map((file) => [file.path, file.status]), [
+      ["vendor/lib/lib.txt", "modified"],
+      ["vendor/lib/extra.txt", "added"],
+      ["vendor/lib/nested/nested.txt", undefined],
+    ]);
+    await rm(join(submodulePath, "extra.txt"));
+    const removed = await collectWorkspaceFileDelta({ cwd: root, paths: ["vendor/lib/extra.txt"] });
+    assert.deepEqual(removed.removed, ["vendor/lib/extra.txt"]);
+
+    // Current/base reads and diffs route through the owning submodule checkout.
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text?.replaceAll("\r\n", "\n"),
+      "lib\ndirty\n");
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "base" })).text?.replaceAll("\r\n", "\n").trim(),
+      "lib");
+    assert.match((await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text ?? '', /^\+dirty$/m);
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "tracked.txt", view: "base" })).text?.replaceAll("\r\n", "\n").trim(),
+      "parent");
+    await addSubmodule(secondOrigin, join("vendor", "newmod"));
+    const staged = await listWorkspaceFiles({ cwd: root });
+    assert.equal(staged.files.find((file) => file.path === "vendor/newmod/nested.txt")?.status, "added");
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "vendor/newmod/nested.txt", view: "base" })).state,
+      "deleted");
+
+    // Uninitialized registered submodules degrade to folder markers without misreading through the parent.
+    await rm(submodulePath, { recursive: true, force: true });
+    const broken = await listWorkspaceFiles({ cwd: root });
+    assert.equal(broken.files.find((file) => file.path === "vendor/lib")?.kind, "submodule");
+    assert.ok(!broken.files.some((file) => file.path.startsWith("vendor/lib/")));
+    assert.equal((await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "current" })).state,
+      "deleted");
+    assert.equal((await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(originRoot, { recursive: true, force: true });
   }
 });

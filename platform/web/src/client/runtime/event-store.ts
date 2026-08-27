@@ -6,12 +6,12 @@ import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/pro
 import type { HeliosAndroidToolingInput, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling";
 import type { ConnectionState, ContinuityMemoryNoteReadModel, ConversationReadModel, DelegatedAgentRunReadModel, DelegatedAgentRunUpdateReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, ProviderAuthType, SessionControlsReadModel, SessionMetricsReadModel, ThinkingLevelReadModel, ToolActivityReadModel, UiNotificationReadModel, UiRequestReadModel } from "../../shared/protocol/events";
 import type { SessionRuntimeState } from "../../shared/protocol/events";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
+import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationTurnIndexPage, ConversationTurnIndexQuery, DialogTimeoutSeconds, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffResult, VerifyPolicyReadModel, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage, WorkspaceFileReadModel, WorkspacePolicyMode } from "../../shared/protocol/snapshots";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
 import { describeRuntimeSnapshotIssue, isArchiveListSnapshot, isConversationHistoryPage, isConversationTurnIndexPage, isExtensionListSnapshot, isFileSuggestionList, isHookSettingsSnapshot, isPackageListSnapshot, isPapercutListPage, isSessionListSnapshot, isStateQLRowsPage, isStateQLSnapshot, isWebEvent, isWorkspaceFileContent, isWorkspaceFilePage, runtimeSnapshotValidationIssue } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
-import { drainWorkspaceFiles } from "../../shared/workspace-file-pages";
+import { drainWorkspaceFiles, workspaceInventoryCacheIsFresh } from "../../shared/workspace-file-pages";
 import { liveToolMessage, replaceConversationMessage, replaceDelegatedRun, replaceToolActivity, settleRunningActivities, terminalActivityStatus } from "../../shared/transcript";
 import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
 import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
@@ -58,6 +58,7 @@ const MAX_SESSION_STATUSES = 200;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
 interface CachedWorkspaceInventory {
+  generation: number;
   revision?: string;
   expiresAt: number;
   files: WorkspaceFileReadModel[];
@@ -405,13 +406,13 @@ export class RuntimeEventStore {
     const runtime = this.requireReadyRuntime();
     const revision = runtime.workspace?.revision;
     const cached = this.workspaceInventories.get(runtime.sessionId);
-    if (!refresh && cached && cached.expiresAt > Date.now()
-      && cached.revision === runtime.workspace?.revision) {
-      this.workspaceInventories.delete(runtime.sessionId);
-      this.workspaceInventories.set(runtime.sessionId, cached);
+    if (!refresh && cached?.generation === runtime.sessionGeneration) {
+      // Stale-while-revalidate: keep the existing tree visible while a newer revision loads.
       publish(cached.files, cached.truncated);
-      progress(cached.files.length, cached.files.length);
-      return cached;
+      if (workspaceInventoryCacheIsFresh(cached.revision, cached.expiresAt, runtime.workspace?.revision)) {
+        progress(cached.files.length, cached.files.length);
+        return cached;
+      }
     }
     let truncated = false;
     const files = await drainWorkspaceFiles(
@@ -429,6 +430,7 @@ export class RuntimeEventStore {
       throw new Error("Workspace files belong to a previous session");
     }
     const inventory = {
+      generation: runtime.sessionGeneration,
       revision,
       expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
       files,
@@ -464,6 +466,16 @@ export class RuntimeEventStore {
     }
     return result;
   }
+
+  async turnDiff(entryId: string): Promise<TurnDiffResult> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.turnDiff(runtime.sessionGeneration, entryId);
+    if (!result || typeof result !== "object" || result.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Turn diff is stale or invalid");
+    }
+    return result;
+  }
+
 
   async timelineCheckpointFiles(checkpointId: string): Promise<TimelineCheckpointFiles> {
     const runtime = this.requireReadyRuntime();
@@ -1289,7 +1301,7 @@ export class RuntimeEventStore {
       }, true);
       return;
     }
-    if (event.type === "workspace.revision") this.workspaceInventories.delete(event.sessionId);
+    // Keep workspace inventories as stale display data; workspaceInventory revalidates when revisions differ.
     const notification = event.type === "ui.notify"
       ? event.payload as UiNotificationReadModel
       : current.notification;
