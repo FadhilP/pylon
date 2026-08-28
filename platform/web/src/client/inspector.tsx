@@ -4,7 +4,6 @@ import {
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
-  IconCircle,
   IconClock,
   IconDatabase,
   IconFile,
@@ -30,7 +29,6 @@ import { highlightSource } from "../shared/markdown";
 import type { ContinuityMemoryNoteReadModel, JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
 import type { DialogTimeoutSeconds, PapercutListPage, PapercutRecordReadModel, PapercutStatusReadModel, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
-import { formatPolicyTimeout, runtimePolicySources } from "../shared/runtime-policy-format";
 import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
@@ -104,33 +102,35 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime;
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
-  const workTone: Tone = work?.mode === "executing" ? "active" : work?.mode === "completed" ? "success" : "neutral";
+  const completedTodos = work?.todos.filter((todo) => todo.status === "done").length ?? 0;
+  const progress = work?.todos.length ? completedTodos / work.todos.length * 100 : 0;
+  const workState: OverviewState = work?.mode === "executing"
+    ? "running"
+    : work?.mode === "completed"
+      ? "done"
+      : work?.mode === "cancelled"
+        ? "failed"
+        : work ? "attention" : "neutral";
   return (
     <div className="page-grid">
       <SessionUsage key={runtime?.sessionId ?? "empty"} metrics={runtime?.metrics} />
       <div className="overview-columns">
-        {operational?.continuity.availability === "available" && <InspectorSection title="Task List" meta={work ? displayTime(work.updatedAt) : undefined} className="run-panel">
+        {operational?.continuity.availability === "available" && <InspectorSection title="Task list" meta={work ? `updated ${displayTime(work.updatedAt)}` : undefined} className="run-panel">
           {work ? <>
-            <div className="run-title-row">
-              <div className={`run-icon tone-${workTone}`}><IconListCheck size={20} /></div>
-              <div><h2 className="run-goal" title={work.goal}>{oneLine(work.goal)}</h2><p className="mono">{work.runId || "Current session"}</p></div>
+            <div className="overview-run-goal"><h2 title={work.goal}>{oneLine(work.goal)}</h2><p className="mono">{work.runId || "Current session"}</p></div>
+            <div className="overview-run-status">
+              <OverviewStateLabel state={workState}>{work.mode}</OverviewStateLabel>
+              {/* <LedBar a={progress} responsive tone={workState} running={workState === "running"} label={`${completedTodos} of ${work.todos.length} tasks complete`} /> */}
+              <small>{completedTodos} of {work.todos.length}</small>
             </div>
-            <div className="run-meta-row">
-              <Status tone={workTone}>{work.mode}</Status>
-              <span>{work.todos.filter((todo) => todo.status === "done").length} of {work.todos.length} complete</span>
-            </div>
-            {(work.latestFailure || work.nextAction) && <div className="run-issue" role={work.latestFailure ? "alert" : "status"}>
-              {work.latestFailure && <strong>{work.latestFailure}</strong>}
-              {work.nextAction && <span>{work.nextAction}</span>}
-            </div>}
+            {work.latestFailure && <div className="overview-run-callout" role="alert"><OverviewOrb state="failed" label="Latest failure" /><div><strong>Latest failure</strong><span>{work.latestFailure}</span></div></div>}
+            {work.nextAction && <div className="overview-run-callout" role="status"><OverviewOrb state="attention" label="Next up" /><div><strong>Next up</strong><span>{work.nextAction}</span></div></div>}
             <TodoList work={work} />
           </> : <div className="empty-state"><IconListCheck size={20} /><strong>No active work</strong><span>Continuity has no plan for this session.</span></div>}
         </InspectorSection>}
-
       </div>
-
       <div className="overview-lower">
-        {operational && <InspectorSection title="Verification" meta={operational.verification.state === "running" ? "Running" : operational.verification.scope || "No run"} className="verification-panel">
+        {operational && <InspectorSection title="Verification" meta={operational.verification.scope ? `${operational.verification.scope} scope` : "No run"} className="verification-panel">
           <Verification verification={operational.verification} />
         </InspectorSection>}
         {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
@@ -155,24 +155,24 @@ function Verification({ verification }: { verification: VerificationReadModel })
   }
 
   const elapsed = Number.isNaN(startedAt) ? verification.durationMs ?? 0 : Math.max(0, now - startedAt);
-  return <>
-    {running && <div className="verification-run">
-      <span className="verification-run-icon"><IconLoader2 size={16} /></span>
-      <div role="status"><strong>Verification running</strong><small>{verification.scope ? `${verification.scope} scope` : "Checking project"}</small></div>
-      <span className="mono">{formatWorkDuration(elapsed)}</span>
+  return <div className="overview-list">
+    {running && <div className="overview-list-row">
+      <OverviewOrb state="running" label="Running" />
+      <div role="status"><strong>Verification</strong><small className="mono">{verification.scope ? `${verification.scope} scope` : "Checking project"}</small></div>
+      <OverviewStateLabel state="running">Running</OverviewStateLabel>
+      <time className="mono">{formatWorkDuration(elapsed)}</time>
     </div>}
-    {verification.checks.length > 0 ? <div className="check-list">
-      {verification.checks.map((check) => (
-        <div className="check-row" key={check.id}>
-          <span className={`check-icon ${check.status}`}>
-            {check.status === "passed" ? <IconCheck size={13} /> : <IconClock size={13} />}
-          </span>
-          <div><strong>{check.label}</strong><small>{check.command || check.status}</small></div>
-          <span className="mono">{formatDuration(check.durationMs)}</span>
-        </div>
-      ))}
-    </div> : !running && <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>}
-  </>;
+    {verification.checks.map((check) => {
+      const state: OverviewState = check.status === "passed" ? "done" : "failed";
+      return <div className="overview-list-row" key={check.id}>
+        <OverviewOrb state={state} label={check.status} />
+        <div><strong>{check.label}</strong><small className="mono">{check.command || check.status}</small></div>
+        <OverviewStateLabel state={state}>{check.status}</OverviewStateLabel>
+        <time className="mono">{formatDuration(check.durationMs)}</time>
+      </div>;
+    })}
+    {!running && verification.checks.length === 0 && <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>}
+  </div>;
 }
 
 type EditablePolicyScope = "project" | "session";
@@ -319,167 +319,78 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
     if (next === checks) return;
     void save({ mode: "selected", checks: next }, timeline, workspace).catch(() => undefined);
   };
+  const verifySetHere = scope === "project" ? verify !== "inherit" && verify.mode === "selected" : verify !== "inherit";
+  const setHereCount = [verifySetHere, guard !== "inherit", timeline !== "inherit", workspace !== "inherit", guardTimeout !== "inherit", clarifyTimeout !== "inherit"].filter(Boolean).length;
 
-  const sources = runtimePolicySources(policy);
-  const effectiveItems = [
-    { label: "Verify", value: verifyPolicyLabel(policy.effective.verify), source: sources.verify },
-    { label: "Guard", value: togglePolicyLabel(policy.effective.guardEnabled), source: sources.guard },
-    { label: "Timeline", value: togglePolicyLabel(policy.effective.timelineEnabled), source: sources.timeline },
-    { label: "Workspace", value: workspaceLabels[policy.effective.workspace], source: sources.workspace },
-    { label: "Guard wait", value: formatPolicyTimeout(policy.effective.guardTimeoutSeconds), source: sources.guardTimeout },
-    { label: "Clarify wait", value: formatPolicyTimeout(policy.effective.clarifyTimeoutSeconds), source: sources.clarifyTimeout },
-  ];
-
-  return <InspectorSection title="Runtime Policy" className="runtime-policy">
+  return <div className="runtime-policy">
     <div className="policy-toolbar">
       <div className="policy-scope" role="tablist" aria-label="Policy scope">
         <button type="button" role="tab" disabled={busy} aria-selected={scope === "project"} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
         <button type="button" role="tab" disabled={busy} aria-selected={scope === "session"} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
       </div>
+      <span className="policy-set-count">{setHereCount} of 6 set here</span>
       <button className="policy-global-link" type="button" disabled={busy} onClick={onOpenGlobalPolicy}>Global defaults <span aria-hidden="true">›</span></button>
     </div>
 
-    <section className="policy-effective" aria-labelledby="policy-effective-title">
-      <div className="policy-effective-header"><strong id="policy-effective-title">Effective for this session</strong><small>Value and source</small></div>
-      <div className="policy-effective-grid">
-        {effectiveItems.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong><small>{item.source}</small></div>)}
-      </div>
-    </section>
-
-    <section className="policy-group" aria-labelledby="policy-verify-title">
-      <header><strong id="policy-verify-title">Verification</strong><small>Choose automatic detection or up to six declared checks.</small></header>
-      <div className="policy-field">
-        <div><strong>Verify checks</strong><small>{scope === "project" ? "Choose verification for this project." : "This session can inherit the Project choice."}</small></div>
-        <div className="policy-field-control">
-          <select value={verify === "inherit" ? "inherit" : verify.mode} disabled={!idle} aria-label="Verify policy" onChange={(event) => changeVerifyMode(event.target.value as "inherit" | "auto" | "selected")}>
-            {scope === "session" && <option value="inherit">Inherit from Project ({verifyPolicyLabel(policy.project.verify)})</option>}
-            <option value="auto">Automatic detection</option>
-            <option value="selected">Selected checks</option>
-          </select>
-          <small>{scope === "project" ? "Required project policy" : verify === "inherit" ? `From Project · ${verifyPolicyLabel(policy.project.verify)}` : "Session override"}</small>
+    <InspectorSection title="Verification" meta={displayedVerify.mode === "selected" ? `${checks.length} of ${policy.availableVerifyChecks.length} checks` : "automatic detection"} className="policy-section">
+      <PolicySelectField label="Verify checks" description="Choose automatic detection or up to six declared checks." value={verify === "inherit" ? "inherit" : verify.mode} isOverride={verifySetHere} inheritedLabel={scope === "session" ? `Inherit from Project (${verifyPolicyLabel(policy.project.verify)})` : ""} disabled={!idle}
+        options={[{ value: "auto", label: "Automatic detection" }, { value: "selected", label: "Selected checks" }]}
+        onChange={(value) => changeVerifyMode(value as "inherit" | "auto" | "selected")} />
+      {verify !== "inherit" && verify.mode === "selected" && <details className="policy-disclosure">
+        <summary><span><strong>Declared checks</strong><small>Detected from this project's scripts.</small></span><small>{checks.length} of {policy.availableVerifyChecks.length}</small><IconChevronDown size={15} /></summary>
+        <div className="policy-disclosure-body policy-checks">
+          {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}><input type="checkbox" checked={checks.includes(check.id)} disabled={!idle || !checks.includes(check.id) && checks.length >= 6} onChange={() => toggleCheck(check.id)} /><span className="mono">{check.label}</span></label>)}
+          {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id)).map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
+          {policy.availableVerifyChecks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
         </div>
-      </div>
-      {verify !== "inherit" && verify.mode === "selected" && <div className="policy-checks">
-        {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}>
-          <input type="checkbox" checked={checks.includes(check.id)} disabled={!idle || !checks.includes(check.id) && checks.length >= 6} onChange={() => toggleCheck(check.id)} />
-          <span className="mono">{check.label}</span>
-        </label>)}
-        {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id))
-          .map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
-        {policy.availableVerifyChecks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
-      </div>}
-    </section>
+      </details>}
+    </InspectorSection>
 
-    <section className="policy-group" aria-labelledby="policy-safety-title">
-      <header><strong id="policy-safety-title">Safety and interaction</strong><small>Control approvals, questions, and recoverable session history.</small></header>
-      <PolicySelectField
-        label="Guard"
-        description="Confirm guarded commands and paths."
-        value={guard}
-        inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedGuard)})`}
-        disabled={!idle}
-        options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]}
-        onChange={(value) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(() => undefined)}
-      />
+    <InspectorSection title="Safety and interaction" meta={`${Object.keys(guardRules).length} category override${Object.keys(guardRules).length === 1 ? "" : "s"}`} className="policy-section">
+      <PolicySelectField label="Guard" description="Confirm guarded commands and paths." value={guard} inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedGuard)})`} disabled={!idle} options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]} onChange={(value) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(() => undefined)} />
       <details className="policy-disclosure">
-        <summary>
-          <span><strong>Guard categories</strong><small>Choose which risks inherit, allow, confirm, or block.</small></span>
-          <small>{Object.keys(guardRules).length} override{Object.keys(guardRules).length === 1 ? "" : "s"}</small>
-        </summary>
+        <summary><span><strong>Guard categories</strong><small>Choose which risks inherit, allow, confirm, or block.</small></span><small className={Object.keys(guardRules).length ? "is-here" : ""}>{Object.keys(guardRules).length} set here</small><IconChevronDown size={15} /></summary>
         <div className="policy-disclosure-body">
           {!draftGuardEnabled && <p className="policy-guard-disabled" role="status">Guard is disabled by {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}. Saved category rules apply when Guard is enabled.</p>}
-          {GUARD_RISK_CATEGORIES.map((category) => {
-            const effective = resolveGuardRule(
-              category,
-              globalGuardRules,
-              scope === "project" ? guardRules : policy.project.guardRules,
-              scope === "session" ? guardRules : policy.session.guardRules,
-            );
-            return <PolicySelectField
-              key={category}
-              label={GUARD_RULE_LABELS[category]}
-              description={GUARD_RULE_DESCRIPTIONS[category]}
-              value={guardRules[category] ?? "inherit"}
-              inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`}
-              stateLabel={`Effective this session · ${guardActionLabel(effective.value)} · ${effective.source}`}
-              disabled={!idle || !draftGuardEnabled}
-              options={GUARD_ACTIONS.map((action) => ({ value: action, label: guardActionLabel(action) }))}
-              onChange={(value) => {
-                const next = { ...guardRules };
-                if (value === "inherit") delete next[category];
-                else next[category] = value as GuardAction;
-                void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, guard, next).catch(() => undefined);
-              }}
-            />;
-          })}
+          {GUARD_RISK_CATEGORIES.map((category) => <PolicySelectField key={category} label={GUARD_RULE_LABELS[category]} description={GUARD_RULE_DESCRIPTIONS[category]} value={guardRules[category] ?? "inherit"} inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`} disabled={!idle || !draftGuardEnabled} options={GUARD_ACTIONS.map((action) => ({ value: action, label: guardActionLabel(action) }))} onChange={(value) => {
+            const next = { ...guardRules }; if (value === "inherit") delete next[category]; else next[category] = value as GuardAction;
+            void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, guard, next).catch(() => undefined);
+          }} />)}
         </div>
       </details>
-      <RuntimePolicyTimeoutControl
-        label="Guard timeout"
-        value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout}
-        inheritedFrom={guardTimeout === "inherit" ? inheritedFrom : undefined}
-        disabled={!idle || !draftGuardEnabled}
-        onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
-        onReset={guardTimeout !== "inherit" ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined) : undefined}
-      />
-      <RuntimePolicyTimeoutControl
-        label="Clarify timeout"
-        value={clarifyTimeout === "inherit" ? inheritedClarifyTimeout : clarifyTimeout}
-        inheritedFrom={clarifyTimeout === "inherit" ? inheritedFrom : undefined}
-        disabled={!idle}
-        onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
-        onReset={clarifyTimeout !== "inherit" ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined) : undefined}
-      />
-      <PolicySelectField
-        label="Timeline"
-        description="Keep recoverable checkpoints for this run."
-        value={timeline}
-        inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedTimeline)})`}
-        disabled={!idle}
-        options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]}
-        onChange={(value) => void save(verify, value as TogglePolicyDraft, workspace).catch(() => undefined)}
-      />
-    </section>
+      <RuntimePolicyTimeoutControl label="Guard timeout" description="How long a guarded prompt waits for you." value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout} inherited={guardTimeout === "inherit"} inheritedFrom={inheritedFrom} disabled={!idle || !draftGuardEnabled} onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)} onReset={guardTimeout !== "inherit" ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined) : undefined} />
+      <RuntimePolicyTimeoutControl label="Clarify timeout" description="How long a clarifying question waits." value={clarifyTimeout === "inherit" ? inheritedClarifyTimeout : clarifyTimeout} inherited={clarifyTimeout === "inherit"} inheritedFrom={inheritedFrom} disabled={!idle} onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)} onReset={clarifyTimeout !== "inherit" ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined) : undefined} />
+      <PolicySelectField label="Timeline" description="Keep recoverable checkpoints for this run." value={timeline} inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedTimeline)})`} disabled={!idle} options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]} onChange={(value) => void save(verify, value as TogglePolicyDraft, workspace).catch(() => undefined)} />
+    </InspectorSection>
 
-    <section className="policy-group" aria-labelledby="policy-environment-title">
-      <header><strong id="policy-environment-title">Environment</strong><small>Session changes apply immediately when possible.</small></header>
-      <PolicySelectField
-        label="Workspace"
-        description="Choose where this scope works by default."
-        value={workspace}
-        inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`}
-        disabled={!idle}
-        options={Object.entries(workspaceLabels).map(([value, label]) => ({ value, label }))}
-        onChange={(value) => void save(verify, timeline, value as WorkspacePolicyMode | "inherit").catch(() => undefined)}
-      />
-    </section>
-
-    {error && <p className="policy-error" role="alert">{error}</p>}
-    {busy && <small className="policy-saving" role="status">Saving…</small>}
-  </InspectorSection>;
+    <InspectorSection title="Environment" meta={workspace === "inherit" ? workspaceLabels[inheritedWorkspace] : workspaceLabels[workspace]} className="policy-section">
+      <PolicySelectField label="Workspace" description="Choose where this scope works by default." value={workspace} inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`} disabled={!idle} options={Object.entries(workspaceLabels).map(([value, label]) => ({ value, label }))} onChange={(value) => void save(verify, timeline, value as WorkspacePolicyMode | "inherit").catch(() => undefined)} />
+      <p className="policy-note">Session changes apply immediately when possible. Package capability and safety gates remain authoritative.</p>
+    </InspectorSection>
+    {error && <p className="policy-error" role="alert">{error}</p>}{busy && <small className="policy-saving" role="status">Saving…</small>}
+  </div>;
 }
 
-function PolicySelectField({ label, description, value, inheritedLabel, stateLabel, disabled, options, onChange }: {
+function PolicySelectField({ label, description, value, inheritedLabel, stateLabel, isOverride = value !== "inherit", disabled, options, onChange }: {
   label: string;
   description: string;
   value: string;
   inheritedLabel: string;
   stateLabel?: string;
+  isOverride?: boolean;
   disabled: boolean;
   options: Array<{ value: string; label: string }>;
   onChange: (value: string) => void;
 }) {
   const descriptionId = useId();
   const stateId = useId();
-  return <div className="policy-field">
-    <div><strong>{label}</strong><small id={descriptionId}>{description}</small></div>
-    <div className="policy-field-control">
-      <select value={value} disabled={disabled} aria-label={`${label} policy`} aria-describedby={`${descriptionId} ${stateId}`} onChange={(event) => onChange(event.target.value)}>
-        <option value="inherit">{inheritedLabel}</option>
-        {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-      </select>
-      <small id={stateId}>{stateLabel ?? (value === "inherit" ? inheritedLabel.replace("Inherit from ", "From ") : "Override")}</small>
-    </div>
+  return <div className="policy-field" data-override={isOverride}>
+    <OverviewOrb state={isOverride ? "done" : "neutral"} label={isOverride ? "Set here" : "Inherited or default"} />
+    <div className="policy-field-copy"><span><strong>{label}</strong><small className={isOverride ? "policy-source is-here" : "policy-source"}>{isOverride ? "set here" : inheritedLabel ? inheritedLabel.replace(/^.*from /, "from ") : "default"}</small></span><p id={descriptionId}>{description}</p></div>
+    <select value={value} disabled={disabled} aria-label={`${label} policy`} aria-describedby={descriptionId} onChange={(event) => onChange(event.target.value)}>
+      {inheritedLabel && <option value="inherit">{inheritedLabel}</option>}{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+    </select>
+    {stateLabel && <small id={stateId} className="sr-only">{stateLabel}</small>}
   </div>;
 }
 
@@ -499,14 +410,10 @@ function Memory({ live, memoryEnabled, papercutEnabled, reviewerConfigured, onOp
     if (view === "papercuts" && !papercutEnabled && memoryEnabled) setView("memory");
   }, [memoryEnabled, papercutEnabled, view]);
   return <div className="memory-page">
-    {memoryEnabled && papercutEnabled && <nav className="memory-archive-nav" aria-label="Memory view">
-      <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>
-        <span><strong>Memory</strong><span className="mono">{memoryCount ?? "–"}</span></span><small>Guidance retained across sessions</small>
-      </button>
-      <button type="button" aria-pressed={view === "papercuts"} onClick={() => setView("papercuts")}>
-        <span><strong>Papercuts</strong><span className="mono">{papercutCount ?? "–"}</span></span><small>Workflow friction to resolve</small>
-      </button>
-    </nav>}
+    {memoryEnabled && papercutEnabled && <div className="memory-view-bar"><nav className="memory-archive-nav" aria-label="Memory view">
+      <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>Memory <span className="mono">{memoryCount ?? "–"}</span></button>
+      <button type="button" aria-pressed={view === "papercuts"} onClick={() => setView("papercuts")}>Papercuts <span className="mono">{papercutCount ?? "–"}</span></button>
+    </nav></div>}
     {view === "memory" && memoryEnabled && <ContinuityMemory live={live} reviewerConfigured={reviewerConfigured} onOpenReviewerSettings={onOpenReviewerSettings} />}
     {view === "papercuts" && papercutEnabled && <Papercuts live={live} />}
   </div>;
@@ -590,19 +497,13 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
   };
 
   return <div className="memory-ledger papercut-ledger">
-    <div className="papercut-toolbar">
-      <div className="papercut-status" role="group" aria-label="Papercut status">
-        {(["open", "resolved", "dismissed", "all"] as const).map((value) => <button type="button" aria-pressed={status === value} className={status === value ? "is-active" : ""} key={value} onClick={() => setStatus(value)}>
-          {value}<span className="mono">{count(value) ?? "–"}</span>
-        </button>)}
+    <div className="memory-ledger-head">
+      <div className="papercut-toolbar">
+        <div className="papercut-status" role="group" aria-label="Papercut status">{(["open", "resolved", "dismissed", "all"] as const).map((value) => <button type="button" aria-pressed={status === value} className={status === value ? "is-active" : ""} key={value} onClick={() => setStatus(value)}>{value}<span className="mono">{count(value) ?? "–"}</span></button>)}</div>
+        <button className="icon-button" type="button" aria-label="Refresh papercuts" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><IconRefresh size={14} /></button>
       </div>
-      <button className="icon-button" type="button" aria-label="Refresh papercuts" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><IconRefresh size={14} /></button>
+      <label className="memory-ledger-search"><IconSearch size={13} /><span className="sr-only">Search papercuts</span><input type="search" value={search} maxLength={200} placeholder="Search papercuts" onChange={(event) => setSearch(event.target.value)} /><span className="mono">{page?.total ?? 0}</span></label>
     </div>
-    <label className="memory-ledger-search">
-      <IconSearch size={13} /><span className="sr-only">Search papercuts</span>
-      <input type="search" value={search} maxLength={200} placeholder="Search papercuts" onChange={(event) => setSearch(event.target.value)} />
-      <span className="mono">{page?.total ?? 0}</span>
-    </label>
     {loading && !page && <div className="memory-ledger-no-results"><IconLoader2 className="spin" size={18} /><strong>Loading papercuts</strong></div>}
     {!loading && error && !page && <div className="memory-ledger-no-results"><IconAlertTriangle size={18} /><strong>Papercuts unavailable</strong><span>{error}</span></div>}
     {!loading && !error && page?.records.length === 0 && <div className="memory-ledger-empty"><strong>{query ? "No matching papercuts" : `No ${status === "all" ? "stored" : status} papercuts`}</strong><span>{query ? "Try a different search." : "Captured workflow friction will appear here."}</span></div>}
@@ -610,8 +511,8 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
       const isEditing = editing === record.id;
       return <details className="memory-ledger-row papercut-row" key={record.id} open={isEditing || undefined}>
         <summary>
-          <span className="memory-archive-kind">{record.status}{record.occurrences > 1 ? ` · ${record.occurrences}×` : ""}</span>
-          <div className="memory-archive-copy"><strong>{record.message}</strong><p>{outcome(record) ?? `Last seen ${displayTime(record.lastSeenAt)}`}</p></div>
+          <OverviewOrb state={record.status === "open" ? "attention" : record.status === "resolved" ? "done" : "neutral"} label={record.status} />
+          <div className="memory-archive-copy"><span><strong>{record.message}</strong><small className="policy-source">{record.status}</small></span><p>{outcome(record) ?? `${record.occurrences} occurrence${record.occurrences === 1 ? "" : "s"} · last seen ${displayTime(record.lastSeenAt)}`}</p></div>
           <IconChevronDown className="memory-ledger-chevron" size={13} />
         </summary>
         <div className="memory-ledger-detail">{isEditing ? <div className="memory-editor">
@@ -700,8 +601,7 @@ function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: 
     const isEditing = editing === key;
     return <details className="memory-ledger-row" key={key} open={isEditing || undefined}>
       <summary>
-        <span className="memory-archive-kind">{note.scope === "user" ? "Global" : "Project"}</span>
-        <div className="memory-archive-copy"><strong>{note.trigger}</strong><p>{note.guidance}</p></div>
+        <div className="memory-archive-copy"><span><strong>{note.trigger}</strong><small className={`policy-source${note.scope === "project" ? " is-here" : ""}`}>{note.scope === "user" ? "global" : "project"}</small></span><p>{note.guidance}</p></div>
         <IconChevronDown className="memory-ledger-chevron" size={13} />
       </summary>
       <div className="memory-ledger-detail">
@@ -723,23 +623,12 @@ function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: 
     </details>;
   });
   if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
-  return <div className="memory-ledger">
-    {reviewerConfigured === false && <div className="memory-reviewer-warning" role="status">
-      <IconAlertTriangle size={15} />
-      <span><strong>Memory Reviewer is not configured.</strong> New memories proposed by the model will not be stored.</span>
-    </div>}
-    {continuity?.v4MigrationAvailable && <div className="memory-migration-banner" role="status">
-      <div><IconRestore size={16} /><span><strong>Previous memory found</strong><small>Review and migrate preserved V4 notes into the V5 notebook.</small></span></div>
-      <button className="secondary-button" type="button" disabled={!idle || reviewerConfigured === undefined}
-        onClick={() => reviewerConfigured === false ? onOpenReviewerSettings() : setConfirmingMigration(true)}>
-        {reviewerConfigured === false ? "Select Memory Reviewer" : reviewerConfigured === undefined ? "Loading settings…" : "Migrate memory"}
-      </button>
-    </div>}
-    <label className="memory-ledger-search">
-      <IconSearch size={13} /><span className="sr-only">Search memory</span>
-      <input type="search" value={search} placeholder={`Search ${total} note${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} />
-      <span className="mono">{query ? `${shown}/${total}` : total}</span>
-    </label>
+  return <div className="memory-ledger memory-notes-ledger">
+    <div className="memory-ledger-head">
+      {reviewerConfigured === false && <div className="memory-reviewer-warning" role="status"><OverviewOrb state="attention" label="Attention" /><div><strong>Memory Reviewer is not configured</strong><span>New memories proposed by the model will not be stored.</span><button className="text-button" type="button" onClick={onOpenReviewerSettings}>Select a reviewer ›</button></div></div>}
+      {continuity?.v4MigrationAvailable && <div className="memory-migration-banner" role="status"><div><IconRestore size={16} /><span><strong>Previous memory found</strong><small>Review and migrate preserved V4 notes into the V5 notebook.</small></span></div><button className="secondary-button" type="button" disabled={!idle || reviewerConfigured === undefined} onClick={() => reviewerConfigured === false ? onOpenReviewerSettings() : setConfirmingMigration(true)}>{reviewerConfigured === false ? "Select Memory Reviewer" : reviewerConfigured === undefined ? "Loading settings…" : "Migrate memory"}</button></div>}
+      <label className="memory-ledger-search"><IconSearch size={13} /><span className="sr-only">Search memory</span><input type="search" value={search} placeholder={`Search ${total} note${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} /><span className="mono">{query ? `${shown}/${total}` : total}</span></label>
+    </div>
     {shown > 0 && <section className="memory-ledger-list" aria-label="Memory archive">{rows([...visibleMemory, ...visibleGlobalMemory])}</section>}
     {!query && total === 0 && <div className="memory-ledger-empty"><strong>No saved memory</strong><span>Continuity has not saved durable guidance for this project or user.</span></div>}
     {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a trigger, guidance, authority, origin, or related path.</span></div>}
@@ -1132,8 +1021,66 @@ function oneLine(value: string, max = 120): string {
   return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
 }
 
+type OverviewState = "neutral" | "done" | "running" | "failed" | "attention";
+
+function LedBar({ a, b = 0, cells = 24, thin = false, responsive = false, tone, running = false, label }: { a: number; b?: number; cells?: number; thin?: boolean; responsive?: boolean; tone?: OverviewState; running?: boolean; label?: string }) {
+  const barRef = useRef<HTMLSpanElement>(null);
+  const [responsiveCells, setResponsiveCells] = useState(cells);
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!responsive || !bar || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => {
+      if (width <= 0) return;
+      const next = Math.max(12, Math.min(40, Math.floor((width + 2) / 12)));
+      setResponsiveCells((current) => current === next ? current : next);
+    };
+    update(bar.getBoundingClientRect().width);
+    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [responsive]);
+  const renderedCells = responsive ? responsiveCells : cells;
+  const clamp = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+  const onA = Math.round(clamp(a) / 100 * renderedCells);
+  const onB = Math.round(clamp(b) / 100 * renderedCells);
+  const filled = Math.min(renderedCells, onA + onB);
+  const classes = ["overview-led-bar", thin && "is-thin", tone && `tone-${tone}`, running && "is-running"].filter(Boolean).join(" ");
+  return <span ref={barRef} className={classes} aria-label={label} aria-hidden={label ? undefined : true}>
+    {Array.from({ length: renderedCells }, (_, index) => <i className={index < onA ? "is-on" : index < filled ? "is-on is-b" : running ? "is-pending" : ""} style={running && index >= filled ? { animationDelay: `${(index - filled) * 50}ms` } : undefined} key={index} />)}
+  </span>;
+}
+function OverviewOrb({ state, label }: { state: OverviewState; label: string }) {
+  return <span className="overview-orb-cell"><i className={`overview-orb is-${state}`} aria-label={label} /></span>;
+}
+
+function OverviewStateLabel({ state, children }: { state: OverviewState; children: ReactNode }) {
+  return <span className={`overview-state-label is-${state}`}>{children}</span>;
+}
+
+function useResponsiveUsageLedCells() {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [cells, setCells] = useState(24);
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => {
+      if (width <= 0) return;
+      const next = Math.max(12, Math.min(40, Math.round((width - 164) / 12)));
+      setCells((current) => current === next ? current : next);
+    };
+    update(list.getBoundingClientRect().width);
+    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
+  return [listRef, cells] as const;
+}
+
+
+
 function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
   const [expanded, setExpanded] = useState(false);
+  const [usageListRef, ledCells] = useResponsiveUsageLedCells();
   const toolUsage = [...(metrics?.toolUsage ?? [])]
     .sort((left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name));
   const inputTokens = metrics?.inputTokens ?? 0;
@@ -1142,23 +1089,30 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
   const cacheWriteTokens = metrics?.cacheWriteTokens ?? 0;
   const inputOutputTokens = inputTokens + outputTokens;
   const inputPercent = inputOutputTokens > 0 ? inputTokens / inputOutputTokens * 100 : 50;
+  const outputPercent = inputOutputTokens > 0 ? outputTokens / inputOutputTokens * 100 : 50;
   const cacheHitRate = formatCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
   const visibleUsage = expanded ? toolUsage : toolUsage.slice(0, 5);
-  return <InspectorSection title="Session Usage" className="session-tool-usage">
+  const maxToolTokens = toolUsage[0]?.tokens ?? 0;
+  return <InspectorSection title="Session usage" meta={`${metrics?.userMessages ?? 0} turns`} className="session-tool-usage">
     <div className="session-tool-summary">
       <div className="session-tool-call-total"><small>Tool calls</small><strong className="mono">{formatCompactNumber(metrics?.toolCalls ?? 0)}</strong><span>{toolUsage.length === 200 ? "200 tools shown" : `${toolUsage.length} tools used`}</span></div>
       <div className="session-token-composition">
         <div><small>Input + output</small><strong className="mono">{formatCompactNumber(inputOutputTokens)}</strong></div>
-        <div className="session-token-stack" aria-label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`}><span className="input" style={{ width: `${inputPercent}%` }} /><span className="output" style={{ width: `${100 - inputPercent}%` }} /></div>
+        <LedBar a={inputPercent} b={outputPercent} cells={ledCells} label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`} />
         <div className="session-token-key"><span><strong>Input</strong> {formatCompactNumber(inputTokens)}</span><span><strong>Output</strong> {formatCompactNumber(outputTokens)}</span></div>
-        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache input</strong> {cacheHitRate}</span></div>
+        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache input</strong> {cacheHitRate}</span><span><strong>Context</strong> {Math.round(metrics?.contextPercent ?? 0)}%</span></div>
       </div>
     </div>
-    <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Estimated from serialized tool arguments and text results">Tokens / calls</span></div>
-    {visibleUsage.length ? <div className="session-tool-usage-list">{visibleUsage.map((usage) => <div className="session-tool-usage-row" key={usage.name}>
-      <div><strong>{usage.name}</strong><span aria-label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens`}><i className="input" style={{ width: `${usage.tokens > 0 ? usage.inputTokens / usage.tokens * 100 : 0}%` }} /><i className="output" style={{ width: `${usage.tokens > 0 ? usage.outputTokens / usage.tokens * 100 : 0}%` }} /></span></div>
-      <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span><span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
-    </div>)}</div> : <div className="session-tool-usage-empty">No completed tool calls in this session.</div>}
+    <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Token volume is logarithmically scaled relative to the busiest tool; LED count adapts to panel width">Tokens / calls</span></div>
+    {visibleUsage.length ? <div className="session-tool-usage-list" ref={usageListRef}>{visibleUsage.map((usage) => {
+      const scaledTotal = maxToolTokens > 0 ? Math.log1p(usage.tokens) / Math.log1p(maxToolTokens) * 100 : 0;
+      const inputShare = usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
+      const outputShare = usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
+      return <div className="session-tool-usage-row" key={usage.name}>
+        <div><strong>{usage.name}</strong><LedBar a={scaledTotal * inputShare} b={scaledTotal * outputShare} cells={ledCells} thin label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens; log-scaled relative volume`} /></div>
+        <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span><span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
+      </div>;
+    })}</div> : <div className="session-tool-usage-empty">No completed tool calls in this session.</div>}
     {toolUsage.length > 5 && <button className="session-usage-expand" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} /></button>}
   </InspectorSection>;
 }
@@ -1341,29 +1295,27 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
     return () => window.clearInterval(timer);
   }, [active.length]);
   const visible = [...active, ...settled];
-  return <InspectorSection title="Heartbeat Jobs" meta={`${active.length} running`} className="heartbeat-panel">
-    <div className="heartbeat-list">
+  return <InspectorSection title="Heartbeat jobs" meta={`${active.length} running`} className="heartbeat-panel">
+    <div className="overview-list">
       {visible.map((job) => {
         const startedAt = Date.parse(job.startedAt);
         const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : now;
         const duration = Math.max(0, finishedAt - startedAt);
-        const tone: Tone = job.state === "completed"
-          ? "success"
+        const state: OverviewState = job.state === "completed"
+          ? "done"
           : job.state === "failed" || job.state === "timed_out"
-            ? "danger"
+            ? "failed"
             : job.state === "running" || job.state === "cancelling"
-              ? "active"
+              ? "running"
               : "neutral";
-        return <article className="heartbeat-row" key={job.id}>
-          <span className="heartbeat-icon"><IconActivityHeartbeat size={16} /></span>
-          <div>
-            <strong title={job.label}>{job.label}</strong>
-            <span>{job.purpose ?? "other"} · {displayTime(job.startedAt)} · {formatDuration(duration)}</span>
-          </div>
-          <div>
-            <Status tone={tone}>{job.state}</Status>
-            {job.exitCode !== undefined && <small>exit {job.exitCode ?? "signal"}</small>}
-          </div>
+        const timestamp = job.finishedAt ?? job.startedAt;
+        const timingLabel = job.finishedAt ? "Finished" : "Started";
+        const label = job.state === "completed" ? "Done" : job.state.replace("_", " ");
+        return <article className="overview-list-row" key={job.id}>
+          <OverviewOrb state={state} label={label} />
+          <div><strong title={job.label}>{job.label}</strong><small>{timingLabel} {displayTime(timestamp)}{job.exitCode !== undefined ? ` · exit ${job.exitCode ?? "signal"}` : ""}</small></div>
+          <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
+          <time className="mono">{formatDuration(duration)}</time>
         </article>;
       })}
       {visible.length === 0 && <div className="empty-state"><IconActivityHeartbeat size={20} /><strong>No background jobs</strong><span>Heartbeat has not started work in this session.</span></div>}
@@ -1401,11 +1353,12 @@ function InspectorSection({
 function TodoList({ work }: { work: NonNullable<NonNullable<RuntimeStoreSnapshot["runtime"]>["operational"]["continuity"]["work"]> }) {
   return <ol className="todo-list">
     {work.todos.map((todo) => {
-      const active = todo.status === "in_progress";
-      return <li className={`todo-item is-${active ? "active" : todo.status}`} key={todo.id}>
-        <span className="todo-state" aria-label={todo.status}>{todo.status === "done" ? <IconCheck size={13} /> : active ? <span /> : <IconCircle size={10} />}</span>
+      const state: OverviewState = todo.status === "done" ? "done" : todo.status === "in_progress" ? "running" : todo.status === "blocked" ? "failed" : "neutral";
+      const label = todo.status === "in_progress" ? "Running" : todo.status;
+      return <li className={`todo-item is-${todo.status}`} key={todo.id}>
+        <OverviewOrb state={state} label={label} />
         <span className="todo-label">{todo.text}</span>
-        <small>{active ? "In progress" : todo.status}</small>
+        <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
       </li>;
     })}
   </ol>;

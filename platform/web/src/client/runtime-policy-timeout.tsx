@@ -6,6 +6,7 @@ export function RuntimePolicyTimeoutControl({
   label,
   description,
   value,
+  inherited = false,
   inheritedFrom,
   disabled,
   onChange,
@@ -14,6 +15,7 @@ export function RuntimePolicyTimeoutControl({
   label: string;
   description?: string;
   value: DialogTimeoutSeconds;
+  inherited?: boolean;
   inheritedFrom?: string;
   disabled: boolean;
   onChange(value: DialogTimeoutSeconds): void;
@@ -57,12 +59,14 @@ export function RuntimePolicyTimeoutControl({
     if (value !== null) commit();
   };
 
-  return <div className="policy-timeout">
+  return <div className="policy-timeout" data-override={!inherited}>
     <div className="policy-label-row">
       <span className="policy-timeout-copy"><span>{label}</span>{description && <small>{description}</small>}</span>
       <span className="policy-field-state">
-        {inheritedFrom && <small>From {inheritedFrom}</small>}
-        {onReset && <button className="text-button" type="button" disabled={disabled} onClick={onReset}>Use {inheritedFrom}</button>}
+        {inherited && inheritedFrom && <small>From {inheritedFrom}</small>}
+        {inherited
+          ? <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value)}>Override</button>
+          : onReset && <button className="text-button" type="button" disabled={disabled} onClick={onReset}>Use {inheritedFrom}</button>}
       </span>
     </div>
     <div className="policy-timeout-controls" onBlur={onControlsBlur}>
