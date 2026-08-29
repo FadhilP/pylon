@@ -1,5 +1,6 @@
 import {
   IconBell,
+  IconAlertTriangle,
   IconContrast,
   IconExternalLink,
   IconKey,
@@ -1357,7 +1358,7 @@ function PackageChips({
 }
 
 function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
-  return Boolean(settings && settings.kind !== "timeline");
+  return Boolean(settings);
 }
 
 function PackageFields({
@@ -1389,6 +1390,49 @@ function PackageFields({
       </div>
     );
   }
+  if (settings.kind === "timeline") {
+    return (
+      <div className="package-list">
+        <PackageRow
+          label="Checkpoint titles"
+          description="Generate short semantic titles after checkpoints are safely captured. Disabled keeps the original prompt labels.">
+          <ModelModeSelect
+            label="checkpoint title model"
+            value={
+              settings.checkpointTitleMode === "model" ? settings.checkpointTitleModel! : settings.checkpointTitleMode
+            }
+            models={models}
+            disabled={disabled}
+            onChange={value =>
+              onUpdate({
+                ...settings,
+                checkpointTitleMode: value === "disabled" || value === "session" ? value : "model",
+                checkpointTitleModel: value === "disabled" || value === "session" ? undefined : value,
+              })
+            }
+          />
+        </PackageRow>
+        <p className="settings-callout">
+          <IconAlertTriangle size={18} aria-hidden="true" />
+          <span>
+            <strong>Checkpoint naming creates an extra model call for each changed turn.</strong>
+            Use a cheap model to keep Timeline costs low.
+          </span>
+        </p>
+        <PackageRow
+          label="Rollback files when editing prompts"
+          description="Restore the matching Timeline checkpoint by default when an earlier prompt is edited.">
+          <PackageSwitch
+            label="Toggle file rollback for edited prompts"
+            checked={settings.editRollbackDefault}
+            disabled={disabled}
+            onChange={editRollbackDefault => onUpdate({ ...settings, editRollbackDefault })}
+          />
+        </PackageRow>
+      </div>
+    );
+  }
+
   if (settings.kind === "advisor" || settings.kind === "scout") {
     const noun = settings.kind === "advisor" ? "the advisor" : "both scouts";
     const levels = thinkingLevels(
@@ -1671,7 +1715,6 @@ function PackageFields({
       </div>
     );
   }
-  if (settings.kind === "timeline") return null;
   if (settings.kind !== "helios") return null;
   return (
     <div className="package-list">

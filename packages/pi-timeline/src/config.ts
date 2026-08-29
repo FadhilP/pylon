@@ -6,6 +6,8 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export interface TimelineConfig {
   version: 1;
   editRollbackDefault: boolean;
+  checkpointTitleModel?: string;
+  useSessionModelForCheckpointTitles?: boolean;
 }
 
 export const defaultConfig = (): TimelineConfig => ({ version: 1, editRollbackDefault: false });
@@ -21,10 +23,25 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
     throw error;
   }
   const value = JSON.parse(serialized);
-  if (value?.version !== 1 || typeof value.editRollbackDefault !== "boolean") {
+  const validModel =
+    value.checkpointTitleModel === undefined ||
+    (typeof value.checkpointTitleModel === "string" && !!value.checkpointTitleModel.trim());
+  if (
+    value?.version !== 1 ||
+    typeof value.editRollbackDefault !== "boolean" ||
+    !validModel ||
+    (value.useSessionModelForCheckpointTitles !== undefined &&
+      typeof value.useSessionModelForCheckpointTitles !== "boolean") ||
+    (value.checkpointTitleModel && value.useSessionModelForCheckpointTitles)
+  ) {
     throw new Error("invalid pi-timeline config");
   }
-  return { version: 1, editRollbackDefault: value.editRollbackDefault };
+  return {
+    version: 1,
+    editRollbackDefault: value.editRollbackDefault,
+    ...(value.checkpointTitleModel ? { checkpointTitleModel: value.checkpointTitleModel.trim() } : {}),
+    ...(value.useSessionModelForCheckpointTitles ? { useSessionModelForCheckpointTitles: true } : {}),
+  };
 }
 
 export async function saveConfig(config: TimelineConfig, path = configPath()): Promise<void> {
@@ -37,4 +54,10 @@ export async function saveConfig(config: TimelineConfig, path = configPath()): P
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
+  const slash = ref.indexOf("/");
+  if (slash < 1 || slash === ref.length - 1) return undefined;
+  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
 }

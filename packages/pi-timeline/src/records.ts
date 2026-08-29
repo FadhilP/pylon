@@ -3,13 +3,16 @@ import type { TimelineChangeSet } from "./changes.ts";
 
 /** A checkpoint as persisted in the session log, alongside the snapshot it captured. */
 export type CheckpointRecord = Snapshot & {
-  version: 3 | 4 | 5;
+  version: 3 | 4 | 5 | 6;
   kind: "pi-prompt-checkpoint";
   promptEntryId: string;
   ownerSessionId: string;
   continuationEntryId: string;
   createdAt: string;
   changes?: Pick<TimelineChangeSet, "fileCount" | "additions" | "deletions" | "binaryCount">;
+  /** Session-start state used only to attribute the first checkpoint's displayed changes. */
+  baseline?: Snapshot;
+  baselineEntryId?: string;
   verification?: {
     runId: string;
     state: "passed" | "failed";
@@ -30,9 +33,31 @@ export type Bound = {
 
 export type ClearV1 = { version: 1; ownerSessionId: string; checkpointEntryIds: string[] };
 
-export const CHECKPOINT_VERSIONS = [3, 4, 5] as const;
+export type CheckpointTitleV1 = {
+  version: 1;
+  kind: "pi-checkpoint-title";
+  checkpointEntryId: string;
+  ownerSessionId: string;
+  title: string;
+};
+
+export type TimelineBaselineV1 = Snapshot & {
+  version: 1;
+  kind: "pi-timeline-baseline";
+  ownerSessionId: string;
+  createdAt: string;
+};
+
+export type TimelineBaselineRetiredV1 = {
+  version: 1;
+  kind: "pi-timeline-baseline-retired";
+  baselineEntryId: string;
+  ownerSessionId: string;
+};
+
+export const CHECKPOINT_VERSIONS = [3, 4, 5, 6] as const;
 /** Versions that already carry a repository-independent snapshot. */
-export const PORTABLE_CHECKPOINT_VERSIONS = [4, 5] as const;
+export const PORTABLE_CHECKPOINT_VERSIONS = [4, 5, 6] as const;
 
 /** Returns a custom entry's data when it matches `customType` and, optionally, a known version. */
 export const customEntryData = (entry: any, customType: string, versions?: readonly number[]): any | undefined => {

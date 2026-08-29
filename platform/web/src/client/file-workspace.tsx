@@ -1,12 +1,4 @@
-import {
-  IconChevronLeft,
-  IconFiles,
-  IconFolder,
-  IconSearch,
-  IconSettings,
-  IconTerminal2,
-  IconX,
-} from "@tabler/icons-react";
+import { IconChevronLeft, IconFiles, IconFolder, IconSearch, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useMemo,
@@ -46,8 +38,6 @@ export function FileWorkspace({
   header,
   workspaceRef,
   sidePanel,
-  terminalOpen,
-  terminalAvailable,
   rightPanelOpen,
   inspectorWidth,
   showExplorer,
@@ -55,8 +45,6 @@ export function FileWorkspace({
   mobile,
   onCloseNavigation,
   onSessions,
-  onToggleTerminal,
-  onOpenSettings,
   onError,
 }: {
   live: RuntimeStoreSnapshot;
@@ -66,8 +54,6 @@ export function FileWorkspace({
   header: ReactNode;
   workspaceRef: RefObject<HTMLDivElement | null>;
   sidePanel: ReactNode;
-  terminalOpen: boolean;
-  terminalAvailable: boolean;
   rightPanelOpen: boolean;
   inspectorWidth: number;
   showExplorer: boolean;
@@ -75,8 +61,6 @@ export function FileWorkspace({
   mobile: boolean;
   onCloseNavigation: () => void;
   onSessions: () => void;
-  onToggleTerminal: () => void;
-  onOpenSettings: () => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
@@ -315,21 +299,6 @@ export function FileWorkspace({
               />
             )}
             {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
-          </div>
-          <div className="sidebar-foot file-workspace-foot">
-            <button className="sidebar-action" type="button" onClick={onOpenSettings}>
-              <IconSettings size={16} />
-              Settings
-            </button>
-            <button
-              className={`sidebar-action${terminalOpen ? " is-active" : ""}`}
-              type="button"
-              disabled={!terminalAvailable}
-              aria-pressed={terminalOpen}
-              onClick={onToggleTerminal}>
-              <IconTerminal2 size={16} />
-              Terminal
-            </button>
           </div>
         </aside>
       )}

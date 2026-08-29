@@ -292,11 +292,11 @@ export function FilesPanel({
   const workspace = runtime?.workspace;
   return (
     <>
-      <aside id="files-panel" className="inspector files-panel is-open" aria-labelledby="files-title">
+      <aside id="changes-panel" className="inspector files-panel is-open" aria-labelledby="changes-title">
         <header>
           <div>
             <IconFiles size={18} />
-            <strong id="files-title">Files</strong>
+            <strong id="changes-title">Changes</strong>
           </div>
           <span>
             {onExpand && (

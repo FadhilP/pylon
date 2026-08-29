@@ -387,6 +387,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
           : (automatic ?? detection).checks;
       const omittedChecks =
         selectedPolicy || requested.length ? [] : (automatic ?? detection).omitted.map(check => check.id);
+      const incomplete = automatic?.complete === false;
       if (!checks.length) {
         const skipped = "No declared verification commands detected.";
         return finish("no_checks", {
@@ -484,6 +485,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         aborted: Boolean(signal?.aborted),
         initialIdentity,
         finalIdentity,
+        errored: incomplete,
         passed: results.length === checks.length && results.every(result => result.code === 0),
       });
       const completedIds = new Set(results.map(result => result.id));

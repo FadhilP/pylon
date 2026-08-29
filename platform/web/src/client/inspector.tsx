@@ -1,6 +1,5 @@
 import {
   IconActivityHeartbeat,
-  IconAdjustmentsHorizontal,
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
@@ -9,20 +8,17 @@ import {
   IconFile,
   IconGitBranch,
   IconGitFork,
-  IconLayoutDashboard,
   IconListCheck,
   IconLoader2,
   IconSearch,
   IconRestore,
   IconRefresh,
   IconTimeline,
-  IconTool,
   IconTrash,
   IconX,
-  IconThinkingMedium,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
 import {
   DEFAULT_GUARD_RULES,
@@ -66,116 +62,68 @@ import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
+import type { ReferenceId } from "./navigation";
 import {
   buildStateQLActivity,
   filterStateQLActivity,
+  selectStateQLActivity,
   stateqlActivityStatus,
-  type StateQLActivityFilter,
   type StateQLActivityItem,
+  type StateQLActivityTag,
+  type StateQLActivityTone,
 } from "../shared/stateql-notebook";
 
-export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
+/** The session-scoped reference views. The rail owns choosing between them. */
+export type ViewId = Extract<ReferenceId, "overview" | "policy" | "timeline" | "memory" | "tools">;
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
-type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
-const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
-  { id: "overview", label: "Overview", icon: IconLayoutDashboard },
-  { id: "policy", label: "Policy", icon: IconAdjustmentsHorizontal },
-  { id: "timeline", label: "Timeline", icon: IconTimeline },
-  { id: "memory", label: "Memory", icon: IconThinkingMedium },
-  { id: "tools", label: "Tools", icon: IconTool },
-];
-
-const viewDescriptions: Record<ViewId, string> = {
-  overview: "Live state for the active Pylon session.",
-  policy: "Project and session behavior. Global defaults live in Settings.",
-  timeline: "Recoverable checkpoints across the current run.",
-  memory: "Durable project context and workflow friction.",
-  tools: "Project and session overrides for registered tools.",
-};
-
-interface InspectorProps {
-  current: ViewId;
+interface SessionReferenceProps {
+  view: ViewId;
   live: RuntimeStoreSnapshot;
-  availableViews: Set<ViewId>;
   timelineEnabled: boolean;
   memoryReviewerConfigured?: boolean;
   memoryEnabled: boolean;
   papercutEnabled: boolean;
-  overlay: boolean;
-  onClose: () => void;
-  onNavigate: (view: ViewId) => void;
   onOpenGlobalPolicy: () => void;
   onOpenMemoryReviewerSettings: () => void;
 }
 
-export function Inspector({
-  current,
+/**
+ * One session reference view, with no chrome of its own. The panel header,
+ * the description and the choice of view all belong to the rail that opened
+ * it — this renders only the body.
+ */
+export function SessionReference({
+  view,
   live,
-  availableViews,
   timelineEnabled,
   memoryReviewerConfigured,
   memoryEnabled,
   papercutEnabled,
-  overlay,
-  onClose,
-  onNavigate,
   onOpenGlobalPolicy,
   onOpenMemoryReviewerSettings,
-}: InspectorProps) {
-  const items = navigation.filter(item => availableViews.has(item.id));
-  return (
-    <aside id="session-inspector" className="inspector" aria-label="Session inspector">
-      <header className="inspector-header">
-        <div>
-          <span className="section-kicker">Inspector</span>
-        </div>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={onClose}
-          aria-label={overlay ? "Close inspector" : "Collapse inspector"}>
-          <IconX size={17} />
-        </button>
-      </header>
-      <div className="inspector-tabs" role="tablist" aria-label="Session details">
-        {items.map(item => {
-          const Icon = item.icon;
-          return (
-            <button
-              type="button"
-              role="tab"
-              aria-label={item.label}
-              aria-selected={current === item.id}
-              className={current === item.id ? "is-active" : ""}
-              data-view={item.id}
-              key={item.id}
-              onClick={() => onNavigate(item.id)}>
-              <Icon size={14} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </div>
-      <p className="inspector-description">{viewDescriptions[current]}</p>
-      <div className="inspector-scroll" role="tabpanel">
-        {current === "overview" && <Overview live={live} />}
-        {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
-        {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
-        {current === "memory" && (
-          <Memory
-            live={live}
-            memoryEnabled={memoryEnabled}
-            papercutEnabled={papercutEnabled}
-            reviewerConfigured={memoryReviewerConfigured}
-            onOpenReviewerSettings={onOpenMemoryReviewerSettings}
-          />
-        )}
-        {current === "tools" && <Tools live={live} />}
-      </div>
-    </aside>
-  );
+}: SessionReferenceProps) {
+  switch (view) {
+    case "overview":
+      return <Overview live={live} />;
+    case "policy":
+      return live.runtime ? <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} /> : null;
+    case "timeline":
+      return <Timeline live={live} enabled={timelineEnabled} />;
+    case "memory":
+      return (
+        <Memory
+          live={live}
+          memoryEnabled={memoryEnabled}
+          papercutEnabled={papercutEnabled}
+          reviewerConfigured={memoryReviewerConfigured}
+          onOpenReviewerSettings={onOpenMemoryReviewerSettings}
+        />
+      );
+    case "tools":
+      return <Tools live={live} />;
+  }
 }
 
 function Overview({ live }: { live: RuntimeStoreSnapshot }) {
@@ -1477,6 +1425,14 @@ function ContinuityMemory({
   );
 }
 
+/* The filter chips key themselves with the marker the rows already use, so the
+   toolbar teaches the ledger's vocabulary instead of restating it in words. */
+const STATEQL_FILTERS: Array<{ tag: StateQLActivityTag; marker: string; noun: string }> = [
+  { tag: "read", marker: "Q", noun: "read" },
+  { tag: "write", marker: "W", noun: "write" },
+  { tag: "error", marker: "!", noun: "error" },
+];
+
 export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
   const snapshotScope = `${live.connection}:${live.runtime?.ready ?? false}:${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
   const [snapshotState, setSnapshotState] = useState<{ scope: string; value: StateQLSnapshot }>();
@@ -1484,7 +1440,7 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
-  const [activityFilter, setActivityFilter] = useState<StateQLActivityFilter>("all");
+  const [activityTags, setActivityTags] = useState<ReadonlySet<StateQLActivityTag>>(new Set());
   const [expandedActivity, setExpandedActivity] = useState<Set<string>>(new Set());
   const toolRevision = useMemo(
     () =>
@@ -1533,7 +1489,7 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
   ]);
 
   const activity = useMemo(() => (snapshot ? buildStateQLActivity(snapshot) : []), [snapshot]);
-  const visibleActivity = useMemo(() => filterStateQLActivity(activity, activityFilter), [activity, activityFilter]);
+  const visibleActivity = useMemo(() => selectStateQLActivity(activity, activityTags), [activity, activityTags]);
   const visibleHistory = visibleActivity.filter(item => item.source === "history");
   const visibleMetadata = visibleActivity.filter(item => item.source === "metadata");
   const historyCount = activity.filter(item => item.source === "history").length;
@@ -1541,12 +1497,12 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
   const allVisibleExpanded = visibleActivity.length > 0 && visibleActivity.every(item => expandedActivity.has(item.id));
   const rowsScope = `${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
   const header = (
-    <header className="stateql-ledger-header">
-      <div>
-        <h1 id="database-panel-title">Database</h1>
-        <span>{snapshot?.session.name ?? "Command ledger"}</span>
-      </div>
-      <span className="stateql-ledger-header-spacer" />
+    <header className="panel-head">
+      <IconDatabase size={18} aria-hidden="true" />
+      <span className="section-kicker" id="database-panel-title">
+        Database
+      </span>
+      <span className="spacer" />
       <button
         className="text-button"
         type="button"
@@ -1586,6 +1542,12 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
     setExpandedActivity(current => {
       if (allVisibleExpanded) return new Set([...current].filter(id => !visibleActivity.some(item => item.id === id)));
       return new Set([...current, ...visibleActivity.map(item => item.id)]);
+    });
+  const toggleTag = (tag: StateQLActivityTag) =>
+    setActivityTags(current => {
+      const next = new Set(current);
+      if (!next.delete(tag)) next.add(tag);
+      return next;
     });
   const setExpanded = (item: StateQLActivityItem, open: boolean) =>
     setExpandedActivity(current => {
@@ -1638,19 +1600,17 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
         <header className="stateql-ledger-toolbar">
           <h2 id="stateql-activity-title">Session activity</h2>
           <span className="mono">
-            {historyCount} / {metadataCount} history / retained
+            {historyCount} history · {metadataCount} retained
           </span>
           <div className="stateql-ledger-filters" role="group" aria-label="Filter database activity">
-            {(["all", "read", "write", "error"] as const).map(filter => {
-              const count = filterStateQLActivity(activity, filter).length;
+            {STATEQL_FILTERS.map(({ tag, marker, noun }) => {
+              const count = filterStateQLActivity(activity, tag).length;
               return (
-                <button
-                  type="button"
-                  aria-pressed={activityFilter === filter}
-                  key={filter}
-                  onClick={() => setActivityFilter(filter)}>
-                  {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}
-                  <span>{count}</span>
+                <button type="button" aria-pressed={activityTags.has(tag)} key={tag} onClick={() => toggleTag(tag)}>
+                  <span className={`stateql-ledger-marker is-${tag}`} aria-hidden="true">
+                    {marker}
+                  </span>
+                  {count} {count === 1 ? noun : `${noun}s`}
                 </button>
               );
             })}
@@ -1674,8 +1634,8 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
               <colgroup>
                 <col className="toggle" />
                 <col className="command" />
+                <col className="sql" />
                 <col className="handle" />
-                <col className="actor" />
                 <col className="status" />
                 <col className="time" />
               </colgroup>
@@ -1683,8 +1643,8 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
                 <tr>
                   <th aria-label="Expand activity" />
                   <th>Command</th>
+                  <th>Statement</th>
                   <th>Handle</th>
-                  <th>Actor</th>
                   <th>Status</th>
                   <th>Time</th>
                 </tr>
@@ -1723,7 +1683,7 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
             <span>
               {activity.length === 0
                 ? "Commands run in this shared workspace will appear here."
-                : `No ${activityFilter} activity is available in the bounded snapshot.`}
+                : "No activity in the bounded snapshot matches the pressed filters."}
             </span>
           </div>
         )}
@@ -1731,6 +1691,13 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
     </div>
   );
 }
+
+const STATEQL_TONE_STATES: Record<StateQLActivityTone, OverviewState> = {
+  success: "done",
+  danger: "failed",
+  active: "running",
+  neutral: "neutral",
+};
 
 function stateqlExecution(item: StateQLActivityItem): string {
   return item.source === "metadata"
@@ -1764,6 +1731,7 @@ function StateQLLedgerItem({
         ? "read"
         : "other";
   const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "M";
+  const statement = item.sql ?? "Statement not retained";
   const detailId = `stateql-detail-${encodeURIComponent(item.id)}`;
   return (
     <>
@@ -1785,20 +1753,20 @@ function StateQLLedgerItem({
         </td>
         <th scope="row">
           <span className="stateql-ledger-command">
-            <span className="stateql-ledger-marker" aria-hidden="true">
+            <span className={`stateql-ledger-marker is-${kind}`} aria-hidden="true">
               {marker}
             </span>
             <span>{item.command}</span>
           </span>
         </th>
+        <td className="stateql-ledger-sql-peek" title={statement}>
+          {statement}
+        </td>
         <td className="mono" title={item.result?.alias ?? item.handle}>
           {item.result?.alias ?? item.handle ?? "N/A"}
         </td>
-        <td className="mono" title={item.actorId}>
-          {item.actorId ?? "N/A"}
-        </td>
         <td>
-          <Status tone={status.tone}>{status.label}</Status>
+          <OverviewStateLabel state={STATEQL_TONE_STATES[status.tone]}>{status.label}</OverviewStateLabel>
         </td>
         <td className="mono">
           {item.timestamp ? <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time> : "No time"}
@@ -1812,6 +1780,27 @@ function StateQLLedgerItem({
         </tr>
       )}
     </>
+  );
+}
+
+function StateQLReceiptRow({
+  label,
+  mono,
+  title,
+  children,
+}: {
+  label: string;
+  mono?: boolean;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd className={mono ? "mono" : undefined} title={title}>
+        {children}
+      </dd>
+    </div>
   );
 }
 
@@ -1838,50 +1827,35 @@ function StateQLLedgerDetail({ item, rowsScope }: { item: StateQLActivityItem; r
           <span>{item.source === "metadata" ? "retained metadata" : "session history"}</span>
         </header>
         {item.result && (
-          <div className="stateql-ledger-receipt">
-            <div>
-              <small>Result handle</small>
-              <strong className="mono" title={item.result.handle}>
-                {item.result.handle}
-              </strong>
-            </div>
-            <div>
-              <small>Alias</small>
-              <strong>{item.result.alias ?? "No alias"}</strong>
-            </div>
-            <div>
-              <small>Rows</small>
-              <strong className="mono">{item.result.rows}</strong>
-            </div>
-          </div>
+          <dl className="stateql-ledger-receipt">
+            <StateQLReceiptRow label="Result handle" mono title={item.result.handle}>
+              {item.result.handle}
+            </StateQLReceiptRow>
+            <StateQLReceiptRow label="Alias">{item.result.alias ?? "No alias"}</StateQLReceiptRow>
+            <StateQLReceiptRow label="Rows" mono>
+              {item.result.rows.toLocaleString()}
+            </StateQLReceiptRow>
+            <StateQLReceiptRow label="Actor" mono title={item.actorId}>
+              {item.actorId ?? "N/A"}
+            </StateQLReceiptRow>
+          </dl>
         )}
         {item.operation && (
-          <div className="stateql-ledger-receipt">
-            <div>
-              <small>Operation handle</small>
-              <strong className="mono" title={item.operation.handle}>
-                {item.operation.handle}
-              </strong>
-            </div>
-            <div>
-              <small>Affected</small>
-              <strong>
-                {item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}
-              </strong>
-            </div>
-            <div>
-              <small>State</small>
-              <strong>{item.operation.status}</strong>
-            </div>
-          </div>
+          <dl className="stateql-ledger-receipt">
+            <StateQLReceiptRow label="Operation handle" mono title={item.operation.handle}>
+              {item.operation.handle}
+            </StateQLReceiptRow>
+            <StateQLReceiptRow label="Affected">
+              {item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}
+            </StateQLReceiptRow>
+            <StateQLReceiptRow label="State">{item.operation.status}</StateQLReceiptRow>
+            <StateQLReceiptRow label="Actor" mono title={item.operation.actor_id}>
+              {item.operation.actor_id}
+            </StateQLReceiptRow>
+          </dl>
         )}
         {!item.result && !item.operation && (
           <span className="stateql-ledger-unavailable">No retained receipt is available.</span>
-        )}
-        {item.handle && (
-          <p className="mono" title={item.handle}>
-            {item.handle}
-          </p>
         )}
         {item.result && item.operation && (
           <p className="stateql-ledger-warning">This handle matches both result and operation metadata.</p>

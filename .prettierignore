@@ -10,3 +10,4 @@ package-lock.json
 # Local state
 .pi/
 *.log
+*.css

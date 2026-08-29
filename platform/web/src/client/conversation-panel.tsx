@@ -8,6 +8,7 @@ import {
   IconChevronRight,
   IconCopy,
   IconFileText,
+  IconGitBranch,
   IconGitFork,
   IconLoader2,
   IconPaperclip,
@@ -68,6 +69,7 @@ import type {
   QueuedPromptReadModel,
   SessionControlsReadModel,
   ThinkingLevelReadModel,
+  TimelineCheckpointReadModel,
 } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
@@ -381,6 +383,15 @@ export function ConversationPanel({
     latestUserTurn?.text,
     railPage,
   ]);
+  const railCheckpoints = useMemo(
+    () =>
+      new Map<string, TimelineCheckpointReadModel>(
+        (runtime?.operational.timeline.checkpoints ?? [])
+          .filter(checkpoint => checkpoint.ownerSessionId === runtime?.sessionId)
+          .map(checkpoint => [checkpoint.promptEntryId, checkpoint]),
+      ),
+    [runtime?.operational.timeline.checkpoints, runtime?.sessionId],
+  );
   useEffect(() => {
     const root = streamRef.current;
     if (!root || !userTurns.length) return;
@@ -1017,6 +1028,7 @@ export function ConversationPanel({
       {runtime && (
         <HistoryRail
           page={live.treeChanging ? undefined : displayedRailPage}
+          checkpoints={railCheckpoints}
           visibleIds={visibleTurnIds}
           loading={railLoading}
           onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
@@ -1760,27 +1772,48 @@ function ModelControl({
 
 function HistoryRail({
   page,
+  checkpoints,
   visibleIds,
   loading,
   onPage,
   onSelect,
 }: {
   page?: ConversationTurnIndexPage;
+  checkpoints: Map<string, TimelineCheckpointReadModel>;
   visibleIds: Set<string>;
   loading: boolean;
   onPage: (direction: "earlier" | "later", cursor?: string) => void;
   onSelect: (turn: ConversationTurnIndexItem) => void;
 }) {
-  const [tooltip, setTooltip] = useState<{ top: number; preview: string; label: string; createdAt?: string }>();
+  const [tooltip, setTooltip] = useState<{
+    top: number;
+    preview: string;
+    label: string;
+    createdAt?: string;
+    promptId?: string;
+  }>();
   if (!page || page.totalCount < 3) return null;
   const turns = [...page.turns].reverse();
-  const showTooltip = (element: HTMLButtonElement, preview: string, label: string, createdAt?: string) => {
+  const tooltipCheckpoint = tooltip?.promptId ? checkpoints.get(tooltip.promptId) : undefined;
+  const showTooltip = (
+    element: HTMLButtonElement,
+    preview: string,
+    label: string,
+    createdAt?: string,
+    promptId?: string,
+  ) => {
     const container = element.closest(".conversation-panel");
     if (!container) return;
     const buttonRect = element.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
     const middle = buttonRect.top + buttonRect.height / 2 - containerRect.top;
-    setTooltip({ top: Math.max(52, Math.min(containerRect.height - 52, middle)), preview, label, createdAt });
+    setTooltip({
+      top: Math.max(52, Math.min(containerRect.height - 52, middle)),
+      preview,
+      label,
+      createdAt,
+      promptId,
+    });
   };
   const hideTooltip = () => setTooltip(undefined);
   return (
@@ -1814,6 +1847,8 @@ function HistoryRail({
         )}
         {turns.map(turn => {
           const timestamp = formatMessageTime(turn.createdAt);
+          const checkpoint = checkpoints.get(turn.promptId);
+          const accessibleTitle = checkpoint ? `${checkpoint.title}. Prompt: ${turn.preview}` : turn.preview;
           return (
             <button
               className={`history-tick${visibleIds.has(turn.promptId) ? " is-active" : ""}`}
@@ -1821,14 +1856,14 @@ function HistoryRail({
               key={turn.promptId}
               onClick={() => onSelect(turn)}
               onMouseEnter={event =>
-                showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)
+                showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt, turn.promptId)
               }
               onFocus={event =>
-                showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)
+                showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt, turn.promptId)
               }
               onMouseLeave={hideTooltip}
               onBlur={hideTooltip}
-              aria-label={`Jump to prompt: ${turn.preview}${timestamp ? `, ${timestamp}` : ""}`}>
+              aria-label={`Jump to prompt: ${accessibleTitle}${timestamp ? `, ${timestamp}` : ""}`}>
               <i />
             </button>
           );
@@ -1864,9 +1899,36 @@ function HistoryRail({
         <div
           className="history-rail-tooltip"
           role="tooltip"
-          aria-label={tooltip.label}
+          aria-label={
+            tooltipCheckpoint
+              ? `Checkpoint: ${tooltipCheckpoint.title}. Prompt: ${tooltip.preview}`
+              : tooltip.label
+          }
           style={{ top: `${tooltip.top}px` }}>
-          <strong>{tooltip.preview}</strong>
+          <strong>{tooltipCheckpoint?.title ?? tooltip.preview}</strong>
+          {tooltipCheckpoint && tooltipCheckpoint.title !== tooltip.preview && (
+            <span className="history-rail-prompt">Prompt: {tooltip.preview}</span>
+          )}
+          {tooltipCheckpoint &&
+            (tooltipCheckpoint.changes || tooltipCheckpoint.verificationState !== "unverified") && (
+              <span className="history-rail-metrics">
+                {tooltipCheckpoint.changes && (
+                  <>
+                    <span>
+                      {formatCompactNumber(tooltipCheckpoint.changes.fileCount)}{" "}
+                      {tooltipCheckpoint.changes.fileCount === 1 ? "file" : "files"}
+                    </span>
+                    <span className="is-addition">+{formatCompactNumber(tooltipCheckpoint.changes.additions)}</span>
+                    <span className="is-deletion">-{formatCompactNumber(tooltipCheckpoint.changes.deletions)}</span>
+                    {tooltipCheckpoint.changes.binaryCount > 0 && (
+                      <span>{formatCompactNumber(tooltipCheckpoint.changes.binaryCount)} binary</span>
+                    )}
+                  </>
+                )}
+                {tooltipCheckpoint.verificationState === "passed" && <span className="is-verified">Verified</span>}
+                {tooltipCheckpoint.verificationState === "failed" && <span className="is-failed">Checks failed</span>}
+              </span>
+            )}
           {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageTime(tooltip.createdAt)}</time>}
         </div>
       )}
@@ -2235,6 +2297,7 @@ function MessageFooter({
           durationMs={message.workDurationMs}
           modelName={message.modelName}
           thinkingLevel={message.thinkingLevel}
+          turn={message.turn}
           gitBranch={message.gitBranch}
         />
       )}
@@ -2392,6 +2455,7 @@ export function WorkTimer({
   modelName,
   thinkingLevel,
   gitBranch,
+  turn,
   stopped = false,
 }: {
   startedAt?: string;
@@ -2399,6 +2463,7 @@ export function WorkTimer({
   modelName?: string;
   thinkingLevel?: MessageReadModel["thinkingLevel"];
   gitBranch?: string;
+  turn?: number;
   stopped?: boolean;
 }) {
   const [now, setNow] = useState(Date.now());
@@ -2412,10 +2477,22 @@ export function WorkTimer({
   const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
   return (
     <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
-      {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
-      {modelName && <> · {modelName}</>}
-      {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
-      {gitBranch && <> · {gitBranch}</>}
+      <span className="work-timer-stats">
+        {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
+        {modelName && <> · {modelName}</>}
+        {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+      </span>
+      {(turn || gitBranch) && (
+        <span className="work-timer-context">
+          {gitBranch && (
+            <span className="work-timer-branch">
+              <IconGitBranch aria-hidden="true" size={14} />
+              {gitBranch} ·
+            </span>
+          )}
+          {turn && <span>Turn {turn}</span>}
+        </span>
+      )}
     </span>
   );
 }

@@ -1,17 +1,11 @@
 import {
   IconArchive,
-  IconBrandGit,
   IconCopy,
-  IconGitBranch,
   IconDots,
   IconPencil,
   IconPin,
   IconPlus,
   IconPower,
-  IconMenu2,
-  IconMessageCircle,
-  IconMoon,
-  IconSun,
   IconX,
   IconTrash,
 } from "@tabler/icons-react";
@@ -51,6 +45,7 @@ import { AttachmentPanel } from "./attachment-panel";
 import { useAgentColors } from "./agent-color";
 import { copyText } from "./clipboard";
 import { ArchiveDialog } from "./archive-dialog";
+import { ChangelogDialog } from "./changelog-dialog";
 import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
 import { CompactionPanel } from "./compaction-panel";
 import { BrowserPanel } from "./browser-panel";
@@ -58,20 +53,28 @@ import { DatabasePanel } from "./database-panel";
 import { FilesPanel, type FileView } from "./files-panel";
 import { FileWorkspace, type FileWorkspaceContentStore } from "./file-workspace";
 import type { FileWorkspaceState } from "../shared/file-workspace-state";
-import { Inspector, type ViewId } from "./inspector";
+import { SessionReference, type ViewId } from "./inspector";
+import { ReferencePanel, ReferenceRail, ScopeRail, SurfaceTabs } from "./app-chrome";
+
+/** Reference views that render a session view body inside the shared panel. */
+const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory", "tools"];
+import { UsageView } from "./usage-view";
 import {
   clampPanelWidth,
+  displacesConversation,
   initialPanelWidths,
-  PANELS,
-  panelDefinition,
   panelWidthSlot,
-  WORKSPACE_MODES,
-  workspaceModeDefinition,
-  type PanelContext,
-  type PanelId,
-  type RightPanel,
-  type WorkspaceModeId,
-} from "./panels";
+  referenceDefinition,
+  surfaceDefinition,
+  workspaceViewDefinition,
+  type ActiveReference,
+  type ActiveWorkspaceView,
+  type AmbientId,
+  type NavContext,
+  type ReferenceId,
+  type SurfaceId,
+  type WorkspaceViewId,
+} from "./navigation";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
@@ -79,9 +82,9 @@ import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "./use-session-catalog";
 import { useComposerDrafts } from "./use-composer-drafts";
-import { rememberSetting, readStoredNumber, useDocumentTitle, useTheme, type Theme } from "./use-chrome";
+import { rememberSetting, readStoredNumber, useDocumentTitle, useTheme } from "./use-chrome";
 import { useSettingsDialog } from "./use-settings-dialog";
-import { useMarkSessionSeen, useTerminalDrawer, type RetainedTerminal } from "./use-terminal-drawer";
+import { useMarkSessionSeen, useTerminalDrawer } from "./use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
 type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
@@ -143,18 +146,19 @@ function useMediaQuery(query: string) {
 
 export function App() {
   const composerDrafts = useComposerDrafts();
-  const [view, setView] = useState<ViewId>("overview");
+  const [workspaceView, setWorkspaceView] = useState<ActiveWorkspaceView>(null);
   const [theme, setTheme] = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
-  const [rightPanel, setRightPanel] = useState<RightPanel>("inspector");
+  const [reference, setReference] = useState<ActiveReference>("overview");
   const [panelWidths, setPanelWidths] = useState(initialPanelWidths);
   const [browserMirrorRequest, setBrowserMirrorRequest] = useState("");
   const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceModeId>("chat");
+  const [surface, setSurface] = useState<SurfaceId>("chat");
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const [fileNavigation, setFileNavigation] = useState<FileNavigation>("explorer");
   const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
   const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment>();
@@ -175,13 +179,13 @@ export function App() {
   const [query, setQuery] = useState("");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
-  const navigationToggleRef = useRef<HTMLButtonElement>(null);
-  const panelToggles = useRef(new Map<PanelId, HTMLButtonElement>());
+  const panelToggles = useRef(new Map<ReferenceId, HTMLButtonElement>());
   const appShellRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const previousSidebarOpen = useRef(sidebarOpen);
-  const previousRightPanel = useRef(rightPanel);
-  const previousChatModePanel = useRef<RightPanel>(rightPanel);
+  const previousReference = useRef(reference);
+  /** What was docked before a surface displaced the conversation into the rail. */
+  const displacedReference = useRef<ActiveReference>(reference);
   const browserToolSession = useRef<string | undefined>(undefined);
   const observedBrowserTools = useRef(new Set<string>());
   const sessionListRequest = useRef(0);
@@ -286,23 +290,21 @@ export function App() {
       ? Boolean(continuitySettings.memoryReviewer?.model)
       : undefined;
   const stateqlEnabled = activePackages.has("pi-stateql");
-  const panelContext = useMemo<PanelContext>(
-    () => ({ workspaceMode, stateqlEnabled, browserAvailable, browserActive }),
-    [workspaceMode, stateqlEnabled, browserAvailable, browserActive],
+  const navContext = useMemo<NavContext>(
+    () => ({
+      surface,
+      stateqlEnabled,
+      browserAvailable,
+      browserActive,
+      timelineEnabled,
+      memoryEnabled,
+      papercutEnabled,
+    }),
+    [surface, stateqlEnabled, browserAvailable, browserActive, timelineEnabled, memoryEnabled, papercutEnabled],
   );
-  const rightPanelWidth = panelWidths[panelWidthSlot(rightPanel).key];
-  const shellModeClass = workspaceModeDefinition(workspaceMode).shellClass;
-  const availableViews = useMemo(
-    () =>
-      new Set<ViewId>([
-        "overview",
-        "policy",
-        ...(timelineEnabled ? ["timeline" as const] : []),
-        ...(memoryEnabled || papercutEnabled ? ["memory" as const] : []),
-        "tools",
-      ]),
-    [memoryEnabled, papercutEnabled, timelineEnabled],
-  );
+  const rightPanelWidth = panelWidths[panelWidthSlot(reference).key];
+  const shellModeClass = surfaceDefinition(surface).shellClass;
+
   const updateSessionPages = (update: (pages: SessionProjectPage[]) => SessionProjectPage[]) => {
     setSessionPages(current => {
       const next = update(current);
@@ -355,7 +357,7 @@ export function App() {
     setSelectedAgentId(undefined);
     setSelectedCompaction(undefined);
     setSelectedAttachment(undefined);
-    setRightPanel(current => (current === "compaction" || current === "attachment" ? null : current));
+    setReference(current => (current === "compaction" || current === "attachment" ? null : current));
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
   useEffect(() => {
@@ -395,7 +397,7 @@ export function App() {
       setBrowserMirrorRequest(runningStart ? `${sessionId}:${runningStart.id}` : "");
       if (runningStart) {
         setSidebarOpen(false);
-        setRightPanel("browser");
+        changeSurface("browser");
       }
       return;
     }
@@ -408,27 +410,28 @@ export function App() {
     if (!start) return;
     setBrowserMirrorRequest(`${sessionId}:${start.id}`);
     setSidebarOpen(false);
-    setRightPanel("browser");
+    changeSurface("browser");
   }, [live.runtime?.sessionId, live.runtime?.conversation.tools]);
 
   useEffect(() => {
-    if (mobile && previousSidebarOpen.current && !sidebarOpen) navigationToggleRef.current?.focus();
+    if (mobile && previousSidebarOpen.current && !sidebarOpen)
+      document.querySelector<HTMLButtonElement>('.scope-rail [data-label="All sessions"]')?.focus();
     previousSidebarOpen.current = sidebarOpen;
   }, [mobile, sidebarOpen]);
 
   useEffect(() => {
-    const closed = previousRightPanel.current;
-    previousRightPanel.current = rightPanel;
-    if (!closed || rightPanel) return;
-    // Topbar panels return focus to their own button, never to another panel's.
-    if (panelDefinition(closed)) {
+    const closed = previousReference.current;
+    previousReference.current = reference;
+    if (!closed || reference) return;
+    // Rail references return focus to their own button, never to another's.
+    if (referenceDefinition(closed)) {
       panelToggles.current.get(closed)?.focus();
       return;
     }
     // Panels opened from the conversation have no button of their own.
     if (closed === "attachment") selectedAttachment?.trigger.focus();
-    else panelToggles.current.get("inspector")?.focus();
-  }, [rightPanel]);
+    else panelToggles.current.get("overview")?.focus();
+  }, [reference]);
 
   useLayoutEffect(() => {
     const drawer = workspaceRef.current?.querySelector<HTMLElement>(":scope > .inspector");
@@ -437,7 +440,7 @@ export function App() {
     return () => {
       drawer.inert = false;
     };
-  }, [Boolean(pendingSession), rightPanel, live.runtime?.sessionId]);
+  }, [Boolean(pendingSession), reference, live.runtime?.sessionId]);
 
   useEffect(() => {
     const open = (event: Event) => {
@@ -454,11 +457,11 @@ export function App() {
         sessionId: runtimeStore.getSnapshot().runtime?.sessionId,
         requestId: Date.now(),
       });
-      if (workspaceMode !== "files") setRightPanel("files");
+      if (surface !== "files") setReference("changes");
     };
     window.addEventListener("pylon:open-file", open);
     return () => window.removeEventListener("pylon:open-file", open);
-  }, [workspaceMode]);
+  }, [surface]);
 
   useEffect(() => {
     if (live.connection !== "connected" || !live.runtime?.ready) return;
@@ -554,13 +557,13 @@ export function App() {
   }, [live.notificationRevision]);
 
   useEffect(() => {
-    if (!availableViews.has(view)) setView("overview");
-  }, [availableViews, view]);
+    const definition = referenceDefinition(reference);
+    if (definition && !(definition.available?.(navContext) ?? true)) setReference("overview");
+  }, [reference, navContext]);
 
   useEffect(() => {
-    const definition = panelDefinition(rightPanel);
-    if (definition?.requiresPackage && !definition.requiresPackage(panelContext)) setRightPanel(null);
-  }, [rightPanel, panelContext]);
+    if (!(surfaceDefinition(surface).available?.(navContext) ?? true)) changeSurface("chat");
+  }, [surface, navContext]);
 
   useEffect(() => {
     if (!live.sessionStatuses && !live.sessionWorkStartedAts) return;
@@ -586,19 +589,16 @@ export function App() {
       }
       if (event.key === "Escape") {
         setSidebarOpen(false);
-        if (inspectorOverlay) setRightPanel(null);
+        if (workspaceView) setWorkspaceView(null);
+        else if (inspectorOverlay) setReference(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [inspectorOverlay, live.pendingUi?.owned, mobile]);
-
-  const selectView = (next: ViewId) => {
-    setView(next);
-    setRightPanel("inspector");
-  };
+  }, [inspectorOverlay, live.pendingUi?.owned, mobile, workspaceView]);
 
   const switchSession = async (session: SessionSummary) => {
+    setWorkspaceView(null);
     if (sessionBusy || sessionDeleting) {
       if (mobile) setSidebarOpen(false);
       return;
@@ -627,7 +627,7 @@ export function App() {
         }
       }
       setSelectedAgentId(run.id);
-      setRightPanel("agents");
+      setReference("agents");
     };
     setSessionBusy(session.id);
     setSessionTransition(!listedParentId || live.runtime?.sessionId !== listedParentId);
@@ -958,18 +958,9 @@ export function App() {
     }
   };
 
-  const toggleSidebar = () => {
-    if (mobile) {
-      setRightPanel(null);
-      setSidebarOpen(open => !open);
-      return;
-    }
-    setSidebarCollapsed(collapsed => !collapsed);
-  };
-
-  const toggleRightPanel = (panel: Exclude<RightPanel, null>) => {
+  const toggleReference = (next: ReferenceId) => {
     if (inspectorOverlay) setSidebarOpen(false);
-    setRightPanel(current => (current === panel ? null : panel));
+    setReference(current => (current === next ? null : next));
   };
 
   const setPackageEnabled = async (item: PackageSummary, enabled: boolean) => {
@@ -1100,39 +1091,109 @@ export function App() {
       initialValue: sessionTitle(session),
       onConfirm: (value: string) => void renameSession(session, value),
     });
-  const changeWorkspaceMode = (mode: WorkspaceModeId) => {
-    const changingMode = mode !== workspaceMode;
-    setWorkspaceMode(mode);
+  /**
+   * Switching surface hands the conversation between its two homes: a surface
+   * that fills the main area displaces it into the rail, and coming back
+   * gives the rail to whatever was there before — unless you chose something
+   * else while it was docked, in which case that choice stands.
+   */
+  const changeSurface = (next: SurfaceId) => {
+    setWorkspaceView(null);
     setSidebarOpen(false);
-    if (!changingMode) return;
-    const wasDisplaced = workspaceModeDefinition(workspaceMode).displacesConversation;
-    if (workspaceModeDefinition(mode).displacesConversation) {
-      // Remember the panel the conversation displaced, but only the first time.
-      if (!wasDisplaced) previousChatModePanel.current = rightPanel;
-      setRightPanel("chat");
-    } else if (rightPanel === "chat") {
-      setRightPanel(previousChatModePanel.current);
+    if (next === surface) return;
+    const wasDisplaced = displacesConversation(surface);
+    setSurface(next);
+    if (displacesConversation(next)) {
+      if (!wasDisplaced) displacedReference.current = reference;
+      setReference("chat");
+    } else if (reference === "chat") {
+      setReference(displacedReference.current);
     }
   };
+
+  const openWorkspaceView = (next: WorkspaceViewId) => {
+    if (next === "sessions") {
+      if (workspaceView) {
+        setWorkspaceView(null);
+        setSidebarCollapsed(false);
+        setSidebarOpen(mobile);
+        return;
+      }
+      if (mobile) {
+        setSidebarOpen(open => !open);
+        return;
+      }
+      setSidebarCollapsed(collapsed => {
+        if (collapsed) queueMicrotask(() => searchRef.current?.focus());
+        return !collapsed;
+      });
+      return;
+    }
+    if (next === "archive") {
+      setArchivesOpen(true);
+      setSidebarOpen(false);
+      return;
+    }
+    setWorkspaceView(current => (current === next ? null : next));
+    setSidebarOpen(false);
+  };
+
+  const runAmbient = (id: AmbientId) => {
+    if (id === "theme") setTheme(theme === "dark" ? "light" : "dark");
+    if (id === "settings") openSettings();
+    if (id === "changelog") setChangelogOpen(true);
+    if (id === "terminal") toggleTerminal();
+  };
+  const branchLabel = pendingSession
+    ? pendingSession.phase === "failed"
+      ? "setup failed"
+      : "workspace pending"
+    : `${live.runtime?.gitBranch || "No Git branch"} · Turn ${live.runtime?.metrics.userMessages ?? 0}`;
   const topbar = (
-    <Topbar
-      live={live}
-      session={activeSession}
-      pendingSession={pendingSession}
-      theme={theme}
-      workspaceMode={workspaceMode}
-      onWorkspaceMode={changeWorkspaceMode}
-      onToggleTheme={() => setTheme(current => (current === "dark" ? "light" : "dark"))}
-      menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
-      rightPanel={rightPanel}
-      panelContext={panelContext}
-      menuButtonRef={navigationToggleRef}
-      registerPanelButton={(id, node) => {
+    <SurfaceTabs
+      surface={surface}
+      context={navContext}
+      runtime={pendingSession ? undefined : live.runtime}
+      disabled={Boolean(pendingSession)}
+      branchLabel={branchLabel}
+      onSurface={changeSurface}
+    />
+  );
+  /**
+   * The sidebar, and so its resizer and scrim. A workspace view keeps it: the
+   * session list is workspace scope itself, so Usage replaces the surface and
+   * its reference panel rather than the list you navigate from.
+   */
+  const sidebarVisible = workspaceView ? true : surface !== "files" || fileNavigation === "sessions";
+  const surfaceMain =
+    surface === "database" ? (
+      <DatabasePanel
+        key={`database:${live.runtime?.sessionId ?? "loading"}`}
+        live={live}
+        onClose={() => changeSurface("chat")}
+      />
+    ) : surface === "browser" ? (
+      <BrowserPanel
+        key={`browser:${live.runtime?.sessionId ?? "loading"}`}
+        connected={live.connection === "connected" && live.runtime?.ready === true}
+        generation={live.runtime?.sessionGeneration}
+        mirrorRequest={browserMirrorRequest}
+        onActiveChange={setBrowserActive}
+        onClose={() => changeSurface("chat")}
+        onError={reportError}
+      />
+    ) : null;
+  const referenceRail = (
+    <ReferenceRail
+      reference={reference}
+      context={navContext}
+      runtime={pendingSession ? undefined : live.runtime}
+      disabled={Boolean(pendingSession)}
+      registerButton={(id, node) => {
         if (node) panelToggles.current.set(id, node);
         else panelToggles.current.delete(id);
       }}
-      onToggleMenu={toggleSidebar}
-      onTogglePanel={toggleRightPanel}
+      onReference={toggleReference}
     />
   );
   const conversationPanel = (
@@ -1140,7 +1201,7 @@ export function App() {
       key={
         pendingSession
           ? `conversation:pending:${pendingSession.requestId}`
-          : `conversation:${live.runtime?.sessionId ?? "loading"}:${workspaceMode}`
+          : `conversation:${live.runtime?.sessionId ?? "loading"}:${surface}`
       }
       live={live}
       projectAvailable={live.runtime?.projectAvailable !== false}
@@ -1189,19 +1250,19 @@ export function App() {
       }}
       onSelectAgent={id => {
         setSelectedAgentId(id);
-        setRightPanel("agents");
+        setReference("agents");
       }}
       onOpenCompaction={message => {
         const sessionId = live.runtime?.sessionId;
         if (!sessionId) return;
         setSelectedCompaction({ sessionId, message });
-        setRightPanel("compaction");
+        setReference("compaction");
       }}
       onOpenAttachment={(attachment, trigger) => {
         const sessionId = live.runtime?.sessionId;
         if (!sessionId) return;
         setSelectedAttachment({ sessionId, attachment, trigger });
-        setRightPanel("attachment");
+        setReference("attachment");
       }}
       agentColors={agentColors}
       onOpenLogin={provider => {
@@ -1212,65 +1273,50 @@ export function App() {
 
   const sidePanel = (
     <>
-      {rightPanel && inspectorOverlay && (
-        <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />
+      {reference && inspectorOverlay && (
+        <button className="inspector-scrim" aria-label={`Close ${reference}`} onClick={() => setReference(null)} />
       )}
-      {rightPanel && (
+      {reference && (
         <PanelResizer
           container={workspaceRef}
           width={rightPanelWidth}
           onCommit={width => {
-            const slot = panelWidthSlot(rightPanel);
+            const slot = panelWidthSlot(reference);
             setPanelWidths(current => ({ ...current, [slot.key]: width }));
             rememberSetting(slot.key, width);
           }}
         />
       )}
-      {rightPanel === "chat" && (
-        <aside id="chat-panel" className="inspector workspace-chat-panel is-open" aria-labelledby="chat-panel-title">
-          <header>
-            <div>
-              <IconMessageCircle size={18} />
-              <strong id="chat-panel-title">Chat</strong>
-            </div>
-            <button className="icon-button" type="button" onClick={() => setRightPanel(null)} aria-label="Close chat">
-              <IconX size={17} />
-            </button>
-          </header>
-          <div className="workspace-chat-panel-body">{conversationPanel}</div>
-        </aside>
+      {reference === "chat" && (
+        <ReferencePanel reference="chat" overlay={inspectorOverlay} fill onClose={() => setReference(null)}>
+          {conversationPanel}
+        </ReferencePanel>
       )}
-      {rightPanel === "inspector" && (
-        <Inspector
-          key={`inspector:${live.runtime?.sessionId ?? "loading"}`}
-          current={view}
-          live={live}
-          availableViews={availableViews}
-          timelineEnabled={timelineEnabled}
-          memoryReviewerConfigured={memoryReviewerConfigured}
-          memoryEnabled={memoryEnabled}
-          papercutEnabled={papercutEnabled}
+      {SESSION_REFERENCES.includes(reference as ViewId) && (
+        <ReferencePanel
+          key={`reference:${live.runtime?.sessionId ?? "loading"}`}
+          reference={reference as ViewId}
           overlay={inspectorOverlay}
-          onClose={() => setRightPanel(null)}
-          onNavigate={selectView}
-          onOpenGlobalPolicy={() => {
-            setRightPanel(null);
-            showSettings({ tab: "policy" });
-          }}
-          onOpenMemoryReviewerSettings={() => {
-            setRightPanel(null);
-            showSettings({ packageQuery: "continuity" });
-          }}
-        />
+          onClose={() => setReference(null)}>
+          <SessionReference
+            view={reference as ViewId}
+            live={live}
+            timelineEnabled={timelineEnabled}
+            memoryReviewerConfigured={memoryReviewerConfigured}
+            memoryEnabled={memoryEnabled}
+            papercutEnabled={papercutEnabled}
+            onOpenGlobalPolicy={() => {
+              setReference(null);
+              showSettings({ tab: "policy" });
+            }}
+            onOpenMemoryReviewerSettings={() => {
+              setReference(null);
+              showSettings({ packageQuery: "continuity" });
+            }}
+          />
+        </ReferencePanel>
       )}
-      {rightPanel === "database" && (
-        <DatabasePanel
-          key={`database:${live.runtime?.sessionId ?? "loading"}`}
-          live={live}
-          onClose={() => setRightPanel(null)}
-        />
-      )}
-      {rightPanel === "agents" && (
+      {reference === "agents" && (
         <AgentPanel
           key={`agents:${live.runtime?.sessionId ?? "loading"}`}
           runs={live.runtime?.conversation.delegatedRuns ?? []}
@@ -1278,50 +1324,35 @@ export function App() {
           colors={agentColors}
           selectedId={selectedAgentId}
           onSelect={setSelectedAgentId}
-          onClose={() => setRightPanel(null)}
+          onClose={() => setReference(null)}
         />
       )}
-      {rightPanel === "compaction" &&
-        selectedCompaction &&
-        selectedCompaction.sessionId === live.runtime?.sessionId && (
-          <CompactionPanel
-            key={`compaction:${selectedCompaction.message.id}`}
-            message={selectedCompaction.message}
-            onClose={() => setRightPanel(null)}
-          />
-        )}
-      {rightPanel === "attachment" &&
-        selectedAttachment &&
-        selectedAttachment.sessionId === live.runtime?.sessionId && (
-          <AttachmentPanel
-            key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`}
-            attachment={selectedAttachment.attachment}
-            onClose={() => setRightPanel(null)}
-          />
-        )}
-      {rightPanel === "files" && (
+      {reference === "compaction" && selectedCompaction && selectedCompaction.sessionId === live.runtime?.sessionId && (
+        <CompactionPanel
+          key={`compaction:${selectedCompaction.message.id}`}
+          message={selectedCompaction.message}
+          onClose={() => setReference(null)}
+        />
+      )}
+      {reference === "attachment" && selectedAttachment && selectedAttachment.sessionId === live.runtime?.sessionId && (
+        <AttachmentPanel
+          key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`}
+          attachment={selectedAttachment.attachment}
+          onClose={() => setReference(null)}
+        />
+      )}
+      {reference === "changes" && (
         <FilesPanel
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
           live={live}
           requestedPath={requestedFile}
-          onClose={() => setRightPanel(null)}
+          onClose={() => setReference(null)}
           onExpand={(path, fileView) => {
             if (path)
               setRequestedFile({ path, view: fileView, sessionId: live.runtime?.sessionId, requestId: Date.now() });
-            setRightPanel(null);
-            changeWorkspaceMode("files");
+            setReference(null);
+            changeSurface("files");
           }}
-          onError={reportError}
-        />
-      )}
-      {rightPanel === "browser" && (
-        <BrowserPanel
-          key={`browser:${live.runtime?.sessionId ?? "loading"}`}
-          connected={live.connection === "connected" && live.runtime?.ready === true}
-          generation={live.runtime?.sessionGeneration}
-          mirrorRequest={browserMirrorRequest}
-          onActiveChange={setBrowserActive}
-          onClose={() => setRightPanel(null)}
           onError={reportError}
         />
       )}
@@ -1359,7 +1390,9 @@ export function App() {
   return (
     <div
       ref={appShellRef}
-      className={`app-shell has-session-strip ${sidebarCollapsed ? "sidebar-collapsed" : ""}${shellModeClass ? ` ${shellModeClass}` : ""}`}
+      className={`app-shell has-scope-rail has-session-strip ${
+        sidebarCollapsed ? "sidebar-collapsed" : ""
+      }${shellModeClass ? ` ${shellModeClass}` : ""}`}
       style={
         {
           "--sidebar-width": `${leftPanelWidth}px`,
@@ -1369,6 +1402,14 @@ export function App() {
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
+      <ScopeRail
+        workspaceView={workspaceView}
+        theme={theme}
+        terminalOpen={terminalOpen}
+        terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
+        onWorkspaceView={openWorkspaceView}
+        onAmbient={runAmbient}
+      />
       <ActiveSessionStrip
         sessions={activeSessions}
         unseenCompletions={live.unseenCompletions}
@@ -1385,17 +1426,11 @@ export function App() {
         onSetPinned={(session, pinned) => void setSessionPinned(session, pinned)}
         onNew={() => {
           if (!currentProject) return;
-          changeWorkspaceMode("chat");
+          changeSurface("chat");
           void newSession(currentProject);
         }}
-        onAllSessions={() => {
-          if (workspaceMode === "files") setFileNavigation("sessions");
-          else changeWorkspaceMode("chat");
-          setSidebarCollapsed(false);
-          if (mobile) setSidebarOpen(true);
-        }}
       />
-      {(workspaceMode === "chat" || fileNavigation === "sessions") && (
+      {sidebarVisible && (
         <SessionSidebar
           activeSessions={activeSessions}
           unseenCompletions={live.unseenCompletions}
@@ -1411,10 +1446,9 @@ export function App() {
           projectBusy={projectBusy}
           isOpen={sidebarOpen}
           mobile={mobile}
-          contextual
           onClose={() => setSidebarOpen(false)}
           onShowFiles={
-            workspaceMode === "files"
+            surface === "files"
               ? () => {
                   setFileNavigation("explorer");
                   if (mobile) setSidebarOpen(false);
@@ -1443,10 +1477,6 @@ export function App() {
             setArchivesOpen(true);
             if (mobile) setSidebarOpen(false);
           }}
-          terminalOpen={terminalOpen}
-          terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
-          onToggleTerminal={toggleTerminal}
-          onOpenSettings={openSettings}
           onArchiveProject={project => void archiveProject(project)}
           onRenameProject={project =>
             setSidebarAction({
@@ -1509,7 +1539,7 @@ export function App() {
           }
         />
       )}
-      {!mobile && !sidebarCollapsed && (
+      {sidebarVisible && !mobile && !sidebarCollapsed && (
         <SidebarResizer
           container={appShellRef}
           width={leftPanelWidth}
@@ -1519,12 +1549,20 @@ export function App() {
           }}
         />
       )}
-      {mobile && sidebarOpen && (workspaceMode === "chat" || fileNavigation === "sessions") && (
+      {mobile && sidebarOpen && sidebarVisible && (
         <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Modes that own the main area are listed explicitly; anything else falls back to chat. */}
-      {workspaceMode !== "files" ? (
+      {/* A workspace view replaces the session column entirely; the strip
+          above stays, so the session you left is one click away. Otherwise
+          the surface decides which shell fills the main area — Files brings
+          its own, everything else uses the card. */}
+      {workspaceView ? (
+        <main className="content-card is-workspace-view" id="main-content">
+          <WorkspaceViewHeader view={workspaceView} onClose={() => setWorkspaceView(null)} />
+          <div className="workspace-view-body">{workspaceView === "usage" && <UsageView />}</div>
+        </main>
+      ) : surface !== "files" ? (
         <main className="content-card" id="main-content">
           {topbar}
           {(toast || live.connection === "disconnected" || live.recovery) && (
@@ -1548,10 +1586,18 @@ export function App() {
           )}
           <div
             ref={workspaceRef}
-            className={`workspace-layout ${rightPanel ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
-            style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}>
-            {conversationPanel}
+            className={`workspace-layout ${reference ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
+            style={
+              {
+                "--inspector-width": `${rightPanelWidth}px`,
+                ...(referenceDefinition(reference)?.tone
+                  ? { "--rail-tone": referenceDefinition(reference)?.tone }
+                  : {}),
+              } as CSSProperties
+            }>
+            {surface === "chat" ? conversationPanel : surfaceMain}
             {sidePanel}
+            {referenceRail}
           </div>
           {(sessionTransition || packageBusy) && (
             <div className="session-transition" role="status">
@@ -1568,17 +1614,18 @@ export function App() {
           contentStore={fileWorkspaceContents}
           header={topbar}
           workspaceRef={workspaceRef}
-          sidePanel={sidePanel}
-          terminalOpen={terminalOpen}
-          terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
-          rightPanelOpen={Boolean(rightPanel)}
+          sidePanel={
+            <>
+              {sidePanel}
+              {referenceRail}
+            </>
+          }
+          rightPanelOpen={Boolean(reference)}
           inspectorWidth={rightPanelWidth}
           showExplorer={fileNavigation === "explorer" && (mobile || !sidebarCollapsed)}
           navigationOpen={sidebarOpen}
           mobile={mobile}
           onCloseNavigation={() => setSidebarOpen(false)}
-          onToggleTerminal={toggleTerminal}
-          onOpenSettings={openSettings}
           onSessions={() => {
             setFileNavigation("sessions");
             setSidebarCollapsed(false);
@@ -1607,6 +1654,7 @@ export function App() {
           onConfirm={sidebarAction.onConfirm}
         />
       )}
+      {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
       {archivesOpen && (
         <ArchiveDialog
           revision={live.sessionRevision ?? 0}
@@ -1919,7 +1967,6 @@ function ActiveSessionStrip({
   onSetActive,
   onSetPinned,
   onNew,
-  onAllSessions,
 }: {
   sessions: SessionSummary[];
   unseenCompletions?: Record<string, true>;
@@ -1935,7 +1982,6 @@ function ActiveSessionStrip({
   onSetActive: (session: SessionSummary, active: boolean) => void;
   onSetPinned: (session: SessionSummary, pinned: boolean) => void;
   onNew: () => void;
-  onAllSessions: () => void;
 }) {
   const stripRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -2012,12 +2058,6 @@ function ActiveSessionStrip({
   const sleeping = menuSession?.runtimeState === "sleeping";
   return (
     <nav ref={stripRef} className="active-session-strip" aria-label="Active sessions">
-      <div className="active-session-brand">
-        <span className="brand-mark" aria-hidden="true">
-          <img src="/pylon-mark.svg" alt="" />
-        </span>
-        <strong>Pylon</strong>
-      </div>
       <div ref={listRef} className="active-session-tabs">
         {sessions.map(session => {
           const completed = Boolean(unseenCompletions?.[session.id]);
@@ -2083,14 +2123,6 @@ function ActiveSessionStrip({
           <IconPlus size={17} />
         </button>
       </div>
-      <button
-        className="active-session-all"
-        type="button"
-        onClick={onAllSessions}
-        aria-label="All sessions"
-        title="All sessions">
-        <IconDots size={18} />
-      </button>
       {menuSession && (
         <div
           id="active-session-options-menu"
@@ -2151,114 +2183,18 @@ function ActiveSessionStrip({
   );
 }
 
-function Topbar({
-  live,
-  session,
-  pendingSession,
-  theme,
-  workspaceMode,
-  menuOpen,
-  rightPanel,
-  panelContext,
-  menuButtonRef,
-  registerPanelButton,
-  onWorkspaceMode,
-  onToggleTheme,
-  onToggleMenu,
-  onTogglePanel,
-}: {
-  live: RuntimeStoreSnapshot;
-  session?: SessionSummary;
-  pendingSession?: PendingSession;
-  theme: Theme;
-  workspaceMode: WorkspaceModeId;
-  menuOpen: boolean;
-  rightPanel: RightPanel;
-  panelContext: PanelContext;
-  menuButtonRef: React.RefObject<HTMLButtonElement | null>;
-  registerPanelButton: (id: PanelId, node: HTMLButtonElement | null) => void;
-  onWorkspaceMode: (mode: WorkspaceModeId) => void;
-  onToggleTheme: () => void;
-  onToggleMenu: () => void;
-  onTogglePanel: (panel: PanelId) => void;
-}) {
-  const runtime = pendingSession ? undefined : live.runtime;
-  const sessionName = pendingSession
-    ? "New session"
-    : runtime?.sessionName || (session ? sessionTitle(session) : "New session");
-  const branch = pendingSession
-    ? pendingSession.phase === "failed"
-      ? "setup failed"
-      : "workspace pending"
-    : runtime?.gitBranch || "No Git branch";
-  const turn = runtime?.metrics.userMessages ?? 0;
+function WorkspaceViewHeader({ view, onClose }: { view: WorkspaceViewId; onClose: () => void }) {
+  const definition = workspaceViewDefinition(view);
+  if (!definition) return null;
+  const Icon = definition.icon;
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <button
-          ref={menuButtonRef}
-          className="icon-button navigation-toggle"
-          onClick={onToggleMenu}
-          aria-label="Toggle project navigation"
-          aria-controls="primary-navigation"
-          aria-expanded={menuOpen}>
-          <IconMenu2 size={18} />
-        </button>
-        <nav className="workspace-mode-switch" aria-label="Session view">
-          {WORKSPACE_MODES.map(mode => (
-            <button
-              key={mode.id}
-              type="button"
-              className={workspaceMode === mode.id ? "is-active" : ""}
-              disabled={Boolean(pendingSession) && Boolean(mode.requiresSession)}
-              onClick={() => onWorkspaceMode(mode.id)}>
-              {mode.label}
-            </button>
-          ))}
-        </nav>
-        <div className="repo-crumb">
-          <IconBrandGit size={16} stroke={1.7} />
-          <span>
-            {pendingSession?.project.label || runtime?.cwdLabel || "Pylon"} /{" "}
-            <strong>{sessionName.slice(0, 128)}</strong>
-          </span>
-        </div>
-        <span className="topbar-divider" />
-        <div className="branch-label">
-          <IconGitBranch size={14} />
-          <span>{pendingSession ? branch : `${branch} · Turn ${turn}`}</span>
-        </div>
-      </div>
-      <div className="topbar-actions">
-        {PANELS.filter(panel => panel.showButton?.(panelContext) ?? true).map(panel => {
-          const badge = panel.badge?.(runtime, panelContext);
-          const Icon = panel.icon;
-          return (
-            <button
-              key={panel.id}
-              ref={node => {
-                registerPanelButton(panel.id, node);
-              }}
-              className={`agents-trigger ${rightPanel === panel.id ? "is-active" : ""} ${badge?.live ? "is-live" : ""}`}
-              type="button"
-              disabled={Boolean(pendingSession)}
-              onClick={() => onTogglePanel(panel.id)}
-              aria-label={badge?.ariaLabel ?? panel.label}
-              aria-controls={panel.ariaId}
-              aria-expanded={rightPanel === panel.id}>
-              <Icon size={16} />
-              <span>{panel.label}</span>
-              {badge?.count !== undefined && <small>{badge.count}</small>}
-            </button>
-          );
-        })}
-        <button
-          className="icon-button"
-          onClick={onToggleTheme}
-          aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
-          {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
-        </button>
-      </div>
+    <header className="workspace-view-head">
+      <Icon size={17} />
+      <strong>{definition.label}</strong>
+      <span>every project in this workspace</span>
+      <button className="icon-button" type="button" onClick={onClose} aria-label={`Close ${definition.label}`}>
+        <IconX size={17} />
+      </button>
     </header>
   );
 }

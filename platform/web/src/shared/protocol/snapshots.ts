@@ -498,7 +498,12 @@ export type PackageSettingsReadModel =
       rolloverLowMultiplier: number;
     }
   | { kind: "helios"; headed: boolean }
-  | { kind: "timeline"; editRollbackDefault: boolean }
+  | {
+      kind: "timeline";
+      editRollbackDefault: boolean;
+      checkpointTitleMode: PackageModelMode;
+      checkpointTitleModel?: string;
+    }
   | {
       kind: "spawn";
       agentAvailability: "deferred" | "active";

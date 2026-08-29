@@ -47,6 +47,7 @@ export interface MessageReadModel {
   role: "user" | "assistant" | "system" | "tool";
   text: string;
   streaming: boolean;
+  turn?: number;
   createdAt?: string;
   canUndo?: boolean;
   canForkWithTimeline?: boolean;
@@ -419,6 +420,7 @@ export interface ContinuityReadModel {
 
 export interface TimelineCheckpointReadModel {
   id: string;
+  promptEntryId: string;
   title: string;
   createdAt: string;
   branch?: string;

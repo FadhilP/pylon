@@ -312,6 +312,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
       checkpoints: [
         {
           id: "checkpoint-1",
+          promptEntryId: "user-1",
           title: "First prompt",
           ownerSessionId: "session",
           createdAt: new Date(0).toISOString(),
@@ -319,6 +320,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
         },
         {
           id: "checkpoint-2",
+          promptEntryId: "user-2",
           title: "Failed prompt",
           ownerSessionId: "session",
           createdAt: new Date(1).toISOString(),
@@ -331,6 +333,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
     "session",
   );
   assert.equal(state.timeline.checkpoints[0]?.id, "checkpoint-1");
+  assert.equal(state.timeline.checkpoints[0]?.promptEntryId, "user-1");
   assert.equal(state.timeline.checkpoints[0]?.verificationState, "passed");
   assert.equal(state.timeline.checkpoints[1]?.verificationState, "failed");
   assert.equal(state.timeline.checkpoints[1]?.verified, false);

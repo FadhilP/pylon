@@ -316,7 +316,16 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
     );
   }
   if (value.kind === "helios") return typeof value.headed === "boolean";
-  if (value.kind === "timeline") return typeof value.editRollbackDefault === "boolean";
+  if (value.kind === "timeline") {
+    return (
+      typeof value.editRollbackDefault === "boolean" &&
+      (value.checkpointTitleMode === "disabled" ||
+        value.checkpointTitleMode === "session" ||
+        value.checkpointTitleMode === "model") &&
+      (value.checkpointTitleModel === undefined || boundedString(value.checkpointTitleModel, 400)) &&
+      (value.checkpointTitleMode !== "model" || boundedString(value.checkpointTitleModel, 400))
+    );
+  }
   return (
     value.kind === "spawn" &&
     (value.agentAvailability === "deferred" || value.agentAvailability === "active") &&
@@ -1235,6 +1244,7 @@ function validHistoryMessage(message: unknown): boolean {
     typeof message.text === "string" &&
     message.text.length <= MAX_MESSAGE_LENGTH &&
     message.streaming === false &&
+    (message.turn === undefined || (Number.isSafeInteger(message.turn) && (message.turn as number) > 0)) &&
     (message.attachmentCount === undefined ||
       (Number.isSafeInteger(message.attachmentCount) &&
         (message.attachmentCount as number) >= 0 &&
@@ -1477,6 +1487,7 @@ function validConversationMessage(message: unknown): boolean {
     typeof message.text === "string" &&
     message.text.length <= MAX_MESSAGE_LENGTH &&
     typeof message.streaming === "boolean" &&
+    (message.turn === undefined || (Number.isSafeInteger(message.turn) && (message.turn as number) > 0)) &&
     (message.createdAt === undefined ||
       (typeof message.createdAt === "string" && !Number.isNaN(Date.parse(message.createdAt)))) &&
     (message.canUndo === undefined || typeof message.canUndo === "boolean") &&

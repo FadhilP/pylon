@@ -6,12 +6,20 @@ import { verificationWorktreeState } from "pylon-core/verification-worktree";
 import { capture, makePortable, worktreeFingerprint, type Snapshot } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import { classifyCompatibility, type GitState } from "../src/compatibility.ts";
-import { normalizeGeneratedTitle, promptText, promptTitle, SESSION_TITLE_PROMPT } from "../src/prompts.ts";
+import {
+  CHECKPOINT_TITLE_PROMPT,
+  normalizeGeneratedTitle,
+  promptText,
+  promptTitle,
+  SESSION_TITLE_PROMPT,
+  titleExcerpt,
+} from "../src/prompts.ts";
 import { git } from "../src/git.ts";
 import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry } from "../src/run.ts";
 import { TIMELINE_STATE_VERSION, timelineStateSnapshot } from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
+import { defaultConfig, loadConfig, parseModelRef, type TimelineConfig } from "../src/config.ts";
 import {
   CHECKPOINT_VERSIONS,
   customEntryData,
@@ -19,6 +27,9 @@ import {
   type Bound,
   type CheckpointRecord,
   type ClearV1,
+  type CheckpointTitleV1,
+  type TimelineBaselineV1,
+  type TimelineBaselineRetiredV1,
 } from "../src/records.ts";
 import { checkpointRow, compatibilityDetail, inspectGitState, shortRef } from "../src/describe.ts";
 
@@ -27,7 +38,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 export default function timelineExtension(
   pi: ExtensionAPI,
   completeTitle: typeof complete = complete,
-  options: { artifactRoot?: string } = {},
+  options: { artifactRoot?: string; configPath?: string } = {},
 ) {
   const emitTelemetry = (value: unknown) => {
     try {
@@ -42,13 +53,17 @@ export default function timelineExtension(
     /** Whether the working tree currently matches the newest prompt's checkpoint. */
     paired: false,
     changeCache: new Map<string, TimelineChangeSet>(),
-    changeBases: new Map<string, CheckpointRecord | null>(),
+    changeBases: new Map<string, Snapshot | null>(),
     /** Checkpoint ids the UI already confirmed a fork for. */
     confirmedForks: new Set<string>(),
   };
 
   /** Session-title generation; `generation` invalidates a naming call that outlived its session. */
   const naming = { decided: false, generation: 0, inFlight: undefined as number | undefined };
+  /** Background checkpoint titles are invalidated when their owning session changes. */
+  const checkpointNaming = { generation: 0, inFlight: new Set<string>() };
+  /** Persisted session-start state until the first checkpoint consumes it as a diff base. */
+  let sessionBaseline: { entryId: string; snapshot: Snapshot } | undefined;
 
   /** Tracks worktree mutations that should trigger an automatic checkpoint. */
   const mutations = {
@@ -79,6 +94,7 @@ export default function timelineExtension(
     sharedWorktreeObserver = false,
     currentGit: any,
     lastCtx: any,
+    timelineConfig: TimelineConfig = defaultConfig(),
     enabled = true;
   pi.events.emit?.("pylon:worktree-observer-request", {
     version: 1,
@@ -151,6 +167,7 @@ export default function timelineExtension(
       stateRevision,
       [...checkpoints.records].map(([id, bound]) => ({
         id,
+        promptEntryId: bound.record.promptEntryId,
         title: bound.preview.split(/\r?\n/, 1)[0] || "Checkpoint",
         createdAt: bound.record.createdAt,
         ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
@@ -322,6 +339,14 @@ export default function timelineExtension(
         return { changes: await checkpointChanges(bound.record, candidate.record), previous: candidate.record };
       } catch {}
     }
+    if (bound.record.baseline) {
+      try {
+        return {
+          changes: await checkpointChanges(bound.record, bound.record.baseline),
+          previous: bound.record.baseline,
+        };
+      } catch {}
+    }
     return { changes: await checkpointChanges(bound.record), previous: undefined };
   };
   const changesFor = async (id: string, bound: Bound) => {
@@ -477,6 +502,92 @@ export default function timelineExtension(
       pi.setSessionName(name);
     }
   };
+
+  const checkpointTitleModel = (ctx: any) => {
+    if (timelineConfig.useSessionModelForCheckpointTitles) return ctx.model;
+    if (!timelineConfig.checkpointTitleModel) return undefined;
+    const ref = parseModelRef(timelineConfig.checkpointTitleModel);
+    return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
+  };
+
+  const nameCheckpoint = async (
+    ctx: any,
+    recordKey: string,
+    checkpointEntryId: string,
+    user: any,
+    finalAssistant: any,
+    changes: TimelineChangeSet,
+  ) => {
+    const model = checkpointTitleModel(ctx);
+    if (!model || checkpointNaming.inFlight.has(recordKey)) return;
+    const generation = checkpointNaming.generation;
+    const sessionId = session.id;
+    checkpointNaming.inFlight.add(recordKey);
+    const request = titleExcerpt(user.message);
+    const paths = changes.files
+      .slice(0, 20)
+      .map(file => `${file.status}: ${file.path}`)
+      .join("\n");
+    const result = [finalAssistant ? titleExcerpt(finalAssistant.message) : "", paths ? `Changed files:\n${paths}` : ""]
+      .filter(Boolean)
+      .join("\n\n");
+    const call: ModelCall = {
+      eventId: hash(`${sessionId}:${checkpointEntryId}:checkpoint-title`),
+      started: Date.now(),
+      request,
+      result,
+    };
+    try {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth.ok || !auth.apiKey) return;
+      const message: Message = {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
+          },
+        ],
+        timestamp: Date.now(),
+      };
+      const response = await completeTitle(
+        model,
+        { systemPrompt: CHECKPOINT_TITLE_PROMPT, messages: [message] },
+        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: 32, timeoutMs: 30_000, sessionId },
+      );
+      const failed = response.stopReason === "error" || response.stopReason === "aborted";
+      emitModelCall(call, failed ? "failed" : "completed", response.usage ?? {});
+      if (failed) return;
+      const title = normalizeGeneratedTitle(
+        response.content
+          .filter((part: any) => part.type === "text")
+          .map((part: any) => part.text)
+          .join("\n"),
+      );
+      if (
+        !title ||
+        generation !== checkpointNaming.generation ||
+        session.id !== sessionId ||
+        session.shuttingDown ||
+        !checkpoints.records.has(recordKey)
+      )
+        return;
+      const update: CheckpointTitleV1 = {
+        version: 1,
+        kind: "pi-checkpoint-title",
+        checkpointEntryId,
+        ownerSessionId: sessionId,
+        title,
+      };
+      pi.appendEntry("pi-checkpoint-title", update);
+      checkpoints.records.get(recordKey)!.preview = title;
+      publishState();
+    } catch {
+      emitModelCall(call, "failed");
+    } finally {
+      checkpointNaming.inFlight.delete(recordKey);
+    }
+  };
   const worktreeId = async (cwd: string) => (await verificationWorktreeState(pi.exec.bind(pi), cwd))?.id;
   const loadEntries = (entries: readonly any[], sessionId: string, sessionPath?: string, timelineId?: string) => {
     const byId = new Map(entries.map((entry: any) => [entry.id, entry]));
@@ -486,6 +597,15 @@ export default function timelineExtension(
         const data = customEntryData(entry, "pi-prompt-checkpoint", PORTABLE_CHECKPOINT_VERSIONS);
         return data && typeof data.promptEntryId === "string" && typeof data.snapshotId === "string"
           ? [`${data.promptEntryId}:${data.snapshotId}`]
+          : [];
+      }),
+    );
+    const titles = new Map(
+      entries.flatMap((entry: any) => {
+        const data = customEntryData(entry, "pi-checkpoint-title", [1]);
+        const title = data && normalizeGeneratedTitle(data.title);
+        return data?.ownerSessionId === sessionId && typeof data.checkpointEntryId === "string" && title
+          ? [[data.checkpointEntryId, title] as const]
           : [];
       }),
     );
@@ -512,10 +632,83 @@ export default function timelineExtension(
         checkpoints.records.set(key(sessionId, entry.id), {
           record: checkpoint as CheckpointRecord,
           checkpointEntryId: entry.id,
-          preview: promptText(user.message),
+          preview: titles.get(entry.id) ?? promptText(user.message),
           sessionId,
           sessionPath,
         });
+    }
+  };
+
+  const validBaselineSnapshot = (value: any): value is Snapshot => {
+    const validRepository = (repository: any, root = false) =>
+      repository &&
+      (!root || typeof repository.snapshotId === "string") &&
+      typeof repository.gitRoot === "string" &&
+      typeof repository.head === "string" &&
+      (repository.headRef === null || typeof repository.headRef === "string") &&
+      typeof repository.worktreeRef === "string" &&
+      typeof repository.indexRef === "string" &&
+      typeof repository.worktreeTree === "string" &&
+      typeof repository.indexTree === "string";
+    return (
+      validRepository(value, true) &&
+      (value.nested === undefined ||
+        (Array.isArray(value.nested) &&
+          value.nested.every(
+            (repository: any) => typeof repository.prefix === "string" && validRepository(repository),
+          )))
+    );
+  };
+
+  const persistedSessionBaseline = (entries: readonly any[], sessionId: string) => {
+    const consumed = new Set(
+      entries.flatMap((entry: any) => {
+        const checkpoint = customEntryData(entry, "pi-prompt-checkpoint", [6]);
+        const retired = customEntryData(entry, "pi-timeline-baseline-retired", [1]);
+        if (typeof checkpoint?.baselineEntryId === "string") return [checkpoint.baselineEntryId];
+        return typeof retired?.baselineEntryId === "string" ? [retired.baselineEntryId] : [];
+      }),
+    );
+    for (const entry of [...entries].reverse()) {
+      const baseline = customEntryData(entry, "pi-timeline-baseline", [1]);
+      if (
+        !consumed.has(entry.id) &&
+        baseline?.ownerSessionId === sessionId &&
+        validBaselineSnapshot(baseline)
+      )
+        return { entryId: entry.id, snapshot: baseline as Snapshot };
+    }
+    return undefined;
+  };
+
+  const establishSessionBaseline = async (ctx: any) => {
+    sessionBaseline = undefined;
+    if ([...checkpoints.records.values()].some(bound => bound.sessionId === session.id)) return;
+    const entries = ctx.sessionManager.getEntries();
+    sessionBaseline = persistedSessionBaseline(entries, session.id);
+    if (sessionBaseline) return;
+    try {
+      const snapshot = await capture(ctx.cwd, session.id, root => recordTimelineOwner(artifactRoot, session.id, root));
+      const record: TimelineBaselineV1 = {
+        version: 1,
+        kind: "pi-timeline-baseline",
+        ownerSessionId: session.id,
+        createdAt: new Date().toISOString(),
+        ...snapshot,
+      };
+      pi.appendEntry("pi-timeline-baseline", record);
+      const entryId = ctx.sessionManager.getLeafId();
+      if (!entryId) {
+        await deleteRefs(snapshot);
+        return;
+      }
+      sessionBaseline = { entryId, snapshot };
+    } catch (error: any) {
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `Timeline session baseline unavailable; first checkpoint may include earlier changes: ${error.message}`,
+          "warning",
+        );
     }
   };
   const load = async (ctx: any) => {
@@ -600,13 +793,16 @@ export default function timelineExtension(
               }
             : undefined,
         record: CheckpointRecord = {
-          version: 5,
+          version: 6,
           kind: "pi-prompt-checkpoint",
           promptEntryId: user.id,
           ownerSessionId: sessionId,
           continuationEntryId: continuation,
           ...snap,
           createdAt: new Date().toISOString(),
+          ...(sessionBaseline
+            ? { baseline: sessionBaseline.snapshot, baselineEntryId: sessionBaseline.entryId }
+            : {}),
           ...(verification ? { verification } : {}),
         };
       const temporary: Bound = {
@@ -635,9 +831,23 @@ export default function timelineExtension(
         sessionId,
         sessionPath: ctx.sessionManager.getSessionFile(),
       });
+      if (record.baselineEntryId) sessionBaseline = undefined;
       checkpoints.paired = true;
       refresh(ctx);
       publishState();
+      const branchAfterCapture = ctx.sessionManager.getBranch();
+      const userIndex = branchAfterCapture.findIndex((entry: any) => entry.id === user.id);
+      const finalAssistant = branchAfterCapture
+        .slice(userIndex + 1)
+        .findLast((entry: any) => entry.type === "message" && entry.message.role === "assistant");
+      void nameCheckpoint(
+        ctx,
+        key(sessionId, checkpointEntryId),
+        checkpointEntryId,
+        user,
+        finalAssistant,
+        changes,
+      );
       return record;
     } catch (e: any) {
       if (snap) await deleteRefs(snap).catch(() => {});
@@ -693,6 +903,7 @@ export default function timelineExtension(
     session.agentRunning = false;
     session.shuttingDown = false;
     mutations.checkpoint = undefined;
+    timelineConfig = await loadConfig(options.configPath);
     const nextSessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!session.releaseLease && session.id === nextSessionId;
     if (session.releaseLease && !reuseSessionLease) await session.releaseLease(session.ephemeral);
@@ -700,18 +911,23 @@ export default function timelineExtension(
     if (!reuseSessionLease) session.releaseLease = await startSessionGc(artifactRoot, session.id);
     session.ephemeral = !ctx.sessionManager.getSessionFile?.();
     await load(ctx);
+    await establishSessionBaseline(ctx);
     checkpoints.paired = false;
     naming.generation++;
     naming.inFlight = undefined;
+    checkpointNaming.generation++;
+    checkpointNaming.inFlight.clear();
     naming.decided = ctx.sessionManager.getEntries().some((entry: any) => entry.type === "session_info");
     refresh(ctx);
     publishState();
     void hydrateLegacyChanges(session.id);
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async event => {
     session.shuttingDown = true;
     naming.generation++;
     naming.inFlight = undefined;
+    checkpointNaming.generation++;
+    checkpointNaming.inFlight.clear();
     checkpoints.confirmedForks.clear();
     publishState(false);
     disposeStateRequest();
@@ -729,7 +945,24 @@ export default function timelineExtension(
     disposeRuntimePolicy();
     await mutations.checkpoint?.catch(() => {});
     mutations.checkpoint = undefined;
+    if (sessionBaseline && event.reason !== "reload" && !session.ephemeral) {
+      const baseline = sessionBaseline;
+      const retired: TimelineBaselineRetiredV1 = {
+        version: 1,
+        kind: "pi-timeline-baseline-retired",
+        baselineEntryId: baseline.entryId,
+        ownerSessionId: session.id,
+      };
+      try {
+        pi.appendEntry("pi-timeline-baseline-retired", retired);
+        await deleteRefs(baseline.snapshot);
+        sessionBaseline = undefined;
+      } catch {
+        // Keep the baseline reachable if retirement could not be persisted safely.
+      }
+    }
     await session.releaseLease?.(session.ephemeral);
+    if (session.ephemeral) sessionBaseline = undefined;
     session.releaseLease = undefined;
     session.id = "";
   });
@@ -859,6 +1092,7 @@ export default function timelineExtension(
     for (const [, bound] of owned) {
       try {
         await deleteRefs(bound.record);
+        if (bound.record.baseline) await deleteRefs(bound.record.baseline);
       } catch (error) {
         deletionFailures.push(error instanceof Error ? error.message : String(error));
       }
@@ -877,6 +1111,7 @@ export default function timelineExtension(
     for (const [id] of owned) checkpoints.records.delete(id);
     refresh(ctx);
     publishState();
+    await establishSessionBaseline(ctx);
   };
 
   /** Prompts for a checkpoint and what to do with it. */

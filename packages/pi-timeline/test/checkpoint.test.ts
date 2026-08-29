@@ -126,6 +126,151 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
   }
 });
 
+
+test("first checkpoint changes use the persisted session-start baseline", async () => {
+  const { root } = await repository();
+  await writeFile(join(root, "tracked.txt"), "dirty before session\n");
+  await writeFile(join(root, "preexisting.txt"), "keep me\n");
+  const entries: any[] = [
+    { type: "message", id: "user-1", message: { role: "user", content: "Change only this session" } },
+    { type: "session_info", id: "name-1", name: "Existing name" },
+  ];
+  const handlers = new Map<string, Function[]>(),
+    eventHandlers = new Map<string, Function>();
+  let nextEntry = 0;
+  const pi: any = {
+    events: {
+      on: (name: string, handler: Function) => {
+        eventHandlers.set(name, handler);
+        return () => eventHandlers.delete(name);
+      },
+      emit() {},
+    },
+    exec: execute,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) =>
+      entries.push({ type: "custom", id: `entry-${++nextEntry}`, customType, data }),
+    setSessionName() {},
+  };
+  extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
+      getSessionId: () => "baseline-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await writeFile(join(root, "tracked.txt"), "changed during session\n");
+    await writeFile(join(root, "session-only.txt"), "new work\n");
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+
+    const checkpoint = entries.find(entry => entry.customType === "pi-prompt-checkpoint");
+    assert.equal(checkpoint.data.version, 6);
+    assert.ok(checkpoint.data.baseline);
+    assert.equal(checkpoint.data.changes.fileCount, 2);
+
+    const requestFiles = async () => {
+      let response: any;
+      eventHandlers.get("pi-timeline:files-request")!({
+        version: 1,
+        sessionId: "baseline-session",
+        checkpointId: `baseline-session:${checkpoint.id}`,
+        respond: (value: any) => {
+          response = value;
+        },
+      });
+      return await response;
+    };
+    const requestDiff = async () => {
+      let response: any;
+      eventHandlers.get("pi-timeline:diff-request")!({
+        version: 1,
+        sessionId: "baseline-session",
+        checkpointId: `baseline-session:${checkpoint.id}`,
+        path: "tracked.txt",
+        respond: (value: any) => {
+          response = value;
+        },
+      });
+      return await response;
+    };
+
+    assert.deepEqual(
+      (await requestFiles()).files.map((file: any) => file.path),
+      ["session-only.txt", "tracked.txt"],
+    );
+    assert.doesNotMatch(JSON.stringify(await requestFiles()), /preexisting\.txt/);
+    assert.match((await requestDiff()).text, /-dirty before session/);
+    assert.match((await requestDiff()).text, /\+changed during session/);
+
+    await handlers.get("session_start")![0]({ reason: "reload" }, ctx);
+    assert.deepEqual(
+      (await requestFiles()).files.map((file: any) => file.path),
+      ["session-only.txt", "tracked.txt"],
+    );
+    assert.match((await requestDiff()).text, /-dirty before session/);
+
+    await rm(join(root, "preexisting.txt"));
+    await restore(checkpoint.data, root);
+    assert.equal((await readFile(join(root, "preexisting.txt"), "utf8")).replaceAll("\r\n", "\n"), "keep me\n");
+    await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
+    await deleteRefs(root, [checkpoint.data.baseline.worktreeRef, checkpoint.data.baseline.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("read-only persistent sessions retire unused baseline refs on quit", async () => {
+  const { root, git } = await repository();
+  const entries: any[] = [];
+  const handlers = new Map<string, Function[]>();
+  let nextEntry = 0;
+  const pi: any = {
+    events: { on: () => () => {}, emit() {} },
+    exec: execute,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) =>
+      entries.push({ type: "custom", id: `entry-${++nextEntry}`, customType, data }),
+    setSessionName() {},
+  };
+  extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => join(root, "session.jsonl"),
+      getSessionId: () => "read-only-persistent-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    assert.equal(
+      (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline")).split(/\r?\n/).filter(Boolean).length,
+      2,
+    );
+    await handlers.get("session_shutdown")![0]({ reason: "quit" }, ctx);
+    assert.equal(await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline"), "");
+    assert.ok(entries.some(entry => entry.customType === "pi-timeline-baseline-retired"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("automatic checkpoints attach matching verification outcomes only", async () => {
   const { root } = await repository();
   const entries: any[] = [{ type: "message", id: "user-1", message: { role: "user", content: "Update and verify" } }];
@@ -677,6 +822,106 @@ test("restore validates objects before mutation", async () => {
     await assert.rejects(restore({ ...snapshot, worktreeTree: "not-an-object" }), /Invalid checkpoint object ID/);
     assert.equal(await readFile(join(root, "tracked.txt"), "utf8"), "safe\n");
     await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("checkpoint titles are generated after capture and survive reload", async () => {
+  const { root } = await repository();
+  const configPath = join(root, "timeline-config.json");
+  const entries: any[] = [
+    {
+      type: "message",
+      id: "user-1",
+      message: { role: "user", content: "Please fix the duplicate checkout submission bug" },
+    },
+    {
+      type: "message",
+      id: "assistant-1",
+      message: { role: "assistant", content: "Added an idempotency guard and regression coverage." },
+    },
+    { type: "session_info", id: "name-1", name: "Existing session name" },
+  ];
+  const handlers = new Map<string, Function[]>(),
+    eventHandlers = new Map<string, Function>(),
+    calls: any[] = [];
+  let nextEntry = 0;
+  const pi: any = {
+    events: {
+      on: (name: string, handler: Function) => {
+        eventHandlers.set(name, handler);
+        return () => eventHandlers.delete(name);
+      },
+      emit() {},
+    },
+    exec: execute,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) =>
+      entries.push({ type: "custom", id: `generated-${++nextEntry}`, customType, data }),
+    setSessionName() {},
+  };
+  await writeFile(
+    configPath,
+    JSON.stringify({ version: 1, editRollbackDefault: false, useSessionModelForCheckpointTitles: true }),
+  );
+  extension(
+    pi,
+    (async (...args: any[]) => {
+      calls.push(args);
+      return { content: [{ type: "text", text: "Prevent Duplicate Checkout Submissions" }] };
+    }) as any,
+    { artifactRoot: join(root, "timeline-artifacts"), configPath },
+  );
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    model: { provider: "test", id: "cheap-title-model" },
+    modelRegistry: {
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
+      find: () => undefined,
+    },
+    ui: { notify() {}, setStatus() {} },
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
+      getSessionId: () => "checkpoint-title-session",
+    },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await writeFile(join(root, "tracked.txt"), "checkout guard\n");
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    const checkpoint = entries.find(entry => entry.customType === "pi-prompt-checkpoint");
+    const title = entries.find(entry => entry.customType === "pi-checkpoint-title");
+    assert.ok(checkpoint);
+    assert.ok(title);
+    assert.equal(title.data.checkpointEntryId, checkpoint.id);
+    assert.equal(title.data.title, "Prevent Duplicate Checkout Submissions");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0][1].messages[0].content[0].text, /idempotency guard/);
+    assert.match(calls[0][1].messages[0].content[0].text, /modified: tracked\.txt/);
+
+    await handlers.get("session_start")![0]({ reason: "reload" }, ctx);
+    let snapshot: any;
+    eventHandlers.get("pi-timeline:state-request")!({
+      version: 4,
+      sessionId: "checkpoint-title-session",
+      respond: (value: any) => {
+        snapshot = value;
+      },
+    });
+    assert.equal(snapshot.checkpoints[0].title, "Prevent Duplicate Checkout Submissions");
+    assert.equal(snapshot.checkpoints[0].promptEntryId, "user-1");
+    assert.notEqual(snapshot.checkpoints[0].title, "Please fix the duplicate checkout submission bug");
+    await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

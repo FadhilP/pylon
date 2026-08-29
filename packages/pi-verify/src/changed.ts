@@ -12,7 +12,7 @@ export function checksForChangedPaths(
   cwd: string,
   detection: Detection,
   paths: readonly string[],
-): { checks: Check[]; omitted: Check[] } | undefined {
+): { checks: Check[]; omitted: Check[]; complete: boolean } | undefined {
   if (!paths.length) return undefined;
   const root = resolve(cwd);
   const packageRoots = detection.packageRoots.slice().sort((a, b) => b.length - a.length);
@@ -26,5 +26,8 @@ export function checksForChangedPaths(
   }
   const available = detection.available.filter(check => affected.has(check.cwd));
   if ([...affected].some(packageRoot => !available.some(check => check.cwd === packageRoot))) return undefined;
-  return { checks: available.slice(0, LIMIT), omitted: available.slice(LIMIT) };
+  if (available.length <= LIMIT) return { checks: available, omitted: [], complete: true };
+  const rootChecks = detection.available.filter(check => check.cwd === root);
+  if (rootChecks.length) return { checks: detection.checks, omitted: detection.omitted, complete: true };
+  return { checks: available.slice(0, LIMIT), omitted: available.slice(LIMIT), complete: false };
 }

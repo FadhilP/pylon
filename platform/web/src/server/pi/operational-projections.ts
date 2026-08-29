@@ -806,10 +806,11 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
   const checkpoints = input.checkpoints.slice(-100).flatMap(value => {
     const item = record(value);
     const id = identifier(item?.id);
+    const promptEntryId = identifier(item?.promptEntryId);
     const title = string(item?.title, 500);
     const ownerSessionId = identifier(item?.ownerSessionId);
     const createdAt = string(item?.createdAt, 64);
-    if (!item || !id || !title || !ownerSessionId || !createdAt) return [];
+    if (!item || !id || !promptEntryId || !title || !ownerSessionId || !createdAt) return [];
     const verificationState: "passed" | "failed" | "unverified" =
       item.verificationState === "passed" || item.verificationState === "failed"
         ? item.verificationState
@@ -832,6 +833,7 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
     return [
       {
         id,
+        promptEntryId,
         title,
         ownerSessionId,
         createdAt,

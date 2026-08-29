@@ -775,6 +775,7 @@ export function projectConversation(
   const projectedMessages: MessageReadModel[] = [];
   let latestProjectedUser: MessageReadModel | undefined;
   let userTurn = 0;
+  let conversationTurn = 0;
   for (let index = 0; index < end; index++) {
     const message = messages[index];
     const raw = object(message);
@@ -782,6 +783,7 @@ export function projectConversation(
     const messageRole = role(raw.role);
     if (messageRole === "user") userTurn++;
     const fileCount = promptFileCount(raw);
+    if (messageRole === "user" && !fileCount) conversationTurn++;
     if (fileCount) {
       if (latestProjectedUser) {
         latestProjectedUser.fileAttachmentCount = fileCount;
@@ -841,6 +843,7 @@ export function projectConversation(
       role: messageRole,
       text: messageText(raw),
       streaming: false,
+      ...(messageRole === "assistant" && conversationTurn ? { turn: conversationTurn } : {}),
       ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
       ...(messageRole === "user" && raw.canUndo === true ? { canUndo: true } : {}),
       ...(images ? { attachmentCount: images } : {}),

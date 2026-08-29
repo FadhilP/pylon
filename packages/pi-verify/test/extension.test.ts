@@ -291,8 +291,21 @@ test("changed scope selects affected workspace packages and falls back for root 
     JSON.stringify({ scripts: { test: "node root.js" }, workspaces: ["packages/*"] }),
   );
   await writeFile(join(packageA, "package.json"), JSON.stringify({ scripts: { test: "node a.js" } }));
-  await writeFile(join(packageB, "package.json"), JSON.stringify({ scripts: { test: "node b.js" } }));
+  await writeFile(
+    join(packageB, "package.json"),
+    JSON.stringify({
+      scripts: {
+        verify: "node verify.js",
+        check: "node check.js",
+        typecheck: "node typecheck.js",
+        lint: "node lint.js",
+        test: "node test.js",
+      },
+    }),
+  );
   await writeFile(join(packageA, "source.ts"), "changed");
+  await writeFile(join(packageB, "source.ts"), "changed");
+  await writeFile(join(packageB, "Makefile"), "verify:\n\ncheck:\n\ntest:\n\nlint:\n");
   let changedPath = "packages/a/source.ts";
   let tool: any;
   const executions: string[] = [];
@@ -350,6 +363,28 @@ test("changed scope selects affected workspace packages and falls back for root 
     ["npm:test"],
   );
   assert.deepEqual(executions, [cwd]);
+
+  executions.length = 0;
+  changedPath = "packages/b/source.ts";
+  const aggregate = await tool.execute("changed-aggregate", { scope: "changed" }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.deepEqual(aggregate.details.results.map((result: any) => result.id), ["npm:test"]);
+  assert.deepEqual(executions, [cwd]);
+
+
+  executions.length = 0;
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));
+  changedPath = "packages/b/source.ts";
+  const incomplete = await tool.execute("changed-capped", { scope: "changed" }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.equal(incomplete.details.state, "error");
+  assert.equal(incomplete.details.results.length, 6);
+  assert.equal(incomplete.details.omittedChecks.length, 3);
+  assert.ok(executions.every(directory => directory === packageB));
 });
 
 test("verify reports live elapsed runtime while a check runs", async () => {

@@ -10,11 +10,9 @@ import {
   IconPlus,
   IconPower,
   IconSearch,
-  IconSettings,
   IconTerminal2,
   IconTrash,
   IconX,
-  IconLibrary,
 } from "@tabler/icons-react";
 import {
   useEffect,
@@ -29,7 +27,6 @@ import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snap
 import { formatSessionActivity } from "../shared/format";
 import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { showSessionRuntimeState } from "../shared/session-completions";
-import { ChangelogDialog } from "./changelog-dialog";
 import { copyText } from "./clipboard";
 import { displayDate, displayTime } from "./format";
 
@@ -60,7 +57,6 @@ interface SidebarProps {
   projectLoading: string;
   projectBusy: string;
   isOpen: boolean;
-  contextual?: boolean;
   mobile: boolean;
   onClose: () => void;
   onShowFiles?: () => void;
@@ -75,10 +71,6 @@ interface SidebarProps {
   onShowLess: (project: SessionProject) => void;
   onAddProject: () => void;
   onOpenArchives: () => void;
-  terminalOpen: boolean;
-  terminalAvailable: boolean;
-  onToggleTerminal: () => void;
-  onOpenSettings: () => void;
   onArchiveProject: (project: SessionProject) => void;
   onRenameProject: (project: SessionProject) => void;
   onRemoveProject: (project: SessionProject) => void;
@@ -106,7 +98,6 @@ export function SessionSidebar({
   projectBusy,
   isOpen,
   mobile,
-  contextual = false,
   onClose,
   onShowFiles,
   onQuery,
@@ -120,10 +111,6 @@ export function SessionSidebar({
   onShowLess,
   onAddProject,
   onOpenArchives,
-  terminalOpen,
-  terminalAvailable,
-  onToggleTerminal,
-  onOpenSettings,
   onArchiveProject,
   onRenameProject,
   onRemoveProject,
@@ -135,8 +122,6 @@ export function SessionSidebar({
   onReorderActiveSession,
 }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
-  const [changelogOpen, setChangelogOpen] = useState(false);
-  const [activeSessionsOpen, setActiveSessionsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [generalOpen, setGeneralOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -146,10 +131,6 @@ export function SessionSidebar({
   const visibleProjects = useMemo(
     () => orderByIds(projects, preview?.kind === "project" ? preview.ids : undefined),
     [preview, projects],
-  );
-  const visibleActiveSessions = useMemo(
-    () => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined),
-    [activeSessions, preview],
   );
   const generalPage = general ? pages.find(page => page.id === general.id) : undefined;
   const working =
@@ -302,50 +283,18 @@ export function SessionSidebar({
         aria-label="Projects and sessions"
         aria-hidden={mobile && !isOpen}
         inert={mobile && !isOpen}>
-        {contextual ? (
-          <div className="session-context-header">
-            <strong>All sessions</strong>
-            {onShowFiles && (
-              <button className="session-context-files" type="button" onClick={onShowFiles}>
-                <IconFolder size={14} />
-                Files
-              </button>
-            )}
-            <span>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setChangelogOpen(true)}
-                aria-label="Open changelog">
-                <IconLibrary size={16} />
-              </button>
-              <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
-                <IconX size={18} />
-              </button>
-            </span>
-          </div>
-        ) : (
-          <div className="brand-row-shell">
-            <button
-              className="brand-row"
-              type="button"
-              onClick={() => setChangelogOpen(true)}
-              aria-label="Open changelog">
-              <span className="brand-row-identity">
-                <span className="brand-mark" aria-hidden="true">
-                  <img src="/pylon-mark.svg" alt="" />
-                </span>
-                <span className="brand-copy">
-                  <strong>Pylon</strong>
-                </span>
-              </span>
-              <IconLibrary className="brand-changelog-icon" size={16} />
+        <div className="session-context-header">
+          <strong>All sessions</strong>
+          {onShowFiles && (
+            <button className="session-context-files" type="button" onClick={onShowFiles}>
+              <IconFolder size={14} />
+              Files
             </button>
-            <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
-              <IconX size={18} />
-            </button>
-          </div>
-        )}
+          )}
+          <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
+            <IconX size={18} />
+          </button>
+        </div>
 
         <label className="session-search">
           <IconSearch size={15} />
@@ -360,67 +309,6 @@ export function SessionSidebar({
         </label>
 
         <nav className="project-list">
-          {!contextual && (
-            <section className="active-session-group" aria-labelledby="active-sessions-heading">
-              <h2 style={{ marginBottom: 4 }} className="nav-label" id="active-sessions-heading">
-                <button
-                  type="button"
-                  aria-expanded={activeSessionsOpen}
-                  onClick={() => setActiveSessionsOpen(open => !open)}>
-                  <span>Active sessions</span>
-                  <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
-                  <small>{activeSessions.length}</small>
-                </button>
-              </h2>
-              {activeSessionsOpen &&
-                (visibleActiveSessions.length > 0 ? (
-                  <div className="active-session-list">
-                    {visibleActiveSessions.map(session => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        menuId={`active-${session.id}`}
-                        menuOpen={openMenu === `active-${session.id}`}
-                        busy={busy}
-                        deleting={deleting}
-                        completed={Boolean(unseenCompletions?.[session.id])}
-                        showProject
-                        now={now}
-                        onSelect={selectSession}
-                        onDelete={onDeleteSession}
-                        onArchive={onArchiveSession}
-                        onRename={onRenameSession}
-                        onSetActive={onSetSessionActive}
-                        onSetPinned={onSetSessionPinned}
-                        onToggleMenu={toggleMenu}
-                        onCloseMenu={() => closeMenu(true)}
-                        onCopySessionId={id => announceCopy(id, "Session ID")}
-                        reorderKind="active"
-                        dragging={preview?.kind === "active" && preview.id === session.id}
-                        onPointerDown={event =>
-                          startPointerReorder(
-                            event,
-                            "active",
-                            session.id,
-                            visibleActiveSessions.map(item => item.id),
-                          )
-                        }
-                        onKeyDown={event =>
-                          keyboardReorder(
-                            event,
-                            "active",
-                            session.id,
-                            visibleActiveSessions.map(item => item.id),
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="active-session-empty">No active sessions</p>
-                ))}
-            </section>
-          )}
           <div className="project-heading">
             <h2 className="nav-label">
               <button
@@ -702,26 +590,10 @@ export function SessionSidebar({
           )}
         </nav>
 
-        <div className="sidebar-foot">
-          <button className="sidebar-action" type="button" onClick={onOpenSettings}>
-            <IconSettings size={16} />
-            Settings
-          </button>
-          <button
-            className={`sidebar-action${terminalOpen ? " is-active" : ""}`}
-            type="button"
-            disabled={!terminalAvailable}
-            aria-pressed={terminalOpen}
-            onClick={onToggleTerminal}>
-            <IconTerminal2 size={16} />
-            Terminal
-          </button>
-        </div>
         <div className="sr-only" aria-live="polite">
           {announcement}
         </div>
       </aside>
-      {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
     </>
   );
 }

@@ -10,6 +10,7 @@ export interface TimelineCheckpointChanges {
 
 export interface TimelineCheckpointState {
   id: string;
+  promptEntryId: string;
   title: string;
   createdAt: string;
   branch?: string;
@@ -62,6 +63,7 @@ export function timelineStateSnapshot(
       .slice(-100)
       .map(item => ({
         id: item.id.slice(0, 128),
+        promptEntryId: item.promptEntryId.slice(0, 128),
         title: item.title.slice(0, 500),
         createdAt: item.createdAt,
         ...(item.branch ? { branch: item.branch.slice(0, 200) } : {}),

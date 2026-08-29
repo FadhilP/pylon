@@ -9,6 +9,7 @@ export { default as IconArrowLeft } from "@tabler/icons-react/dist/esm/icons/Ico
 export { default as IconArrowRight } from "@tabler/icons-react/dist/esm/icons/IconArrowRight.mjs";
 export { default as IconArrowUp } from "@tabler/icons-react/dist/esm/icons/IconArrowUp.mjs";
 export { default as IconBell } from "@tabler/icons-react/dist/esm/icons/IconBell.mjs";
+export { default as IconBook } from "@tabler/icons-react/dist/esm/icons/IconBook.mjs";
 export { default as IconBotId } from "@tabler/icons-react/dist/esm/icons/IconBotId.mjs";
 export { default as IconBrandDocker } from "@tabler/icons-react/dist/esm/icons/IconBrandDocker.mjs";
 export { default as IconBrandGit } from "@tabler/icons-react/dist/esm/icons/IconBrandGit.mjs";
@@ -46,6 +47,7 @@ export { default as IconFileTypeZip } from "@tabler/icons-react/dist/esm/icons/I
 export { default as IconFiles } from "@tabler/icons-react/dist/esm/icons/IconFiles.mjs";
 export { default as IconFolder } from "@tabler/icons-react/dist/esm/icons/IconFolder.mjs";
 export { default as IconFolderOpen } from "@tabler/icons-react/dist/esm/icons/IconFolderOpen.mjs";
+export { default as IconGauge } from "@tabler/icons-react/dist/esm/icons/IconGauge.mjs";
 export { default as IconGitBranch } from "@tabler/icons-react/dist/esm/icons/IconGitBranch.mjs";
 export { default as IconGitCompare } from "@tabler/icons-react/dist/esm/icons/IconGitCompare.mjs";
 export { default as IconGitFork } from "@tabler/icons-react/dist/esm/icons/IconGitFork.mjs";
@@ -54,6 +56,7 @@ export { default as IconJson } from "@tabler/icons-react/dist/esm/icons/IconJson
 export { default as IconKey } from "@tabler/icons-react/dist/esm/icons/IconKey.mjs";
 export { default as IconLayoutDashboard } from "@tabler/icons-react/dist/esm/icons/IconLayoutDashboard.mjs";
 export { default as IconLibrary } from "@tabler/icons-react/dist/esm/icons/IconLibrary.mjs";
+export { default as IconList } from "@tabler/icons-react/dist/esm/icons/IconList.mjs";
 export { default as IconListCheck } from "@tabler/icons-react/dist/esm/icons/IconListCheck.mjs";
 export { default as IconLoader2 } from "@tabler/icons-react/dist/esm/icons/IconLoader2.mjs";
 export { default as IconLogout } from "@tabler/icons-react/dist/esm/icons/IconLogout.mjs";

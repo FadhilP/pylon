@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStateQLActivity, filterStateQLActivity, stateqlActivityStatus } from "../src/shared/stateql-notebook.ts";
+import {
+  buildStateQLActivity,
+  filterStateQLActivity,
+  selectStateQLActivity,
+  stateqlActivityStatus,
+} from "../src/shared/stateql-notebook.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 
@@ -87,6 +92,17 @@ test("classification is allowlisted and failed writes belong to write and error 
     ["history:command-1"],
   );
   assert.equal(filterStateQLActivity(items, "all").length, 3);
+
+  // No pressed chip is not an empty ledger: it is the whole ledger.
+  assert.equal(selectStateQLActivity(items, new Set()).length, 3);
+  assert.deepEqual(
+    selectStateQLActivity(items, new Set(["read", "write"] as const)).map(item => item.id),
+    ["history:command-1", "history:command-3"],
+  );
+  assert.deepEqual(
+    selectStateQLActivity(items, new Set(["write", "error"] as const)).map(item => item.id),
+    ["history:command-1"],
+  );
 });
 
 test("unreferenced colliding metadata becomes one honest activity card", () => {
