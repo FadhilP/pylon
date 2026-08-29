@@ -3,10 +3,7 @@ import { useEffect, useState } from "react";
 export type Theme = "light" | "dark";
 
 const THEME_KEY = "pylon-theme";
-const THEME_COLORS: Record<Theme, string> = {
-  dark: "#111318",
-  light: "#e9eaec",
-};
+const THEME_COLORS: Record<Theme, string> = { dark: "#111318", light: "#e9eaec" };
 
 /**
  * localStorage is unavailable in hardened browser contexts, so every read falls
@@ -41,9 +38,7 @@ export function useTheme() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     rememberSetting(THEME_KEY, theme);
-    document
-      .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", THEME_COLORS[theme]);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
   }, [theme]);
   return [theme, setTheme] as const;
 }

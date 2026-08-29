@@ -1,17 +1,8 @@
 import { join } from "node:path";
-import {
-  getAgentDir,
-  SettingsManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import {
-  isActive,
-  JobManager,
-  pruneStaleSessionDirs,
-  type Job,
-} from "../src/jobs.ts";
+import { isActive, JobManager, pruneStaleSessionDirs, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
 
@@ -20,8 +11,7 @@ const TOOL_USAGE: Record<string, string> = {
   heartbeat_status: "inspect running or recently completed background jobs",
   heartbeat_cancel: "cancel a running background job",
 };
-const tooSoonText = (waitMs: number) =>
-  `Check too soon. Continue other work; retry in ${Math.ceil(waitMs / 1000)}s.`;
+const tooSoonText = (waitMs: number) => `Check too soon. Continue other work; retry in ${Math.ceil(waitMs / 1000)}s.`;
 
 export default function heartbeatExtension(pi: ExtensionAPI) {
   let manager: JobManager | undefined,
@@ -32,9 +22,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
   const refresh = () => {
     if (!manager || !lastCtx) return;
     const running = manager.running();
-    const statusNeeded =
-      running.length > 0 ||
-      [...manager.jobs.values()].some((job) => !job.completionAnnounced);
+    const statusNeeded = running.length > 0 || [...manager.jobs.values()].some(job => !job.completionAnnounced);
     const enabledTools = [
       "heartbeat_start",
       ...(statusNeeded ? ["heartbeat_status"] : []),
@@ -47,15 +35,9 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
         version: 1,
         kind: "register",
         owner: "pi-heartbeat",
-        managedTools: [
-          "heartbeat_start",
-          "heartbeat_status",
-          "heartbeat_cancel",
-        ],
+        managedTools: ["heartbeat_start", "heartbeat_status", "heartbeat_cancel"],
         enabledTools,
-        toolUsage: Object.fromEntries(
-          enabledTools.map((tool) => [tool, TOOL_USAGE[tool]]),
-        ),
+        toolUsage: Object.fromEntries(enabledTools.map(tool => [tool, TOOL_USAGE[tool]])),
       });
     }
     for (const job of manager.jobs.values()) {
@@ -75,19 +57,11 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       });
     }
     if (lastCtx.hasUI)
-      lastCtx.ui.setStatus(
-        "pi-heartbeat",
-        running.length ? `jobs: ${running.length} running` : undefined,
-      );
+      lastCtx.ui.setStatus("pi-heartbeat", running.length ? `jobs: ${running.length} running` : undefined);
     if (lastCtx.mode === "tui")
       lastCtx.ui.setWidget(
         "pi-heartbeat",
-        running.length
-          ? [
-              "Background jobs",
-              ...running.slice(0, 3).map((j) => `${j.id} ${j.label}`),
-            ]
-          : undefined,
+        running.length ? ["Background jobs", ...running.slice(0, 3).map(j => `${j.id} ${j.label}`)] : undefined,
       );
   };
   /** Shared by heartbeat_status and /heartbeat status: enforces the polling gate, then formats. */
@@ -102,21 +76,14 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     return { waitMs: 0, text: manager!.format(job).text };
   };
   const summaryLine = (job: Job) => `${job.id} ${job.state} ${job.label}`;
-  const textResult = (text: string, details: object = {}) => ({
-    content: [{ type: "text", text }],
-    details,
-  });
+  const textResult = (text: string, details: object = {}) => ({ content: [{ type: "text", text }], details });
 
   const statusForJob = (jobManager: JobManager, id: string) => {
     const job = jobManager.jobs.get(id);
     if (!job) return textResult("Unknown or evicted job ID.");
     const inspection = inspectJob(job);
     if (inspection.waitMs)
-      return textResult(inspection.text, {
-        id: job.id,
-        state: job.state,
-        retryAfterMs: inspection.waitMs,
-      });
+      return textResult(inspection.text, { id: job.id, state: job.state, retryAfterMs: inspection.waitMs });
     return textResult(inspection.text, {
       id: job.id,
       state: job.state,
@@ -128,22 +95,16 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
 
   const statusList = (jobManager: JobManager) => {
     const running = jobManager.running();
-    const wait = Math.max(0, ...running.map((job) => checkWaitMs(job)));
-    if (wait)
-      return textResult(tooSoonText(wait), {
-        state: "running",
-        retryAfterMs: wait,
-      });
+    const wait = Math.max(0, ...running.map(job => checkWaitMs(job)));
+    if (wait) return textResult(tooSoonText(wait), { state: "running", retryAfterMs: wait });
     const checkedAt = Date.now();
     for (const job of running) job.lastCheckedAt = checkedAt;
     const recent = [...jobManager.jobs.values()]
-      .filter((job) => !isActive(job))
+      .filter(job => !isActive(job))
       .sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0))
       .slice(0, 3);
     const jobs = [...running.slice(0, 4), ...recent];
-    return textResult(
-      jobs.length ? jobs.map(summaryLine).join("\n") : "No jobs.",
-    );
+    return textResult(jobs.length ? jobs.map(summaryLine).join("\n") : "No jobs.");
   };
 
   pi.on("session_start", async (_e, ctx) => {
@@ -160,10 +121,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     const root = join(getAgentDir(), "pi-heartbeat", "tmp");
     const dir = join(root, ctx.sessionManager.getSessionId());
     await pruneStaleSessionDirs(root, dir);
-    const shellPath = SettingsManager.create(
-      ctx.cwd,
-      getAgentDir(),
-    ).getShellPath();
+    const shellPath = SettingsManager.create(ctx.cwd, getAgentDir()).getShellPath();
     manager = new JobManager(dir, refresh, 5_000, shellPath);
     await manager.init();
     refresh();
@@ -176,35 +134,24 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       announced.clear();
       jobMeta.clear();
       lastToolPolicy = "";
-      pi.events.emit("pylon:tool-policy", {
-        version: 1,
-        kind: "unregister",
-        owner: "pi-heartbeat",
-      });
+      pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-heartbeat" });
     }
   });
-  pi.on("context", (event) => {
+  pi.on("context", event => {
     if (!manager) return;
     const text = jobContext([...manager.jobs.values()]);
     if (text)
       return {
         messages: [
           ...event.messages,
-          {
-            role: "custom",
-            customType: "pi-heartbeat",
-            content: text,
-            display: false,
-            timestamp: Date.now(),
-          },
+          { role: "custom", customType: "pi-heartbeat", content: text, display: false, timestamp: Date.now() },
         ],
       };
   });
   pi.registerTool({
     name: "heartbeat_start",
     label: "Heartbeat Start",
-    description:
-      "Start a long shell command only while other independent work remains; returns job ID immediately.",
+    description: "Start a long shell command only while other independent work remains; returns job ID immediately.",
     promptGuidelines: [
       "Call heartbeat_start only when command is long-running and you can name concrete independent work to do while it runs. If no independent work remains, use bash and wait instead. After heartbeat_start, do that work before checking. heartbeat_status rejects running-job checks until more than 30 seconds after start or prior check.",
     ],
@@ -214,34 +161,19 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
         otherWork: Type.String({
           minLength: 1,
           maxLength: 240,
-          description:
-            "Concrete independent work you will do before checking this job",
+          description: "Concrete independent work you will do before checking this job",
         }),
         label: Type.Optional(Type.String({ maxLength: 120 })),
-        timeoutMs: Type.Optional(
-          Type.Number({ minimum: 1000, maximum: 7200000 }),
-        ),
+        timeoutMs: Type.Optional(Type.Number({ minimum: 1000, maximum: 7200000 })),
         todoId: Type.Optional(Type.String({ maxLength: 120 })),
-        purpose: Type.Optional(
-          StringEnum(["verification", "build", "other"] as const),
-        ),
+        purpose: Type.Optional(StringEnum(["verification", "build", "other"] as const)),
       },
       { additionalProperties: false },
     ),
     async execute(_i, p, signal, _u, ctx) {
-      if (signal?.aborted)
-        return {
-          content: [{ type: "text", text: "Cancelled before start." }],
-          details: {},
-        };
+      if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled before start." }], details: {} };
       if (!manager) throw Error("Heartbeat unavailable.");
-      const j = await manager.start(
-        p.command,
-        ctx.cwd,
-        p.label,
-        p.timeoutMs,
-        ctx.sessionManager.getSessionId(),
-      );
+      const j = await manager.start(p.command, ctx.cwd, p.label, p.timeoutMs, ctx.sessionManager.getSessionId());
       jobMeta.set(j.id, { todoId: p.todoId, purpose: p.purpose });
       announced.delete(j.id);
       refresh();
@@ -268,10 +200,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     name: "heartbeat_status",
     label: "Heartbeat Status",
     description: "Inspect one job, or list running and recent jobs.",
-    parameters: Type.Object(
-      { id: Type.Optional(Type.String()) },
-      { additionalProperties: false },
-    ),
+    parameters: Type.Object({ id: Type.Optional(Type.String()) }, { additionalProperties: false }),
     async execute(_i, p): Promise<any> {
       if (!manager) throw Error("Heartbeat unavailable.");
       return p.id ? statusForJob(manager, p.id) : statusList(manager);
@@ -281,22 +210,13 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     name: "heartbeat_cancel",
     label: "Heartbeat Cancel",
     description: "Cancel background job.",
-    parameters: Type.Object(
-      { id: Type.String() },
-      { additionalProperties: false },
-    ),
+    parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
     async execute(_i, p): Promise<any> {
       const j = manager?.jobs.get(p.id);
-      if (!j)
-        return {
-          content: [{ type: "text", text: "Unknown or evicted job ID." }],
-          details: {},
-        };
+      if (!j) return { content: [{ type: "text", text: "Unknown or evicted job ID." }], details: {} };
       await manager!.stop(j);
       return {
-        content: [
-          { type: "text", text: `Cancellation requested for ${j.id}.` },
-        ],
+        content: [{ type: "text", text: `Cancellation requested for ${j.id}.` }],
         details: { id: j.id, state: j.state },
       };
     },
@@ -314,9 +234,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       } else if (action === "status" && id) {
         const job = manager.jobs.get(id);
         text = job ? inspectJob(job).text : "Unknown job.";
-      } else
-        text =
-          [...manager.jobs.values()].map(summaryLine).join("\n") || "No jobs.";
+      } else text = [...manager.jobs.values()].map(summaryLine).join("\n") || "No jobs.";
       ctx.ui.notify(text, "info");
     },
   });

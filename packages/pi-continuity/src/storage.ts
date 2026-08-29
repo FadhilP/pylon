@@ -1,29 +1,16 @@
 import { randomUUID } from "node:crypto";
-import {
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export const defaultRoot = () => join(getAgentDir(), "pi-continuity");
 
-const invalidData = (message: string) =>
-  Object.assign(new Error(message), { code: "PI_CONTINUITY_INVALID_DATA" });
+const invalidData = (message: string) => Object.assign(new Error(message), { code: "PI_CONTINUITY_INVALID_DATA" });
 const recoverableDataError = (error: any) =>
   error instanceof SyntaxError || error?.code === "PI_CONTINUITY_INVALID_DATA";
 
 /** Missing files use the fallback. Malformed data is quarantined; I/O and permission errors fail closed. */
-export async function readJson<T>(
-  path: string,
-  fallback: T,
-  valid: (x: any) => boolean = () => true,
-): Promise<T> {
+export async function readJson<T>(path: string, fallback: T, valid: (x: any) => boolean = () => true): Promise<T> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
     if (!valid(value)) throw invalidData("invalid JSON state");
@@ -37,11 +24,7 @@ export async function readJson<T>(
 }
 
 /** Missing files use the fallback. Unsupported/malformed state is backed up; operational failures propagate. */
-export async function readVersionedJson<T>(
-  path: string,
-  fallback: T,
-  valid: (x: any) => boolean,
-): Promise<T> {
+export async function readVersionedJson<T>(path: string, fallback: T, valid: (x: any) => boolean): Promise<T> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
     if (!valid(value)) throw invalidData("unsupported schema");
@@ -83,20 +66,14 @@ async function readLockOwner(lock: string): Promise<LockOwner | undefined> {
 }
 async function removeStaleLock(lock: string) {
   const before = await readLockOwner(lock);
-  const age =
-    Date.now() -
-    (await stat(lock).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
-  if (age <= LOCK_STALE_MS || (before && processAlive(before.pid)))
-    return false;
+  const age = Date.now() - (await stat(lock).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
+  if (age <= LOCK_STALE_MS || (before && processAlive(before.pid))) return false;
   const after = await readLockOwner(lock);
   if ((before?.token ?? "") !== (after?.token ?? "")) return false;
   await rm(lock, { recursive: true, force: true });
   return true;
 }
-export async function withFileLock<T>(
-  path: string,
-  task: () => Promise<T>,
-): Promise<T> {
+export async function withFileLock<T>(path: string, task: () => Promise<T>): Promise<T> {
   const lock = `${path}.lock`,
     token = randomUUID();
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -124,17 +101,12 @@ export async function withFileLock<T>(
     return await task();
   } finally {
     const owner = await readLockOwner(lock);
-    if (owner?.token === token)
-      await rm(lock, { recursive: true, force: true });
+    if (owner?.token === token) await rm(lock, { recursive: true, force: true });
   }
 }
 
-export const serializedJson = (value: any) =>
-  JSON.stringify(value, null, 2) + "\n";
-export async function writeBytesAtomic(
-  path: string,
-  value: string | Uint8Array,
-) {
+export const serializedJson = (value: any) => JSON.stringify(value, null, 2) + "\n";
+export async function writeBytesAtomic(path: string, value: string | Uint8Array) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
@@ -164,10 +136,7 @@ export async function writeJsonAtomic(path: string, value: any) {
 export async function writeJson(path: string, value: any) {
   await withFileLock(path, () => writeJsonAtomic(path, value));
 }
-export async function withStateLock<T>(
-  directory: string,
-  task: () => Promise<T>,
-): Promise<T> {
+export async function withStateLock<T>(directory: string, task: () => Promise<T>): Promise<T> {
   return withFileLock(join(directory, "state"), task);
 }
 export async function updateJson<T>(

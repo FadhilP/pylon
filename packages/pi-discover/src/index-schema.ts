@@ -5,12 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export function indexDatabasePath(
-  agentDir = typeof getAgentDir === "function"
-    ? getAgentDir()
-    : join(homedir(), ".pi", "agent"),
+  agentDir = typeof getAgentDir === "function" ? getAgentDir() : join(homedir(), ".pi", "agent"),
 ): string {
-  if (process.env.PI_DISCOVER_INDEX_PATH)
-    return process.env.PI_DISCOVER_INDEX_PATH;
+  if (process.env.PI_DISCOVER_INDEX_PATH) return process.env.PI_DISCOVER_INDEX_PATH;
   const current = join(agentDir, "pi-discover", "index.sqlite");
   const legacy = join(agentDir, "indexes", "pi-discover.sqlite");
   if (existsSync(current) || !existsSync(legacy)) return current;
@@ -73,9 +70,7 @@ function createSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS workspace_repositories_repo ON workspace_repositories(repo_id);
   `);
   try {
-    db.exec(
-      "CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(content, tokenize='trigram');",
-    );
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(content, tokenize='trigram');");
   } catch {
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(content);");
   }
@@ -84,14 +79,9 @@ function createSchema(db: DatabaseSync): void {
 function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");
   try {
-    const version = Number(
-      (db.prepare("PRAGMA user_version").get() as { user_version: number })
-        .user_version,
-    );
+    const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (version > SCHEMA_VERSION)
-      throw new Error(
-        `pi-discover index schema ${version} is newer than supported schema ${SCHEMA_VERSION}`,
-      );
+      throw new Error(`pi-discover index schema ${version} is newer than supported schema ${SCHEMA_VERSION}`);
     if (version < SCHEMA_VERSION) {
       db.exec(`
         DROP TABLE IF EXISTS workspace_repositories;
@@ -116,9 +106,7 @@ export function openIndexDatabase(path: string): DatabaseSync {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   try {
-    db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-    );
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     initializeSchema(db);
     optimizeDatabase(db, true);
     return db;

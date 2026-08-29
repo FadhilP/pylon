@@ -13,24 +13,15 @@ import {
 const lastAssistantEntryId = (ctx: any): string | undefined =>
   [...(ctx.sessionManager?.getBranch?.() ?? [])]
     .reverse()
-    .find(
-      (entry: any) =>
-        entry?.type === "message" && entry.message?.role === "assistant",
-    )?.id;
+    .find((entry: any) => entry?.type === "message" && entry.message?.role === "assistant")?.id;
 
 /**
  * Anchors both boundary trees on a per-session branch so the turn's diff survives `git gc`.
  * The before-tree is anchored first because external edits between turns can orphan it; identical
  * trees short-circuit inside `appendTurnCommit`, and failures degrade to an unanchored summary.
  */
-async function anchorTurn(
-  before: WorktreeSnapshot,
-  after: WorktreeSnapshot,
-  ctx: any,
-) {
-  const branch = turnsBranchForSession(
-    String(ctx.sessionManager?.getSessionId?.() ?? ""),
-  );
+async function anchorTurn(before: WorktreeSnapshot, after: WorktreeSnapshot, ctx: any) {
+  const branch = turnsBranchForSession(String(ctx.sessionManager?.getSessionId?.() ?? ""));
   if (!branch) return;
   if (!(await appendTurnCommit(before.root, branch, before.tree))) return;
   if (!(await appendTurnCommit(before.root, branch, after.tree))) return;
@@ -72,12 +63,8 @@ export function createWorktreeObserver(pi: ExtensionAPI) {
       runCwd = "";
       if (!beforePromise) return;
 
-      const [before, after] = await Promise.all([
-        beforePromise,
-        worktreeSnapshot(cwd),
-      ]);
-      const files =
-        before && after ? await worktreeDiff(before, after) : undefined;
+      const [before, after] = await Promise.all([beforePromise, worktreeSnapshot(cwd)]);
+      const files = before && after ? await worktreeDiff(before, after) : undefined;
       const assistantEntryId = lastAssistantEntryId(ctx);
       const anchor =
         files?.length && before && after && typeof assistantEntryId === "string"
@@ -121,10 +108,7 @@ export function createWorktreeObserver(pi: ExtensionAPI) {
       shellBaseline = undefined;
       shellCwd = "";
       shellToolCallIds = [];
-      const [before, after] = await Promise.all([
-        beforePromise,
-        worktreeFingerprint(cwd),
-      ]);
+      const [before, after] = await Promise.all([beforePromise, worktreeFingerprint(cwd)]);
       pi.events.emit("pylon:worktree-change", {
         version: 1,
         cwd,

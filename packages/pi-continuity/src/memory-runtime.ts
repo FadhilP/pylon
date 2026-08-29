@@ -36,12 +36,7 @@ export type ActiveMemory = {
   activeUntil: CompiledRule["lifecycle"]["activateUntil"];
   lastDeliveredContextEpoch?: number;
 };
-export type DeliveryRecord = {
-  memoryId: string;
-  noteRevision: number;
-  contextEpoch: number;
-  cause: string;
-};
+export type DeliveryRecord = { memoryId: string; noteRevision: number; contextEpoch: number; cause: string };
 export type MemoryLedger = {
   version: typeof MEMORY_LEDGER_VERSION;
   sessionId: string;
@@ -82,15 +77,10 @@ const activeUntil = new Set<ActiveMemory["activeUntil"]>([
   "source_changes",
   "explicit_revocation",
 ]);
-const uuid =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const integer = (value: unknown, minimum = 0) =>
-  Number.isSafeInteger(value) && Number(value) >= minimum;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const integer = (value: unknown, minimum = 0) => Number.isSafeInteger(value) && Number(value) >= minimum;
 const exactKeys = (value: any, keys: readonly string[]) =>
-  value &&
-  typeof value === "object" &&
-  !Array.isArray(value) &&
-  Object.keys(value).every((key) => keys.includes(key));
+  value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 
 export function compileMemorySidecar(
   notes: readonly NotebookNote[],
@@ -99,36 +89,18 @@ export function compileMemorySidecar(
 ): CompiledMemorySidecar {
   const rules: CompiledRule[] = [],
     failures: CompiledMemorySidecar["failures"] = [];
-  for (const note of [...notes].sort((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
+  for (const note of [...notes].sort((left, right) => left.id.localeCompare(right.id))) {
     if (note.disposition === "eligible_enforced") {
-      failures.push({
-        memoryId: note.id,
-        noteRevision: note.revision,
-        reason: "policy_ineligible",
-      });
+      failures.push({ memoryId: note.id, noteRevision: note.revision, reason: "policy_ineligible" });
       continue;
     }
-    if (note.disposition !== "eligible_advisory" || !note.activationDraft)
-      continue;
+    if (note.disposition !== "eligible_advisory" || !note.activationDraft) continue;
     try {
-      const sourceSnapshotId = createHash("sha256")
-        .update(JSON.stringify(note.sourceRefs))
-        .digest("hex");
-      const rule = compileActivationDraft(
-        note.id,
-        note.revision,
-        note.activationDraft,
-        sourceSnapshotId,
-      );
+      const sourceSnapshotId = createHash("sha256").update(JSON.stringify(note.sourceRefs)).digest("hex");
+      const rule = compileActivationDraft(note.id, note.revision, note.activationDraft, sourceSnapshotId);
       if (rule) rules.push(rule);
     } catch {
-      failures.push({
-        memoryId: note.id,
-        noteRevision: note.revision,
-        reason: "invalid_activation_draft",
-      });
+      failures.push({ memoryId: note.id, noteRevision: note.revision, reason: "invalid_activation_draft" });
     }
   }
   return {
@@ -141,13 +113,9 @@ export function compileMemorySidecar(
   };
 }
 
-export const indexMemorySidecar = (sidecar: CompiledMemorySidecar) =>
-  buildRuleIndex(sidecar.rules);
+export const indexMemorySidecar = (sidecar: CompiledMemorySidecar) => buildRuleIndex(sidecar.rules);
 
-export function emptyMemoryLedger(
-  sessionId: string,
-  taskGeneration = 0,
-): MemoryLedger {
+export function emptyMemoryLedger(sessionId: string, taskGeneration = 0): MemoryLedger {
   return {
     version: MEMORY_LEDGER_VERSION,
     sessionId,
@@ -161,15 +129,7 @@ export function emptyMemoryLedger(
 
 export function isMemoryLedger(value: any): value is MemoryLedger {
   return (
-    exactKeys(value, [
-      "version",
-      "sessionId",
-      "taskGeneration",
-      "contextEpoch",
-      "sequence",
-      "active",
-      "deliveries",
-    ]) &&
+    exactKeys(value, ["version", "sessionId", "taskGeneration", "contextEpoch", "sequence", "active", "deliveries"]) &&
     value.version === MEMORY_LEDGER_VERSION &&
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
@@ -192,19 +152,13 @@ export function isMemoryLedger(value: any): value is MemoryLedger {
         integer(item.noteRevision, 1) &&
         integer(item.activatedAtSequence) &&
         activeUntil.has(item.activeUntil) &&
-        (item.lastDeliveredContextEpoch === undefined ||
-          integer(item.lastDeliveredContextEpoch)),
+        (item.lastDeliveredContextEpoch === undefined || integer(item.lastDeliveredContextEpoch)),
     ) &&
     Array.isArray(value.deliveries) &&
     value.deliveries.length <= 2_000 &&
     value.deliveries.every(
       (item: any) =>
-        exactKeys(item, [
-          "memoryId",
-          "noteRevision",
-          "contextEpoch",
-          "cause",
-        ]) &&
+        exactKeys(item, ["memoryId", "noteRevision", "contextEpoch", "cause"]) &&
         uuid.test(item.memoryId) &&
         integer(item.noteRevision, 1) &&
         integer(item.contextEpoch) &&
@@ -215,11 +169,7 @@ export function isMemoryLedger(value: any): value is MemoryLedger {
   );
 }
 
-export function restoreMemoryLedger(
-  entries: readonly any[],
-  sessionId: string,
-  taskGeneration: number,
-): MemoryLedger {
+export function restoreMemoryLedger(entries: readonly any[], sessionId: string, taskGeneration: number): MemoryLedger {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (
@@ -233,17 +183,13 @@ export function restoreMemoryLedger(
       ...entry.data,
       taskGeneration,
       active: entry.data.active.map((item: ActiveMemory) => ({ ...item })),
-      deliveries: entry.data.deliveries.map((item: DeliveryRecord) => ({
-        ...item,
-      })),
+      deliveries: entry.data.deliveries.map((item: DeliveryRecord) => ({ ...item })),
     };
   }
   return emptyMemoryLedger(sessionId, taskGeneration);
 }
 
-function boundedFacts(
-  input: Record<string, unknown>,
-): Partial<Record<TriggerFact, Primitive>> {
+function boundedFacts(input: Record<string, unknown>): Partial<Record<TriggerFact, Primitive>> {
   const facts: Partial<Record<TriggerFact, Primitive>> = {};
   for (const [key, value] of Object.entries(input)) {
     if (
@@ -268,8 +214,7 @@ export function eventFrame(input: {
   toolCallId?: string;
   facts?: Record<string, unknown>;
 }): EventFrame {
-  if (!eventKinds.includes(input.kind))
-    throw Error("invalid memory event kind");
+  if (!eventKinds.includes(input.kind)) throw Error("invalid memory event kind");
   return {
     kind: input.kind,
     sequence: input.ledger.sequence + 1,
@@ -278,49 +223,27 @@ export function eventFrame(input: {
     contextEpoch: input.ledger.contextEpoch,
     repository: input.repository,
     ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
-    facts: {
-      ...boundedFacts(input.facts ?? {}),
-      "event.kind": input.kind,
-      "task.phase": input.taskPhase,
-    },
+    facts: { ...boundedFacts(input.facts ?? {}), "event.kind": input.kind, "task.phase": input.taskPhase },
   };
 }
 
 const causeFor = (event: EventFrame) =>
-  event.toolCallId
-    ? `tool:${event.toolCallId}`
-    : `${event.kind}:${event.sequence}`;
-const deliveryKey = (
-  memoryId: string,
-  noteRevision: number,
-  contextEpoch: number,
-) => `${memoryId}\0${noteRevision}\0${contextEpoch}`;
+  event.toolCallId ? `tool:${event.toolCallId}` : `${event.kind}:${event.sequence}`;
+const deliveryKey = (memoryId: string, noteRevision: number, contextEpoch: number) =>
+  `${memoryId}\0${noteRevision}\0${contextEpoch}`;
 
 export function processMemoryEvent(
   index: ReadonlyMap<AgentEventKind, readonly CompiledRule[]>,
   event: EventFrame,
   current: MemoryLedger,
-): {
-  ledger: MemoryLedger;
-  interventions: MemoryIntervention[];
-  uncertain: string[];
-} {
-  if (
-    event.sessionId !== current.sessionId ||
-    event.sequence <= current.sequence
-  )
+): { ledger: MemoryLedger; interventions: MemoryIntervention[]; uncertain: string[] } {
+  if (event.sessionId !== current.sessionId || event.sequence <= current.sequence)
     return { ledger: current, interventions: [], uncertain: [] };
   let active = current.active.filter(
-    (item) =>
-      event.kind !== "task_started" ||
-      !["event_complete", "task_complete"].includes(item.activeUntil),
+    item => event.kind !== "task_started" || !["event_complete", "task_complete"].includes(item.activeUntil),
   );
   const deliveries = [...current.deliveries],
-    delivered = new Set(
-      deliveries.map((item) =>
-        deliveryKey(item.memoryId, item.noteRevision, item.contextEpoch),
-      ),
-    );
+    delivered = new Set(deliveries.map(item => deliveryKey(item.memoryId, item.noteRevision, item.contextEpoch)));
   const interventions: MemoryIntervention[] = [],
     uncertain: string[] = [],
     cause = causeFor(event);
@@ -331,15 +254,9 @@ export function processMemoryEvent(
       continue;
     }
     if (!result) continue;
-    const key = deliveryKey(
-      rule.memoryId,
-      rule.noteRevision,
-      event.contextEpoch,
-    );
+    const key = deliveryKey(rule.memoryId, rule.noteRevision, event.contextEpoch);
     const activeIndex = active.findIndex(
-      (item) =>
-        item.memoryId === rule.memoryId &&
-        item.noteRevision === rule.noteRevision,
+      item => item.memoryId === rule.memoryId && item.noteRevision === rule.noteRevision,
     );
     if (delivered.has(key)) {
       if (rule.lifecycle.activateUntil !== "event_complete") {
@@ -351,10 +268,7 @@ export function processMemoryEvent(
           lastDeliveredContextEpoch: event.contextEpoch,
         };
         if (activeIndex >= 0)
-          active[activeIndex] = {
-            ...active[activeIndex]!,
-            lastDeliveredContextEpoch: event.contextEpoch,
-          };
+          active[activeIndex] = { ...active[activeIndex]!, lastDeliveredContextEpoch: event.contextEpoch };
         else active.push(next);
       }
       continue;
@@ -368,10 +282,7 @@ export function processMemoryEvent(
         cause: "active",
       });
       if (activeIndex >= 0)
-        active[activeIndex] = {
-          ...active[activeIndex]!,
-          lastDeliveredContextEpoch: event.contextEpoch,
-        };
+        active[activeIndex] = { ...active[activeIndex]!, lastDeliveredContextEpoch: event.contextEpoch };
       else
         active.push({
           memoryId: rule.memoryId,
@@ -408,34 +319,21 @@ export function processMemoryEvent(
   };
 }
 
-export function rearmMemoryAfterCompaction(
-  current: MemoryLedger,
-): MemoryLedger {
-  return {
-    ...current,
-    contextEpoch: current.contextEpoch + 1,
-    sequence: current.sequence + 1,
-  };
+export function rearmMemoryAfterCompaction(current: MemoryLedger): MemoryLedger {
+  return { ...current, contextEpoch: current.contextEpoch + 1, sequence: current.sequence + 1 };
 }
 
 export function activeMemoryForDelivery(current: MemoryLedger): ActiveMemory[] {
-  return current.active.filter(
-    (item) => item.lastDeliveredContextEpoch !== current.contextEpoch,
-  );
+  return current.active.filter(item => item.lastDeliveredContextEpoch !== current.contextEpoch);
 }
 
-export function markActiveMemoryDelivered(
-  current: MemoryLedger,
-  delivered: readonly ActiveMemory[],
-): MemoryLedger {
-  const keys = new Set(
-      delivered.map((item) => `${item.memoryId}\0${item.noteRevision}`),
-    ),
+export function markActiveMemoryDelivered(current: MemoryLedger, delivered: readonly ActiveMemory[]): MemoryLedger {
+  const keys = new Set(delivered.map(item => `${item.memoryId}\0${item.noteRevision}`)),
     records = [...current.deliveries];
   for (const item of delivered)
     if (
       !records.some(
-        (record) =>
+        record =>
           record.memoryId === item.memoryId &&
           record.noteRevision === item.noteRevision &&
           record.contextEpoch === current.contextEpoch,
@@ -449,7 +347,7 @@ export function markActiveMemoryDelivered(
       });
   return {
     ...current,
-    active: current.active.map((item) =>
+    active: current.active.map(item =>
       keys.has(`${item.memoryId}\0${item.noteRevision}`)
         ? { ...item, lastDeliveredContextEpoch: current.contextEpoch }
         : item,

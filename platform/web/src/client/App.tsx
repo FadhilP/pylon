@@ -28,10 +28,7 @@ import type { FileReference } from "../shared/file-reference";
 import { formatSessionActivity } from "../shared/format";
 import { DEFAULT_GUARD_RULES } from "../shared/guard-policy";
 import { GENERAL_PROJECT_ID } from "../shared/general-session";
-import type {
-  MessageAttachmentReadModel,
-  MessageReadModel,
-} from "../shared/protocol/events";
+import type { MessageAttachmentReadModel, MessageReadModel } from "../shared/protocol/events";
 import type {
   HookSettingsReadModel,
   NativeExtensionReadModel,
@@ -54,18 +51,12 @@ import { AttachmentPanel } from "./attachment-panel";
 import { useAgentColors } from "./agent-color";
 import { copyText } from "./clipboard";
 import { ArchiveDialog } from "./archive-dialog";
-import {
-  ConversationPanel,
-  type ComposerSelection,
-} from "./conversation-panel";
+import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
 import { CompactionPanel } from "./compaction-panel";
 import { BrowserPanel } from "./browser-panel";
 import { DatabasePanel } from "./database-panel";
 import { FilesPanel, type FileView } from "./files-panel";
-import {
-  FileWorkspace,
-  type FileWorkspaceContentStore,
-} from "./file-workspace";
+import { FileWorkspace, type FileWorkspaceContentStore } from "./file-workspace";
 import type { FileWorkspaceState } from "../shared/file-workspace-state";
 import { Inspector, type ViewId } from "./inspector";
 import {
@@ -82,50 +73,21 @@ import {
   type WorkspaceModeId,
 } from "./panels";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
-import {
-  runtimeStore,
-  useRuntimeStore,
-  type RuntimeStoreSnapshot,
-} from "./runtime/event-store";
-import {
-  SessionSidebar,
-  sessionTitle,
-  type SessionProject,
-} from "./session-sidebar";
+import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
+import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
-import {
-  runtimeRequestStillCurrent,
-  useSessionCatalog,
-} from "./use-session-catalog";
+import { runtimeRequestStillCurrent, useSessionCatalog } from "./use-session-catalog";
 import { useComposerDrafts } from "./use-composer-drafts";
-import {
-  rememberSetting,
-  readStoredNumber,
-  useDocumentTitle,
-  useTheme,
-  type Theme,
-} from "./use-chrome";
+import { rememberSetting, readStoredNumber, useDocumentTitle, useTheme, type Theme } from "./use-chrome";
 import { useSettingsDialog } from "./use-settings-dialog";
-import {
-  useMarkSessionSeen,
-  useTerminalDrawer,
-  type RetainedTerminal,
-} from "./use-terminal-drawer";
+import { useMarkSessionSeen, useTerminalDrawer, type RetainedTerminal } from "./use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 
-type RequestedFile = FileReference & {
-  requestId: number;
-  sessionId?: string;
-  view?: FileView;
-};
+type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
 type FileNavigation = "explorer" | "sessions";
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
-type SelectedAttachment = {
-  sessionId: string;
-  attachment: MessageAttachmentReadModel;
-  trigger: HTMLButtonElement;
-};
+type SelectedAttachment = { sessionId: string; attachment: MessageAttachmentReadModel; trigger: HTMLButtonElement };
 type PendingSession = {
   requestId: number;
   project: SessionProject;
@@ -159,17 +121,13 @@ function leftPanelWidth(value: number): number {
   return Math.round(Math.max(220, Math.min(maximum, value)));
 }
 function initialLeftPanelWidth(): number {
-  return leftPanelWidth(
-    readStoredNumber(LEFT_PANEL_WIDTH_KEY, DEFAULT_LEFT_PANEL_WIDTH),
-  );
+  return leftPanelWidth(readStoredNumber(LEFT_PANEL_WIDTH_KEY, DEFAULT_LEFT_PANEL_WIDTH));
 }
 function terminalHeight(value: number): number {
   return Math.round(Math.max(160, Math.min(window.innerHeight * 0.7, value)));
 }
 function initialTerminalHeight(): number {
-  return terminalHeight(
-    readStoredNumber(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT),
-  );
+  return terminalHeight(readStoredNumber(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT));
 }
 
 function useMediaQuery(query: string) {
@@ -197,22 +155,14 @@ export function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceModeId>("chat");
-  const [fileNavigation, setFileNavigation] =
-    useState<FileNavigation>("explorer");
-  const [selectedCompaction, setSelectedCompaction] =
-    useState<SelectedCompaction>();
-  const [selectedAttachment, setSelectedAttachment] =
-    useState<SelectedAttachment>();
+  const [fileNavigation, setFileNavigation] = useState<FileNavigation>("explorer");
+  const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
+  const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [archivesOpen, setArchivesOpen] = useState(false);
-  const {
-    settings,
-    settingsOpen,
-    openSettings: showSettings,
-    closeSettings,
-  } = useSettingsDialog();
+  const { settings, settingsOpen, openSettings: showSettings, closeSettings } = useSettingsDialog();
   const [toast, setToast] = useState<{ id: number; message: string }>();
   const [sidebarAction, setSidebarAction] = useState<SidebarAction>();
   const [sessionBusy, setSessionBusy] = useState("");
@@ -223,9 +173,7 @@ export function App() {
   const [projectLoading, setProjectLoading] = useState("");
   const [projectBusy, setProjectBusy] = useState("");
   const [query, setQuery] = useState("");
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
-    new Set(),
-  );
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const panelToggles = useRef(new Map<PanelId, HTMLButtonElement>());
@@ -242,9 +190,7 @@ export function App() {
   const sessionPagesQuery = useRef("");
   const pendingSessionRequest = useRef(0);
   const pendingSessionDraft = useRef("");
-  const pendingSessionSelection = useRef<ComposerSelection | undefined>(
-    undefined,
-  );
+  const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
   const pendingSessionInFlight = useRef(false);
   const fileWorkspaceStates = useRef(new Map<string, FileWorkspaceState>());
   const fileWorkspaceContents = useRef<FileWorkspaceContentStore>(new Map());
@@ -253,47 +199,29 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
-  const agentColors = useAgentColors(
-    live.runtime?.sessionId,
-    live.runtime?.conversation.delegatedRuns ?? [],
-  );
+  const agentColors = useAgentColors(live.runtime?.sessionId, live.runtime?.conversation.delegatedRuns ?? []);
   const toSessionProject = (page: SessionProjectPage): SessionProject => ({
     id: page.id,
     label: page.label,
     cwd: page.cwd,
     sessions: page.sessions,
     active:
-      activeSessions.some(
-        (session) => session.projectId === page.id && session.active,
-      ) || page.sessions.some((session) => session.active),
+      activeSessions.some(session => session.projectId === page.id && session.active) ||
+      page.sessions.some(session => session.active),
   });
   const projects = useMemo<SessionProject[]>(
-    () =>
-      sessionPages
-        .filter((page) => page.id !== GENERAL_PROJECT_ID)
-        .map(toSessionProject),
+    () => sessionPages.filter(page => page.id !== GENERAL_PROJECT_ID).map(toSessionProject),
     [activeSessions, sessionPages],
   );
   const general = useMemo<SessionProject | undefined>(() => {
-    const page = sessionPages.find(
-      (candidate) => candidate.id === GENERAL_PROJECT_ID,
-    );
+    const page = sessionPages.find(candidate => candidate.id === GENERAL_PROJECT_ID);
     return page ? toSessionProject(page) : undefined;
   }, [activeSessions, sessionPages]);
   const reportError = (cause: unknown, fallback: string) => {
     const message = cause instanceof Error ? cause.message : fallback;
-    if (
-      /session changed while listing sessions|session list is stale/i.test(
-        message,
-      )
-    )
-      return;
+    if (/session changed while listing sessions|session list is stale/i.test(message)) return;
     const now = Date.now();
-    if (
-      lastError.current.message === message &&
-      now - lastError.current.at < 100
-    )
-      return;
+    if (lastError.current.message === message && now - lastError.current.at < 100) return;
     lastError.current = { message, at: now };
     setToast({ id: ++toastId.current, message });
   };
@@ -333,42 +261,26 @@ export function App() {
   } = useTerminalDrawer(live, initialTerminalHeight);
   useMarkSessionSeen(live);
 
-  const sessions = useMemo(
-    () => sessionPages.flatMap((page) => page.sessions),
-    [sessionPages],
-  );
-  const activeSession =
-    activeSessions.find((session) => session.active) ??
-    sessions.find((session) => session.active);
-  const activePackages = useMemo(
-    () =>
-      new Set(packages.filter((item) => item.active).map((item) => item.id)),
-    [packages],
-  );
+  const sessions = useMemo(() => sessionPages.flatMap(page => page.sessions), [sessionPages]);
+  const activeSession = activeSessions.find(session => session.active) ?? sessions.find(session => session.active);
+  const activePackages = useMemo(() => new Set(packages.filter(item => item.active).map(item => item.id)), [packages]);
   const browserAvailable = activePackages.has("pi-helios");
   const browserToolRevision = useMemo(
     () =>
       (live.runtime?.conversation.tools ?? [])
-        .filter((tool) => tool.name === "helios_browser")
-        .map((tool) => `${tool.id}:${tool.status}`)
+        .filter(tool => tool.name === "helios_browser")
+        .map(tool => `${tool.id}:${tool.status}`)
         .join("|"),
     [live.runtime?.conversation.tools],
   );
   const timelinePackageAvailable =
-    activePackages.has("pi-timeline") ||
-    live.runtime?.operational.timeline.availability === "available";
-  const timelineEnabled =
-    timelinePackageAvailable &&
-    (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
+    activePackages.has("pi-timeline") || live.runtime?.operational.timeline.availability === "available";
+  const timelineEnabled = timelinePackageAvailable && (live.runtime?.runtimePolicy.effective.timelineEnabled ?? true);
   const memoryEnabled =
-    activePackages.has("pi-continuity") ||
-    live.runtime?.operational.continuity.availability === "available";
+    activePackages.has("pi-continuity") || live.runtime?.operational.continuity.availability === "available";
   const papercutEnabled =
-    activePackages.has("pi-papercut") ||
-    live.runtime?.operational.papercuts.availability === "available";
-  const continuitySettings = packages.find(
-    (item) => item.id === "pi-continuity",
-  )?.settings;
+    activePackages.has("pi-papercut") || live.runtime?.operational.papercuts.availability === "available";
+  const continuitySettings = packages.find(item => item.id === "pi-continuity")?.settings;
   const memoryReviewerConfigured =
     !packagesLoading && continuitySettings?.kind === "continuity"
       ? Boolean(continuitySettings.memoryReviewer?.model)
@@ -391,24 +303,17 @@ export function App() {
       ]),
     [memoryEnabled, papercutEnabled, timelineEnabled],
   );
-  const updateSessionPages = (
-    update: (pages: SessionProjectPage[]) => SessionProjectPage[],
-  ) => {
-    setSessionPages((current) => {
+  const updateSessionPages = (update: (pages: SessionProjectPage[]) => SessionProjectPage[]) => {
+    setSessionPages(current => {
       const next = update(current);
       sessionPagesRef.current = next;
       return next;
     });
   };
-  const applySessionList = (
-    result: SessionListSnapshot,
-    appliedQuery = query.trim(),
-  ) => {
+  const applySessionList = (result: SessionListSnapshot, appliedQuery = query.trim()) => {
     let draftsChanged = false;
     for (const project of result.projects) {
-      for (const session of project.sessions)
-        draftsChanged =
-          composerDrafts.rememberProject(session) || draftsChanged;
+      for (const session of project.sessions) draftsChanged = composerDrafts.rememberProject(session) || draftsChanged;
     }
     for (const session of result.activeSessions)
       draftsChanged = composerDrafts.rememberProject(session) || draftsChanged;
@@ -420,12 +325,9 @@ export function App() {
     const firstList = !query.trim() && !sessionListApplied.current;
     if (!query.trim()) sessionListApplied.current = true;
     const projectId =
-      result.activeSessions.find((session) => session.active)?.projectId ??
-      result.projects.find((page) =>
-        page.sessions.some((session) => session.active),
-      )?.id;
-    if (firstList && !query.trim() && projectId)
-      setExpandedProjects((current) => new Set([...current, projectId]));
+      result.activeSessions.find(session => session.active)?.projectId ??
+      result.projects.find(page => page.sessions.some(session => session.active))?.id;
+    if (firstList && !query.trim() && projectId) setExpandedProjects(current => new Set([...current, projectId]));
   };
 
   useEffect(() => {
@@ -444,8 +346,8 @@ export function App() {
 
   useEffect(() => {
     if (!live.audioCues.length) return;
-    enqueueWebAudioCues(live.audioCues.map((cue) => cue.kind));
-    runtimeStore.consumeAudioCues(live.audioCues.map((cue) => cue.id));
+    enqueueWebAudioCues(live.audioCues.map(cue => cue.kind));
+    runtimeStore.consumeAudioCues(live.audioCues.map(cue => cue.id));
   }, [live.audioCues]);
 
   useDocumentTitle(live.runtime?.extensionUi.title);
@@ -453,17 +355,11 @@ export function App() {
     setSelectedAgentId(undefined);
     setSelectedCompaction(undefined);
     setSelectedAttachment(undefined);
-    setRightPanel((current) =>
-      current === "compaction" || current === "attachment" ? null : current,
-    );
+    setRightPanel(current => (current === "compaction" || current === "attachment" ? null : current));
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
   useEffect(() => {
-    if (
-      live.connection !== "connected" ||
-      !live.runtime?.ready ||
-      !browserAvailable
-    ) {
+    if (live.connection !== "connected" || !live.runtime?.ready || !browserAvailable) {
       setBrowserActive(false);
       return;
     }
@@ -472,15 +368,8 @@ export function App() {
     const generation = live.runtime.sessionGeneration;
     void runtimeStore
       .heliosBrowser({ action: "status" })
-      .then((result) => {
-        if (
-          current &&
-          runtimeRequestStillCurrent(
-            runtimeStore.getSnapshot(),
-            sessionId,
-            generation,
-          )
-        )
+      .then(result => {
+        if (current && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation))
           setBrowserActive(result.active);
       })
       .catch(() => undefined);
@@ -501,13 +390,9 @@ export function App() {
     if (!sessionId) return;
     if (browserToolSession.current !== sessionId) {
       browserToolSession.current = sessionId;
-      observedBrowserTools.current = new Set(tools.map((tool) => tool.id));
-      const runningStart = [...tools]
-        .reverse()
-        .find((tool) => tool.status === "running" && startsHeliosBrowser(tool));
-      setBrowserMirrorRequest(
-        runningStart ? `${sessionId}:${runningStart.id}` : "",
-      );
+      observedBrowserTools.current = new Set(tools.map(tool => tool.id));
+      const runningStart = [...tools].reverse().find(tool => tool.status === "running" && startsHeliosBrowser(tool));
+      setBrowserMirrorRequest(runningStart ? `${sessionId}:${runningStart.id}` : "");
       if (runningStart) {
         setSidebarOpen(false);
         setRightPanel("browser");
@@ -517,10 +402,7 @@ export function App() {
     const start = [...tools]
       .reverse()
       .find(
-        (tool) =>
-          tool.status !== "failed" &&
-          !observedBrowserTools.current.has(tool.id) &&
-          startsHeliosBrowser(tool),
+        tool => tool.status !== "failed" && !observedBrowserTools.current.has(tool.id) && startsHeliosBrowser(tool),
       );
     for (const tool of tools) observedBrowserTools.current.add(tool.id);
     if (!start) return;
@@ -530,8 +412,7 @@ export function App() {
   }, [live.runtime?.sessionId, live.runtime?.conversation.tools]);
 
   useEffect(() => {
-    if (mobile && previousSidebarOpen.current && !sidebarOpen)
-      navigationToggleRef.current?.focus();
+    if (mobile && previousSidebarOpen.current && !sidebarOpen) navigationToggleRef.current?.focus();
     previousSidebarOpen.current = sidebarOpen;
   }, [mobile, sidebarOpen]);
 
@@ -550,9 +431,7 @@ export function App() {
   }, [rightPanel]);
 
   useLayoutEffect(() => {
-    const drawer = workspaceRef.current?.querySelector<HTMLElement>(
-      ":scope > .inspector",
-    );
+    const drawer = workspaceRef.current?.querySelector<HTMLElement>(":scope > .inspector");
     if (!drawer) return;
     drawer.inert = Boolean(pendingSession);
     return () => {
@@ -566,9 +445,7 @@ export function App() {
       const reference =
         typeof detail === "string"
           ? { path: detail }
-          : detail &&
-              typeof detail === "object" &&
-              typeof (detail as FileReference).path === "string"
+          : detail && typeof detail === "object" && typeof (detail as FileReference).path === "string"
             ? (detail as FileReference & { view?: "current" | "diff" })
             : undefined;
       if (!reference) return;
@@ -591,8 +468,7 @@ export function App() {
     const sessionId = live.runtime.sessionId;
     const sessionGeneration = live.runtime.sessionGeneration;
     const requestQuery = query.trim();
-    const previousPages =
-      sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
+    const previousPages = sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
     setSessionsLoading(true);
     const timer = window.setTimeout(
       () =>
@@ -602,35 +478,26 @@ export function App() {
           requestQuery,
           controller.signal,
         )
-          .then((result) => {
+          .then(result => {
             if (
               !active ||
               request !== sessionListRequest.current ||
-              !runtimeRequestStillCurrent(
-                runtimeStore.getSnapshot(),
-                sessionId,
-                sessionGeneration,
-              )
+              !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)
             )
               return;
             applySessionList(result, requestQuery);
           })
-          .catch((cause) => {
+          .catch(cause => {
             if (
               active &&
               request === sessionListRequest.current &&
-              runtimeRequestStillCurrent(
-                runtimeStore.getSnapshot(),
-                sessionId,
-                sessionGeneration,
-              )
+              runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)
             ) {
               reportError(cause, "Unable to list sessions");
             }
           })
           .finally(() => {
-            if (active && request === sessionListRequest.current)
-              setSessionsLoading(false);
+            if (active && request === sessionListRequest.current) setSessionsLoading(false);
           }),
       query ? 200 : 0,
     );
@@ -656,11 +523,7 @@ export function App() {
   }, [live.errorRevision]);
 
   useEffect(() => {
-    if (
-      !pendingSession ||
-      pendingSession.phase !== "preparing" ||
-      pendingSession.expectedGeneration === undefined
-    )
+    if (!pendingSession || pendingSession.phase !== "preparing" || pendingSession.expectedGeneration === undefined)
       return;
     const runtime = live.runtime;
     if (
@@ -671,16 +534,8 @@ export function App() {
     )
       return;
     const draft = pendingSessionDraft.current;
-    composerDrafts.adopt(
-      runtime.sessionId,
-      pendingSession.project.id,
-      draft,
-      pendingSession.recoveredDraftSessionId,
-    );
-    if (
-      document.activeElement instanceof HTMLTextAreaElement &&
-      document.activeElement.id === "runtime-prompt"
-    ) {
+    composerDrafts.adopt(runtime.sessionId, pendingSession.project.id, draft, pendingSession.recoveredDraftSessionId);
+    if (document.activeElement instanceof HTMLTextAreaElement && document.activeElement.id === "runtime-prompt") {
       pendingSessionSelection.current = {
         start: document.activeElement.selectionStart,
         end: document.activeElement.selectionEnd,
@@ -689,17 +544,9 @@ export function App() {
       setComposerFocusTarget(runtime.sessionId);
     }
     pendingSessionDraft.current = "";
-    setPendingSession((current) =>
-      current?.requestId === pendingSession.requestId ? undefined : current,
-    );
+    setPendingSession(current => (current?.requestId === pendingSession.requestId ? undefined : current));
     setSessionBusy("");
-  }, [
-    live.connection,
-    live.runtime?.ready,
-    live.runtime?.sessionId,
-    live.runtime?.sessionGeneration,
-    pendingSession,
-  ]);
+  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, pendingSession]);
 
   useEffect(() => {
     if (!live.notificationRevision || !live.notification?.message) return;
@@ -712,37 +559,20 @@ export function App() {
 
   useEffect(() => {
     const definition = panelDefinition(rightPanel);
-    if (
-      definition?.requiresPackage &&
-      !definition.requiresPackage(panelContext)
-    )
-      setRightPanel(null);
+    if (definition?.requiresPackage && !definition.requiresPackage(panelContext)) setRightPanel(null);
   }, [rightPanel, panelContext]);
 
   useEffect(() => {
     if (!live.sessionStatuses && !live.sessionWorkStartedAts) return;
     const updateSession = (session: SessionSummary): SessionSummary => {
-      const next = {
-        ...session,
-        runtimeState:
-          live.sessionStatuses?.[session.id] ?? session.runtimeState,
-      };
+      const next = { ...session, runtimeState: live.sessionStatuses?.[session.id] ?? session.runtimeState };
       const workStartedAt = live.sessionWorkStartedAts?.[session.id];
       if (workStartedAt === null) delete next.workStartedAt;
       else if (workStartedAt !== undefined) next.workStartedAt = workStartedAt;
       return next;
     };
-    updateSessionPages((pages) =>
-      pages.map((page) => ({
-        ...page,
-        sessions: page.sessions.map(updateSession),
-      })),
-    );
-    setActiveSessions((sessions) =>
-      sessions
-        .map(updateSession)
-        .filter((session) => session.runtimeState !== "sleeping"),
-    );
+    updateSessionPages(pages => pages.map(page => ({ ...page, sessions: page.sessions.map(updateSession) })));
+    setActiveSessions(sessions => sessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
   }, [live.sessionStatuses, live.sessionWorkStartedAts]);
 
   useEffect(() => {
@@ -784,35 +614,23 @@ export function App() {
     }
     const listedParentId = session.runningUnderParentSessionId;
     const openParentActivity = async (parentId: string) => {
-      if (runtimeStore.getSnapshot().runtime?.sessionId !== parentId)
-        await runtimeStore.switchSession(parentId);
-      const run = [
-        ...(runtimeStore.getSnapshot().runtime?.conversation.delegatedRuns ??
-          []),
-      ]
+      if (runtimeStore.getSnapshot().runtime?.sessionId !== parentId) await runtimeStore.switchSession(parentId);
+      const run = [...(runtimeStore.getSnapshot().runtime?.conversation.delegatedRuns ?? [])]
         .reverse()
-        .find(
-          (candidate) =>
-            candidate.kind === "spawn_session" &&
-            candidate.threadId === session.id,
-        );
+        .find(candidate => candidate.kind === "spawn_session" && candidate.threadId === session.id);
       if (!run) {
         try {
           await runtimeStore.switchSession(session.id);
           return;
         } catch {
-          throw new Error(
-            "Spawned session activity is not available yet. Try again.",
-          );
+          throw new Error("Spawned session activity is not available yet. Try again.");
         }
       }
       setSelectedAgentId(run.id);
       setRightPanel("agents");
     };
     setSessionBusy(session.id);
-    setSessionTransition(
-      !listedParentId || live.runtime?.sessionId !== listedParentId,
-    );
+    setSessionTransition(!listedParentId || live.runtime?.sessionId !== listedParentId);
     try {
       if (listedParentId) {
         await openParentActivity(listedParentId);
@@ -822,9 +640,7 @@ export function App() {
         } catch (cause) {
           const parentId =
             cause instanceof Error
-              ? /currently running under its parent session \(([^)]+)\)/i.exec(
-                  cause.message,
-                )?.[1]
+              ? /currently running under its parent session \(([^)]+)\)/i.exec(cause.message)?.[1]
               : undefined;
           if (!parentId) throw cause;
           await openParentActivity(parentId);
@@ -840,13 +656,7 @@ export function App() {
   };
 
   const newSession = async (project: SessionProject, retry = false) => {
-    if (
-      pendingSessionInFlight.current ||
-      sessionBusy ||
-      sessionDeleting ||
-      projectBusy
-    )
-      return;
+    if (pendingSessionInFlight.current || sessionBusy || sessionDeleting || projectBusy) return;
     let recoveredDraft: ComposerDraft | undefined;
     if (!retry) {
       const draft = composerDrafts.latestForProject(project.id);
@@ -874,10 +684,7 @@ export function App() {
       }
     }
     pendingSessionInFlight.current = true;
-    const requestId =
-      retry && pendingSession
-        ? pendingSession.requestId
-        : ++pendingSessionRequest.current;
+    const requestId = retry && pendingSession ? pendingSession.requestId : ++pendingSessionRequest.current;
     if (!retry) {
       pendingSessionDraft.current = recoveredDraft?.text ?? "";
       pendingSessionSelection.current = undefined;
@@ -886,9 +693,7 @@ export function App() {
       requestId,
       project,
       previousSessionId: live.runtime?.sessionId,
-      recoveredDraftSessionId: retry
-        ? pendingSession?.recoveredDraftSessionId
-        : recoveredDraft?.sessionId,
+      recoveredDraftSessionId: retry ? pendingSession?.recoveredDraftSessionId : recoveredDraft?.sessionId,
       phase: "preparing",
     });
     setTerminalOpen(false);
@@ -897,19 +702,12 @@ export function App() {
     try {
       const expectedGeneration = await runtimeStore.newSession(project.id);
       accepted = true;
-      setPendingSession((current) =>
-        current?.requestId === requestId
-          ? { ...current, expectedGeneration }
-          : current,
-      );
+      setPendingSession(current => (current?.requestId === requestId ? { ...current, expectedGeneration } : current));
       if (mobile) setSidebarOpen(false);
     } catch (cause) {
-      const error =
-        cause instanceof Error ? cause.message : "Unable to create session";
-      setPendingSession((current) =>
-        current?.requestId === requestId
-          ? { ...current, phase: "failed", error }
-          : current,
+      const error = cause instanceof Error ? cause.message : "Unable to create session";
+      setPendingSession(current =>
+        current?.requestId === requestId ? { ...current, phase: "failed", error } : current,
       );
     } finally {
       pendingSessionInFlight.current = false;
@@ -924,42 +722,29 @@ export function App() {
     try {
       await runtimeStore.deleteSession(session.id);
       composerDrafts.dropSession(session.id);
-      setActiveSessions((current) =>
-        current.filter((candidate) => candidate.id !== session.id),
-      );
-      updateSessionPages((current) =>
+      setActiveSessions(current => current.filter(candidate => candidate.id !== session.id));
+      updateSessionPages(current =>
         current
-          .map((page) => ({
+          .map(page => ({
             ...page,
-            totalCount:
-              page.id === session.projectId
-                ? Math.max(0, page.totalCount - 1)
-                : page.totalCount,
-            sessions: page.sessions.filter(
-              (candidate) => candidate.id !== session.id,
-            ),
+            totalCount: page.id === session.projectId ? Math.max(0, page.totalCount - 1) : page.totalCount,
+            sessions: page.sessions.filter(candidate => candidate.id !== session.id),
           }))
-          .filter((page) => page.totalCount > 0),
+          .filter(page => page.totalCount > 0),
       );
       const request = ++sessionListRequest.current;
       try {
         const requestQuery = query.trim();
-        const previousPages =
-          sessionPagesQuery.current === requestQuery
-            ? sessionPagesRef.current
-            : [];
+        const previousPages = sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
         const result = await listSessionsPreservingPages(
           (input, signal) => runtimeStore.listSessions(input, signal),
           previousPages,
           requestQuery,
         );
-        if (request === sessionListRequest.current)
-          applySessionList(result, requestQuery);
+        if (request === sessionListRequest.current) applySessionList(result, requestQuery);
       } catch (cause) {
         reportError(
-          cause instanceof Error
-            ? new Error(`Session deleted, but refresh failed: ${cause.message}`)
-            : cause,
+          cause instanceof Error ? new Error(`Session deleted, but refresh failed: ${cause.message}`) : cause,
           "Session deleted, but refresh failed",
         );
       }
@@ -997,16 +782,10 @@ export function App() {
     }
   };
 
-  const updateWorktreeSetup = async (
-    project: SessionProject,
-    setupCommand: string,
-  ) => {
+  const updateWorktreeSetup = async (project: SessionProject, setupCommand: string) => {
     setProjectBusy(project.id);
     try {
-      await runtimeStore.updateProjectWorktreeSettings(
-        project.id,
-        setupCommand,
-      );
+      await runtimeStore.updateProjectWorktreeSettings(project.id, setupCommand);
       setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to save worktree setup");
@@ -1025,15 +804,9 @@ export function App() {
     setSessionBusy(session.id);
     try {
       await runtimeStore.renameSession(session.id, name);
-      const rename = (candidate: SessionSummary) =>
-        candidate.id === session.id ? { ...candidate, name } : candidate;
-      setActiveSessions((current) => current.map(rename));
-      updateSessionPages((current) =>
-        current.map((page) => ({
-          ...page,
-          sessions: page.sessions.map(rename),
-        })),
-      );
+      const rename = (candidate: SessionSummary) => (candidate.id === session.id ? { ...candidate, name } : candidate);
+      setActiveSessions(current => current.map(rename));
+      updateSessionPages(current => current.map(page => ({ ...page, sessions: page.sessions.map(rename) })));
       setSidebarAction(undefined);
     } catch (cause) {
       reportError(cause, "Unable to rename session");
@@ -1052,17 +825,9 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.renameProject(project.id, name);
-      updateSessionPages((current) =>
-        current.map((page) =>
-          page.id === project.id ? { ...page, label: name } : page,
-        ),
-      );
-      setActiveSessions((current) =>
-        current.map((session) =>
-          session.projectId === project.id
-            ? { ...session, cwdLabel: name }
-            : session,
-        ),
+      updateSessionPages(current => current.map(page => (page.id === project.id ? { ...page, label: name } : page)));
+      setActiveSessions(current =>
+        current.map(session => (session.projectId === project.id ? { ...session, cwdLabel: name } : session)),
       );
       setSidebarAction(undefined);
     } catch (cause) {
@@ -1078,10 +843,7 @@ export function App() {
     try {
       await runtimeStore.setSessionActive(session.id, active);
     } catch (cause) {
-      reportError(
-        cause,
-        `Unable to ${active ? "activate" : "deactivate"} session`,
-      );
+      reportError(cause, `Unable to ${active ? "activate" : "deactivate"} session`);
     } finally {
       setSessionBusy("");
     }
@@ -1100,7 +862,7 @@ export function App() {
   };
 
   const loadMoreSessions = async (project: SessionProject) => {
-    const current = sessionPages.find((page) => page.id === project.id);
+    const current = sessionPages.find(page => page.id === project.id);
     if (!current?.nextCursor || projectLoading) return;
     const request = sessionListRequest.current;
     const requestQuery = query.trim();
@@ -1117,27 +879,20 @@ export function App() {
         request !== sessionListRequest.current ||
         query.trim() !== requestQuery ||
         !runtime ||
-        !runtimeRequestStillCurrent(
-          runtimeStore.getSnapshot(),
-          runtime.sessionId,
-          runtime.sessionGeneration,
-        )
+        !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)
       )
         return;
       setActiveSessions(result.activeSessions);
       const next = result.projects[0];
       if (!next) return;
-      updateSessionPages((pages) =>
-        pages.map((page) =>
+      updateSessionPages(pages =>
+        pages.map(page =>
           page.id === project.id
             ? {
                 ...page,
                 sessions: [
                   ...page.sessions,
-                  ...next.sessions.filter(
-                    (session) =>
-                      !page.sessions.some((old) => old.id === session.id),
-                  ),
+                  ...next.sessions.filter(session => !page.sessions.some(old => old.id === session.id)),
                 ],
                 nextCursor: next.nextCursor,
               }
@@ -1152,13 +907,8 @@ export function App() {
   };
 
   const showLessSessions = async (project: SessionProject) => {
-    const current = sessionPages.find((page) => page.id === project.id);
-    if (
-      !current ||
-      current.sessions.length <= SESSION_LIST_INITIAL_LIMIT ||
-      projectLoading
-    )
-      return;
+    const current = sessionPages.find(page => page.id === project.id);
+    if (!current || current.sessions.length <= SESSION_LIST_INITIAL_LIMIT || projectLoading) return;
     const request = sessionListRequest.current;
     const requestQuery = query.trim();
     const runtime = live.runtime;
@@ -1173,19 +923,13 @@ export function App() {
         request !== sessionListRequest.current ||
         query.trim() !== requestQuery ||
         !runtime ||
-        !runtimeRequestStillCurrent(
-          runtimeStore.getSnapshot(),
-          runtime.sessionId,
-          runtime.sessionGeneration,
-        )
+        !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)
       )
         return;
       const next = result.projects[0];
       if (!next) return;
       setActiveSessions(result.activeSessions);
-      updateSessionPages((pages) =>
-        pages.map((page) => (page.id === project.id ? next : page)),
-      );
+      updateSessionPages(pages => pages.map(page => (page.id === project.id ? next : page)));
     } catch (cause) {
       reportError(cause, "Unable to show fewer sessions");
     } finally {
@@ -1198,8 +942,7 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.archiveProject(project.id);
-      for (const session of project.sessions)
-        composerDrafts.forgetInMemory(session.id);
+      for (const session of project.sessions) composerDrafts.forgetInMemory(session.id);
     } catch (cause) {
       reportError(cause, "Unable to archive project");
     } finally {
@@ -1223,15 +966,15 @@ export function App() {
   const toggleSidebar = () => {
     if (mobile) {
       setRightPanel(null);
-      setSidebarOpen((open) => !open);
+      setSidebarOpen(open => !open);
       return;
     }
-    setSidebarCollapsed((collapsed) => !collapsed);
+    setSidebarCollapsed(collapsed => !collapsed);
   };
 
   const toggleRightPanel = (panel: Exclude<RightPanel, null>) => {
     if (inspectorOverlay) setSidebarOpen(false);
-    setRightPanel((current) => (current === panel ? null : panel));
+    setRightPanel(current => (current === panel ? null : panel));
   };
 
   const setPackageEnabled = async (item: PackageSummary, enabled: boolean) => {
@@ -1239,10 +982,8 @@ export function App() {
     setPackageBusy(item.id);
     try {
       await runtimeStore.setPackageEnabled(item.id, enabled);
-      setPackages((current) =>
-        current.map((candidate) =>
-          candidate.id === item.id ? { ...candidate, enabled } : candidate,
-        ),
+      setPackages(current =>
+        current.map(candidate => (candidate.id === item.id ? { ...candidate, enabled } : candidate)),
       );
     } catch (cause) {
       reportError(cause, "Unable to update package");
@@ -1251,18 +992,13 @@ export function App() {
     }
   };
 
-  const updatePackageSettings = async (
-    item: PackageSummary,
-    settings: PackageSettingsReadModel,
-  ) => {
+  const updatePackageSettings = async (item: PackageSummary, settings: PackageSettingsReadModel) => {
     if (packageBusy) return;
     setPackageBusy(item.id);
     try {
       await runtimeStore.updatePackageSettings(item.id, settings);
-      setPackages((current) =>
-        current.map((candidate) =>
-          candidate.id === item.id ? { ...candidate, settings } : candidate,
-        ),
+      setPackages(current =>
+        current.map(candidate => (candidate.id === item.id ? { ...candidate, settings } : candidate)),
       );
     } catch (cause) {
       reportError(cause, `Unable to update ${item.name}`);
@@ -1271,15 +1007,9 @@ export function App() {
     }
   };
 
-  const refreshExtensions = async () =>
-    setExtensions(await runtimeStore.listExtensions());
-  const manageExtension = async (
-    key: string,
-    action: () => Promise<void>,
-    failure: string,
-  ) => {
-    if (extensionBusy)
-      throw new Error("Another extension operation is still running");
+  const refreshExtensions = async () => setExtensions(await runtimeStore.listExtensions());
+  const manageExtension = async (key: string, action: () => Promise<void>, failure: string) => {
+    if (extensionBusy) throw new Error("Another extension operation is still running");
     setExtensionBusy(key);
     try {
       await action();
@@ -1291,10 +1021,7 @@ export function App() {
       setExtensionBusy("");
     }
   };
-  const toggleExtension = (
-    extension: NativeExtensionReadModel,
-    enabled: boolean,
-  ) =>
+  const toggleExtension = (extension: NativeExtensionReadModel, enabled: boolean) =>
     manageExtension(
       extension.id,
       () => runtimeStore.setExtensionEnabled(extension.id, enabled),
@@ -1313,23 +1040,12 @@ export function App() {
       "Unable to remove extension package",
     );
   const setProjectTrust = (trusted: boolean) =>
-    manageExtension(
-      "trust",
-      () => runtimeStore.setProjectTrust(trusted),
-      "Unable to update project trust",
-    );
+    manageExtension("trust", () => runtimeStore.setProjectTrust(trusted), "Unable to update project trust");
   const reloadExtensions = () =>
-    manageExtension(
-      "reload",
-      () => runtimeStore.reloadExtensions(),
-      "Unable to reload extensions",
-    );
+    manageExtension("reload", () => runtimeStore.reloadExtensions(), "Unable to reload extensions");
 
-  const manageAndroidTooling = async (
-    action: "status" | "install" | "remove",
-  ) => {
-    if (androidToolingBusy)
-      throw new Error("Another Android tooling operation is still running");
+  const manageAndroidTooling = async (action: "status" | "install" | "remove") => {
+    if (androidToolingBusy) throw new Error("Another Android tooling operation is still running");
     if (action !== "status") setAndroidToolingBusy(action);
     try {
       const result = await runtimeStore.heliosAndroidTooling(
@@ -1337,10 +1053,7 @@ export function App() {
       );
       setAndroidTooling(result);
     } catch (cause) {
-      reportError(
-        cause,
-        `Unable to ${action === "install" ? "set up" : action} Android tooling`,
-      );
+      reportError(cause, `Unable to ${action === "install" ? "set up" : action} Android tooling`);
       throw cause;
     } finally {
       if (action !== "status") setAndroidToolingBusy("");
@@ -1348,8 +1061,7 @@ export function App() {
   };
 
   const updateHookSettings = async (settings: HookSettingsReadModel) => {
-    if (hooksBusy)
-      throw new Error("Another hook settings update is still saving");
+    if (hooksBusy) throw new Error("Another hook settings update is still saving");
     setHooksBusy(true);
     try {
       await runtimeStore.updateHookSettings(settings);
@@ -1362,12 +1074,8 @@ export function App() {
     }
   };
 
-  const currentProjectPage = sessionPages.find(
-    (page) => page.id === activeSession?.projectId,
-  );
-  const currentProject = currentProjectPage
-    ? toSessionProject(currentProjectPage)
-    : (projects[0] ?? general);
+  const currentProjectPage = sessionPages.find(page => page.id === activeSession?.projectId);
+  const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : (projects[0] ?? general);
   const toggleTerminal = () => {
     openTerminalDrawer();
     if (mobile) setSidebarOpen(false);
@@ -1380,8 +1088,7 @@ export function App() {
     setSidebarAction({
       key: `delete-session-${session.id}`,
       title: `Delete “${sessionTitle(session)}”?`,
-      description:
-        "This removes saved history. If system trash is unavailable, deletion is permanent.",
+      description: "This removes saved history. If system trash is unavailable, deletion is permanent.",
       confirmLabel: "Delete session",
       busyLabel: "Deleting…",
       danger: true,
@@ -1403,8 +1110,7 @@ export function App() {
     setWorkspaceMode(mode);
     setSidebarOpen(false);
     if (!changingMode) return;
-    const wasDisplaced =
-      workspaceModeDefinition(workspaceMode).displacesConversation;
+    const wasDisplaced = workspaceModeDefinition(workspaceMode).displacesConversation;
     if (workspaceModeDefinition(mode).displacesConversation) {
       // Remember the panel the conversation displaced, but only the first time.
       if (!wasDisplaced) previousChatModePanel.current = rightPanel;
@@ -1421,9 +1127,7 @@ export function App() {
       theme={theme}
       workspaceMode={workspaceMode}
       onWorkspaceMode={changeWorkspaceMode}
-      onToggleTheme={() =>
-        setTheme((current) => (current === "dark" ? "light" : "dark"))
-      }
+      onToggleTheme={() => setTheme(current => (current === "dark" ? "light" : "dark"))}
       menuOpen={mobile ? sidebarOpen : !sidebarCollapsed}
       rightPanel={rightPanel}
       panelContext={panelContext}
@@ -1464,25 +1168,17 @@ export function App() {
       }
       restoreComposerFocus={composerFocusTarget === live.runtime?.sessionId}
       restoreComposerSelection={
-        composerFocusTarget === live.runtime?.sessionId
-          ? pendingSessionSelection.current
-          : undefined
+        composerFocusTarget === live.runtime?.sessionId ? pendingSessionSelection.current : undefined
       }
       onComposerFocusRestored={() => {
         pendingSessionSelection.current = undefined;
-        setComposerFocusTarget((current) =>
-          current === live.runtime?.sessionId ? undefined : current,
-        );
+        setComposerFocusTarget(current => (current === live.runtime?.sessionId ? undefined : current));
       }}
-      onDraftChange={(draft) => {
+      onDraftChange={draft => {
         if (pendingSession) {
           pendingSessionDraft.current = draft;
           if (pendingSession.recoveredDraftSessionId)
-            composerDrafts.save(
-              pendingSession.recoveredDraftSessionId,
-              pendingSession.project.id,
-              draft,
-            );
+            composerDrafts.save(pendingSession.recoveredDraftSessionId, pendingSession.project.id, draft);
           const runtime = live.runtime;
           if (
             pendingSession.expectedGeneration !== undefined &&
@@ -1490,22 +1186,17 @@ export function App() {
             runtime.sessionGeneration === pendingSession.expectedGeneration &&
             runtime.sessionId !== pendingSession.previousSessionId
           )
-            composerDrafts.save(
-              runtime.sessionId,
-              pendingSession.project.id,
-              draft,
-            );
+            composerDrafts.save(runtime.sessionId, pendingSession.project.id, draft);
           return;
         }
         const sessionId = live.runtime?.sessionId;
-        if (sessionId)
-          composerDrafts.save(sessionId, activeSession?.projectId, draft);
+        if (sessionId) composerDrafts.save(sessionId, activeSession?.projectId, draft);
       }}
-      onSelectAgent={(id) => {
+      onSelectAgent={id => {
         setSelectedAgentId(id);
         setRightPanel("agents");
       }}
-      onOpenCompaction={(message) => {
+      onOpenCompaction={message => {
         const sessionId = live.runtime?.sessionId;
         if (!sessionId) return;
         setSelectedCompaction({ sessionId, message });
@@ -1518,7 +1209,7 @@ export function App() {
         setRightPanel("attachment");
       }}
       agentColors={agentColors}
-      onOpenLogin={(provider) => {
+      onOpenLogin={provider => {
         showSettings({ tab: "providers", providerQuery: provider ?? "" });
       }}
     />
@@ -1527,40 +1218,27 @@ export function App() {
   const sidePanel = (
     <>
       {rightPanel && inspectorOverlay && (
-        <button
-          className="inspector-scrim"
-          aria-label={`Close ${rightPanel}`}
-          onClick={() => setRightPanel(null)}
-        />
+        <button className="inspector-scrim" aria-label={`Close ${rightPanel}`} onClick={() => setRightPanel(null)} />
       )}
       {rightPanel && (
         <PanelResizer
           container={workspaceRef}
           width={rightPanelWidth}
-          onCommit={(width) => {
+          onCommit={width => {
             const slot = panelWidthSlot(rightPanel);
-            setPanelWidths((current) => ({ ...current, [slot.key]: width }));
+            setPanelWidths(current => ({ ...current, [slot.key]: width }));
             rememberSetting(slot.key, width);
           }}
         />
       )}
       {rightPanel === "chat" && (
-        <aside
-          id="chat-panel"
-          className="inspector workspace-chat-panel is-open"
-          aria-labelledby="chat-panel-title"
-        >
+        <aside id="chat-panel" className="inspector workspace-chat-panel is-open" aria-labelledby="chat-panel-title">
           <header>
             <div>
               <IconMessageCircle size={18} />
               <strong id="chat-panel-title">Chat</strong>
             </div>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={() => setRightPanel(null)}
-              aria-label="Close chat"
-            >
+            <button className="icon-button" type="button" onClick={() => setRightPanel(null)} aria-label="Close chat">
               <IconX size={17} />
             </button>
           </header>
@@ -1634,12 +1312,7 @@ export function App() {
           onClose={() => setRightPanel(null)}
           onExpand={(path, fileView) => {
             if (path)
-              setRequestedFile({
-                path,
-                view: fileView,
-                sessionId: live.runtime?.sessionId,
-                requestId: Date.now(),
-              });
+              setRequestedFile({ path, view: fileView, sessionId: live.runtime?.sessionId, requestId: Date.now() });
             setRightPanel(null);
             changeWorkspaceMode("files");
           }}
@@ -1649,9 +1322,7 @@ export function App() {
       {rightPanel === "browser" && (
         <BrowserPanel
           key={`browser:${live.runtime?.sessionId ?? "loading"}`}
-          connected={
-            live.connection === "connected" && live.runtime?.ready === true
-          }
+          connected={live.connection === "connected" && live.runtime?.ready === true}
           generation={live.runtime?.sessionGeneration}
           mirrorRequest={browserMirrorRequest}
           onActiveChange={setBrowserActive}
@@ -1668,13 +1339,13 @@ export function App() {
         <TerminalResizer
           container={appShellRef}
           height={terminalDrawerHeight}
-          onCommit={(height) => {
+          onCommit={height => {
             setTerminalDrawerHeight(height);
             rememberSetting(TERMINAL_HEIGHT_KEY, height);
           }}
         />
       )}
-      {retainedTerminals.map((terminal) => (
+      {retainedTerminals.map(terminal => (
         <TerminalPanel
           key={`terminal:${terminal.sessionId}`}
           open={terminalOpen && terminalSessionId === terminal.sessionId}
@@ -1697,12 +1368,9 @@ export function App() {
       style={
         {
           "--sidebar-width": `${leftPanelWidth}px`,
-          "--terminal-height": terminalOpen
-            ? `${terminalDrawerHeight}px`
-            : "0px",
+          "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px",
         } as CSSProperties
-      }
-    >
+      }>
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
@@ -1714,16 +1382,12 @@ export function App() {
         busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
         busySessionId={sessionBusy}
         deletingSessionId={sessionDeleting}
-        onSelect={(session) => void switchSession(session)}
+        onSelect={session => void switchSession(session)}
         onDelete={requestDeleteSession}
         onRename={requestRenameSession}
-        onArchive={(session) => void archiveSession(session)}
-        onSetActive={(session, active) =>
-          void setSessionActive(session, active)
-        }
-        onSetPinned={(session, pinned) =>
-          void setSessionPinned(session, pinned)
-        }
+        onArchive={session => void archiveSession(session)}
+        onSetActive={(session, active) => void setSessionActive(session, active)}
+        onSetPinned={(session, pinned) => void setSessionPinned(session, pinned)}
         onNew={() => {
           if (!currentProject) return;
           changeWorkspaceMode("chat");
@@ -1763,25 +1427,21 @@ export function App() {
               : undefined
           }
           onQuery={setQuery}
-          onToggleProject={(projectId) =>
-            setExpandedProjects((current) => {
+          onToggleProject={projectId =>
+            setExpandedProjects(current => {
               const next = new Set(current);
               if (next.has(projectId)) next.delete(projectId);
               else next.add(projectId);
               return next;
             })
           }
-          onSelectSession={(session) => void switchSession(session)}
+          onSelectSession={session => void switchSession(session)}
           onDeleteSession={requestDeleteSession}
           onRenameSession={requestRenameSession}
-          onSetSessionActive={(session, active) =>
-            void setSessionActive(session, active)
-          }
-          onSetSessionPinned={(session, pinned) =>
-            void setSessionPinned(session, pinned)
-          }
-          onLoadMore={(project) => void loadMoreSessions(project)}
-          onShowLess={(project) => void showLessSessions(project)}
+          onSetSessionActive={(session, active) => void setSessionActive(session, active)}
+          onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
+          onLoadMore={project => void loadMoreSessions(project)}
+          onShowLess={project => void showLessSessions(project)}
           onAddProject={() => void addProject()}
           general={general}
           onOpenArchives={() => {
@@ -1789,29 +1449,25 @@ export function App() {
             if (mobile) setSidebarOpen(false);
           }}
           terminalOpen={terminalOpen}
-          terminalAvailable={Boolean(
-            live.runtime?.ready && live.runtime.projectAvailable !== false,
-          )}
+          terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
           onToggleTerminal={toggleTerminal}
           onOpenSettings={openSettings}
-          onArchiveProject={(project) => void archiveProject(project)}
-          onRenameProject={(project) =>
+          onArchiveProject={project => void archiveProject(project)}
+          onRenameProject={project =>
             setSidebarAction({
               key: `rename-project-${project.id}`,
               title: "Rename project",
-              description:
-                "This changes only the project name shown in Pylon. Folder name and files stay unchanged.",
+              description: "This changes only the project name shown in Pylon. Folder name and files stay unchanged.",
               confirmLabel: "Save name",
               busyLabel: "Saving…",
               inputLabel: "Project name",
               initialValue: project.label,
-              onConfirm: (value) => void renameProject(project, value),
+              onConfirm: value => void renameProject(project, value),
             })
           }
-          onRemoveProject={(project) => {
+          onRemoveProject={project => {
             const count =
-              sessionPages.find((candidate) => candidate.id === project.id)
-                ?.totalCount ?? project.sessions.length;
+              sessionPages.find(candidate => candidate.id === project.id)?.totalCount ?? project.sessions.length;
             setSidebarAction({
               key: `remove-project-${project.id}`,
               title: `Remove “${project.label}”?`,
@@ -1822,46 +1478,39 @@ export function App() {
               onConfirm: () => void removeProject(project),
             });
           }}
-          onArchiveSession={(session) => void archiveSession(session)}
-          onNewSession={(project) => {
-            const unfiltered = projects.find(
-              (candidate) => candidate.id === project.id,
-            );
+          onArchiveSession={session => void archiveSession(session)}
+          onNewSession={project => {
+            const unfiltered = projects.find(candidate => candidate.id === project.id);
             if (unfiltered) void newSession(unfiltered);
           }}
           onNewGeneral={() => {
             if (general) void newSession(general);
           }}
-          onWorktreeSetup={(project) =>
+          onWorktreeSetup={project =>
             setSidebarAction({
               key: `worktree-setup-${project.id}`,
               title: `Worktree setup for ${project.label}`,
-              description:
-                "This command runs once after Pylon creates a new isolated worktree.",
+              description: "This command runs once after Pylon creates a new isolated worktree.",
               confirmLabel: "Save setup",
               busyLabel: "Saving…",
               inputLabel: "Setup command",
               multiline: true,
               maxLength: 2_000,
               allowEmpty: true,
-              onConfirm: (value) => void updateWorktreeSetup(project, value),
+              onConfirm: value => void updateWorktreeSetup(project, value),
             })
           }
           onReorderProject={(projectId, beforeProjectId) =>
-            runtimeStore
-              .reorderProject(projectId, beforeProjectId)
-              .catch((cause) => {
-                reportError(cause, "Unable to reorder project");
-                throw cause;
-              })
+            runtimeStore.reorderProject(projectId, beforeProjectId).catch(cause => {
+              reportError(cause, "Unable to reorder project");
+              throw cause;
+            })
           }
           onReorderActiveSession={(sessionId, beforeSessionId) =>
-            runtimeStore
-              .reorderActiveSession(sessionId, beforeSessionId)
-              .catch((cause) => {
-                reportError(cause, "Unable to reorder active session");
-                throw cause;
-              })
+            runtimeStore.reorderActiveSession(sessionId, beforeSessionId).catch(cause => {
+              reportError(cause, "Unable to reorder active session");
+              throw cause;
+            })
           }
         />
       )}
@@ -1869,21 +1518,15 @@ export function App() {
         <SidebarResizer
           container={appShellRef}
           width={leftPanelWidth}
-          onCommit={(width) => {
+          onCommit={width => {
             setLeftPanelWidth(width);
             rememberSetting(LEFT_PANEL_WIDTH_KEY, width);
           }}
         />
       )}
-      {mobile &&
-        sidebarOpen &&
-        (workspaceMode === "chat" || fileNavigation === "sessions") && (
-          <button
-            className="sidebar-scrim"
-            aria-label="Close navigation"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
+      {mobile && sidebarOpen && (workspaceMode === "chat" || fileNavigation === "sessions") && (
+        <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />
+      )}
 
       {/* Modes that own the main area are listed explicitly; anything else falls back to chat. */}
       {workspaceMode !== "files" ? (
@@ -1900,28 +1543,18 @@ export function App() {
                 <RecoveryToast
                   recovery={live.recovery}
                   onAction={() => {
-                    if (live.recovery?.action === "reload")
-                      window.location.reload();
+                    if (live.recovery?.action === "reload") window.location.reload();
                     else runtimeStore.retryBootstrap();
                   }}
                 />
               )}
-              {toast && (
-                <ErrorToast
-                  key={toast.id}
-                  message={toast.message}
-                  onClose={() => setToast(undefined)}
-                />
-              )}
+              {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
             </div>
           )}
           <div
             ref={workspaceRef}
             className={`workspace-layout ${rightPanel ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
-            style={
-              { "--inspector-width": `${rightPanelWidth}px` } as CSSProperties
-            }
-          >
+            style={{ "--inspector-width": `${rightPanelWidth}px` } as CSSProperties}>
             {conversationPanel}
             {sidePanel}
           </div>
@@ -1942,14 +1575,10 @@ export function App() {
           workspaceRef={workspaceRef}
           sidePanel={sidePanel}
           terminalOpen={terminalOpen}
-          terminalAvailable={Boolean(
-            live.runtime?.ready && live.runtime.projectAvailable !== false,
-          )}
+          terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
           rightPanelOpen={Boolean(rightPanel)}
           inspectorWidth={rightPanelWidth}
-          showExplorer={
-            fileNavigation === "explorer" && (mobile || !sidebarCollapsed)
-          }
+          showExplorer={fileNavigation === "explorer" && (mobile || !sidebarCollapsed)}
           navigationOpen={sidebarOpen}
           mobile={mobile}
           onCloseNavigation={() => setSidebarOpen(false)}
@@ -2006,11 +1635,7 @@ export function App() {
             live.connection !== "connected" ||
             live.runtime?.ready !== true ||
             Boolean(live.pendingUi) ||
-            activeSessions.some(
-              (session) =>
-                session.runtimeState === "running" ||
-                session.runtimeState === "attention",
-            )
+            activeSessions.some(session => session.runtimeState === "running" || session.runtimeState === "attention")
           }
           loading={packagesLoading}
           extensionLoading={extensionsLoading}
@@ -2022,34 +1647,21 @@ export function App() {
           androidToolingBusy={androidToolingBusy}
           onAndroidTooling={manageAndroidTooling}
           providerLogoutDisabled={activeSessions.some(
-            (session) =>
-              session.runtimeState === "running" ||
-              session.runtimeState === "attention",
+            session => session.runtimeState === "running" || session.runtimeState === "attention",
           )}
           models={live.runtime?.sessionControls.models ?? []}
-          sessionThinkingLevels={
-            live.runtime?.sessionControls.thinkingLevels ?? []
-          }
+          sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
           theme={theme}
           onThemeChange={setTheme}
           onClose={() => {
-            if (live.runtime?.providerAuth?.flow?.status === "running")
-              void runtimeStore.cancelProviderLogin();
+            if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
             closeSettings();
           }}
-          onProviderLogin={(provider, authType) =>
-            void runtimeStore.startProviderLogin(provider, authType)
-          }
-          onProviderLogout={(provider) =>
-            void runtimeStore.logoutProvider(provider)
-          }
+          onProviderLogin={(provider, authType) => void runtimeStore.startProviderLogin(provider, authType)}
+          onProviderLogout={provider => void runtimeStore.logoutProvider(provider)}
           onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
-          onSetEnabled={(item, enabled) =>
-            void setPackageEnabled(item, enabled)
-          }
-          onUpdate={(item, settings) =>
-            void updatePackageSettings(item, settings)
-          }
+          onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
+          onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
           onToggleExtension={toggleExtension}
           onInstallExtensionPackage={installExtensionPackage}
           onRemoveExtensionPackage={removeExtensionPackage}
@@ -2070,12 +1682,7 @@ export function App() {
             )
           }
           onUpdateGlobalToolPolicy={(tool, mode, expectedRevision) =>
-            runtimeStore.updateToolPolicy(
-              "global",
-              tool,
-              mode,
-              expectedRevision,
-            )
+            runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)
           }
         />
       )}
@@ -2132,12 +1739,10 @@ function TerminalResizer({
       aria-valuenow={height}
       tabIndex={0}
       onPointerDown={onPointerDown}
-      onKeyDown={(event) => {
+      onKeyDown={event => {
         if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
         event.preventDefault();
-        const next = terminalHeight(
-          height + (event.key === "ArrowUp" ? 16 : -16),
-        );
+        const next = terminalHeight(height + (event.key === "ArrowUp" ? 16 : -16));
         container.current?.style.setProperty("--terminal-height", `${next}px`);
         onCommit(next);
       }}
@@ -2195,12 +1800,10 @@ function PanelResizer({
       aria-valuenow={width}
       tabIndex={0}
       onPointerDown={onPointerDown}
-      onKeyDown={(event) => {
+      onKeyDown={event => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
-        const next = clampPanelWidth(
-          width + (event.key === "ArrowLeft" ? 16 : -16),
-        );
+        const next = clampPanelWidth(width + (event.key === "ArrowLeft" ? 16 : -16));
         container.current?.style.setProperty("--inspector-width", `${next}px`);
         onCommit(next);
       }}
@@ -2257,12 +1860,10 @@ function SidebarResizer({
       aria-valuenow={width}
       tabIndex={0}
       onPointerDown={onPointerDown}
-      onKeyDown={(event) => {
+      onKeyDown={event => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
-        const next = leftPanelWidth(
-          width + (event.key === "ArrowRight" ? 16 : -16),
-        );
+        const next = leftPanelWidth(width + (event.key === "ArrowRight" ? 16 : -16));
         container.current?.style.setProperty("--sidebar-width", `${next}px`);
         onCommit(next);
       }}
@@ -2270,13 +1871,7 @@ function SidebarResizer({
   );
 }
 
-function ErrorToast({
-  message,
-  onClose,
-}: {
-  message: string;
-  onClose: () => void;
-}) {
+function ErrorToast({ message, onClose }: { message: string; onClose: () => void }) {
   const [exiting, setExiting] = useState(false);
   const close = () => {
     if (exiting) return;
@@ -2288,10 +1883,7 @@ function ErrorToast({
     return () => window.clearTimeout(timer);
   }, []);
   return (
-    <div
-      className={`app-error-toast${exiting ? " is-exiting" : ""}`}
-      role="alert"
-    >
+    <div className={`app-error-toast${exiting ? " is-exiting" : ""}`} role="alert">
       <span>{message}</span>
       <button type="button" onClick={close} aria-label="Dismiss error">
         <IconX size={15} />
@@ -2355,15 +1947,11 @@ function ActiveSessionStrip({
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
   const [menu, setMenu] = useState<{ sessionId: string; left: number }>();
   const [announcement, setAnnouncement] = useState("");
-  const menuSession = sessions.find(
-    (session) => session.id === menu?.sessionId,
-  );
+  const menuSession = sessions.find(session => session.id === menu?.sessionId);
   useEffect(() => {
     if (!selectedId) return;
     listRef.current
-      ?.querySelector<HTMLElement>(
-        `[data-session-id="${CSS.escape(selectedId)}"]`,
-      )
+      ?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [selectedId]);
   useEffect(() => {
@@ -2372,9 +1960,7 @@ function ActiveSessionStrip({
     const onPointerDown = (event: PointerEvent) => {
       if (
         event.target instanceof Element &&
-        event.target.closest(
-          ".active-session-options, .active-session-menu-popover",
-        )
+        event.target.closest(".active-session-options, .active-session-menu-popover")
       )
         return;
       close();
@@ -2395,13 +1981,10 @@ function ActiveSessionStrip({
       listRef.current?.removeEventListener("scroll", close);
     };
   }, [menu]);
-  const working = sessions.some((session) => session.workStartedAt);
+  const working = sessions.some(session => session.workStartedAt);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const interval = window.setInterval(
-      () => setNow(Date.now()),
-      working ? 1_000 : 60_000,
-    );
+    const interval = window.setInterval(() => setNow(Date.now()), working ? 1_000 : 60_000);
     return () => window.clearInterval(interval);
   }, [working]);
   const toggleMenu = (session: SessionSummary, trigger: HTMLButtonElement) => {
@@ -2413,16 +1996,10 @@ function ActiveSessionStrip({
     const stripRect = stripRef.current?.getBoundingClientRect();
     const triggerRect = trigger.getBoundingClientRect();
     const menuWidth = 168;
-    const maxLeft = Math.max(
-      8,
-      (stripRect?.width ?? window.innerWidth) - menuWidth - 8,
-    );
+    const maxLeft = Math.max(8, (stripRect?.width ?? window.innerWidth) - menuWidth - 8);
     setMenu({
       sessionId: session.id,
-      left: Math.min(
-        Math.max(triggerRect.right - (stripRect?.left ?? 0) - menuWidth, 8),
-        maxLeft,
-      ),
+      left: Math.min(Math.max(triggerRect.right - (stripRect?.left ?? 0) - menuWidth, 8), maxLeft),
     });
   };
   const closeAndRun = (action: (session: SessionSummary) => void) => {
@@ -2435,19 +2012,11 @@ function ActiveSessionStrip({
     const id = menuSession.id;
     setMenu(undefined);
     setAnnouncement("");
-    void copyText(id).then((copied) =>
-      setAnnouncement(
-        copied ? "Session ID copied" : "Copying session ID failed",
-      ),
-    );
+    void copyText(id).then(copied => setAnnouncement(copied ? "Session ID copied" : "Copying session ID failed"));
   };
   const sleeping = menuSession?.runtimeState === "sleeping";
   return (
-    <nav
-      ref={stripRef}
-      className="active-session-strip"
-      aria-label="Active sessions"
-    >
+    <nav ref={stripRef} className="active-session-strip" aria-label="Active sessions">
       <div className="active-session-brand">
         <span className="brand-mark" aria-hidden="true">
           <img src="/pylon-mark.svg" alt="" />
@@ -2455,21 +2024,16 @@ function ActiveSessionStrip({
         <strong>Pylon</strong>
       </div>
       <div ref={listRef} className="active-session-tabs">
-        {sessions.map((session) => {
+        {sessions.map(session => {
           const completed = Boolean(unseenCompletions?.[session.id]);
-          const activity = formatSessionActivity(
-            session.modifiedAt,
-            session.workStartedAt,
-            now,
-          );
+          const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
           const preview = `${session.parentSession ? `Spawned from ${session.parentSession.title} · ` : ""}${session.cwdLabel} · ${activity}`;
           const menuOpen = menu?.sessionId === session.id;
           return (
             <div
               key={session.id}
               data-session-id={session.id}
-              className={`active-session-tab-shell${session.id === selectedId ? " is-active" : ""}`}
-            >
+              className={`active-session-tab-shell${session.id === selectedId ? " is-active" : ""}`}>
               <button
                 type="button"
                 className={`active-session-tab${session.id === selectedId ? " is-active" : ""}`}
@@ -2477,27 +2041,19 @@ function ActiveSessionStrip({
                 onClick={() => {
                   setMenu(undefined);
                   onSelect(session);
-                }}
-              >
-                <strong title={sessionTitle(session)}>
-                  {sessionTitle(session).slice(0, 50)}
-                </strong>
+                }}>
+                <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
                 <span title={preview}>{preview}</span>
-                {busySessionId === session.id ||
-                deletingSessionId === session.id ? (
+                {busySessionId === session.id || deletingSessionId === session.id ? (
                   <i
                     className="active-session-state status-orb success"
-                    aria-label={
-                      deletingSessionId === session.id ? "Deleting" : "Updating"
-                    }
+                    aria-label={deletingSessionId === session.id ? "Deleting" : "Updating"}
                   />
                 ) : (
                   showSessionRuntimeState(session.runtimeState, completed) && (
                     <i
                       className={`active-session-state session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
-                      aria-label={
-                        completed ? "New response" : session.runtimeState
-                      }
+                      aria-label={completed ? "New response" : session.runtimeState}
                       title={completed ? "New response" : session.runtimeState}
                     />
                   )
@@ -2510,19 +2066,14 @@ function ActiveSessionStrip({
                 aria-expanded={menuOpen}
                 aria-controls="active-session-options-menu"
                 title="More options"
-                onClick={(event) => toggleMenu(session, event.currentTarget)}
-              >
+                onClick={event => toggleMenu(session, event.currentTarget)}>
                 <IconDots size={15} />
               </button>
             </div>
           );
         })}
         {pendingLabel && (
-          <button
-            type="button"
-            className="active-session-tab is-active"
-            disabled
-          >
+          <button type="button" className="active-session-tab is-active" disabled>
             <strong>New session</strong>
             <span>{pendingLabel}</span>
           </button>
@@ -2533,8 +2084,7 @@ function ActiveSessionStrip({
           disabled={busy}
           onClick={onNew}
           aria-label="New session"
-          title="New session"
-        >
+          title="New session">
           <IconPlus size={17} />
         </button>
       </div>
@@ -2543,8 +2093,7 @@ function ActiveSessionStrip({
         type="button"
         onClick={onAllSessions}
         aria-label="All sessions"
-        title="All sessions"
-      >
+        title="All sessions">
         <IconDots size={18} />
       </button>
       {menuSession && (
@@ -2552,14 +2101,8 @@ function ActiveSessionStrip({
           id="active-session-options-menu"
           className="session-menu-popover active-session-menu-popover"
           role="menu"
-          style={{ left: menu?.left }}
-        >
-          <button
-            role="menuitem"
-            type="button"
-            disabled={busy}
-            onClick={() => closeAndRun(onRename)}
-          >
+          style={{ left: menu?.left }}>
+          <button role="menuitem" type="button" disabled={busy} onClick={() => closeAndRun(onRename)}>
             <IconPencil size={14} />
             Rename
           </button>
@@ -2571,19 +2114,11 @@ function ActiveSessionStrip({
             role="menuitem"
             type="button"
             disabled={busy}
-            onClick={() =>
-              closeAndRun((session) => onSetPinned(session, !session.pinned))
-            }
-          >
+            onClick={() => closeAndRun(session => onSetPinned(session, !session.pinned))}>
             <IconPin size={14} />
             {menuSession.pinned ? "Unpin" : "Pin"}
           </button>
-          <button
-            role="menuitem"
-            type="button"
-            disabled={busy}
-            onClick={() => closeAndRun(onArchive)}
-          >
+          <button role="menuitem" type="button" disabled={busy} onClick={() => closeAndRun(onArchive)}>
             <IconArchive size={14} />
             Archive
           </button>
@@ -2598,10 +2133,7 @@ function ActiveSessionStrip({
                   ? "Unpin before deactivating"
                   : undefined
             }
-            onClick={() =>
-              closeAndRun((session) => onSetActive(session, sleeping))
-            }
-          >
+            onClick={() => closeAndRun(session => onSetActive(session, sleeping))}>
             <IconPower size={14} />
             {sleeping ? "Activate" : "Deactivate"}
           </button>
@@ -2610,13 +2142,8 @@ function ActiveSessionStrip({
             className="is-danger"
             type="button"
             disabled={busy || menuSession.active}
-            title={
-              menuSession.active
-                ? "Active session cannot be deleted"
-                : undefined
-            }
-            onClick={() => closeAndRun(onDelete)}
-          >
+            title={menuSession.active ? "Active session cannot be deleted" : undefined}
+            onClick={() => closeAndRun(onDelete)}>
             <IconTrash size={14} />
             Delete
           </button>
@@ -2679,21 +2206,17 @@ function Topbar({
           onClick={onToggleMenu}
           aria-label="Toggle project navigation"
           aria-controls="primary-navigation"
-          aria-expanded={menuOpen}
-        >
+          aria-expanded={menuOpen}>
           <IconMenu2 size={18} />
         </button>
         <nav className="workspace-mode-switch" aria-label="Session view">
-          {WORKSPACE_MODES.map((mode) => (
+          {WORKSPACE_MODES.map(mode => (
             <button
               key={mode.id}
               type="button"
               className={workspaceMode === mode.id ? "is-active" : ""}
-              disabled={
-                Boolean(pendingSession) && Boolean(mode.requiresSession)
-              }
-              onClick={() => onWorkspaceMode(mode.id)}
-            >
+              disabled={Boolean(pendingSession) && Boolean(mode.requiresSession)}
+              onClick={() => onWorkspaceMode(mode.id)}>
               {mode.label}
             </button>
           ))}
@@ -2712,36 +2235,32 @@ function Topbar({
         </div>
       </div>
       <div className="topbar-actions">
-        {PANELS.filter((panel) => panel.showButton?.(panelContext) ?? true).map(
-          (panel) => {
-            const badge = panel.badge?.(runtime, panelContext);
-            const Icon = panel.icon;
-            return (
-              <button
-                key={panel.id}
-                ref={(node) => {
-                  registerPanelButton(panel.id, node);
-                }}
-                className={`agents-trigger ${rightPanel === panel.id ? "is-active" : ""} ${badge?.live ? "is-live" : ""}`}
-                type="button"
-                disabled={Boolean(pendingSession)}
-                onClick={() => onTogglePanel(panel.id)}
-                aria-label={badge?.ariaLabel ?? panel.label}
-                aria-controls={panel.ariaId}
-                aria-expanded={rightPanel === panel.id}
-              >
-                <Icon size={16} />
-                <span>{panel.label}</span>
-                {badge?.count !== undefined && <small>{badge.count}</small>}
-              </button>
-            );
-          },
-        )}
+        {PANELS.filter(panel => panel.showButton?.(panelContext) ?? true).map(panel => {
+          const badge = panel.badge?.(runtime, panelContext);
+          const Icon = panel.icon;
+          return (
+            <button
+              key={panel.id}
+              ref={node => {
+                registerPanelButton(panel.id, node);
+              }}
+              className={`agents-trigger ${rightPanel === panel.id ? "is-active" : ""} ${badge?.live ? "is-live" : ""}`}
+              type="button"
+              disabled={Boolean(pendingSession)}
+              onClick={() => onTogglePanel(panel.id)}
+              aria-label={badge?.ariaLabel ?? panel.label}
+              aria-controls={panel.ariaId}
+              aria-expanded={rightPanel === panel.id}>
+              <Icon size={16} />
+              <span>{panel.label}</span>
+              {badge?.count !== undefined && <small>{badge.count}</small>}
+            </button>
+          );
+        })}
         <button
           className="icon-button"
           onClick={onToggleTheme}
-          aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}
-        >
+          aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
           {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
         </button>
       </div>

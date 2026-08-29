@@ -35,32 +35,13 @@ const MAX_IMAGES = 4;
 const MAX_TEXT_FILES = 100;
 const MAX_TEXT_FILE_TOTAL_BYTES = 10 * 1024 * 1024;
 const commandNames = new Set<string>(COMMAND_NAMES);
-const thinkingLevels = new Set([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
-const extensionPackageName =
-  /^npm:(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)(?:@[^\s]+)?$/i;
-const extensionGitSource =
-  /^(?:git:(?:[^\s]+)|(?:https?|ssh|git):\/\/[^\s]+)$/i;
-const imageMimeTypes = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
+const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const extensionPackageName = /^npm:(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)(?:@[^\s]+)?$/i;
+const extensionGitSource = /^(?:git:(?:[^\s]+)|(?:https?|ssh|git):\/\/[^\s]+)$/i;
+const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const runtimeStates = new Set(["sleeping", "idle", "running", "attention"]);
 const memoryScopes = new Set(["user", "project"]);
-const memoryAuthorities = new Set([
-  "user_instruction",
-  "project_contract",
-  "imported",
-]);
+const memoryAuthorities = new Set(["user_instruction", "project_contract", "imported"]);
 const memoryOrigins = new Set(["user", "agent", "migration"]);
 const memoryDispositions = new Set([
   "archival",
@@ -70,35 +51,12 @@ const memoryDispositions = new Set([
   "superseded",
   "revoked",
 ]);
-const memoryEnforcementAuthorities = new Set([
-  "context_only",
-  "warning",
-  "validation",
-  "blocking_guard",
-]);
-const memoryNoteId =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const delegatedAgentKinds = new Set([
-  "advisor",
-  "grunt",
-  "repo_scout",
-  "web_scout",
-  "spawn_agent",
-  "spawn_session",
-]);
+const memoryEnforcementAuthorities = new Set(["context_only", "warning", "validation", "blocking_guard"]);
+const memoryNoteId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session"]);
 const workspaceModes = new Set(["checkout", "worktree", "local"]);
-const sessionWorkspaceModes = new Set([
-  "worktree",
-  "checkout",
-  "local",
-  "non-git",
-]);
-const inheritedWorkspaceModes = new Set([
-  "inherit",
-  "checkout",
-  "worktree",
-  "local",
-]);
+const sessionWorkspaceModes = new Set(["worktree", "checkout", "local", "non-git"]);
+const inheritedWorkspaceModes = new Set(["inherit", "checkout", "worktree", "local"]);
 const toolStatuses = new Set(["running", "completed", "failed"]);
 const healthStatuses = new Set(["healthy", "degraded", "unavailable"]);
 const policyToggles = new Set(["inherit", "enabled", "disabled"]);
@@ -107,19 +65,14 @@ const sieveLatestModes = new Set(["enabled", "observe"]);
 const sieveProjectionModes = new Set(["stable", "legacy", "standard-v2"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
-export type ValidationResult<T> =
-  { ok: true; value: T } | { ok: false; error: string };
+export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function identifier(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_ID_LENGTH
-  );
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH;
 }
 
 function generation(value: unknown): value is number {
@@ -127,16 +80,13 @@ function generation(value: unknown): value is number {
 }
 
 function boundedString(value: unknown, maximum = 200): value is string {
-  return (
-    typeof value === "string" && value.length > 0 && value.length <= maximum
-  );
+  return typeof value === "string" && value.length > 0 && value.length <= maximum;
 }
 
 function validOptionalToolTiming(value: Record<string, unknown>): boolean {
   return (
     (value.startedAt === undefined ||
-      (typeof value.startedAt === "string" &&
-        !Number.isNaN(Date.parse(value.startedAt)))) &&
+      (typeof value.startedAt === "string" && !Number.isNaN(Date.parse(value.startedAt)))) &&
     (value.durationMs === undefined ||
       (Number.isSafeInteger(value.durationMs) &&
         (value.durationMs as number) >= 0 &&
@@ -150,7 +100,7 @@ function validMessageAttachments(value: unknown): boolean {
     (Array.isArray(value) &&
       value.length <= MAX_IMAGES + MAX_TEXT_FILES &&
       value.every(
-        (attachment) =>
+        attachment =>
           record(attachment) &&
           identifier(attachment.sourceEntryId) &&
           Number.isSafeInteger(attachment.index) &&
@@ -172,8 +122,7 @@ function validMessageAttachments(value: unknown): boolean {
 
 function validImages(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES)
-    return false;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES) return false;
   let totalBytes = 0;
   for (const image of value) {
     if (
@@ -185,11 +134,7 @@ function validImages(value: unknown): boolean {
       !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)
     )
       return false;
-    const padding = image.data.endsWith("==")
-      ? 2
-      : image.data.endsWith("=")
-        ? 1
-        : 0;
+    const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
     const bytes = (image.data.length / 4) * 3 - padding;
     if (bytes <= 0 || bytes > MAX_IMAGE_BYTES) return false;
     totalBytes += bytes;
@@ -199,12 +144,7 @@ function validImages(value: unknown): boolean {
 
 function validTextFiles(value: unknown): boolean {
   if (value === undefined) return true;
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.length > MAX_TEXT_FILES
-  )
-    return false;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TEXT_FILES) return false;
   let totalBytes = 0;
   for (const file of value) {
     if (
@@ -218,8 +158,7 @@ function validTextFiles(value: unknown): boolean {
       file.text.includes("\0") ||
       !Number.isSafeInteger(file.size) ||
       (file.size as number) <= 0 ||
-      (file.mimeType !== undefined &&
-        (typeof file.mimeType !== "string" || file.mimeType.length > 120))
+      (file.mimeType !== undefined && (typeof file.mimeType !== "string" || file.mimeType.length > 120))
     )
       return false;
     const bytes = new TextEncoder().encode(file.text).byteLength;
@@ -237,7 +176,7 @@ function validVerifyPolicy(value: unknown, allowInherit = false): boolean {
     value.mode === "selected" &&
     Array.isArray(value.checks) &&
     value.checks.length <= 6 &&
-    value.checks.every((check) => boundedString(check, 100)) &&
+    value.checks.every(check => boundedString(check, 100)) &&
     new Set(value.checks).size === value.checks.length
   );
 }
@@ -246,9 +185,7 @@ function validDialogTimeout(value: unknown, allowInherit = false): boolean {
   return (
     value === null ||
     (allowInherit && value === "inherit") ||
-    (Number.isSafeInteger(value) &&
-      (value as number) >= 15 &&
-      (value as number) <= 86_400)
+    (Number.isSafeInteger(value) && (value as number) >= 15 && (value as number) <= 86_400)
   );
 }
 
@@ -257,16 +194,12 @@ function validToolOverrides(value: unknown): boolean {
     record(value) &&
     Object.keys(value).length <= 256 &&
     Object.entries(value).every(
-      ([tool, mode]) =>
-        boundedString(tool, 200) &&
-        (mode === "active" || mode === "deferred" || mode === "disabled"),
+      ([tool, mode]) => boundedString(tool, 200) && (mode === "active" || mode === "deferred" || mode === "disabled"),
     )
   );
 }
 
-export function validHookSettings(
-  value: unknown,
-): value is HookSettingsReadModel {
+export function validHookSettings(value: unknown): value is HookSettingsReadModel {
   if (
     !record(value) ||
     Object.keys(value).length !== 2 ||
@@ -292,14 +225,8 @@ export function validHookSettings(
         !boundedString(source.name, 200) ||
         (source.kind !== "file" && source.kind !== "text") ||
         typeof source.content !== "string" ||
-        (source.reinjectOnCompaction !== undefined &&
-          typeof source.reinjectOnCompaction !== "boolean") ||
-        Object.keys(source).some(
-          (key) =>
-            !["id", "name", "kind", "content", "reinjectOnCompaction"].includes(
-              key,
-            ),
-        )
+        (source.reinjectOnCompaction !== undefined && typeof source.reinjectOnCompaction !== "boolean") ||
+        Object.keys(source).some(key => !["id", "name", "kind", "content", "reinjectOnCompaction"].includes(key))
       )
         return false;
       const bytes = new TextEncoder().encode(source.content).byteLength;
@@ -309,26 +236,15 @@ export function validHookSettings(
     }
     return true;
   };
-  return (
-    hook(value.sessionStart) &&
-    hook(value.beforeAgentStart) &&
-    totalBytes <= 96 * 1024
-  );
+  return hook(value.sessionStart) && hook(value.beforeAgentStart) && totalBytes <= 96 * 1024;
 }
 
-export function validPackageSettings(
-  value: unknown,
-): value is PackageSettingsReadModel {
+export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
-  if (value.kind === "pylon-core")
-    return typeof value.lineEditEnabled === "boolean";
-  const modelMode =
-    value.mode === "disabled" ||
-    value.mode === "session" ||
-    value.mode === "model";
+  if (value.kind === "pylon-core") return typeof value.lineEditEnabled === "boolean";
+  const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
   const model = value.model === undefined || boundedString(value.model, 400);
-  const thinking =
-    value.thinking === undefined || thinkingLevels.has(String(value.thinking));
+  const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));
   if (value.kind === "advisor") {
     return (
       modelMode &&
@@ -351,7 +267,7 @@ export function validPackageSettings(
     Array.isArray(levels) &&
     levels.length > 0 &&
     new Set(levels).size === levels.length &&
-    levels.every((level) => thinkingLevels.has(String(level)));
+    levels.every(level => thinkingLevels.has(String(level)));
   if (value.kind === "grunt") {
     return (
       modelMode &&
@@ -372,18 +288,15 @@ export function validPackageSettings(
       Number.isSafeInteger(value.keepRecentTokens) &&
       (value.keepRecentTokens as number) >= 1_000 &&
       (value.keepRecentTokens as number) <= 50_000 &&
-      ["planner", "executor", "memoryReviewer", "compactionReviewer"].every(
-        (key) => {
-          const profile = value[key];
-          return (
-            profile === undefined ||
-            (record(profile) &&
-              boundedString(profile.model, 400) &&
-              (profile.thinking === undefined ||
-                thinkingLevels.has(String(profile.thinking))))
-          );
-        },
-      )
+      ["planner", "executor", "memoryReviewer", "compactionReviewer"].every(key => {
+        const profile = value[key];
+        return (
+          profile === undefined ||
+          (record(profile) &&
+            boundedString(profile.model, 400) &&
+            (profile.thinking === undefined || thinkingLevels.has(String(profile.thinking))))
+        );
+      })
     );
   }
   if (value.kind === "sieve") {
@@ -399,79 +312,53 @@ export function validPackageSettings(
       Number.isSafeInteger(value.rolloverLowMultiplier) &&
       (value.rolloverLowMultiplier as number) >= 1 &&
       (value.rolloverHighMultiplier as number) <= 64 &&
-      (value.rolloverHighMultiplier as number) >
-        (value.rolloverLowMultiplier as number)
+      (value.rolloverHighMultiplier as number) > (value.rolloverLowMultiplier as number)
     );
   }
   if (value.kind === "helios") return typeof value.headed === "boolean";
-  if (value.kind === "timeline")
-    return typeof value.editRollbackDefault === "boolean";
+  if (value.kind === "timeline") return typeof value.editRollbackDefault === "boolean";
   return (
     value.kind === "spawn" &&
-    (value.agentAvailability === "deferred" ||
-      value.agentAvailability === "active") &&
-    (value.sessionAvailability === "deferred" ||
-      value.sessionAvailability === "active") &&
+    (value.agentAvailability === "deferred" || value.agentAvailability === "active") &&
+    (value.sessionAvailability === "deferred" || value.sessionAvailability === "active") &&
     (value.models === undefined ||
       (Array.isArray(value.models) &&
         value.models.length > 0 &&
         new Set(value.models).size === value.models.length &&
-        value.models.every((model) => boundedString(model, 400)))) &&
+        value.models.every(model => boundedString(model, 400)))) &&
     validThinkingList(value.agentThinkingLevels)
   );
 }
 
 /** Validates prompt text, attachments, and the actions that target one prompt. */
-function commandPromptError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
-  if (
-    ["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(type)
-  ) {
+function commandPromptError(value: Record<string, unknown>, type: string): string | undefined {
+  if (["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(type)) {
     if (
       typeof value.message !== "string" ||
       value.message.length > MAX_MESSAGE_LENGTH ||
-      (!value.message.length &&
-        !Array.isArray(value.images) &&
-        !Array.isArray(value.files))
+      (!value.message.length && !Array.isArray(value.images) && !Array.isArray(value.files))
     ) {
       return "invalid message";
     }
     if (!validImages(value.images)) return "invalid images";
     if (!validTextFiles(value.files)) return "invalid text files";
   }
-  if (
-    ["prompt", "queuePrompt"].includes(type) &&
-    value.planMode !== undefined &&
-    typeof value.planMode !== "boolean"
-  ) {
+  if (["prompt", "queuePrompt"].includes(type) && value.planMode !== undefined && typeof value.planMode !== "boolean") {
     return "invalid prompt mode";
   }
-  if (
-    ["restoreQueuedPrompt", "steerQueuedPrompt"].includes(type) &&
-    !identifier(value.queueId)
-  ) {
+  if (["restoreQueuedPrompt", "steerQueuedPrompt"].includes(type) && !identifier(value.queueId)) {
     return "invalid queueId";
   }
   if (type === "continuityPlanAction") {
-    if (
-      !Number.isSafeInteger(value.expectedRevision) ||
-      Number(value.expectedRevision) < 1
-    )
+    if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 1)
       return "invalid plan revision";
     if (value.action === "approve") {
-      if (typeof value.resetContext !== "boolean")
-        return "invalid plan approval";
+      if (typeof value.resetContext !== "boolean") return "invalid plan approval";
     } else if (value.action === "requestChanges") {
-      if (!boundedString(value.feedback, 1_000) || !value.feedback.trim())
-        return "invalid plan feedback";
+      if (!boundedString(value.feedback, 1_000) || !value.feedback.trim()) return "invalid plan feedback";
     } else return "invalid plan action";
   }
-  if (
-    type === "editPrompt" &&
-    (!identifier(value.entryId) || typeof value.rollbackFiles !== "boolean")
-  ) {
+  if (type === "editPrompt" && (!identifier(value.entryId) || typeof value.rollbackFiles !== "boolean")) {
     return "invalid prompt edit";
   }
   if (type === "rewindPrompt" && !identifier(value.entryId)) {
@@ -481,10 +368,7 @@ function commandPromptError(
 }
 
 /** Validates session, project, fork, and new-session targets. */
-function commandTargetError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandTargetError(value: Record<string, unknown>, type: string): string | undefined {
   if (
     [
       "switchSession",
@@ -515,16 +399,11 @@ function commandTargetError(
   }
   if (
     type === "renameProject" &&
-    (!boundedString(value.name) ||
-      !value.name.trim() ||
-      /[\u0000-\u001f\u007f]/.test(value.name))
+    (!boundedString(value.name) || !value.name.trim() || /[\u0000-\u001f\u007f]/.test(value.name))
   ) {
     return "invalid project name";
   }
-  if (
-    type === "renameSession" &&
-    (!boundedString(value.name) || !value.name.trim())
-  ) {
+  if (type === "renameSession" && (!boundedString(value.name) || !value.name.trim())) {
     return "invalid session name";
   }
   if (type === "setSessionActive" && typeof value.active !== "boolean") {
@@ -533,18 +412,10 @@ function commandTargetError(
   if (type === "setSessionPinned" && typeof value.pinned !== "boolean") {
     return "invalid session pinned state";
   }
-  if (
-    type === "reorderProject" &&
-    value.beforeProjectId !== undefined &&
-    !identifier(value.beforeProjectId)
-  ) {
+  if (type === "reorderProject" && value.beforeProjectId !== undefined && !identifier(value.beforeProjectId)) {
     return "invalid project reorder target";
   }
-  if (
-    type === "reorderActiveSession" &&
-    value.beforeSessionId !== undefined &&
-    !identifier(value.beforeSessionId)
-  ) {
+  if (type === "reorderActiveSession" && value.beforeSessionId !== undefined && !identifier(value.beforeSessionId)) {
     return "invalid active session reorder target";
   }
   if (type === "fork") {
@@ -552,65 +423,34 @@ function commandTargetError(
     if (!boundedString(value.name, 200) || !value.name.trim()) {
       return "invalid fork name";
     }
-    if (
-      value.position !== undefined &&
-      value.position !== "before" &&
-      value.position !== "at"
-    ) {
+    if (value.position !== undefined && value.position !== "before" && value.position !== "at") {
       return "invalid fork position";
     }
-    if (
-      value.mode !== undefined &&
-      value.mode !== "conversation" &&
-      value.mode !== "timeline"
-    ) {
+    if (value.mode !== undefined && value.mode !== "conversation" && value.mode !== "timeline") {
       return "invalid fork mode";
     }
   }
-  if (
-    type === "newSession" &&
-    value.parentSessionId !== undefined &&
-    !identifier(value.parentSessionId)
-  ) {
+  if (type === "newSession" && value.parentSessionId !== undefined && !identifier(value.parentSessionId)) {
     return "invalid parentSessionId";
   }
-  if (
-    type === "newSession" &&
-    value.projectId !== undefined &&
-    !identifier(value.projectId)
-  ) {
+  if (type === "newSession" && value.projectId !== undefined && !identifier(value.projectId)) {
     return "invalid projectId";
   }
-  if (
-    type === "newSession" &&
-    value.projectId !== undefined &&
-    value.parentSessionId !== undefined
-  ) {
+  if (type === "newSession" && value.projectId !== undefined && value.parentSessionId !== undefined) {
     return "newSession accepts either projectId or parentSessionId";
   }
   return undefined;
 }
 
 /** Validates timeline checkpoint commands. */
-function commandTimelineError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandTimelineError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "timeline") {
-    if (
-      value.action !== "restore" &&
-      value.action !== "fork" &&
-      value.action !== "clear"
-    ) {
+    if (value.action !== "restore" && value.action !== "fork" && value.action !== "clear") {
       return "invalid timeline action";
     }
     if (value.action === "clear") {
-      if (value.checkpointId !== undefined)
-        return "clear does not accept a checkpointId";
-    } else if (
-      !identifier(value.checkpointId) ||
-      !/^[A-Za-z0-9:._-]+$/.test(value.checkpointId)
-    ) {
+      if (value.checkpointId !== undefined) return "clear does not accept a checkpointId";
+    } else if (!identifier(value.checkpointId) || !/^[A-Za-z0-9:._-]+$/.test(value.checkpointId)) {
       return "invalid checkpointId";
     }
   }
@@ -618,43 +458,30 @@ function commandTimelineError(
 }
 
 /** Validates package, extension, trust, and hook commands. */
-function commandPackageError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandPackageError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "setPackageEnabled") {
     if (!identifier(value.packageId)) return "invalid packageId";
-    if (typeof value.enabled !== "boolean")
-      return "invalid package enabled state";
+    if (typeof value.enabled !== "boolean") return "invalid package enabled state";
   }
   if (type === "updatePackageSettings") {
     if (!identifier(value.packageId)) return "invalid packageId";
-    if (!validPackageSettings(value.settings))
-      return "invalid package settings";
+    if (!validPackageSettings(value.settings)) return "invalid package settings";
   }
   if (type === "setExtensionEnabled") {
-    if (!identifier(value.extensionId) || typeof value.enabled !== "boolean")
-      return "invalid extension enabled state";
+    if (!identifier(value.extensionId) || typeof value.enabled !== "boolean") return "invalid extension enabled state";
   }
   if (type === "installExtensionPackage" || type === "removeExtensionPackage") {
-    if (value.scope !== "user" && value.scope !== "project")
-      return "invalid extension package scope";
+    if (value.scope !== "user" && value.scope !== "project") return "invalid extension package scope";
     if (
       value.confirmed !== true ||
       typeof value.source !== "string" ||
       value.source.length > 500 ||
-      !(
-        extensionPackageName.test(value.source) ||
-        extensionGitSource.test(value.source)
-      )
+      !(extensionPackageName.test(value.source) || extensionGitSource.test(value.source))
     ) {
       return "invalid extension package source";
     }
   }
-  if (
-    type === "setProjectTrust" &&
-    (typeof value.trusted !== "boolean" || value.confirmed !== true)
-  ) {
+  if (type === "setProjectTrust" && (typeof value.trusted !== "boolean" || value.confirmed !== true)) {
     return "invalid project trust decision";
   }
   if (type === "reloadExtensions" && value.confirmed !== true) {
@@ -665,8 +492,7 @@ function commandPackageError(
   }
   if (
     type === "updateProjectWorktreeSettings" &&
-    (typeof value.setupCommand !== "string" ||
-      value.setupCommand.length > 2_000)
+    (typeof value.setupCommand !== "string" || value.setupCommand.length > 2_000)
   ) {
     return "invalid worktree setup command";
   }
@@ -674,38 +500,21 @@ function commandPackageError(
 }
 
 /** Validates runtime and tool policy updates. */
-function commandPolicyError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandPolicyError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "updateRuntimePolicy") {
-    if (
-      value.scope !== "global" &&
-      value.scope !== "project" &&
-      value.scope !== "session"
-    ) {
+    if (value.scope !== "global" && value.scope !== "project" && value.scope !== "session") {
       return "invalid runtime policy scope";
     }
-    if (
-      !Number.isSafeInteger(value.expectedRevision) ||
-      (value.expectedRevision as number) < 0
-    ) {
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
       return "invalid runtime policy revision";
     }
     if (
-      !validVerifyPolicy(
-        value.verify,
-        value.scope === "global" || value.scope === "session",
-      ) ||
-      (value.scope === "global" &&
-        (!record(value.verify) || value.verify.mode !== "inherit"))
+      !validVerifyPolicy(value.verify, value.scope === "global" || value.scope === "session") ||
+      (value.scope === "global" && (!record(value.verify) || value.verify.mode !== "inherit"))
     ) {
       return "invalid Verify policy";
     }
-    if (
-      !policyToggles.has(String(value.timeline)) ||
-      (value.scope === "global" && value.timeline === "inherit")
-    ) {
+    if (!policyToggles.has(String(value.timeline)) || (value.scope === "global" && value.timeline === "inherit")) {
       return "invalid Timeline policy";
     }
     if (
@@ -722,35 +531,23 @@ function commandPolicyError(
       return "invalid workspace policy";
     }
     if (
-      !validDialogTimeout(
-        value.guardTimeoutSeconds,
-        value.scope !== "global",
-      ) ||
+      !validDialogTimeout(value.guardTimeoutSeconds, value.scope !== "global") ||
       !validDialogTimeout(value.clarifyTimeoutSeconds, value.scope !== "global")
     ) {
       return "invalid dialog timeout policy";
     }
   }
   if (type === "updateToolPolicy") {
-    if (
-      value.scope !== "global" &&
-      value.scope !== "project" &&
-      value.scope !== "session"
-    ) {
+    if (value.scope !== "global" && value.scope !== "project" && value.scope !== "session") {
       return "invalid tool policy scope";
     }
     if (
       !boundedString(value.tool, 200) ||
-      !["inherit", "active", "deferred", "disabled"].includes(
-        String(value.mode),
-      )
+      !["inherit", "active", "deferred", "disabled"].includes(String(value.mode))
     ) {
       return "invalid tool policy";
     }
-    if (
-      !Number.isSafeInteger(value.expectedRevision) ||
-      (value.expectedRevision as number) < 0
-    ) {
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
       return "invalid tool policy revision";
     }
   }
@@ -758,30 +555,17 @@ function commandPolicyError(
 }
 
 /** Validates model, thinking level, and session control commands. */
-function commandControlsError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandControlsError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "dismissCommandResult" && !identifier(value.resultId)) {
     return "invalid command result";
   }
-  if (
-    type === "handoffSession" &&
-    value.destination !== "checkout" &&
-    value.destination !== "worktree"
-  ) {
+  if (type === "handoffSession" && value.destination !== "checkout" && value.destination !== "worktree") {
     return "invalid handoff destination";
   }
-  if (
-    type === "applySessionChanges" &&
-    !boundedString(value.expectedRevision, 128)
-  ) {
+  if (type === "applySessionChanges" && !boundedString(value.expectedRevision, 128)) {
     return "invalid workspace revision";
   }
-  if (
-    type === "setModel" &&
-    (!boundedString(value.provider) || !boundedString(value.modelId))
-  ) {
+  if (type === "setModel" && (!boundedString(value.provider) || !boundedString(value.modelId))) {
     return "invalid model";
   }
   if (type === "setThinkingLevel" && !thinkingLevels.has(String(value.level))) {
@@ -795,56 +579,30 @@ function commandControlsError(
   ) {
     return "invalid session controls";
   }
-  if (
-    (type === "startProviderLogin" || type === "logoutProvider") &&
-    !boundedString(value.provider, 200)
-  ) {
+  if ((type === "startProviderLogin" || type === "logoutProvider") && !boundedString(value.provider, 200)) {
     return "invalid provider";
   }
-  if (
-    type === "startProviderLogin" &&
-    value.authType !== "api_key" &&
-    value.authType !== "oauth"
-  ) {
+  if (type === "startProviderLogin" && value.authType !== "api_key" && value.authType !== "oauth") {
     return "invalid provider authentication type";
   }
   return undefined;
 }
 
 /** Validates continuity memory commands. */
-function commandMemoryError(
-  value: Record<string, unknown>,
-  type: string,
-): string | undefined {
+function commandMemoryError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "migrateContinuityMemory") {
     const allowed = new Set(["type", "commandId", "expectedGeneration"]);
-    if (Object.keys(value).some((key) => !allowed.has(key))) {
+    if (Object.keys(value).some(key => !allowed.has(key))) {
       return "invalid memory migration";
     }
   }
   if (type === "updateContinuityMemory" || type === "deleteContinuityMemory") {
     const allowed =
       type === "updateContinuityMemory"
-        ? new Set([
-            "type",
-            "commandId",
-            "expectedGeneration",
-            "scope",
-            "id",
-            "trigger",
-            "guidance",
-            "expectedRevision",
-          ])
-        : new Set([
-            "type",
-            "commandId",
-            "expectedGeneration",
-            "scope",
-            "id",
-            "expectedRevision",
-          ]);
+        ? new Set(["type", "commandId", "expectedGeneration", "scope", "id", "trigger", "guidance", "expectedRevision"])
+        : new Set(["type", "commandId", "expectedGeneration", "scope", "id", "expectedRevision"]);
     if (
-      Object.keys(value).some((key) => !allowed.has(key)) ||
+      Object.keys(value).some(key => !allowed.has(key)) ||
       !memoryScopes.has(String(value.scope)) ||
       typeof value.id !== "string" ||
       value.id.length > MAX_ID_LENGTH ||
@@ -891,10 +649,8 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   if (typeof value.type !== "string" || !commandNames.has(value.type)) {
     return { ok: false, error: "unknown command type" };
   }
-  if (!identifier(value.commandId))
-    return { ok: false, error: "invalid commandId" };
-  if (!generation(value.expectedGeneration))
-    return { ok: false, error: "invalid expectedGeneration" };
+  if (!identifier(value.commandId)) return { ok: false, error: "invalid commandId" };
+  if (!generation(value.expectedGeneration)) return { ok: false, error: "invalid expectedGeneration" };
 
   for (const validate of commandValidators) {
     const error = validate(value, value.type);
@@ -903,9 +659,7 @@ export function validateCommand(value: unknown): ValidationResult<WebCommand> {
   return { ok: true, value: value as unknown as WebCommand };
 }
 
-export function isHookSettingsSnapshot(
-  value: unknown,
-): value is HookSettingsSnapshot {
+export function isHookSettingsSnapshot(value: unknown): value is HookSettingsSnapshot {
   return (
     record(value) &&
     value.protocolVersion === PROTOCOL_VERSION &&
@@ -914,9 +668,7 @@ export function isHookSettingsSnapshot(
   );
 }
 
-export function isPackageListSnapshot(
-  value: unknown,
-): value is PackageListSnapshot {
+export function isPackageListSnapshot(value: unknown): value is PackageListSnapshot {
   if (
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
@@ -926,7 +678,7 @@ export function isPackageListSnapshot(
   )
     return false;
   return value.packages.every(
-    (item) =>
+    item =>
       record(item) &&
       identifier(item.id) &&
       typeof item.name === "string" &&
@@ -941,14 +693,11 @@ export function isPackageListSnapshot(
       (item.extensionCount as number) > 0 &&
       (item.extensionCount as number) <= 50 &&
       (item.settings === undefined || validPackageSettings(item.settings)) &&
-      (item.error === undefined ||
-        (typeof item.error === "string" && item.error.length <= 500)),
+      (item.error === undefined || (typeof item.error === "string" && item.error.length <= 500)),
   );
 }
 
-export function isExtensionListSnapshot(
-  value: unknown,
-): value is ExtensionListSnapshot {
+export function isExtensionListSnapshot(value: unknown): value is ExtensionListSnapshot {
   if (
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
@@ -963,15 +712,12 @@ export function isExtensionListSnapshot(
     return false;
   if (
     !value.packages.every(
-      (item) =>
-        record(item) &&
-        boundedString(item.source, 500) &&
-        (item.scope === "user" || item.scope === "project"),
+      item => record(item) && boundedString(item.source, 500) && (item.scope === "user" || item.scope === "project"),
     )
   )
     return false;
   return value.extensions.every(
-    (item) =>
+    item =>
       record(item) &&
       identifier(item.id) &&
       (item.scope === "user" || item.scope === "project") &&
@@ -980,8 +726,7 @@ export function isExtensionListSnapshot(
       (item.origin === "package" || item.origin === "top-level") &&
       typeof item.enabled === "boolean" &&
       typeof item.active === "boolean" &&
-      (item.loadError === undefined ||
-        (typeof item.loadError === "string" && item.loadError.length <= 500)),
+      (item.loadError === undefined || (typeof item.loadError === "string" && item.loadError.length <= 500)),
   );
 }
 
@@ -1003,22 +748,20 @@ export function isWebEvent(value: unknown): value is WebEvent {
   );
 }
 
-export function isSessionListSnapshot(
-  value: unknown,
-): value is SessionListSnapshot {
+export function isSessionListSnapshot(value: unknown): value is SessionListSnapshot {
   if (
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
     !generation(value.sessionGeneration) ||
     !Array.isArray(value.activeSessions) ||
     value.activeSessions.length > 100 ||
-    !value.activeSessions.every((session) => validSessionSummary(session)) ||
+    !value.activeSessions.every(session => validSessionSummary(session)) ||
     !Array.isArray(value.projects) ||
     value.projects.length > 100
   )
     return false;
   return value.projects.every(
-    (project) =>
+    project =>
       record(project) &&
       identifier(project.id) &&
       typeof project.label === "string" &&
@@ -1030,9 +773,7 @@ export function isSessionListSnapshot(
       (project.nextCursor === undefined || identifier(project.nextCursor)) &&
       Array.isArray(project.sessions) &&
       project.sessions.length <= 100 &&
-      project.sessions.every((session) =>
-        validSessionSummary(session, project.id as string),
-      ),
+      project.sessions.every(session => validSessionSummary(session, project.id as string)),
   );
 }
 
@@ -1044,13 +785,11 @@ function validWorkspacePath(value: unknown): value is string {
     !value.startsWith("/") &&
     !value.includes("\\") &&
     !/^[A-Za-z]:/.test(value) &&
-    value.split("/").every((part) => part && part !== "." && part !== "..")
+    value.split("/").every(part => part && part !== "." && part !== "..")
   );
 }
 
-export function isWorkspaceFilePage(
-  value: unknown,
-): value is WorkspaceFilePage {
+export function isWorkspaceFilePage(value: unknown): value is WorkspaceFilePage {
   if (
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
@@ -1066,37 +805,26 @@ export function isWorkspaceFilePage(
   )
     return false;
   return value.files.every(
-    (file) =>
+    file =>
       record(file) &&
       validWorkspacePath(file.path) &&
-      (file.status === undefined ||
-        ["added", "modified", "deleted"].includes(String(file.status))) &&
+      (file.status === undefined || ["added", "modified", "deleted"].includes(String(file.status))) &&
       (file.binary === undefined || typeof file.binary === "boolean") &&
-      (file.additions === undefined ||
-        (Number.isSafeInteger(file.additions) &&
-          (file.additions as number) >= 0)) &&
-      (file.deletions === undefined ||
-        (Number.isSafeInteger(file.deletions) &&
-          (file.deletions as number) >= 0)) &&
+      (file.additions === undefined || (Number.isSafeInteger(file.additions) && (file.additions as number) >= 0)) &&
+      (file.deletions === undefined || (Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0)) &&
       (file.kind === undefined || file.kind === "submodule"),
   );
 }
 
-export function isWorkspaceFileContent(
-  value: unknown,
-): value is WorkspaceFileContent {
+export function isWorkspaceFileContent(value: unknown): value is WorkspaceFileContent {
   return (
     record(value) &&
     value.protocolVersion === PROTOCOL_VERSION &&
     generation(value.sessionGeneration) &&
     boundedString(value.revision, 128) &&
     validWorkspacePath(value.path) &&
-    ["available", "deleted", "binary", "oversized"].includes(
-      String(value.state),
-    ) &&
-    (value.text === undefined ||
-      (typeof value.text === "string" &&
-        value.text.length <= 2 * 1024 * 1024)) &&
+    ["available", "deleted", "binary", "oversized"].includes(String(value.state)) &&
+    (value.text === undefined || (typeof value.text === "string" && value.text.length <= 2 * 1024 * 1024)) &&
     (value.truncated === undefined || typeof value.truncated === "boolean")
   );
 }
@@ -1106,24 +834,11 @@ function validJsonCell(value: unknown, depth = 0): boolean {
   if (typeof value === "number") return Number.isFinite(value);
   if (typeof value === "string") return value.length <= 64 * 1024;
   if (depth >= 6) return false;
-  if (Array.isArray(value))
-    return (
-      value.length <= 100 &&
-      value.every((item) => validJsonCell(item, depth + 1))
-    );
-  if (
-    !record(value) ||
-    (Object.getPrototypeOf(value) !== Object.prototype &&
-      Object.getPrototypeOf(value) !== null)
-  )
+  if (Array.isArray(value)) return value.length <= 100 && value.every(item => validJsonCell(item, depth + 1));
+  if (!record(value) || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null))
     return false;
   const entries = Object.entries(value);
-  return (
-    entries.length <= 100 &&
-    entries.every(
-      ([key, item]) => key.length <= 500 && validJsonCell(item, depth + 1),
-    )
-  );
+  return entries.length <= 100 && entries.every(([key, item]) => key.length <= 500 && validJsonCell(item, depth + 1));
 }
 
 export function isPapercutListPage(value: unknown): value is PapercutListPage {
@@ -1147,17 +862,14 @@ export function isPapercutListPage(value: unknown): value is PapercutListPage {
     (value.total as number) > 1_000 ||
     !Array.isArray(value.records) ||
     value.records.length > (value.limit as number) ||
-    value.records.length >
-      Math.max(0, (value.total as number) - (value.offset as number))
+    value.records.length > Math.max(0, (value.total as number) - (value.offset as number))
   )
     return false;
   const validTimestamp = (item: unknown) =>
-    typeof item === "string" &&
-    item.length <= 64 &&
-    !Number.isNaN(Date.parse(item));
+    typeof item === "string" && item.length <= 64 && !Number.isNaN(Date.parse(item));
   if (
     !value.records.every(
-      (item) =>
+      item =>
         record(item) &&
         typeof item.id === "string" &&
         memoryNoteId.test(item.id) &&
@@ -1170,13 +882,9 @@ export function isPapercutListPage(value: unknown): value is PapercutListPage {
         validTimestamp(item.createdAt) &&
         validTimestamp(item.updatedAt) &&
         validTimestamp(item.lastSeenAt) &&
-        (item.resolution === undefined ||
-          (typeof item.resolution === "string" &&
-            item.resolution.length <= 500)) &&
+        (item.resolution === undefined || (typeof item.resolution === "string" && item.resolution.length <= 500)) &&
         (item.resolvedAt === undefined || validTimestamp(item.resolvedAt)) &&
-        (item.dismissal === undefined ||
-          (typeof item.dismissal === "string" &&
-            item.dismissal.length <= 500)) &&
+        (item.dismissal === undefined || (typeof item.dismissal === "string" && item.dismissal.length <= 500)) &&
         (item.dismissedAt === undefined || validTimestamp(item.dismissedAt)),
     )
   )
@@ -1208,31 +916,26 @@ export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
     !Number.isSafeInteger(value.total) ||
     (value.total as number) < 0 ||
     (value.total as number) > 10_000 ||
-    (value.returned as number) >
-      Math.max(0, (value.total as number) - (value.offset as number)) ||
+    (value.returned as number) > Math.max(0, (value.total as number) - (value.offset as number)) ||
     typeof value.truncated !== "boolean"
   )
     return false;
   if (
     !value.rows.every(
-      (row) =>
+      row =>
         record(row) &&
-        (Object.getPrototypeOf(row) === Object.prototype ||
-          Object.getPrototypeOf(row) === null) &&
+        (Object.getPrototypeOf(row) === Object.prototype || Object.getPrototypeOf(row) === null) &&
         validJsonCell(row),
     )
   )
     return false;
-  const truncated =
-    (value.offset as number) + (value.returned as number) <
-    (value.total as number);
+  const truncated = (value.offset as number) + (value.returned as number) < (value.total as number);
   return (
     value.truncated === truncated &&
     (truncated
       ? (value.returned as number) > 0 &&
         Number.isSafeInteger(value.next_offset) &&
-        value.next_offset ===
-          (value.offset as number) + (value.returned as number)
+        value.next_offset === (value.offset as number) + (value.returned as number)
       : value.next_offset === null)
   );
 }
@@ -1276,28 +979,18 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
       !boundedString(transaction.state, 100))
   )
     return false;
-  if (
-    value.session.status === "closed" &&
-    (connection !== null || transaction !== null)
-  )
-    return false;
-  if (value.state_version !== null && !boundedString(value.state_version, 128))
-    return false;
+  if (value.session.status === "closed" && (connection !== null || transaction !== null)) return false;
+  if (value.state_version !== null && !boundedString(value.state_version, 128)) return false;
   if (
     value.state_confidence !== null &&
-    ![
-      "authoritative",
-      "transaction_snapshot",
-      "database_reported",
-      "local",
-      "ttl_based",
-      "unknown",
-    ].includes(String(value.state_confidence))
+    !["authoritative", "transaction_snapshot", "database_reported", "local", "ttl_based", "unknown"].includes(
+      String(value.state_confidence),
+    )
   )
     return false;
   if (
     !value.recent_results.every(
-      (item) =>
+      item =>
         record(item) &&
         (item.alias === null || boundedString(item.alias, 200)) &&
         identifier(item.handle) &&
@@ -1309,20 +1002,19 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
     return false;
   if (
     !value.recent_operations.every(
-      (item) =>
+      item =>
         record(item) &&
         identifier(item.handle) &&
         identifier(item.actor_id) &&
         boundedString(item.type, 100) &&
         boundedString(item.status, 100) &&
         (item.affected_rows === null ||
-          (Number.isSafeInteger(item.affected_rows) &&
-            (item.affected_rows as number) >= 0)),
+          (Number.isSafeInteger(item.affected_rows) && (item.affected_rows as number) >= 0)),
     )
   )
     return false;
   return value.history.every(
-    (item) =>
+    item =>
       record(item) &&
       identifier(item.command_id) &&
       typeof item.timestamp === "string" &&
@@ -1331,9 +1023,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
       identifier(item.session_id) &&
       identifier(item.actor_id) &&
       boundedString(item.command, 100) &&
-      (item.sql === null ||
-        (typeof item.sql === "string" &&
-          new TextEncoder().encode(item.sql).byteLength <= 4_096)) &&
+      (item.sql === null || (typeof item.sql === "string" && new TextEncoder().encode(item.sql).byteLength <= 4_096)) &&
       (item.handle === null || identifier(item.handle)) &&
       typeof item.executed === "boolean" &&
       typeof item.cached === "boolean" &&
@@ -1342,9 +1032,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
   );
 }
 
-export function isArchiveListSnapshot(
-  value: unknown,
-): value is ArchiveListSnapshot {
+export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnapshot {
   if (
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
@@ -1360,7 +1048,7 @@ export function isArchiveListSnapshot(
     return false;
   if (
     !value.projects.every(
-      (project) =>
+      project =>
         record(project) &&
         identifier(project.id) &&
         boundedString(project.label, 500) &&
@@ -1372,7 +1060,7 @@ export function isArchiveListSnapshot(
   )
     return false;
   return value.sessions.every(
-    (session) =>
+    session =>
       validSessionSummary(session) &&
       typeof session.archivedAt === "string" &&
       !Number.isNaN(Date.parse(session.archivedAt)),
@@ -1385,14 +1073,12 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     identifier(value.id) &&
     identifier(value.projectId) &&
     (projectId === undefined || value.projectId === projectId) &&
-    (value.name === undefined ||
-      (typeof value.name === "string" && value.name.length <= 200)) &&
+    (value.name === undefined || (typeof value.name === "string" && value.name.length <= 200)) &&
     (value.parentSession === undefined ||
       (record(value.parentSession) &&
         identifier(value.parentSession.id) &&
         boundedString(value.parentSession.title, 200))) &&
-    (value.runningUnderParentSessionId === undefined ||
-      identifier(value.runningUnderParentSessionId)) &&
+    (value.runningUnderParentSessionId === undefined || identifier(value.runningUnderParentSessionId)) &&
     typeof value.cwdLabel === "string" &&
     value.cwdLabel.length <= 500 &&
     typeof value.createdAt === "string" &&
@@ -1400,8 +1086,7 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     typeof value.modifiedAt === "string" &&
     !Number.isNaN(Date.parse(value.modifiedAt)) &&
     (value.workStartedAt === undefined ||
-      (typeof value.workStartedAt === "string" &&
-        !Number.isNaN(Date.parse(value.workStartedAt)))) &&
+      (typeof value.workStartedAt === "string" && !Number.isNaN(Date.parse(value.workStartedAt)))) &&
     Number.isSafeInteger(value.userMessageCount) &&
     (value.userMessageCount as number) >= 0 &&
     typeof value.preview === "string" &&
@@ -1423,43 +1108,27 @@ function validDelegatedRun(value: unknown): boolean {
     !Array.isArray(value.activity)
   )
     return false;
-  if (
-    value.request !== undefined &&
-    (typeof value.request !== "string" || value.request.length > 8 * 1024)
-  )
+  if (value.request !== undefined && (typeof value.request !== "string" || value.request.length > 8 * 1024))
     return false;
   if (
     value.response !== undefined &&
-    (typeof value.response !== "string" ||
-      value.response.length > MAX_MESSAGE_LENGTH)
+    (typeof value.response !== "string" || value.response.length > MAX_MESSAGE_LENGTH)
   )
     return false;
-  if (value.agentName !== undefined && !boundedString(value.agentName, 24))
-    return false;
+  if (value.agentName !== undefined && !boundedString(value.agentName, 24)) return false;
   if (
     value.startedAt !== undefined &&
-    (typeof value.startedAt !== "string" ||
-      Number.isNaN(Date.parse(value.startedAt)))
+    (typeof value.startedAt !== "string" || Number.isNaN(Date.parse(value.startedAt)))
   )
     return false;
-  if (
-    value.modelName !== undefined &&
-    (typeof value.modelName !== "string" || value.modelName.length > 200)
-  )
+  if (value.modelName !== undefined && (typeof value.modelName !== "string" || value.modelName.length > 200))
     return false;
-  if (
-    value.thinkingLevel !== undefined &&
-    !thinkingLevels.has(String(value.thinkingLevel))
-  )
-    return false;
-  const spawned =
-    value.kind === "spawn_agent" || value.kind === "spawn_session";
+  if (value.thinkingLevel !== undefined && !thinkingLevels.has(String(value.thinkingLevel))) return false;
+  const spawned = value.kind === "spawn_agent" || value.kind === "spawn_session";
   if (spawned !== spawnExecutionActions.has(String(value.action))) return false;
   if (value.action === "adopt" && value.kind !== "spawn_session") return false;
-  if (value.threadId !== undefined && (!spawned || !identifier(value.threadId)))
-    return false;
-  if (value.runId !== undefined && (!spawned || !identifier(value.runId)))
-    return false;
+  if (value.threadId !== undefined && (!spawned || !identifier(value.threadId))) return false;
+  if (value.runId !== undefined && (!spawned || !identifier(value.runId))) return false;
   if (
     value.durationMs !== undefined &&
     (!Number.isSafeInteger(value.durationMs) ||
@@ -1472,38 +1141,32 @@ function validDelegatedRun(value: unknown): boolean {
     if (
       !record(usage) ||
       !["input", "output", "cacheRead", "cacheWrite", "cost"].every(
-        (key) =>
-          typeof usage[key] === "number" &&
-          Number.isFinite(usage[key] as number) &&
-          (usage[key] as number) >= 0,
+        key => typeof usage[key] === "number" && Number.isFinite(usage[key] as number) && (usage[key] as number) >= 0,
       )
     )
       return false;
   }
   return value.activity.every(
-    (item) =>
+    item =>
       record(item) &&
       (item.id === undefined || identifier(item.id)) &&
       ["call", "result"].includes(String(item.kind)) &&
       boundedString(item.tool, 200) &&
-      (item.text === undefined ||
-        (typeof item.text === "string" && item.text.length <= 2_000)) &&
+      (item.text === undefined || (typeof item.text === "string" && item.text.length <= 2_000)) &&
       (item.isError === undefined || typeof item.isError === "boolean") &&
       validOptionalToolTiming(item),
   );
 }
 
 function validCompactionDisplay(value: unknown): boolean {
-  const exact = (item: Record<string, unknown>, keys: string[]) =>
-    Object.keys(item).every((key) => keys.includes(key));
+  const exact = (item: Record<string, unknown>, keys: string[]) => Object.keys(item).every(key => keys.includes(key));
   if (
     !record(value) ||
     !exact(value, ["records", "failedTools", "toolResults", "history"]) ||
     !Array.isArray(value.records) ||
     !Array.isArray(value.failedTools) ||
     !Array.isArray(value.toolResults) ||
-    value.records.length + value.failedTools.length + value.toolResults.length >
-      MAX_COMPACTION_DISPLAY_RECORDS ||
+    value.records.length + value.failedTools.length + value.toolResults.length > MAX_COMPACTION_DISPLAY_RECORDS ||
     !record(value.history) ||
     !exact(value.history, ["read", "modified"]) ||
     !Array.isArray(value.history.read) ||
@@ -1522,11 +1185,10 @@ function validCompactionDisplay(value: unknown): boolean {
     exact(item, ["path", "sourceEntryId"]) &&
     boundedString(item.path, MAX_COMPACTION_DISPLAY_PATH) &&
     (item.sourceEntryId === undefined ||
-      (typeof item.sourceEntryId === "string" &&
-        item.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID));
+      (typeof item.sourceEntryId === "string" && item.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID));
   return (
     value.records.every(
-      (item) =>
+      item =>
         record(item) &&
         exact(item, ["sourceEntryId", "role", "text"]) &&
         boundedString(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID) &&
@@ -1542,8 +1204,7 @@ function validCompactionDisplay(value: unknown): boolean {
 
 function validCompactionMessage(value: unknown): boolean {
   const optionalCount = (count: unknown) =>
-    count === undefined ||
-    (Number.isSafeInteger(count) && (count as number) >= 0);
+    count === undefined || (Number.isSafeInteger(count) && (count as number) >= 0);
   return (
     record(value) &&
     Number.isSafeInteger(value.contextAfterTokens) &&
@@ -1573,25 +1234,20 @@ function validHistoryMessage(message: unknown): boolean {
         (message.fileAttachmentCount as number) <= MAX_TEXT_FILES)) &&
     validMessageAttachments(message.attachments) &&
     (message.systemSource === undefined ||
-      (typeof message.systemSource === "string" &&
-        message.systemSource.length <= 200)) &&
-    (message.compaction === undefined ||
-      validCompactionMessage(message.compaction)) &&
+      (typeof message.systemSource === "string" && message.systemSource.length <= 200)) &&
+    (message.compaction === undefined || validCompactionMessage(message.compaction)) &&
     (message.tool === undefined ||
       (record(message.tool) &&
         identifier(message.tool.id) &&
         boundedString(message.tool.name) &&
         (message.tool.input === undefined ||
-          (typeof message.tool.input === "string" &&
-            message.tool.input.length <= MAX_MESSAGE_LENGTH)) &&
+          (typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)) &&
         toolStatuses.has(String(message.tool.status)) &&
         validOptionalToolTiming(message.tool)))
   );
 }
 
-export function isConversationHistoryPage(
-  value: unknown,
-): value is ConversationHistoryPage {
+export function isConversationHistoryPage(value: unknown): value is ConversationHistoryPage {
   return (
     record(value) &&
     value.protocolVersion === PROTOCOL_VERSION &&
@@ -1610,9 +1266,7 @@ export function isConversationHistoryPage(
   );
 }
 
-export function isConversationTurnIndexPage(
-  value: unknown,
-): value is ConversationTurnIndexPage {
+export function isConversationTurnIndexPage(value: unknown): value is ConversationTurnIndexPage {
   return (
     record(value) &&
     value.protocolVersion === PROTOCOL_VERSION &&
@@ -1625,21 +1279,18 @@ export function isConversationTurnIndexPage(
     Array.isArray(value.turns) &&
     value.turns.length <= 250 &&
     value.turns.every(
-      (turn) =>
+      turn =>
         record(turn) &&
         identifier(turn.promptId) &&
         boundedString(turn.preview, 120) &&
         identifier(turn.cursor) &&
         (turn.createdAt === undefined ||
-          (typeof turn.createdAt === "string" &&
-            !Number.isNaN(Date.parse(turn.createdAt)))),
+          (typeof turn.createdAt === "string" && !Number.isNaN(Date.parse(turn.createdAt)))),
     )
   );
 }
 
-export function isFileSuggestionList(
-  value: unknown,
-): value is FileSuggestionList {
+export function isFileSuggestionList(value: unknown): value is FileSuggestionList {
   return (
     record(value) &&
     value.protocolVersion === PROTOCOL_VERSION &&
@@ -1648,7 +1299,7 @@ export function isFileSuggestionList(
     Array.isArray(value.paths) &&
     value.paths.length <= 20 &&
     value.paths.every(
-      (path) =>
+      path =>
         typeof path === "string" &&
         path.length > 0 &&
         path.length <= 500 &&
@@ -1656,9 +1307,7 @@ export function isFileSuggestionList(
         !/^[A-Za-z]:/.test(path) &&
         !path.includes("\\") &&
         !path.includes("\0") &&
-        !path
-          .split("/")
-          .some((part) => part === "" || part === "." || part === ".."),
+        !path.split("/").some(part => part === "" || part === "." || part === ".."),
     )
   );
 }
@@ -1673,40 +1322,26 @@ function validWorkspaceSnapshot(workspace: unknown): boolean {
     typeof workspace.canMoveToCheckout !== "boolean" ||
     typeof workspace.canMoveToWorktree !== "boolean" ||
     typeof workspace.canApplyChanges !== "boolean" ||
-    (workspace.revision !== undefined &&
-      !boundedString(workspace.revision, 128)) ||
-    (workspace.setupState !== undefined &&
-      !["idle", "running", "failed"].includes(String(workspace.setupState))) ||
-    (workspace.setupError !== undefined &&
-      !boundedString(workspace.setupError, 500)) ||
-    (workspace.checkoutOwner !== undefined &&
-      !identifier(workspace.checkoutOwner)) ||
-    (workspace.handoffUnavailableReason !== undefined &&
-      !boundedString(workspace.handoffUnavailableReason, 500)) ||
-    (workspace.applyTargetBranch !== undefined &&
-      !boundedString(workspace.applyTargetBranch, 200)) ||
+    (workspace.revision !== undefined && !boundedString(workspace.revision, 128)) ||
+    (workspace.setupState !== undefined && !["idle", "running", "failed"].includes(String(workspace.setupState))) ||
+    (workspace.setupError !== undefined && !boundedString(workspace.setupError, 500)) ||
+    (workspace.checkoutOwner !== undefined && !identifier(workspace.checkoutOwner)) ||
+    (workspace.handoffUnavailableReason !== undefined && !boundedString(workspace.handoffUnavailableReason, 500)) ||
+    (workspace.applyTargetBranch !== undefined && !boundedString(workspace.applyTargetBranch, 200)) ||
     (workspace.applyTargetChangedCount !== undefined &&
       (!Number.isSafeInteger(workspace.applyTargetChangedCount) ||
         (workspace.applyTargetChangedCount as number) < 0)) ||
-    (workspace.applyUnavailableReason !== undefined &&
-      !boundedString(workspace.applyUnavailableReason, 500)) ||
-    (workspace.applyState !== undefined &&
-      !["pending", "applying"].includes(String(workspace.applyState))) ||
+    (workspace.applyUnavailableReason !== undefined && !boundedString(workspace.applyUnavailableReason, 500)) ||
+    (workspace.applyState !== undefined && !["pending", "applying"].includes(String(workspace.applyState))) ||
     (workspace.lastApply !== undefined &&
       (!record(workspace.lastApply) ||
-        !["applied", "unchanged", "conflict", "error"].includes(
-          String(workspace.lastApply.state),
-        ) ||
-        (workspace.lastApply.targetBranch !== undefined &&
-          !boundedString(workspace.lastApply.targetBranch, 200)) ||
-        (workspace.lastApply.message !== undefined &&
-          !boundedString(workspace.lastApply.message, 500)) ||
+        !["applied", "unchanged", "conflict", "error"].includes(String(workspace.lastApply.state)) ||
+        (workspace.lastApply.targetBranch !== undefined && !boundedString(workspace.lastApply.targetBranch, 200)) ||
+        (workspace.lastApply.message !== undefined && !boundedString(workspace.lastApply.message, 500)) ||
         (workspace.lastApply.conflicts !== undefined &&
           (!Array.isArray(workspace.lastApply.conflicts) ||
             workspace.lastApply.conflicts.length > 100 ||
-            !workspace.lastApply.conflicts.every((path) =>
-              boundedString(path, 500),
-            )))))
+            !workspace.lastApply.conflicts.every(path => boundedString(path, 500))))))
   )
     return false;
   return true;
@@ -1723,50 +1358,35 @@ function validRuntimePolicySnapshot(policy: unknown): boolean {
     !workspaceModes.has(String(policy.global.workspace)) ||
     !validDialogTimeout(policy.global.guardTimeoutSeconds) ||
     !validDialogTimeout(policy.global.clarifyTimeoutSeconds) ||
-    (policy.global.toolOverrides !== undefined &&
-      !validToolOverrides(policy.global.toolOverrides)) ||
+    (policy.global.toolOverrides !== undefined && !validToolOverrides(policy.global.toolOverrides)) ||
     !record(policy.project) ||
     !validVerifyPolicy(policy.project.verify) ||
-    (policy.project.toolOverrides !== undefined &&
-      !validToolOverrides(policy.project.toolOverrides)) ||
-    (policy.project.timelineEnabled !== undefined &&
-      typeof policy.project.timelineEnabled !== "boolean") ||
-    (policy.project.guardEnabled !== undefined &&
-      typeof policy.project.guardEnabled !== "boolean") ||
-    (policy.project.workspace !== undefined &&
-      !workspaceModes.has(String(policy.project.workspace))) ||
-    (policy.project.guardTimeoutSeconds !== undefined &&
-      !validDialogTimeout(policy.project.guardTimeoutSeconds)) ||
-    (policy.project.clarifyTimeoutSeconds !== undefined &&
-      !validDialogTimeout(policy.project.clarifyTimeoutSeconds)) ||
+    (policy.project.toolOverrides !== undefined && !validToolOverrides(policy.project.toolOverrides)) ||
+    (policy.project.timelineEnabled !== undefined && typeof policy.project.timelineEnabled !== "boolean") ||
+    (policy.project.guardEnabled !== undefined && typeof policy.project.guardEnabled !== "boolean") ||
+    (policy.project.workspace !== undefined && !workspaceModes.has(String(policy.project.workspace))) ||
+    (policy.project.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.guardTimeoutSeconds)) ||
+    (policy.project.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.clarifyTimeoutSeconds)) ||
     !record(policy.session) ||
-    (policy.session.toolOverrides !== undefined &&
-      !validToolOverrides(policy.session.toolOverrides)) ||
-    (policy.session.verify !== undefined &&
-      !validVerifyPolicy(policy.session.verify)) ||
-    (policy.session.timelineEnabled !== undefined &&
-      typeof policy.session.timelineEnabled !== "boolean") ||
-    (policy.session.guardEnabled !== undefined &&
-      typeof policy.session.guardEnabled !== "boolean") ||
-    (policy.session.workspace !== undefined &&
-      !workspaceModes.has(String(policy.session.workspace))) ||
-    (policy.session.guardTimeoutSeconds !== undefined &&
-      !validDialogTimeout(policy.session.guardTimeoutSeconds)) ||
-    (policy.session.clarifyTimeoutSeconds !== undefined &&
-      !validDialogTimeout(policy.session.clarifyTimeoutSeconds)) ||
+    (policy.session.toolOverrides !== undefined && !validToolOverrides(policy.session.toolOverrides)) ||
+    (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify)) ||
+    (policy.session.timelineEnabled !== undefined && typeof policy.session.timelineEnabled !== "boolean") ||
+    (policy.session.guardEnabled !== undefined && typeof policy.session.guardEnabled !== "boolean") ||
+    (policy.session.workspace !== undefined && !workspaceModes.has(String(policy.session.workspace))) ||
+    (policy.session.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.guardTimeoutSeconds)) ||
+    (policy.session.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.clarifyTimeoutSeconds)) ||
     !record(policy.effective) ||
     !validVerifyPolicy(policy.effective.verify) ||
     typeof policy.effective.timelineEnabled !== "boolean" ||
     typeof policy.effective.guardEnabled !== "boolean" ||
-    (policy.effective.toolOverrides !== undefined &&
-      !validToolOverrides(policy.effective.toolOverrides)) ||
+    (policy.effective.toolOverrides !== undefined && !validToolOverrides(policy.effective.toolOverrides)) ||
     !workspaceModes.has(String(policy.effective.workspace)) ||
     !validDialogTimeout(policy.effective.guardTimeoutSeconds) ||
     !validDialogTimeout(policy.effective.clarifyTimeoutSeconds) ||
     !Array.isArray(policy.availableVerifyChecks) ||
     policy.availableVerifyChecks.length > 100 ||
     !policy.availableVerifyChecks.every(
-      (check) =>
+      check =>
         record(check) &&
         boundedString(check.id, 100) &&
         boundedString(check.label, 200) &&
@@ -1783,7 +1403,7 @@ function validProviderAuth(auth: unknown): boolean {
     !Array.isArray(auth.providers) ||
     auth.providers.length > 200 ||
     !auth.providers.every(
-      (provider) =>
+      provider =>
         record(provider) &&
         boundedString(provider.id, 200) &&
         boundedString(provider.name, 200) &&
@@ -1795,7 +1415,7 @@ function validProviderAuth(auth: unknown): boolean {
         Array.isArray(provider.methods) &&
         provider.methods.length <= 2 &&
         provider.methods.every(
-          (method) =>
+          method =>
             record(method) &&
             (method.type === "api_key" || method.type === "oauth") &&
             boundedString(method.name, 200) &&
@@ -1812,13 +1432,10 @@ function validProviderAuth(auth: unknown): boolean {
       !boundedString(flow.providerId, 200) ||
       !boundedString(flow.providerName, 200) ||
       !["api_key", "oauth"].includes(String(flow.authType)) ||
-      !["running", "succeeded", "failed", "cancelled"].includes(
-        String(flow.status),
-      ) ||
+      !["running", "succeeded", "failed", "cancelled"].includes(String(flow.status)) ||
       (flow.message !== undefined && !boundedString(flow.message, 2_000)) ||
       (flow.authUrl !== undefined && !boundedString(flow.authUrl, 8_000)) ||
-      (flow.instructions !== undefined &&
-        !boundedString(flow.instructions, 2_000))
+      (flow.instructions !== undefined && !boundedString(flow.instructions, 2_000))
     )
       return false;
   }
@@ -1850,11 +1467,9 @@ function validConversationMessage(message: unknown): boolean {
     message.text.length <= MAX_MESSAGE_LENGTH &&
     typeof message.streaming === "boolean" &&
     (message.createdAt === undefined ||
-      (typeof message.createdAt === "string" &&
-        !Number.isNaN(Date.parse(message.createdAt)))) &&
+      (typeof message.createdAt === "string" && !Number.isNaN(Date.parse(message.createdAt)))) &&
     (message.canUndo === undefined || typeof message.canUndo === "boolean") &&
-    (message.canForkWithTimeline === undefined ||
-      typeof message.canForkWithTimeline === "boolean") &&
+    (message.canForkWithTimeline === undefined || typeof message.canForkWithTimeline === "boolean") &&
     (message.attachmentCount === undefined ||
       (Number.isSafeInteger(message.attachmentCount) &&
         (message.attachmentCount as number) >= 0 &&
@@ -1869,19 +1484,14 @@ function validConversationMessage(message: unknown): boolean {
         (message.workDurationMs as number) >= 0 &&
         (message.workDurationMs as number) <= 7 * 24 * 60 * 60 * 1_000)) &&
     (message.gitBranch === undefined ||
-      (typeof message.gitBranch === "string" &&
-        message.gitBranch.length > 0 &&
-        message.gitBranch.length <= 200)) &&
-    (message.modelName === undefined ||
-      (typeof message.modelName === "string" &&
-        message.modelName.length <= 200)) &&
-    (message.thinkingLevel === undefined ||
-      thinkingLevels.has(String(message.thinkingLevel))) &&
+      (typeof message.gitBranch === "string" && message.gitBranch.length > 0 && message.gitBranch.length <= 200)) &&
+    (message.modelName === undefined || (typeof message.modelName === "string" && message.modelName.length <= 200)) &&
+    (message.thinkingLevel === undefined || thinkingLevels.has(String(message.thinkingLevel))) &&
     (message.changedFiles === undefined ||
       (Array.isArray(message.changedFiles) &&
         message.changedFiles.length <= 100 &&
         message.changedFiles.every(
-          (file) =>
+          file =>
             record(file) &&
             typeof file.path === "string" &&
             file.path.length > 0 &&
@@ -1893,17 +1503,14 @@ function validConversationMessage(message: unknown): boolean {
                 (file.deletions as number) >= 0)),
         ))) &&
     (message.systemSource === undefined ||
-      (typeof message.systemSource === "string" &&
-        message.systemSource.length <= 200)) &&
-    (message.compaction === undefined ||
-      validCompactionMessage(message.compaction)) &&
+      (typeof message.systemSource === "string" && message.systemSource.length <= 200)) &&
+    (message.compaction === undefined || validCompactionMessage(message.compaction)) &&
     (message.tool === undefined ||
       (record(message.tool) &&
         identifier(message.tool.id) &&
         boundedString(message.tool.name) &&
         (message.tool.input === undefined ||
-          (typeof message.tool.input === "string" &&
-            message.tool.input.length <= MAX_MESSAGE_LENGTH)) &&
+          (typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)) &&
         toolStatuses.has(String(message.tool.status)) &&
         validOptionalToolTiming(message.tool)))
   );
@@ -1914,12 +1521,8 @@ function validConversationTool(tool: unknown): boolean {
     record(tool) &&
     identifier(tool.id) &&
     typeof tool.name === "string" &&
-    (tool.input === undefined ||
-      (typeof tool.input === "string" &&
-        tool.input.length <= MAX_MESSAGE_LENGTH)) &&
-    (tool.summary === undefined ||
-      (typeof tool.summary === "string" &&
-        tool.summary.length <= MAX_MESSAGE_LENGTH)) &&
+    (tool.input === undefined || (typeof tool.input === "string" && tool.input.length <= MAX_MESSAGE_LENGTH)) &&
+    (tool.summary === undefined || (typeof tool.summary === "string" && tool.summary.length <= MAX_MESSAGE_LENGTH)) &&
     toolStatuses.has(tool.status as string) &&
     validOptionalToolTiming(tool)
   );
@@ -1951,10 +1554,8 @@ function validStoppedRun(stopped: unknown): boolean {
     Number.isSafeInteger(stopped.durationMs) &&
     (stopped.durationMs as number) >= 0 &&
     (stopped.durationMs as number) <= 7 * 24 * 60 * 60 * 1_000 &&
-    (stopped.modelName === undefined ||
-      boundedString(stopped.modelName, 200)) &&
-    (stopped.thinkingLevel === undefined ||
-      thinkingLevels.has(String(stopped.thinkingLevel)))
+    (stopped.modelName === undefined || boundedString(stopped.modelName, 200)) &&
+    (stopped.thinkingLevel === undefined || thinkingLevels.has(String(stopped.thinkingLevel)))
   );
 }
 
@@ -1972,62 +1573,31 @@ function validConversation(conversation: unknown): boolean {
     return false;
   if (
     conversation.workStartedAt !== undefined &&
-    (typeof conversation.workStartedAt !== "string" ||
-      Number.isNaN(Date.parse(conversation.workStartedAt)))
+    (typeof conversation.workStartedAt !== "string" || Number.isNaN(Date.parse(conversation.workStartedAt)))
   )
     return false;
   if (
     conversation.workModelName !== undefined &&
-    (typeof conversation.workModelName !== "string" ||
-      conversation.workModelName.length > 200)
+    (typeof conversation.workModelName !== "string" || conversation.workModelName.length > 200)
   )
     return false;
-  if (
-    conversation.workThinkingLevel !== undefined &&
-    !thinkingLevels.has(String(conversation.workThinkingLevel))
-  )
+  if (conversation.workThinkingLevel !== undefined && !thinkingLevels.has(String(conversation.workThinkingLevel)))
     return false;
-  if (
-    conversation.stopping !== undefined &&
-    typeof conversation.stopping !== "boolean"
-  )
-    return false;
-  if (
-    conversation.agentError !== undefined &&
-    !boundedString(conversation.agentError, 1_000)
-  )
-    return false;
-  if (
-    conversation.stoppedRun !== undefined &&
-    !validStoppedRun(conversation.stoppedRun)
-  )
-    return false;
-  if (
-    conversation.historyCursor !== undefined &&
-    !identifier(conversation.historyCursor)
-  )
-    return false;
+  if (conversation.stopping !== undefined && typeof conversation.stopping !== "boolean") return false;
+  if (conversation.agentError !== undefined && !boundedString(conversation.agentError, 1_000)) return false;
+  if (conversation.stoppedRun !== undefined && !validStoppedRun(conversation.stoppedRun)) return false;
+  if (conversation.historyCursor !== undefined && !identifier(conversation.historyCursor)) return false;
   if (
     conversation.historyRemaining !== undefined &&
-    (!Number.isSafeInteger(conversation.historyRemaining) ||
-      (conversation.historyRemaining as number) < 0)
+    (!Number.isSafeInteger(conversation.historyRemaining) || (conversation.historyRemaining as number) < 0)
   )
     return false;
   // The cursor and its remaining count are only meaningful together.
-  if (
-    (conversation.historyCursor === undefined) !==
-    (conversation.historyRemaining === undefined)
-  )
-    return false;
-  if (
-    conversation.tools.length > 100 ||
-    conversation.delegatedRuns.length > 100
-  )
-    return false;
+  if ((conversation.historyCursor === undefined) !== (conversation.historyRemaining === undefined)) return false;
+  if (conversation.tools.length > 100 || conversation.delegatedRuns.length > 100) return false;
   if (!conversation.messages.every(validConversationMessage)) return false;
   if (!conversation.tools.every(validConversationTool)) return false;
-  if (!conversation.delegatedRuns.every((run) => validDelegatedRun(run)))
-    return false;
+  if (!conversation.delegatedRuns.every(run => validDelegatedRun(run))) return false;
   if (
     !Number.isSafeInteger(conversation.queue.steering) ||
     !Number.isSafeInteger(conversation.queue.followUp) ||
@@ -2051,11 +1621,8 @@ function validSessionControls(controls: unknown): boolean {
     !Array.isArray(controls.models) ||
     controls.models.length > 500 ||
     !Array.isArray(controls.thinkingLevels) ||
-    !controls.thinkingLevels.every((level) =>
-      thinkingLevels.has(String(level)),
-    ) ||
-    (controls.thinkingLevel !== undefined &&
-      !thinkingLevels.has(String(controls.thinkingLevel)))
+    !controls.thinkingLevels.every(level => thinkingLevels.has(String(level))) ||
+    (controls.thinkingLevel !== undefined && !thinkingLevels.has(String(controls.thinkingLevel)))
   )
     return false;
   if (
@@ -2063,12 +1630,11 @@ function validSessionControls(controls: unknown): boolean {
     (!Array.isArray(controls.commands) ||
       controls.commands.length > 200 ||
       !controls.commands.every(
-        (command) =>
+        command =>
           record(command) &&
           boundedString(command.name, 120) &&
           (command.description === undefined ||
-            (typeof command.description === "string" &&
-              command.description.length <= 300)) &&
+            (typeof command.description === "string" && command.description.length <= 300)) &&
           ["extension", "prompt", "skill"].includes(String(command.source)),
       ))
   )
@@ -2081,14 +1647,8 @@ function validSessionControls(controls: unknown): boolean {
     (value.thinkingLevels === undefined ||
       (Array.isArray(value.thinkingLevels) &&
         value.thinkingLevels.length <= 7 &&
-        value.thinkingLevels.every((level) =>
-          thinkingLevels.has(String(level)),
-        )));
-  if (
-    !controls.models.every(model) ||
-    (controls.model !== undefined && !model(controls.model))
-  )
-    return false;
+        value.thinkingLevels.every(level => thinkingLevels.has(String(level)))));
+  if (!controls.models.every(model) || (controls.model !== undefined && !model(controls.model))) return false;
   if (
     controls.pending !== undefined &&
     (!record(controls.pending) ||
@@ -2116,16 +1676,12 @@ function validRuntimeMetrics(metrics: unknown): boolean {
       "userMessages",
       "assistantMessages",
       "toolCalls",
-    ].every(
-      (key) =>
-        typeof metrics[key] === "number" &&
-        Number.isFinite(metrics[key] as number),
-    ) ||
+    ].every(key => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number)) ||
     (metrics.toolUsage !== undefined &&
       (!Array.isArray(metrics.toolUsage) ||
         metrics.toolUsage.length > 200 ||
         !metrics.toolUsage.every(
-          (item) =>
+          item =>
             record(item) &&
             boundedString(item.name) &&
             item.name.length > 0 &&
@@ -2136,8 +1692,7 @@ function validRuntimeMetrics(metrics: unknown): boolean {
             Number.isSafeInteger(item.outputTokens) &&
             (item.outputTokens as number) >= 0 &&
             Number.isSafeInteger(item.tokens) &&
-            item.tokens ===
-              (item.inputTokens as number) + (item.outputTokens as number),
+            item.tokens === (item.inputTokens as number) + (item.outputTokens as number),
         )))
   )
     return false;
@@ -2148,16 +1703,11 @@ function validDiscoverIndex(index: unknown): boolean {
   if (
     !record(index) ||
     !["idle", "indexing", "error"].includes(String(index.state)) ||
-    (index.files !== undefined &&
-      (!Number.isSafeInteger(index.files) || (index.files as number) < 0)) ||
-    (index.symbols !== undefined &&
-      (!Number.isSafeInteger(index.symbols) ||
-        (index.symbols as number) < 0)) ||
+    (index.files !== undefined && (!Number.isSafeInteger(index.files) || (index.files as number) < 0)) ||
+    (index.symbols !== undefined && (!Number.isSafeInteger(index.symbols) || (index.symbols as number) < 0)) ||
     (index.indexedAt !== undefined &&
-      (typeof index.indexedAt !== "string" ||
-        Number.isNaN(Date.parse(index.indexedAt)))) ||
-    (index.error !== undefined &&
-      (typeof index.error !== "string" || index.error.length > 500))
+      (typeof index.indexedAt !== "string" || Number.isNaN(Date.parse(index.indexedAt)))) ||
+    (index.error !== undefined && (typeof index.error !== "string" || index.error.length > 500))
   )
     return false;
   return true;
@@ -2170,7 +1720,7 @@ const safeMemoryPath = (path: unknown) =>
   !path.startsWith("/") &&
   !path.startsWith("\\") &&
   !/^[a-z]:/i.test(path) &&
-  !path.split(/[\\/]+/).some((part) => !part || part === "." || part === "..");
+  !path.split(/[\\/]+/).some(part => !part || part === "." || part === "..");
 const validMemoryNote = (note: unknown, expectedScope: "user" | "project") =>
   record(note) &&
   typeof note.id === "string" &&
@@ -2188,14 +1738,10 @@ const validMemoryNote = (note: unknown, expectedScope: "user" | "project") =>
   note.trigger.length + note.guidance.length <= 1_000 &&
   memoryAuthorities.has(String(note.authority)) &&
   memoryOrigins.has(String(note.origin)) &&
-  (note.disposition === undefined ||
-    memoryDispositions.has(String(note.disposition))) &&
-  (note.enforcementAuthority === undefined ||
-    memoryEnforcementAuthorities.has(String(note.enforcementAuthority))) &&
+  (note.disposition === undefined || memoryDispositions.has(String(note.disposition))) &&
+  (note.enforcementAuthority === undefined || memoryEnforcementAuthorities.has(String(note.enforcementAuthority))) &&
   (note.relatedPaths === undefined ||
-    (Array.isArray(note.relatedPaths) &&
-      note.relatedPaths.length <= 5 &&
-      note.relatedPaths.every(safeMemoryPath))) &&
+    (Array.isArray(note.relatedPaths) && note.relatedPaths.length <= 5 && note.relatedPaths.every(safeMemoryPath))) &&
   Number.isSafeInteger(note.revision) &&
   (note.revision as number) >= 1 &&
   typeof note.updatedAt === "string" &&
@@ -2205,46 +1751,24 @@ const validMemoryNote = (note: unknown, expectedScope: "user" | "project") =>
 
 /** Sieve stats blocks all share the same non-negative-integer shape. */
 function validSieveStats(value: unknown): boolean {
-  if (
-    !record(value) ||
-    !record(value.transformedBy) ||
-    !record(value.byTool) ||
-    Object.keys(value.byTool).length > 33
-  )
+  if (!record(value) || !record(value.transformedBy) || !record(value.byTool) || Object.keys(value.byTool).length > 33)
     return false;
   const transformedBy = value.transformedBy;
   const toolStats = Object.entries(value.byTool).every(
     ([name, usage]) =>
       record(usage) &&
       /^[a-zA-Z0-9_-]{1,64}$/.test(name) &&
-      [
-        "scanned",
-        "transformed",
-        "sourceChars",
-        "retainedChars",
-        "netCharsSaved",
-      ].every(
-        (key) =>
-          Number.isSafeInteger(usage[key]) && (usage[key] as number) >= 0,
+      ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every(
+        key => Number.isSafeInteger(usage[key]) && (usage[key] as number) >= 0,
       ),
   );
   return (
     toolStats &&
     ["scanned", "transformed", "omittedChars", "netCharsSaved"].every(
-      (key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
+      key => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
     ) &&
-    [
-      "ageThreshold",
-      "budget",
-      "activeThreshold",
-      "staleRead",
-      "duplicate",
-      "errorCap",
-      "mixedText",
-    ].every(
-      (key) =>
-        Number.isSafeInteger(transformedBy[key]) &&
-        (transformedBy[key] as number) >= 0,
+    ["ageThreshold", "budget", "activeThreshold", "staleRead", "duplicate", "errorCap", "mixedText"].every(
+      key => Number.isSafeInteger(transformedBy[key]) && (transformedBy[key] as number) >= 0,
     )
   );
 }
@@ -2280,14 +1804,8 @@ function validSieve(sieve: Record<string, unknown>): boolean {
     (sieve.error !== undefined && !boundedString(sieve.error, 500))
   )
     return false;
-  const metrics = (
-    value: Record<string, unknown> | undefined,
-    keys: string[],
-  ) =>
-    value !== undefined &&
-    keys.every(
-      (key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
-    );
+  const metrics = (value: Record<string, unknown> | undefined, keys: string[]) =>
+    value !== undefined && keys.every(key => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0);
   const rawEpoch = sieve.epoch;
   const epoch = record(rawEpoch) ? rawEpoch : undefined;
   if (
@@ -2300,18 +1818,15 @@ function validSieve(sieve: Record<string, unknown>): boolean {
       "recoverableEntries",
     ]) ||
       !["id", "reason", "promptFingerprint"].every(
-        (key) => epoch![key] === undefined || boundedString(epoch![key], 200),
+        key => epoch![key] === undefined || boundedString(epoch![key], 200),
       ) ||
       (epoch!.startedAt !== undefined &&
-        (typeof epoch!.startedAt !== "string" ||
-          Number.isNaN(Date.parse(epoch!.startedAt)))))
+        (typeof epoch!.startedAt !== "string" || Number.isNaN(Date.parse(epoch!.startedAt)))))
   )
     return false;
   const rawStability = sieve.stability;
   const stability = record(rawStability) ? rawStability : undefined;
-  const standardChangesByKind = record(stability?.standardChangesByKind)
-    ? stability.standardChangesByKind
-    : undefined;
+  const standardChangesByKind = record(stability?.standardChangesByKind) ? stability.standardChangesByKind : undefined;
   if (
     sieve.stability !== undefined &&
     (!metrics(stability, [
@@ -2327,34 +1842,19 @@ function validSieve(sieve: Record<string, unknown>): boolean {
         (!Number.isSafeInteger(stability!.earliestChangedPriorMessageIndex) ||
           (stability!.earliestChangedPriorMessageIndex as number) < 0)) ||
       (stability!.standardComparisons !== undefined &&
-        (!Number.isSafeInteger(stability!.standardComparisons) ||
-          (stability!.standardComparisons as number) < 0)) ||
+        (!Number.isSafeInteger(stability!.standardComparisons) || (stability!.standardComparisons as number) < 0)) ||
       (stability!.standardPrefixChurn !== undefined &&
-        (!Number.isSafeInteger(stability!.standardPrefixChurn) ||
-          (stability!.standardPrefixChurn as number) < 0)) ||
+        (!Number.isSafeInteger(stability!.standardPrefixChurn) || (stability!.standardPrefixChurn as number) < 0)) ||
       (stability!.standardEarliestChangedPriorMessageIndex !== undefined &&
-        (!Number.isSafeInteger(
-          stability!.standardEarliestChangedPriorMessageIndex,
-        ) ||
-          (stability!.standardEarliestChangedPriorMessageIndex as number) <
-            0)) ||
+        (!Number.isSafeInteger(stability!.standardEarliestChangedPriorMessageIndex) ||
+          (stability!.standardEarliestChangedPriorMessageIndex as number) < 0)) ||
       (stability!.standardEstimatedInvalidatedChars !== undefined &&
         (!Number.isSafeInteger(stability!.standardEstimatedInvalidatedChars) ||
           (stability!.standardEstimatedInvalidatedChars as number) < 0)) ||
       (stability!.standardChangesByKind !== undefined &&
         (!standardChangesByKind ||
-          ![
-            "activeThreshold",
-            "ageThreshold",
-            "budget",
-            "staleRead",
-            "duplicate",
-            "errorCap",
-            "history",
-          ].every(
-            (key) =>
-              Number.isSafeInteger(standardChangesByKind[key]) &&
-              (standardChangesByKind[key] as number) >= 0,
+          !["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"].every(
+            key => Number.isSafeInteger(standardChangesByKind[key]) && (standardChangesByKind[key] as number) >= 0,
           ))))
   )
     return false;
@@ -2373,10 +1873,10 @@ function validContinuityMemory(continuity: Record<string, unknown>): boolean {
   if (
     !Array.isArray(continuity.memory) ||
     continuity.memory.length > 1_000 ||
-    !continuity.memory.every((note) => validMemoryNote(note, "project")) ||
+    !continuity.memory.every(note => validMemoryNote(note, "project")) ||
     !Array.isArray(continuity.globalMemory) ||
     continuity.globalMemory.length > 1_000 ||
-    !continuity.globalMemory.every((note) => validMemoryNote(note, "user"))
+    !continuity.globalMemory.every(note => validMemoryNote(note, "user"))
   )
     return false;
   return true;
@@ -2397,11 +1897,8 @@ function validOperational(operational: unknown): boolean {
   )
     return false;
   const available = (feature: Record<string, unknown>) =>
-    feature.availability === "available" ||
-    feature.availability === "unavailable";
-  const papercutCounts = record(operational.papercuts.counts)
-    ? operational.papercuts.counts
-    : undefined;
+    feature.availability === "available" || feature.availability === "unavailable";
+  const papercutCounts = record(operational.papercuts.counts) ? operational.papercuts.counts : undefined;
   if (
     !available(operational.verification) ||
     !Array.isArray(operational.verification.checks) ||
@@ -2418,14 +1915,12 @@ function validOperational(operational: unknown): boolean {
     !Number.isSafeInteger(operational.papercuts.revision) ||
     !papercutCounts ||
     !["open", "resolved", "dismissed", "total"].every(
-      (key) =>
+      key =>
         Number.isSafeInteger(papercutCounts?.[key]) &&
         (papercutCounts?.[key] as number) >= 0 &&
         (papercutCounts?.[key] as number) <= 1_000,
     ) ||
-    (papercutCounts?.open as number) +
-      (papercutCounts?.resolved as number) +
-      (papercutCounts?.dismissed as number) !==
+    (papercutCounts?.open as number) + (papercutCounts?.resolved as number) + (papercutCounts?.dismissed as number) !==
       papercutCounts?.total ||
     !available(operational.timeline) ||
     !Number.isSafeInteger(operational.timeline.revision) ||
@@ -2440,15 +1935,8 @@ function validOperational(operational: unknown): boolean {
     operational.health.issues.length > 20
   )
     return false;
-  if (
-    operational.sieve.availability === "available" &&
-    !validSieve(operational.sieve)
-  )
-    return false;
-  if (
-    operational.continuity.availability === "available" &&
-    !validContinuityMemory(operational.continuity)
-  )
+  if (operational.sieve.availability === "available" && !validSieve(operational.sieve)) return false;
+  if (operational.continuity.availability === "available" && !validContinuityMemory(operational.continuity))
     return false;
   return true;
 }
@@ -2459,7 +1947,7 @@ function validExtensionUi(extensionUi: unknown): boolean {
     Array.isArray(extensionUi.notifications) &&
     extensionUi.notifications.length <= 10 &&
     extensionUi.notifications.every(
-      (item) =>
+      item =>
         record(item) &&
         identifier(item.id) &&
         typeof item.message === "string" &&
@@ -2468,24 +1956,18 @@ function validExtensionUi(extensionUi: unknown): boolean {
     ) &&
     Array.isArray(extensionUi.statuses) &&
     extensionUi.statuses.length <= 25 &&
-    extensionUi.statuses.every(
-      (item) =>
-        record(item) && identifier(item.key) && typeof item.text === "string",
-    ) &&
+    extensionUi.statuses.every(item => record(item) && identifier(item.key) && typeof item.text === "string") &&
     Array.isArray(extensionUi.widgets) &&
     extensionUi.widgets.length <= 10 &&
     extensionUi.widgets.every(
-      (item) =>
+      item =>
         record(item) &&
         identifier(item.key) &&
         Array.isArray(item.lines) &&
         item.lines.length <= 40 &&
-        item.lines.every(
-          (line) => typeof line === "string" && line.length <= 500,
-        ),
+        item.lines.every(line => typeof line === "string" && line.length <= 500),
     ) &&
-    (extensionUi.title === undefined ||
-      typeof extensionUi.title === "string") &&
+    (extensionUi.title === undefined || typeof extensionUi.title === "string") &&
     typeof extensionUi.editorText === "string" &&
     extensionUi.editorText.length <= MAX_MESSAGE_LENGTH &&
     Number.isSafeInteger(extensionUi.editorRevision) &&
@@ -2494,78 +1976,42 @@ function validExtensionUi(extensionUi: unknown): boolean {
 }
 
 export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
-  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION)
+  if (!record(value) || value.protocolVersion !== PROTOCOL_VERSION) return false;
+  if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean")
     return false;
-  if (
-    !identifier(value.sessionId) ||
-    !generation(value.sessionGeneration) ||
-    typeof value.ready !== "boolean"
-  )
+  if (typeof value.cwdLabel !== "string" || !Array.isArray(value.activeTools) || !Array.isArray(value.availableTools))
     return false;
-  if (
-    typeof value.cwdLabel !== "string" ||
-    !Array.isArray(value.activeTools) ||
-    !Array.isArray(value.availableTools)
-  )
+  if (value.projectAvailable !== undefined && typeof value.projectAvailable !== "boolean") return false;
+  if (value.sessionName !== undefined && (typeof value.sessionName !== "string" || value.sessionName.length > 200))
     return false;
-  if (
-    value.projectAvailable !== undefined &&
-    typeof value.projectAvailable !== "boolean"
-  )
+  if (value.gitBranch !== undefined && (typeof value.gitBranch !== "string" || value.gitBranch.length > 200))
     return false;
-  if (
-    value.sessionName !== undefined &&
-    (typeof value.sessionName !== "string" || value.sessionName.length > 200)
-  )
-    return false;
-  if (
-    value.gitBranch !== undefined &&
-    (typeof value.gitBranch !== "string" || value.gitBranch.length > 200)
-  )
-    return false;
-  if (value.workspace !== undefined && !validWorkspaceSnapshot(value.workspace))
-    return false;
+  if (value.workspace !== undefined && !validWorkspaceSnapshot(value.workspace)) return false;
   if (!validRuntimePolicySnapshot(value.runtimePolicy)) return false;
+  if (value.providerAuth !== undefined && !validProviderAuth(value.providerAuth)) return false;
+  if (value.commandResult !== undefined && !validCommandResult(value.commandResult)) return false;
   if (
-    value.providerAuth !== undefined &&
-    !validProviderAuth(value.providerAuth)
-  )
-    return false;
-  if (
-    value.commandResult !== undefined &&
-    !validCommandResult(value.commandResult)
-  )
-    return false;
-  if (
-    !value.activeTools.every((item) => typeof item === "string") ||
-    !value.availableTools.every((item) => typeof item === "string")
+    !value.activeTools.every(item => typeof item === "string") ||
+    !value.availableTools.every(item => typeof item === "string")
   )
     return false;
   if (
     !record(value.optionalCapabilities) ||
-    !Object.values(value.optionalCapabilities).every(
-      (item) => item === "available" || item === "unavailable",
-    )
+    !Object.values(value.optionalCapabilities).every(item => item === "available" || item === "unavailable")
   )
     return false;
   if (
     !Array.isArray(value.diagnostics) ||
     !value.diagnostics.every(
-      (item) =>
-        record(item) &&
-        ["info", "warning", "error"].includes(item.level as string) &&
-        typeof item.message === "string",
+      item =>
+        record(item) && ["info", "warning", "error"].includes(item.level as string) && typeof item.message === "string",
     )
   )
     return false;
   if (!validConversation(value.conversation)) return false;
   if (!validSessionControls(value.sessionControls)) return false;
   if (!validRuntimeMetrics(value.metrics)) return false;
-  if (
-    value.discoverIndex !== undefined &&
-    !validDiscoverIndex(value.discoverIndex)
-  )
-    return false;
+  if (value.discoverIndex !== undefined && !validDiscoverIndex(value.discoverIndex)) return false;
   if (!validOperational(value.operational)) return false;
   return validExtensionUi(value.extensionUi);
 }
@@ -2576,36 +2022,19 @@ function issue(area: string, detail: string): ValidationIssue {
   return { area: `operational.${area}`, detail };
 }
 
-function sieveValidationIssue(
-  sieve: Record<string, unknown>,
-): ValidationIssue | undefined {
-  if (!sieveModes.has(String(sieve.mode)))
-    return issue("sieve.mode", "is invalid");
-  if (!sieveProjectionModes.has(String(sieve.projectionMode)))
-    return issue("sieve.projectionMode", "is invalid");
-  if (
-    !Number.isSafeInteger(sieve.threshold) ||
-    (sieve.threshold as number) < 1_000
-  )
+function sieveValidationIssue(sieve: Record<string, unknown>): ValidationIssue | undefined {
+  if (!sieveModes.has(String(sieve.mode))) return issue("sieve.mode", "is invalid");
+  if (!sieveProjectionModes.has(String(sieve.projectionMode))) return issue("sieve.projectionMode", "is invalid");
+  if (!Number.isSafeInteger(sieve.threshold) || (sieve.threshold as number) < 1_000)
     return issue("sieve.threshold", "must be a safe integer of at least 1000");
-  if (typeof sieve.activePruning !== "boolean")
-    return issue("sieve.activePruning", "must be boolean");
-  if (!sieveLatestModes.has(String(sieve.latestMode)))
-    return issue("sieve.latestMode", "is invalid");
+  if (typeof sieve.activePruning !== "boolean") return issue("sieve.activePruning", "must be boolean");
+  if (!sieveLatestModes.has(String(sieve.latestMode))) return issue("sieve.latestMode", "is invalid");
   const statsIssue = (raw: unknown, path: string) => {
     if (!record(raw)) return issue(path, "must be an object");
-    if (!record(raw.transformedBy))
-      return issue(`${path}.transformedBy`, "must be an object");
-    if (!record(raw.byTool))
-      return issue(`${path}.byTool`, "must be an object");
-    if (Object.keys(raw.byTool).length > 33)
-      return issue(`${path}.byTool`, "must contain at most 33 tools");
-    for (const key of [
-      "scanned",
-      "transformed",
-      "omittedChars",
-      "netCharsSaved",
-    ] as const) {
+    if (!record(raw.transformedBy)) return issue(`${path}.transformedBy`, "must be an object");
+    if (!record(raw.byTool)) return issue(`${path}.byTool`, "must be an object");
+    if (Object.keys(raw.byTool).length > 33) return issue(`${path}.byTool`, "must contain at most 33 tools");
+    for (const key of ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const) {
       if (!Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0)
         return issue(`${path}.${key}`, "must be a non-negative safe integer");
     }
@@ -2618,73 +2047,40 @@ function sieveValidationIssue(
       "errorCap",
       "mixedText",
     ] as const) {
-      if (
-        !Number.isSafeInteger(raw.transformedBy[key]) ||
-        (raw.transformedBy[key] as number) < 0
-      )
-        return issue(
-          `${path}.transformedBy.${key}`,
-          "must be a non-negative safe integer",
-        );
+      if (!Number.isSafeInteger(raw.transformedBy[key]) || (raw.transformedBy[key] as number) < 0)
+        return issue(`${path}.transformedBy.${key}`, "must be a non-negative safe integer");
     }
     for (const [name, usage] of Object.entries(raw.byTool)) {
-      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name))
-        return issue(`${path}.byTool`, "contains an invalid tool name");
-      if (!record(usage))
-        return issue(`${path}.byTool.${name}`, "must be an object");
-      for (const key of [
-        "scanned",
-        "transformed",
-        "sourceChars",
-        "retainedChars",
-        "netCharsSaved",
-      ] as const) {
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue(`${path}.byTool`, "contains an invalid tool name");
+      if (!record(usage)) return issue(`${path}.byTool.${name}`, "must be an object");
+      for (const key of ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"] as const) {
         if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0)
-          return issue(
-            `${path}.byTool.${name}.${key}`,
-            "must be a non-negative safe integer",
-          );
+          return issue(`${path}.byTool.${name}.${key}`, "must be a non-negative safe integer");
       }
     }
     return undefined;
   };
-  for (const key of [
-    "latest",
-    "cumulativeActual",
-    "cumulativeProjected",
-  ] as const) {
+  for (const key of ["latest", "cumulativeActual", "cumulativeProjected"] as const) {
     const invalid = statsIssue(sieve[key], `sieve.${key}`);
     if (invalid) return invalid;
   }
   for (const key of ["recalls", "recalledChars"] as const)
     if (!Number.isSafeInteger(sieve[key]) || (sieve[key] as number) < 0)
       return issue(`sieve.${key}`, "must be a non-negative safe integer");
-  if (!record(sieve.recallsByTool))
-    return issue("sieve.recallsByTool", "must be an object");
+  if (!record(sieve.recallsByTool)) return issue("sieve.recallsByTool", "must be an object");
   if (Object.keys(sieve.recallsByTool).length > 33)
     return issue("sieve.recallsByTool", "must contain at most 33 tools");
   for (const [name, usage] of Object.entries(sieve.recallsByTool)) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name))
-      return issue("sieve.recallsByTool", "contains an invalid tool name");
-    if (!record(usage))
-      return issue(`sieve.recallsByTool.${name}`, "must be an object");
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue("sieve.recallsByTool", "contains an invalid tool name");
+    if (!record(usage)) return issue(`sieve.recallsByTool.${name}`, "must be an object");
     for (const key of ["recalls", "recalledChars"] as const)
       if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0)
-        return issue(
-          `sieve.recallsByTool.${name}.${key}`,
-          "must be a non-negative safe integer",
-        );
+        return issue(`sieve.recallsByTool.${name}.${key}`, "must be a non-negative safe integer");
   }
-  if (
-    typeof sieve.updatedAt !== "string" ||
-    Number.isNaN(Date.parse(sieve.updatedAt))
-  )
+  if (typeof sieve.updatedAt !== "string" || Number.isNaN(Date.parse(sieve.updatedAt)))
     return issue("sieve.updatedAt", "must be a valid timestamp");
   if (sieve.error !== undefined && !boundedString(sieve.error, 500))
-    return issue(
-      "sieve.error",
-      "must be a non-empty string of at most 500 characters",
-    );
+    return issue("sieve.error", "must be a non-empty string of at most 500 characters");
   const metricObjectIssue = (raw: unknown, path: string, keys: string[]) => {
     if (!record(raw)) return issue(path, "must be an object");
     for (const key of keys)
@@ -2704,14 +2100,10 @@ function sieveValidationIssue(
     const epoch = sieve.epoch as Record<string, unknown>;
     for (const key of ["id", "reason", "promptFingerprint"] as const)
       if (epoch[key] !== undefined && !boundedString(epoch[key], 200))
-        return issue(
-          `sieve.epoch.${key}`,
-          "must be a non-empty string of at most 200 characters",
-        );
+        return issue(`sieve.epoch.${key}`, "must be a non-empty string of at most 200 characters");
     if (
       epoch.startedAt !== undefined &&
-      (typeof epoch.startedAt !== "string" ||
-        Number.isNaN(Date.parse(epoch.startedAt)))
+      (typeof epoch.startedAt !== "string" || Number.isNaN(Date.parse(epoch.startedAt)))
     )
       return issue("sieve.epoch.startedAt", "must be a valid timestamp");
   }
@@ -2734,23 +2126,12 @@ function sieveValidationIssue(
       "standardEarliestChangedPriorMessageIndex",
       "standardEstimatedInvalidatedChars",
     ] as const) {
-      if (
-        stability[key] !== undefined &&
-        (!Number.isSafeInteger(stability[key]) ||
-          (stability[key] as number) < 0)
-      )
-        return issue(
-          `sieve.stability.${key}`,
-          "must be a non-negative safe integer",
-        );
+      if (stability[key] !== undefined && (!Number.isSafeInteger(stability[key]) || (stability[key] as number) < 0))
+        return issue(`sieve.stability.${key}`, "must be a non-negative safe integer");
     }
     if (stability.standardChangesByKind !== undefined) {
       const changes = stability.standardChangesByKind;
-      if (!record(changes))
-        return issue(
-          "sieve.stability.standardChangesByKind",
-          "must be an object",
-        );
+      if (!record(changes)) return issue("sieve.stability.standardChangesByKind", "must be an object");
       for (const key of [
         "activeThreshold",
         "ageThreshold",
@@ -2761,10 +2142,7 @@ function sieveValidationIssue(
         "history",
       ] as const)
         if (!Number.isSafeInteger(changes[key]) || (changes[key] as number) < 0)
-          return issue(
-            `sieve.stability.standardChangesByKind.${key}`,
-            "must be a non-negative safe integer",
-          );
+          return issue(`sieve.stability.standardChangesByKind.${key}`, "must be a non-negative safe integer");
     }
   }
   if (
@@ -2774,16 +2152,11 @@ function sieveValidationIssue(
       sieve.contextUsagePercent < 0 ||
       sieve.contextUsagePercent > 100)
   )
-    return issue(
-      "sieve.contextUsagePercent",
-      "must be a finite percentage from 0 to 100",
-    );
+    return issue("sieve.contextUsagePercent", "must be a finite percentage from 0 to 100");
   return undefined;
 }
 
-function continuityMemoryIssue(
-  continuity: Record<string, unknown>,
-): ValidationIssue | undefined {
+function continuityMemoryIssue(continuity: Record<string, unknown>): ValidationIssue | undefined {
   const safePath = (path: unknown) =>
     typeof path === "string" &&
     path.length > 0 &&
@@ -2791,64 +2164,35 @@ function continuityMemoryIssue(
     !path.startsWith("/") &&
     !path.startsWith("\\") &&
     !/^[a-z]:/i.test(path) &&
-    !path
-      .split(/[\\/]+/)
-      .some((part) => !part || part === "." || part === "..");
-  const memoryIssue = (
-    raw: unknown,
-    scope: "user" | "project",
-    path: string,
-  ) => {
-    if (!Array.isArray(raw) || raw.length > 1_000)
-      return issue(path, "must be an array with at most 1000 notes");
+    !path.split(/[\\/]+/).some(part => !part || part === "." || part === "..");
+  const memoryIssue = (raw: unknown, scope: "user" | "project", path: string) => {
+    if (!Array.isArray(raw) || raw.length > 1_000) return issue(path, "must be an array with at most 1000 notes");
     for (let index = 0; index < raw.length; index++) {
       const note = raw[index],
         notePath = `${path}[${index}]`;
       if (!record(note)) return issue(notePath, "must be an object");
-      if (
-        typeof note.id !== "string" ||
-        note.id.length > MAX_ID_LENGTH ||
-        !memoryNoteId.test(note.id)
-      )
-        return issue(
-          `${notePath}.id`,
-          "must be a UUID of at most 128 characters",
-        );
-      if (note.scope !== scope)
-        return issue(`${notePath}.scope`, `must be ${scope}`);
+      if (typeof note.id !== "string" || note.id.length > MAX_ID_LENGTH || !memoryNoteId.test(note.id))
+        return issue(`${notePath}.id`, "must be a UUID of at most 128 characters");
+      if (note.scope !== scope) return issue(`${notePath}.scope`, `must be ${scope}`);
       if (
         typeof note.trigger !== "string" ||
         note.trigger.length < 1 ||
         note.trigger.length > 240 ||
         note.trigger !== note.trigger.trim()
       )
-        return issue(
-          `${notePath}.trigger`,
-          "must be trimmed and contain 1 to 240 characters",
-        );
+        return issue(`${notePath}.trigger`, "must be trimmed and contain 1 to 240 characters");
       if (
         typeof note.guidance !== "string" ||
         note.guidance.length < 1 ||
         note.guidance.length > 800 ||
         note.guidance !== note.guidance.trim()
       )
-        return issue(
-          `${notePath}.guidance`,
-          "must be trimmed and contain 1 to 800 characters",
-        );
+        return issue(`${notePath}.guidance`, "must be trimmed and contain 1 to 800 characters");
       if (note.trigger.length + note.guidance.length > 1_000)
-        return issue(
-          notePath,
-          "trigger and guidance must total at most 1000 characters",
-        );
-      if (!memoryAuthorities.has(String(note.authority)))
-        return issue(`${notePath}.authority`, "is invalid");
-      if (!memoryOrigins.has(String(note.origin)))
-        return issue(`${notePath}.origin`, "is invalid");
-      if (
-        note.disposition !== undefined &&
-        !memoryDispositions.has(String(note.disposition))
-      )
+        return issue(notePath, "trigger and guidance must total at most 1000 characters");
+      if (!memoryAuthorities.has(String(note.authority))) return issue(`${notePath}.authority`, "is invalid");
+      if (!memoryOrigins.has(String(note.origin))) return issue(`${notePath}.origin`, "is invalid");
+      if (note.disposition !== undefined && !memoryDispositions.has(String(note.disposition)))
         return issue(`${notePath}.disposition`, "is invalid");
       if (
         note.enforcementAuthority !== undefined &&
@@ -2857,48 +2201,24 @@ function continuityMemoryIssue(
         return issue(`${notePath}.enforcementAuthority`, "is invalid");
       if (
         note.relatedPaths !== undefined &&
-        (!Array.isArray(note.relatedPaths) ||
-          note.relatedPaths.length > 5 ||
-          !note.relatedPaths.every(safePath))
+        (!Array.isArray(note.relatedPaths) || note.relatedPaths.length > 5 || !note.relatedPaths.every(safePath))
       )
-        return issue(
-          `${notePath}.relatedPaths`,
-          "must contain at most 5 safe relative paths",
-        );
+        return issue(`${notePath}.relatedPaths`, "must contain at most 5 safe relative paths");
       if (!Number.isSafeInteger(note.revision) || (note.revision as number) < 1)
         return issue(`${notePath}.revision`, "must be a positive safe integer");
-      if (
-        typeof note.updatedAt !== "string" ||
-        Number.isNaN(Date.parse(note.updatedAt))
-      )
+      if (typeof note.updatedAt !== "string" || Number.isNaN(Date.parse(note.updatedAt)))
         return issue(`${notePath}.updatedAt`, "must be a valid timestamp");
-      if (
-        typeof note.sourceSummary !== "string" ||
-        note.sourceSummary.length > 500
-      )
-        return issue(
-          `${notePath}.sourceSummary`,
-          "must be a string of at most 500 characters",
-        );
+      if (typeof note.sourceSummary !== "string" || note.sourceSummary.length > 500)
+        return issue(`${notePath}.sourceSummary`, "must be a string of at most 500 characters");
     }
     return undefined;
   };
-  const projectIssue = memoryIssue(
-    continuity.memory,
-    "project",
-    "continuity.memory",
-  );
+  const projectIssue = memoryIssue(continuity.memory, "project", "continuity.memory");
   if (projectIssue) return projectIssue;
-  return memoryIssue(
-    continuity.globalMemory,
-    "user",
-    "continuity.globalMemory",
-  );
+  return memoryIssue(continuity.globalMemory, "user", "continuity.globalMemory");
 }
 
-function operationalValidationIssue(
-  value: unknown,
-): ValidationIssue | undefined {
+function operationalValidationIssue(value: unknown): ValidationIssue | undefined {
   if (!record(value)) return issue("data", "must be an object");
   const names = [
     "verification",
@@ -2911,69 +2231,38 @@ function operationalValidationIssue(
     "sieve",
     "health",
   ] as const;
-  for (const name of names)
-    if (!record(value[name])) return issue(name, "must be an object");
-  const operational = value as Record<
-    (typeof names)[number],
-    Record<string, unknown>
-  >;
+  for (const name of names) if (!record(value[name])) return issue(name, "must be an object");
+  const operational = value as Record<(typeof names)[number], Record<string, unknown>>;
   const available = (feature: Record<string, unknown>) =>
-    feature.availability === "available" ||
-    feature.availability === "unavailable";
+    feature.availability === "available" || feature.availability === "unavailable";
   for (const name of names.slice(0, -1))
-    if (!available(operational[name]))
-      return issue(`${name}.availability`, "must be available or unavailable");
-  if (
-    !Array.isArray(operational.verification.checks) ||
-    operational.verification.checks.length > 20
-  )
-    return issue(
-      "verification.checks",
-      "must be an array with at most 20 items",
-    );
-  if (
-    !Array.isArray(operational.jobs.items) ||
-    operational.jobs.items.length > 50
-  )
+    if (!available(operational[name])) return issue(`${name}.availability`, "must be available or unavailable");
+  if (!Array.isArray(operational.verification.checks) || operational.verification.checks.length > 20)
+    return issue("verification.checks", "must be an array with at most 20 items");
+  if (!Array.isArray(operational.jobs.items) || operational.jobs.items.length > 50)
     return issue("jobs.items", "must be an array with at most 50 items");
   for (const key of ["blocked", "confirmed"] as const)
-    if (typeof operational.guard[key] !== "number")
-      return issue(`guard.${key}`, "must be a number");
+    if (typeof operational.guard[key] !== "number") return issue(`guard.${key}`, "must be a number");
   if (!Number.isSafeInteger(operational.continuity.revision))
     return issue("continuity.revision", "must be a safe integer");
   if (!Number.isSafeInteger(operational.papercuts.revision))
     return issue("papercuts.revision", "must be a safe integer");
-  if (!record(operational.papercuts.counts))
-    return issue("papercuts.counts", "must be an object");
-  if (!Number.isSafeInteger(operational.timeline.revision))
-    return issue("timeline.revision", "must be a safe integer");
-  if (
-    !Array.isArray(operational.timeline.checkpoints) ||
-    operational.timeline.checkpoints.length > 100
-  )
-    return issue(
-      "timeline.checkpoints",
-      "must be an array with at most 100 items",
-    );
-  if (
-    !Array.isArray(operational.tools.policies) ||
-    operational.tools.policies.length > 100
-  )
+  if (!record(operational.papercuts.counts)) return issue("papercuts.counts", "must be an object");
+  if (!Number.isSafeInteger(operational.timeline.revision)) return issue("timeline.revision", "must be a safe integer");
+  if (!Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100)
+    return issue("timeline.checkpoints", "must be an array with at most 100 items");
+  if (!Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100)
     return issue("tools.policies", "must be an array with at most 100 items");
   if (!healthStatuses.has(String(operational.health.status)))
     return issue("health.status", "must be healthy, degraded, or unavailable");
-  if (
-    !Array.isArray(operational.health.issues) ||
-    operational.health.issues.length > 20
-  )
+  if (!Array.isArray(operational.health.issues) || operational.health.issues.length > 20)
     return issue("health.issues", "must be an array with at most 20 items");
 
   if (operational.sieve.availability === "available") {
     const invalid = sieveValidationIssue(operational.sieve);
     if (invalid) return invalid;
   }
-  if (operational.continuity.availability === "available")
-    return continuityMemoryIssue(operational.continuity);
+  if (operational.continuity.availability === "available") return continuityMemoryIssue(operational.continuity);
   return undefined;
 }
 
@@ -2983,15 +2272,8 @@ export interface RuntimeSnapshotValidationIssue {
   detail: string;
 }
 
-export function runtimeSnapshotValidationIssue(
-  value: unknown,
-): RuntimeSnapshotValidationIssue | undefined {
-  if (!record(value))
-    return {
-      kind: "snapshot",
-      area: "payload",
-      detail: "the response is not an object",
-    };
+export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotValidationIssue | undefined {
+  if (!record(value)) return { kind: "snapshot", area: "payload", detail: "the response is not an object" };
   if (value.protocolVersion !== PROTOCOL_VERSION) {
     return {
       kind: "protocol",
@@ -2999,16 +2281,8 @@ export function runtimeSnapshotValidationIssue(
       detail: `expected ${PROTOCOL_VERSION}, received ${String(value.protocolVersion ?? "missing")}`,
     };
   }
-  if (
-    !identifier(value.sessionId) ||
-    !generation(value.sessionGeneration) ||
-    typeof value.ready !== "boolean"
-  ) {
-    return {
-      kind: "snapshot",
-      area: "identity",
-      detail: "session ID, generation, or readiness is invalid",
-    };
+  if (!identifier(value.sessionId) || !generation(value.sessionGeneration) || typeof value.ready !== "boolean") {
+    return { kind: "snapshot", area: "identity", detail: "session ID, generation, or readiness is invalid" };
   }
   const requiredAreas = [
     "runtimePolicy",
@@ -3018,13 +2292,8 @@ export function runtimeSnapshotValidationIssue(
     "operational",
     "extensionUi",
   ] as const;
-  const missing = requiredAreas.find((area) => !record(value[area]));
-  if (missing)
-    return {
-      kind: "snapshot",
-      area: missing,
-      detail: "required runtime data is missing",
-    };
+  const missing = requiredAreas.find(area => !record(value[area]));
+  if (missing) return { kind: "snapshot", area: missing, detail: "required runtime data is missing" };
   if (!isRuntimeSnapshot(value)) {
     const operationalIssue = operationalValidationIssue(value.operational);
     if (operationalIssue) return { kind: "snapshot", ...operationalIssue };
@@ -3056,15 +2325,7 @@ export function runtimeSnapshotValidationIssue(
           },
         },
       ],
-      [
-        "capabilities",
-        {
-          activeTools: [],
-          availableTools: [],
-          optionalCapabilities: {},
-          diagnostics: [],
-        },
-      ],
+      ["capabilities", { activeTools: [], availableTools: [], optionalCapabilities: {}, diagnostics: [] }],
       [
         "conversation",
         {
@@ -3079,10 +2340,7 @@ export function runtimeSnapshotValidationIssue(
           },
         },
       ],
-      [
-        "session controls",
-        { sessionControls: { models: [], thinkingLevels: [] } },
-      ],
+      ["session controls", { sessionControls: { models: [], thinkingLevels: [] } }],
       [
         "metrics",
         {
@@ -3117,11 +2375,7 @@ export function runtimeSnapshotValidationIssue(
               revision: 0,
               counts: { open: 0, resolved: 0, dismissed: 0, total: 0 },
             },
-            timeline: {
-              availability: "unavailable",
-              revision: 0,
-              checkpoints: [],
-            },
+            timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
             tools: { availability: "unavailable", policies: [] },
             sieve: { availability: "unavailable" },
             health: { status: "unavailable", issues: [] },
@@ -3130,31 +2384,12 @@ export function runtimeSnapshotValidationIssue(
       ],
       [
         "extension UI",
-        {
-          extensionUi: {
-            notifications: [],
-            statuses: [],
-            widgets: [],
-            editorText: "",
-            editorRevision: 0,
-          },
-        },
+        { extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 } },
       ],
     ];
-    const area = validAreaReplacements.find(([, replacement]) =>
-      isRuntimeSnapshot({ ...value, ...replacement }),
-    )?.[0];
-    if (area)
-      return {
-        kind: "snapshot",
-        area,
-        detail: "a field is invalid, oversized, or incomplete",
-      };
-    return {
-      kind: "snapshot",
-      area: "runtime data",
-      detail: "a field is invalid, oversized, or incomplete",
-    };
+    const area = validAreaReplacements.find(([, replacement]) => isRuntimeSnapshot({ ...value, ...replacement }))?.[0];
+    if (area) return { kind: "snapshot", area, detail: "a field is invalid, oversized, or incomplete" };
+    return { kind: "snapshot", area: "runtime data", detail: "a field is invalid, oversized, or incomplete" };
   }
   return undefined;
 }
@@ -3166,9 +2401,7 @@ export function describeRuntimeSnapshotIssue(
   if (!issue) return undefined;
   const input = record(value) ? value : {};
   const session = identifier(input.sessionId) ? input.sessionId : "unknown";
-  const generationValue = generation(input.sessionGeneration)
-    ? input.sessionGeneration
-    : "unknown";
+  const generationValue = generation(input.sessionGeneration) ? input.sessionGeneration : "unknown";
   const ready = typeof input.ready === "boolean" ? input.ready : "unknown";
   if (issue.kind === "protocol") {
     return `Runtime protocol mismatch: ${issue.detail} (session ${session}, generation ${generationValue}, ready ${ready}).`;

@@ -13,22 +13,14 @@ test("checkpoint changes compare first against HEAD and later against the prior 
     await git(root, ["init"]);
     await writeFile(join(root, "tracked.txt"), "one\n");
     await git(root, ["add", "."]);
-    await git(root, [
-      "-c",
-      "user.name=test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(root, ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
 
     await writeFile(join(root, "tracked.txt"), "one\ntwo\n");
     await writeFile(join(root, "added.txt"), "added\n");
     const first = await capture(root, "session");
     const firstChanges = await checkpointChanges(first);
     assert.deepEqual(
-      firstChanges.files.map((item) => item.path),
+      firstChanges.files.map(item => item.path),
       ["added.txt", "tracked.txt"],
     );
     assert.equal(firstChanges.additions, 2);
@@ -38,7 +30,7 @@ test("checkpoint changes compare first against HEAD and later against the prior 
     const second = await capture(root, "session");
     const laterChanges = await checkpointChanges(second, first);
     assert.deepEqual(
-      laterChanges.files.map((item) => item.status),
+      laterChanges.files.map(item => item.status),
       ["deleted", "modified"],
     );
     const diff = await checkpointFileDiff(second, first, "tracked.txt");

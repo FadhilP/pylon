@@ -31,25 +31,18 @@ export function createToolRegistry(pi: ExtensionAPI) {
   let lastError: string | undefined;
   let lastAcknowledgeError: string | undefined;
 
-  const hasGate = () =>
-    [...policies.values()].some((policy) => policy.allowOnly);
-  const managedTools = () =>
-    new Set([...managedByOwner.values()].flatMap((tools) => [...tools]));
+  const hasGate = () => [...policies.values()].some(policy => policy.allowOnly);
+  const managedTools = () => new Set([...managedByOwner.values()].flatMap(tools => [...tools]));
   const capableTools = () => {
     const managed = managedTools();
-    const capable = new Set(
-      [...policies.values()].flatMap((policy) => policy.enabledTools),
-    );
-    for (const tool of pi.getAllTools?.() ?? [])
-      if (!managed.has(tool.name)) capable.add(tool.name);
+    const capable = new Set([...policies.values()].flatMap(policy => policy.enabledTools));
+    for (const tool of pi.getAllTools?.() ?? []) if (!managed.has(tool.name)) capable.add(tool.name);
     return capable;
   };
   const discoverableTools = () => {
     const capable = capableTools();
     const result = new Set(
-      [...policies.values()]
-        .flatMap((policy) => policy.deferredTools ?? [])
-        .filter((tool) => capable.has(tool)),
+      [...policies.values()].flatMap(policy => policy.deferredTools ?? []).filter(tool => capable.has(tool)),
     );
     for (const [tool, mode] of toolOverrides) {
       result.delete(tool);
@@ -63,17 +56,13 @@ export function createToolRegistry(pi: ExtensionAPI) {
     for (const policy of policies.values()) {
       for (const name of policy.enabledTools) {
         const usages = entries.get(name);
-        const usage =
-          policy.toolUsage?.[name] ?? policy.deferredToolUsage?.[name];
+        const usage = policy.toolUsage?.[name] ?? policy.deferredToolUsage?.[name];
         if (usages && usage) usages.add(usage);
       }
     }
     return [...entries]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, usages]) => ({
-        name,
-        usage: usages.size === 1 ? [...usages][0] : undefined,
-      }));
+      .map(([name, usages]) => ({ name, usage: usages.size === 1 ? [...usages][0] : undefined }));
   };
 
   /** Records the tools the runtime offers on its own, ignoring policy-managed and overridden ones. */
@@ -82,10 +71,8 @@ export function createToolRegistry(pi: ExtensionAPI) {
     const managed = managedTools();
     const previous = new Set(baseline);
     baseline.clear();
-    for (const tool of pi.getActiveTools())
-      if (!managed.has(tool) && !toolOverrides.has(tool)) baseline.add(tool);
-    for (const tool of previous)
-      if (!managed.has(tool) && toolOverrides.has(tool)) baseline.add(tool);
+    for (const tool of pi.getActiveTools()) if (!managed.has(tool) && !toolOverrides.has(tool)) baseline.add(tool);
+    for (const tool of previous) if (!managed.has(tool) && toolOverrides.has(tool)) baseline.add(tool);
     initialized = true;
   };
 
@@ -93,9 +80,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
     if (!initialized) captureBaseline();
     try {
       const discoverable = discoverableTools();
-      const nextSelected = [...selectedTools].filter((tool) =>
-        discoverable.has(tool),
-      );
+      const nextSelected = [...selectedTools].filter(tool => discoverable.has(tool));
       pi.setActiveTools(
         reconcileTools(baseline, policies.values(), {
           selectedTools: nextSelected,
@@ -129,8 +114,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
   };
 
   const register = (message: ToolPolicyMessage) => {
-    const previousManaged =
-      managedByOwner.get(message.owner) ?? new Set<string>();
+    const previousManaged = managedByOwner.get(message.owner) ?? new Set<string>();
     const previousPolicy = policies.get(message.owner);
     const baselineBefore = new Set(baseline);
     managedByOwner.set(message.owner, new Set(message.managedTools));
@@ -139,27 +123,21 @@ export function createToolRegistry(pi: ExtensionAPI) {
     // Tools this owner no longer manages fall back into the baseline if they are still active.
     const stillManaged = managedTools();
     const active = new Set(pi.getActiveTools());
-    for (const tool of previousManaged)
-      if (!stillManaged.has(tool) && active.has(tool)) baseline.add(tool);
+    for (const tool of previousManaged) if (!stillManaged.has(tool) && active.has(tool)) baseline.add(tool);
     for (const tool of message.managedTools) baseline.delete(tool);
 
     policies.set(message.owner, {
       owner: message.owner,
       managedTools: [...message.managedTools],
       enabledTools: [...message.enabledTools],
-      ...(message.deferredTools
-        ? { deferredTools: [...message.deferredTools] }
-        : {}),
+      ...(message.deferredTools ? { deferredTools: [...message.deferredTools] } : {}),
       ...(message.toolUsage ? { toolUsage: { ...message.toolUsage } } : {}),
-      ...(message.deferredToolUsage
-        ? { deferredToolUsage: { ...message.deferredToolUsage } }
-        : {}),
+      ...(message.deferredToolUsage ? { deferredToolUsage: { ...message.deferredToolUsage } } : {}),
       ...(message.allowOnly ? { allowOnly: [...message.allowOnly] } : {}),
     });
     if (message.restoreTools && !hasGate()) {
       const managed = managedTools();
-      for (const tool of message.restoreTools)
-        if (!managed.has(tool)) baseline.add(tool);
+      for (const tool of message.restoreTools) if (!managed.has(tool)) baseline.add(tool);
     }
 
     if (reconcile()) {
@@ -172,8 +150,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
       return;
     }
     restoreBaseline(baselineBefore);
-    if (previousManaged.size)
-      managedByOwner.set(message.owner, previousManaged);
+    if (previousManaged.size) managedByOwner.set(message.owner, previousManaged);
     else managedByOwner.delete(message.owner);
     if (previousPolicy) policies.set(message.owner, previousPolicy);
     else policies.delete(message.owner);
@@ -201,19 +178,12 @@ export function createToolRegistry(pi: ExtensionAPI) {
     const entries = Object.entries(value.overrides);
     if (
       entries.length > MAX_OVERRIDES ||
-      entries.some(
-        ([tool, mode]) =>
-          !tool ||
-          tool.length > MAX_TOOL_NAME ||
-          !OVERRIDE_MODES.includes(String(mode)),
-      )
+      entries.some(([tool, mode]) => !tool || tool.length > MAX_TOOL_NAME || !OVERRIDE_MODES.includes(String(mode)))
     )
       return;
     if (!initialized) captureBaseline();
     toolOverrides.clear();
-    for (const [tool, mode] of entries)
-      if (tool !== "search_tools")
-        toolOverrides.set(tool, mode as ToolOverrideMode);
+    for (const [tool, mode] of entries) if (tool !== "search_tools") toolOverrides.set(tool, mode as ToolOverrideMode);
     reconcile();
   };
 
@@ -225,16 +195,13 @@ export function createToolRegistry(pi: ExtensionAPI) {
       if (
         !Array.isArray(names) ||
         names.length > MAX_SELECTION ||
-        names.some((name) => typeof name !== "string" || !name) ||
+        names.some(name => typeof name !== "string" || !name) ||
         new Set(names).size !== names.length
       )
-        return {
-          error: `selection must contain at most ${MAX_SELECTION} unique non-empty tool names`,
-        };
+        return { error: `selection must contain at most ${MAX_SELECTION} unique non-empty tool names` };
       const eligible = discoverableTools();
-      const unknown = names.filter((name) => !eligible.has(name));
-      if (unknown.length)
-        return { error: `tools are not eligible: ${unknown.join(", ")}` };
+      const unknown = names.filter(name => !eligible.has(name));
+      if (unknown.length) return { error: `tools are not eligible: ${unknown.join(", ")}` };
       const previous = [...selectedTools];
       selectedTools.clear();
       for (const name of names) selectedTools.add(name);
@@ -244,10 +211,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
         return { error: lastError ?? "tool reconciliation failed" };
       }
       const active = new Set(pi.getActiveTools());
-      return {
-        selected: [...selectedTools],
-        blocked: [...selectedTools].filter((name) => !active.has(name)),
-      };
+      return { selected: [...selectedTools], blocked: [...selectedTools].filter(name => !active.has(name)) };
     },
     reset: () => {
       const previous = [...selectedTools];
@@ -262,10 +226,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
 
   /** Backs `/pylon tools [status|enable <tool...>|disable <tool...>]`. */
   const manageTools = (args: string, ctx: any) => {
-    const [action = "status", ...names] = args
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+    const [action = "status", ...names] = args.trim().split(/\s+/).filter(Boolean);
     const effective = () => pi.getActiveTools();
     if (action === "status") {
       ctx.ui.notify(
@@ -275,29 +236,19 @@ export function createToolRegistry(pi: ExtensionAPI) {
       return;
     }
     if (!["enable", "disable"].includes(action) || !names.length) {
-      ctx.ui.notify(
-        "Usage: /pylon tools [status|enable <tool...>|disable <tool...>]",
-        "error",
-      );
+      ctx.ui.notify("Usage: /pylon tools [status|enable <tool...>|disable <tool...>]", "error");
       return;
     }
-    const known = new Set(
-      (pi.getAllTools?.() ?? effective().map((name) => ({ name }))).map(
-        (tool: any) => tool.name,
-      ),
-    );
-    const unknown = names.filter((name) => !known.has(name));
+    const known = new Set((pi.getAllTools?.() ?? effective().map(name => ({ name }))).map((tool: any) => tool.name));
+    const unknown = names.filter(name => !known.has(name));
     if (unknown.length) {
       ctx.ui.notify(`Unknown tools: ${unknown.join(", ")}`, "error");
       return;
     }
     const managed = managedTools();
-    const policyOwned = names.filter((name) => managed.has(name));
+    const policyOwned = names.filter(name => managed.has(name));
     if (policyOwned.length) {
-      ctx.ui.notify(
-        `Policy-managed tools cannot be changed manually: ${policyOwned.join(", ")}`,
-        "error",
-      );
+      ctx.ui.notify(`Policy-managed tools cannot be changed manually: ${policyOwned.join(", ")}`, "error");
       return;
     }
     const previous = new Set(baseline);
@@ -309,10 +260,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
       ctx.ui.notify(`Tool update failed: ${lastError}`, "error");
       return;
     }
-    const deferred =
-      action === "enable"
-        ? names.filter((name) => !effective().includes(name))
-        : [];
+    const deferred = action === "enable" ? names.filter(name => !effective().includes(name)) : [];
     ctx.ui.notify(
       `${action === "enable" ? "Enabled" : "Disabled"}: ${names.join(", ")}${deferred.length ? `\nDeferred by active gate: ${deferred.join(", ")}` : ""}`,
       deferred.length ? "warning" : "info",

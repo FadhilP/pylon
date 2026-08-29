@@ -36,7 +36,9 @@ async function confirmUpdate(version) {
 function installUpdate(version) {
   const spec = `${PACKAGE}@${version}`;
   return process.platform === "win32"
-    ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `npm install --global ${spec}`], { stdio: "inherit" })
+    ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `npm install --global ${spec}`], {
+        stdio: "inherit",
+      })
     : spawnSync("npm", ["install", "--global", spec], { stdio: "inherit" });
 }
 
@@ -46,8 +48,14 @@ async function cachedVersion(path, currentVersion, now) {
     const raw = await readFile(path, "utf8");
     if (raw.length > 10_000) return;
     const value = JSON.parse(raw);
-    if (value.currentVersion !== currentVersion || !parseVersion(value.latestVersion)
-      || !Number.isSafeInteger(value.checkedAt) || value.checkedAt > now || now - value.checkedAt >= CACHE_MS) return;
+    if (
+      value.currentVersion !== currentVersion ||
+      !parseVersion(value.latestVersion) ||
+      !Number.isSafeInteger(value.checkedAt) ||
+      value.checkedAt > now ||
+      now - value.checkedAt >= CACHE_MS
+    )
+      return;
     return value.latestVersion;
   } catch {
     return;
@@ -78,9 +86,10 @@ export async function checkForUpdate(currentVersion, options = {}) {
   }
   try {
     const now = options.now?.() ?? Date.now();
-    const cacheFile = options.cacheFile === null
-      ? undefined
-      : options.cacheFile ?? (options.fetch ? undefined : join(homedir(), ".pylon", "update-check.json"));
+    const cacheFile =
+      options.cacheFile === null
+        ? undefined
+        : (options.cacheFile ?? (options.fetch ? undefined : join(homedir(), ".pylon", "update-check.json")));
     let version = await cachedVersion(cacheFile, currentVersion, now);
     if (!version) {
       const response = await (options.fetch ?? globalThis.fetch)(REGISTRY_URL, {
@@ -102,7 +111,7 @@ export async function checkForUpdate(currentVersion, options = {}) {
       log(`Run npm install --global ${PACKAGE}@${version} to update.`);
       return "continue";
     }
-    if (!await (options.confirm ?? confirmUpdate)(version)) return "continue";
+    if (!(await (options.confirm ?? confirmUpdate)(version))) return "continue";
 
     let result;
     try {
@@ -111,7 +120,9 @@ export async function checkForUpdate(currentVersion, options = {}) {
       result = { status: null };
     }
     if (result.error || result.status !== 0) {
-      warn(`Pylon update failed and may be incomplete. Run npm install --global ${PACKAGE}@${version}, then run pylon again.`);
+      warn(
+        `Pylon update failed and may be incomplete. Run npm install --global ${PACKAGE}@${version}, then run pylon again.`,
+      );
       return "stopped";
     }
     log(`Pylon updated to ${version}. Run pylon again.`);

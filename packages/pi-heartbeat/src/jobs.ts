@@ -10,11 +10,7 @@ import { killTree, shellInvocation } from "./process-tree.ts";
 export const STALE_SESSION_DIR_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Best-effort removal of abandoned heartbeat session directories. */
-export async function pruneStaleSessionDirs(
-  root: string,
-  currentDir: string,
-  now = Date.now(),
-): Promise<void> {
+export async function pruneStaleSessionDirs(root: string, currentDir: string, now = Date.now()): Promise<void> {
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
@@ -22,7 +18,7 @@ export async function pruneStaleSessionDirs(
     return;
   }
   await Promise.all(
-    entries.map(async (entry) => {
+    entries.map(async entry => {
       if (!entry.isDirectory()) return;
       const dir = join(root, entry.name);
       if (resolve(dir) === resolve(currentDir)) return;
@@ -31,13 +27,9 @@ export async function pruneStaleSessionDirs(
         // Job logs are written after their containing directory is created.
         for (const child of await readdir(dir, { withFileTypes: true })) {
           if (!child.isFile()) continue;
-          lastActivity = Math.max(
-            lastActivity,
-            (await stat(join(dir, child.name))).mtimeMs,
-          );
+          lastActivity = Math.max(lastActivity, (await stat(join(dir, child.name))).mtimeMs);
         }
-        if (now - lastActivity >= STALE_SESSION_DIR_MS)
-          await rm(dir, { recursive: true, force: true });
+        if (now - lastActivity >= STALE_SESSION_DIR_MS) await rm(dir, { recursive: true, force: true });
       } catch {
         // A concurrent session or filesystem error must not disrupt startup.
       }
@@ -45,11 +37,9 @@ export async function pruneStaleSessionDirs(
   );
 }
 
-export type State =
-  "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out";
+export type State = "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out";
 /** A job still doing work: not yet finished, failed, cancelled, or timed out. */
-export const isActive = (job: Pick<Job, "state">) =>
-  job.state === "running" || job.state === "cancelling";
+export const isActive = (job: Pick<Job, "state">) => job.state === "running" || job.state === "cancelling";
 
 function formatFinished(job: Job, heading: string) {
   const successful = job.state === "completed" && job.exitCode === 0;
@@ -59,8 +49,7 @@ function formatFinished(job: Job, heading: string) {
     successful ? 40 : 200,
   );
   let text = `${heading}\n${tails.text}${tails.truncated ? "\n[tail truncated]" : ""}\nFull captured log: ${job.logPath}`;
-  if (job.outputTruncated)
-    text += `\nOutput exceeded 10 MiB; final tails retained.`;
+  if (job.outputTruncated) text += `\nOutput exceeded 10 MiB; final tails retained.`;
   return { text, truncated: tails.truncated || job.outputTruncated };
 }
 
@@ -114,12 +103,7 @@ export class JobManager {
   readonly onChange: () => void;
   private readonly shutdownGraceMs: number;
   private readonly shellPath?: string;
-  constructor(
-    dir: string,
-    onChange: () => void = () => {},
-    shutdownGraceMs = 5_000,
-    shellPath?: string,
-  ) {
+  constructor(dir: string, onChange: () => void = () => {}, shutdownGraceMs = 5_000, shellPath?: string) {
     this.dir = dir;
     this.onChange = onChange;
     this.shutdownGraceMs = shutdownGraceMs;
@@ -139,10 +123,7 @@ export class JobManager {
   }
   /** Pipes both streams into the job's tails and its capped log file. */
   private attachStreams(j: Job, child: ChildProcess) {
-    const decoders = {
-      stdout: new StringDecoder("utf8"),
-      stderr: new StringDecoder("utf8"),
-    };
+    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
     const consumeText = (kind: "stdout" | "stderr", text: string) => {
       if (!text) return;
       (kind === "stdout" ? j.stdoutTail : j.stderrTail).append(text);
@@ -151,12 +132,8 @@ export class JobManager {
       if (j.outputBytes <= 10 * 1024 * 1024) j.file.write(line);
       else j.outputTruncated = true;
     };
-    child.stdout!.on("data", (data: Buffer) =>
-      consumeText("stdout", decoders.stdout.write(data)),
-    );
-    child.stderr!.on("data", (data: Buffer) =>
-      consumeText("stderr", decoders.stderr.write(data)),
-    );
+    child.stdout!.on("data", (data: Buffer) => consumeText("stdout", decoders.stdout.write(data)));
+    child.stderr!.on("data", (data: Buffer) => consumeText("stderr", decoders.stderr.write(data)));
     j.file.on("error", () => {
       j.outputTruncated = true;
     });
@@ -177,7 +154,7 @@ export class JobManager {
       j.state = j.stopReason || (code === 0 ? "completed" : "failed");
       flush();
       j.file.end();
-      j.finalizing = new Promise<void>((resolve) => {
+      j.finalizing = new Promise<void>(resolve => {
         if (j.file.closed) resolve();
         else {
           j.file.once("close", resolve);
@@ -194,17 +171,9 @@ export class JobManager {
       this.onChange();
     });
   }
-  async start(
-    command: string,
-    cwd: string,
-    label?: string,
-    timeoutMs = 1800000,
-    sessionId?: string,
-  ) {
-    if (!command.trim() || command.length > 8000)
-      throw Error("Invalid command.");
-    if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 7200000)
-      throw Error("Invalid timeout.");
+  async start(command: string, cwd: string, label?: string, timeoutMs = 1800000, sessionId?: string) {
+    if (!command.trim() || command.length > 8000) throw Error("Invalid command.");
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 7200000) throw Error("Invalid timeout.");
     if (this.running().length >= 4) throw Error("Maximum 4 simultaneous jobs.");
     const id = this.newJobId();
     const logPath = join(this.dir, `${id}.log`),
@@ -262,44 +231,31 @@ export class JobManager {
   }
   prune() {
     const done = [...this.jobs.values()]
-      .filter((j) => !isActive(j))
+      .filter(j => !isActive(j))
       .sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
     for (const j of done.slice(20)) this.jobs.delete(j.id);
   }
   format(job: Job) {
     const elapsed = ((job.finishedAt || Date.now()) - job.startedAt) / 1000;
     const heading = `Job ${job.id}: ${job.state}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ""}, ${elapsed.toFixed(1)}s.`;
-    return isActive(job)
-      ? formatRunning(job, heading)
-      : formatFinished(job, heading);
+    return isActive(job) ? formatRunning(job, heading) : formatFinished(job, heading);
   }
   async shutdown() {
     const deadline = Date.now() + this.shutdownGraceMs;
     for (const j of this.running()) await this.stop(j);
     const withinDeadline = (promise: Promise<unknown>) => {
       const remaining = Math.max(0, deadline - Date.now());
-      return remaining
-        ? Promise.race([promise, delay(remaining)])
-        : Promise.resolve();
+      return remaining ? Promise.race([promise, delay(remaining)]) : Promise.resolve();
     };
     await Promise.all(
-      this.running().map((job) =>
+      this.running().map(job =>
         job.child.exitCode !== null
           ? Promise.resolve()
-          : withinDeadline(
-              new Promise<void>((resolve) => job.child.once("close", resolve)),
-            ),
+          : withinDeadline(new Promise<void>(resolve => job.child.once("close", resolve))),
       ),
     );
-    await withinDeadline(
-      Promise.all(
-        [...this.jobs.values()].map(
-          (job) => job.finalizing ?? Promise.resolve(),
-        ),
-      ),
-    );
-    for (const job of this.jobs.values())
-      if (!job.file.closed) job.file.destroy();
+    await withinDeadline(Promise.all([...this.jobs.values()].map(job => job.finalizing ?? Promise.resolve())));
+    for (const job of this.jobs.values()) if (!job.file.closed) job.file.destroy();
     await rm(this.dir, { recursive: true, force: true });
   }
 }

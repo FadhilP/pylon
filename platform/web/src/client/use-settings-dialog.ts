@@ -23,10 +23,5 @@ export function useSettingsDialog() {
       packageQuery: options.packageQuery ?? "",
     });
 
-  return {
-    settings,
-    settingsOpen: Boolean(settings),
-    openSettings,
-    closeSettings: () => setSettings(undefined),
-  };
+  return { settings, settingsOpen: Boolean(settings), openSettings, closeSettings: () => setSettings(undefined) };
 }

@@ -2,15 +2,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readVersionedJson, updateJson, writeJson } from "./storage.ts";
 
-export const thinkingLevels = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type ModelProfile = { model: string; thinking?: ThinkingLevel };
 export const DEFAULT_KEEP_RECENT_TOKENS = 25_000;
@@ -34,21 +26,20 @@ export const defaultConfig = (): ContinuityConfig => ({
   memoryEnabled: true,
   keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
 });
-export const configPath = (agentDir = getAgentDir()) =>
-  join(agentDir, "pi-continuity", "config.json");
+export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-continuity", "config.json");
 const isProfile = (value: any): value is ModelProfile =>
   Boolean(
     value &&
     typeof value.model === "string" &&
     value.model.trim() &&
-    Object.keys(value).every((key) => key === "model" || key === "thinking") &&
+    Object.keys(value).every(key => key === "model" || key === "thinking") &&
     (value.thinking === undefined || thinkingLevels.includes(value.thinking)),
   );
 const normalizeConfig = (value: any): ContinuityConfig | undefined => {
   if (
     ![1, 2].includes(value?.version) ||
     Object.keys(value).some(
-      (key) =>
+      key =>
         ![
           "version",
           "memoryEnabled",
@@ -59,15 +50,12 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
           "compactionReviewer",
         ].includes(key),
     ) ||
-    (value.memoryEnabled !== undefined &&
-      typeof value.memoryEnabled !== "boolean") ||
-    (value.keepRecentTokens !== undefined &&
-      !validKeepRecentTokens(value.keepRecentTokens)) ||
+    (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") ||
+    (value.keepRecentTokens !== undefined && !validKeepRecentTokens(value.keepRecentTokens)) ||
     (value.planner !== undefined && !isProfile(value.planner)) ||
     (value.executor !== undefined && !isProfile(value.executor)) ||
     (value.memoryReviewer !== undefined && !isProfile(value.memoryReviewer)) ||
-    (value.compactionReviewer !== undefined &&
-      !isProfile(value.compactionReviewer))
+    (value.compactionReviewer !== undefined && !isProfile(value.compactionReviewer))
   )
     return;
   return {
@@ -77,28 +65,16 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
     ...(value.planner ? { planner: value.planner } : {}),
     ...(value.executor ? { executor: value.executor } : {}),
     ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}),
-    ...(value.compactionReviewer
-      ? { compactionReviewer: value.compactionReviewer }
-      : {}),
+    ...(value.compactionReviewer ? { compactionReviewer: value.compactionReviewer } : {}),
   };
 };
-export const isContinuityConfig = (value: any) =>
-  normalizeConfig(value) !== undefined;
-export async function loadConfig(
-  path = configPath(),
-): Promise<ContinuityConfig> {
+export const isContinuityConfig = (value: any) => normalizeConfig(value) !== undefined;
+export async function loadConfig(path = configPath()): Promise<ContinuityConfig> {
   return normalizeConfig(
-    await readVersionedJson(
-      path,
-      defaultConfig(),
-      (value) => normalizeConfig(value) !== undefined,
-    ),
+    await readVersionedJson(path, defaultConfig(), value => normalizeConfig(value) !== undefined),
   )!;
 }
-export async function saveConfig(
-  config: ContinuityConfig,
-  path = configPath(),
-): Promise<void> {
+export async function saveConfig(config: ContinuityConfig, path = configPath()): Promise<void> {
   const normalized = normalizeConfig({ ...config, version: 2 });
   if (!normalized) throw Error("invalid Continuity config");
   await writeJson(path, normalized);
@@ -110,20 +86,16 @@ export async function updateConfig(
   return updateJson(
     path,
     defaultConfig(),
-    (current) => {
+    current => {
       const normalizedCurrent = normalizeConfig(current);
-      const next =
-        normalizedCurrent &&
-        normalizeConfig({ ...update(normalizedCurrent), version: 2 });
+      const next = normalizedCurrent && normalizeConfig({ ...update(normalizedCurrent), version: 2 });
       if (!next) throw Error("invalid Continuity config update");
       return next;
     },
     isContinuityConfig,
   );
 }
-export function parseModelRef(
-  ref: string,
-): { provider: string; id: string; thinking?: ThinkingLevel } | undefined {
+export function parseModelRef(ref: string): { provider: string; id: string; thinking?: ThinkingLevel } | undefined {
   const slash = ref.indexOf("/");
   if (slash < 1 || slash === ref.length - 1) return;
   const colon = ref.lastIndexOf(":"),

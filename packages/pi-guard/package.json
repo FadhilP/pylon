@@ -3,12 +3,32 @@
   "version": "0.1.0",
   "description": "Conservative destructive-command and path guard for Pi",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=24.15.0" },
-  "files": ["extensions", "src", "README.md", "LICENSE"],
-  "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
-  "pi": { "extensions": ["./extensions/pi-guard.ts"] },
-  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
-  "devDependencies": { "typescript": "^5.8.0" },
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-guard.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
   "license": "MIT"
 }

@@ -1,12 +1,5 @@
-import {
-  complete,
-  type Message,
-  type Model,
-} from "@earendil-works/pi-ai/compat";
-import {
-  sessionEntryToContextMessages,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { complete, type Message, type Model } from "@earendil-works/pi-ai/compat";
+import { sessionEntryToContextMessages, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
@@ -58,8 +51,7 @@ type Details = {
   failureMessage?: string;
   attempts?: number;
 };
-const modelName = (model: { provider: string; id: string }) =>
-  `${model.provider}/${model.id}`;
+const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
 const HEARTBEAT_MS = 1_000;
 
 const snapshotDetails = (snapshot: Snapshot) => ({
@@ -70,14 +62,8 @@ const snapshotDetails = (snapshot: Snapshot) => ({
   sectionAllocations: snapshot.sectionAllocations,
   duplicateTelemetry: snapshot.duplicateTelemetry,
 });
-const textResult = (text: string, details: Details) => ({
-  content: [{ type: "text" as const, text }],
-  details,
-});
-const configuredModel = (
-  ctx: any,
-  config: AdvisorConfig,
-): Model<any> | undefined => {
+const textResult = (text: string, details: Details) => ({ content: [{ type: "text" as const, text }], details });
+const configuredModel = (ctx: any, config: AdvisorConfig): Model<any> | undefined => {
   if (config.useMainModel) return ctx.model;
   if (!config.advisorModel) return undefined;
   const ref = parseModelRef(config.advisorModel);
@@ -93,9 +79,7 @@ function delegatedName(pi: ExtensionAPI, callId: string): string {
       if (typeof name === "string" && /^A\d+$/.test(name)) assigned = name;
     },
   });
-  return (
-    assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`
-  );
+  return assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
 }
 
 type CallLifecycle = { signal: AbortSignal; isTimedOut: () => boolean };
@@ -136,7 +120,7 @@ export default function advisorExtension(
   const serializeAdvisor = async <T>(run: () => Promise<T>): Promise<T> => {
     const previousRun = advisorQueue;
     let releaseRun = () => {};
-    advisorQueue = new Promise<void>((resolve) => {
+    advisorQueue = new Promise<void>(resolve => {
       releaseRun = resolve;
     });
     await previousRun;
@@ -147,13 +131,9 @@ export default function advisorExtension(
     }
   };
   const refreshTool = async (ctx: any, agentDir?: string) => {
-    const config = await loadConfig(
-      agentDir ? configPath(agentDir) : undefined,
-    );
+    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
     const model = configuredModel(ctx, config);
-    const enabled = Boolean(
-      model && ctx.modelRegistry.hasConfiguredAuth(model),
-    );
+    const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -164,8 +144,7 @@ export default function advisorExtension(
       ...(enabled
         ? {
             toolUsage: {
-              advisor:
-                "review consequential decisions, architecture, migrations, security, or broad regression risk",
+              advisor: "review consequential decisions, architecture, migrations, security, or broad regression risk",
             },
           }
         : {}),
@@ -174,12 +153,12 @@ export default function advisorExtension(
       },
     });
     if (coordinated) return;
-    const active = pi.getActiveTools().filter((name) => name !== "advisor");
+    const active = pi.getActiveTools().filter(name => name !== "advisor");
     if (enabled) active.push("advisor");
     pi.setActiveTools(active);
   };
 
-  pi.on("input", (event) => {
+  pi.on("input", event => {
     if (event.source !== "extension") {
       calls = 0;
       previousAdvice = undefined;
@@ -208,11 +187,7 @@ export default function advisorExtension(
   pi.on("session_shutdown", () => {
     sessionContext = undefined;
     disposeSettingsRefresh();
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "unregister",
-      owner: "pi-advisor",
-    });
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-advisor" });
   });
 
   type PreparedCall = {
@@ -227,18 +202,11 @@ export default function advisorExtension(
     userMessage: Message;
     cacheRetention: "short" | "long";
   };
-  type PrepareResult =
-    | { ok: true; call: PreparedCall }
-    | { ok: false; result: ReturnType<typeof textResult> };
+  type PrepareResult = { ok: true; call: PreparedCall } | { ok: false; result: ReturnType<typeof textResult> };
 
   /** Everything that must hold before a provider call: quota, model, credentials, snapshot, budget. */
-  const prepareCall = async (
-    id: string,
-    params: any,
-    ctx: any,
-  ): Promise<PrepareResult> => {
-    const cacheRetention: "short" | "long" =
-      process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
+  const prepareCall = async (id: string, params: any, ctx: any): Promise<PrepareResult> => {
+    const cacheRetention: "short" | "long" = process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
     if (calls >= ADVISOR_MAX_CALLS)
       return {
         ok: false,
@@ -259,9 +227,7 @@ export default function advisorExtension(
     const named = (value: string) => `[${agentName} · Advisor] ${value}`;
     const config = await loadConfig();
     const model = configuredModel(ctx, config);
-    const thinking =
-      config.thinking ??
-      (config.useMainModel ? pi.getThinkingLevel() : undefined);
+    const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
     const base: Details = {
       agentName,
       startedAt: new Date(started).toISOString(),
@@ -269,44 +235,23 @@ export default function advisorExtension(
       thinking,
       durationMs: 0,
       usage: emptyUsage(),
-      callNumber: Math.min(
-        calls + 1,
-        ADVISOR_MAX_CALLS,
-      ) as Details["callNumber"],
+      callNumber: Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"],
       snapshotEstimatedTokens: 0,
       redactionCount: 0,
       truncated: false,
       cacheRetention,
     };
-    const fail = (
-      text: string,
-      code: FailureCode,
-      extra: Partial<Details> = {},
-    ): PrepareResult => ({
+    const fail = (text: string, code: FailureCode, extra: Partial<Details> = {}): PrepareResult => ({
       ok: false,
       result: textResult(text, { ...base, ...extra, failureCode: code }),
     });
 
-    if (!model)
-      return fail(
-        "Advisor unavailable: no valid model selected.",
-        "unavailable",
-      );
+    if (!model) return fail("Advisor unavailable: no valid model selected.", "unavailable");
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || !auth.apiKey)
-      return fail(
-        "Advisor unavailable: selected model has no credentials.",
-        "unavailable",
-      );
+    if (!auth.ok || !auth.apiKey) return fail("Advisor unavailable: selected model has no credentials.", "unavailable");
 
-    const messages: any[] = ctx.sessionManager
-      .buildContextEntries()
-      .flatMap(sessionEntryToContextMessages);
-    messages.push({
-      role: "custom",
-      customType: "advisor-request",
-      content: params.request.trim(),
-    });
+    const messages: any[] = ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+    messages.push({ role: "custom", customType: "advisor-request", content: params.request.trim() });
     for (const record of await loadEvidenceRecords(ctx.cwd, params.evidence))
       messages.push({
         role: "custom",
@@ -319,18 +264,11 @@ export default function advisorExtension(
     const continuationPrefix = previousAdvice
       ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
       : "";
-    const reservedInputTokens =
-      Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
-    const snapshot = buildSnapshot(
-      messages,
-      model.contextWindow,
-      reservedInputTokens,
-    );
+    const reservedInputTokens = Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
+    const snapshot = buildSnapshot(messages, model.contextWindow, reservedInputTokens);
     if (snapshot.requiredContextOmitted)
       return fail(
-        named(
-          "Advisor failed nonfatally: required context exceeds the input budget.",
-        ),
+        named("Advisor failed nonfatally: required context exceeds the input budget."),
         "context_overflow",
         snapshotDetails(snapshot),
       );
@@ -348,37 +286,20 @@ export default function advisorExtension(
             ? "estimated input cost exceeds the limit"
             : "estimated output budget is exhausted";
       return fail(
-        named(
-          `Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`,
-        ),
-        budget.error === "pricing_unavailable"
-          ? "pricing_unavailable"
-          : "budget_exceeded",
+        named(`Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`),
+        budget.error === "pricing_unavailable" ? "pricing_unavailable" : "budget_exceeded",
         snapshotDetails(snapshot),
       );
     }
 
     const userMessage: Message = {
       role: "user",
-      content: [
-        { type: "text", text: `${continuationPrefix}${snapshot.text}` },
-      ],
+      content: [{ type: "text", text: `${continuationPrefix}${snapshot.text}` }],
       timestamp: Date.now(),
     };
     return {
       ok: true,
-      call: {
-        started,
-        named,
-        base,
-        model,
-        auth,
-        snapshot,
-        budget,
-        thinking,
-        userMessage,
-        cacheRetention,
-      },
+      call: { started, named, base, model, auth, snapshot, budget, thinking, userMessage, cacheRetention },
     };
   };
 
@@ -387,8 +308,7 @@ export default function advisorExtension(
     label: "Advisor",
     description:
       "Send configured tool-free strategic advisor a concrete request using a redacted bounded snapshot of current executor context plus optional high-priority workspace file ranges. Maximum three successful consultations per original user prompt; failures do not consume quota.",
-    promptSnippet:
-      "Consult selected strategic model for difficult planning, review, or failure recovery",
+    promptSnippet: "Consult selected strategic model for difficult planning, review, or failure recovery",
     promptGuidelines: [
       "Use one advisor consultation before implementation only when both conditions hold: multiple credible approaches have meaningful tradeoffs and repository precedent does not clearly determine the solution; and a wrong choice risks security or privacy, data loss, compatibility or migration failure, or broad cross-module regression. Skip advisor for local fixes, established repository patterns, routine refactors, test additions, dependency-free changes, and decisions reversible in one small diff.",
       "Call advisor after focused reads or repo_scout establish evidence, before choosing an approach. Consult again after implementation only when implementation exposes new risks, contradicts assumptions, or verification fails ambiguously—not by default. Reserve a third advisor call for material contradictions, failures, or unresolved risks.",
@@ -399,8 +319,7 @@ export default function advisorExtension(
         request: Type.String({
           minLength: 1,
           maxLength: 8_192,
-          description:
-            "Concrete decision, risk, or approach for the advisor to review",
+          description: "Concrete decision, risk, or approach for the advisor to review",
         }),
         evidence: Type.Optional(
           Type.Array(
@@ -409,15 +328,9 @@ export default function advisorExtension(
                 path: Type.String({ minLength: 1, maxLength: 500 }),
                 start: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
                 end: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
-                claim: Type.Optional(
-                  Type.String({ minLength: 1, maxLength: 500 }),
-                ),
-                revision: Type.Optional(
-                  Type.String({ minLength: 1, maxLength: 200 }),
-                ),
-                verification: Type.Optional(
-                  Type.String({ minLength: 1, maxLength: 500 }),
-                ),
+                claim: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+                revision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+                verification: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
               },
               { additionalProperties: false },
             ),
@@ -433,52 +346,28 @@ export default function advisorExtension(
     ),
     async execute(id, params, signal, onUpdate, ctx) {
       return serializeAdvisor(async () => {
-        if (signal?.aborted)
-          throw new DOMException("Advisor call was aborted.", "AbortError");
+        if (signal?.aborted) throw new DOMException("Advisor call was aborted.", "AbortError");
         const prepared = await prepareCall(id, params, ctx);
         if (!prepared.ok) return prepared.result;
-        const {
-          started,
-          named,
-          base,
-          model,
-          auth,
-          snapshot,
-          budget,
-          thinking,
-          userMessage,
-          cacheRetention,
-        } = prepared.call;
+        const { started, named, base, model, auth, snapshot, budget, thinking, userMessage, cacheRetention } =
+          prepared.call;
 
-        if (ctx.hasUI)
-          ctx.ui.setStatus(
-            "pi-advisor",
-            `advisor: consulting ${modelName(model)}…`,
-          );
+        if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", `advisor: consulting ${modelName(model)}…`);
         const { usage: _usage, ...runningDetails } = base;
         const running = (text: string, extra: Record<string, unknown> = {}) =>
-          onUpdate?.({
-            content: [{ type: "text", text }],
-            details: { ...runningDetails, state: "running", ...extra },
-          });
+          onUpdate?.({ content: [{ type: "text", text }], details: { ...runningDetails, state: "running", ...extra } });
         running(`Consulting ${modelName(model)}…`, snapshotDetails(snapshot));
 
         try {
           const result = await withCallLifecycle(
             signal,
-            () =>
-              running(`${((Date.now() - started) / 1000).toFixed(0)}s`, {
-                durationMs: Date.now() - started,
-              }),
-            (lifecycle) =>
+            () => running(`${((Date.now() - started) / 1000).toFixed(0)}s`, { durationMs: Date.now() - started }),
+            lifecycle =>
               runConsultation({
                 complete: completeAdvisor,
                 retryWait,
                 model,
-                request: {
-                  systemPrompt: ADVISOR_PROMPT,
-                  messages: [userMessage],
-                },
+                request: { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
                 completeOptions: {
                   apiKey: auth.apiKey,
                   headers: auth.headers,
@@ -513,14 +402,11 @@ export default function advisorExtension(
             attempts: result.attempts,
           };
           if (!result.ok)
-            return textResult(
-              named(`Advisor failed nonfatally: ${result.code}.`),
-              {
-                ...details,
-                failureCode: result.code,
-                failureMessage: result.message,
-              },
-            );
+            return textResult(named(`Advisor failed nonfatally: ${result.code}.`), {
+              ...details,
+              failureCode: result.code,
+              failureMessage: result.message,
+            });
 
           const advice = capAdvice(result.raw);
           calls++;
@@ -535,13 +421,10 @@ export default function advisorExtension(
       });
     },
     renderCall(args, theme, context) {
-      const callNumber =
-        (context.state.callNumber as number | undefined) ??
-        Math.min(calls + 1, ADVISOR_MAX_CALLS);
+      const callNumber = (context.state.callNumber as number | undefined) ?? Math.min(calls + 1, ADVISOR_MAX_CALLS);
       context.state.callNumber = callNumber;
       const request = args.request?.trim().replace(/\s+/g, " ") ?? "";
-      const truncatedRequest =
-        request.length > 512 ? `${request.slice(0, 509)}...` : request;
+      const truncatedRequest = request.length > 512 ? `${request.slice(0, 509)}...` : request;
       return new Text(
         theme.fg("toolTitle", theme.bold("Advisor")) +
           theme.fg("muted", ` · ${callNumber}/${ADVISOR_MAX_CALLS}`) +
@@ -552,9 +435,7 @@ export default function advisorExtension(
     },
     renderResult(result, { expanded }, theme) {
       const details = result.details as Details | undefined;
-      const body = result.content.find(
-        (part: any) => part.type === "text",
-      ) as any;
+      const body = result.content.find((part: any) => part.type === "text") as any;
       if (!details) return new Text(body?.text ?? "Advisor", 0, 0);
       let text = theme.fg(
         details.failureCode ? "error" : "success",
@@ -562,19 +443,14 @@ export default function advisorExtension(
       );
       if (!details.failureCode && details.usage)
         text += ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`;
-      else if (details.durationMs)
-        text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
+      else if (details.durationMs) text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
       if (details.failureCode && body?.text) text += `\n${body.text}`;
-      else if (expanded && body?.text)
-        text += `\n\nAdvisor report:\n${body.text}`;
+      else if (expanded && body?.text) text += `\n\nAdvisor report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });
 
-  const confirmContextSharing = async (
-    ctx: any,
-    model: Model<any>,
-  ): Promise<boolean> =>
+  const confirmContextSharing = async (ctx: any, model: Model<any>): Promise<boolean> =>
     ctx.mode !== "tui" ||
     (await ctx.ui.confirm(
       "Share current context with advisor?",
@@ -595,10 +471,7 @@ export default function advisorExtension(
     if (!(await confirmContextSharing(ctx, model))) return;
     await saveConfig({ version: 1, useMainModel: true });
     await refreshTool(ctx);
-    ctx.ui.notify(
-      "Advisor enabled; uses current main model and thinking level.",
-      "info",
-    );
+    ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
   };
   const showAdvisorStatus = async (ctx: any) => {
     const config = await loadConfig();
@@ -612,10 +485,7 @@ export default function advisorExtension(
     let selected = value;
     if (!selected) {
       if (ctx.mode !== "tui") {
-        ctx.ui.notify(
-          "Usage: /advisor <provider/model-id[:thinking]>|disable|reset|status",
-          "info",
-        );
+        ctx.ui.notify("Usage: /advisor <provider/model-id[:thinking]>|disable|reset|status", "info");
         return;
       }
       selected =
@@ -636,22 +506,13 @@ export default function advisorExtension(
     }
     let thinking: ThinkingLevel | undefined = ref.thinking;
     if (!value && ctx.mode === "tui") {
-      thinking = (await ctx.ui.select("Advisor thinking level", [
-        ...thinkingLevels,
-      ])) as ThinkingLevel | undefined;
+      thinking = (await ctx.ui.select("Advisor thinking level", [...thinkingLevels])) as ThinkingLevel | undefined;
       if (!thinking) return;
     }
     if (!(await confirmContextSharing(ctx, model))) return;
-    await saveConfig({
-      version: 1,
-      advisorModel: modelName(model),
-      ...(thinking ? { thinking } : {}),
-    });
+    await saveConfig({ version: 1, advisorModel: modelName(model), ...(thinking ? { thinking } : {}) });
     await refreshTool(ctx);
-    ctx.ui.notify(
-      `Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`,
-      "info",
-    );
+    ctx.ui.notify(`Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`, "info");
   };
 
   pi.registerCommand("advisor", {

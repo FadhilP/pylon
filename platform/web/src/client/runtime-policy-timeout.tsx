@@ -1,15 +1,6 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type FocusEvent as ReactFocusEvent,
-} from "react";
+import { useEffect, useRef, useState, type FocusEvent as ReactFocusEvent } from "react";
 import type { DialogTimeoutSeconds } from "../shared/protocol/snapshots";
-import {
-  timeoutParts,
-  timeoutUnitSeconds,
-  type TimeoutUnit,
-} from "../shared/runtime-policy-format";
+import { timeoutParts, timeoutUnitSeconds, type TimeoutUnit } from "../shared/runtime-policy-format";
 
 export function RuntimePolicyTimeoutControl({
   label,
@@ -64,11 +55,7 @@ export function RuntimePolicyTimeoutControl({
   };
 
   const onControlsBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
-    if (
-      event.relatedTarget instanceof Node &&
-      event.currentTarget.contains(event.relatedTarget)
-    )
-      return;
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
     if (value !== null) commit();
   };
 
@@ -82,22 +69,12 @@ export function RuntimePolicyTimeoutControl({
         <span className="policy-field-state">
           {inherited && inheritedFrom && <small>From {inheritedFrom}</small>}
           {inherited ? (
-            <button
-              className="text-button"
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange(value)}
-            >
+            <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value)}>
               Override
             </button>
           ) : (
             onReset && (
-              <button
-                className="text-button"
-                type="button"
-                disabled={disabled}
-                onClick={onReset}
-              >
+              <button className="text-button" type="button" disabled={disabled} onClick={onReset}>
                 Use {inheritedFrom}
               </button>
             )
@@ -117,8 +94,8 @@ export function RuntimePolicyTimeoutControl({
               value={amount}
               disabled={disabled}
               aria-label={`${label} duration`}
-              onChange={(event) => setAmount(event.target.value)}
-              onKeyDown={(event) => {
+              onChange={event => setAmount(event.target.value)}
+              onKeyDown={event => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
                 commit();
@@ -128,8 +105,7 @@ export function RuntimePolicyTimeoutControl({
               value={unit}
               disabled={disabled}
               aria-label={`${label} unit`}
-              onChange={(event) => setUnit(event.target.value as TimeoutUnit)}
-            >
+              onChange={event => setUnit(event.target.value as TimeoutUnit)}>
               <option value="seconds">Seconds</option>
               <option value="minutes">Minutes</option>
               <option value="hours">Hours</option>
@@ -140,10 +116,7 @@ export function RuntimePolicyTimeoutControl({
           className="text-button"
           type="button"
           disabled={disabled}
-          onClick={() =>
-            changeValue(value === null ? lastFiniteValue.current : null)
-          }
-        >
+          onClick={() => changeValue(value === null ? lastFiniteValue.current : null)}>
           {value === null ? "Use timeout" : "Never"}
         </button>
       </div>

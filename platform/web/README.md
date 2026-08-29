@@ -40,13 +40,14 @@ node --experimental-transform-types --input-type=module --eval "import { Session
 
 Node's native transform does not load `.tsx`. Tests that need a client module can use the already-installed Vite transform, which handles TSX and extensionless production imports:
 
-```ts
+````ts
 ```ts
 import { createServer } from "vite";
 const vite = await createServer({ server: { middlewareMode: true }, appType: "custom" });
 try { const module = await vite.ssrLoadModule("/src/client/example.tsx"); }
 finally { await vite.close(); }
-```
+````
+
 ## Session workspaces
 
 The sidebar also includes a built-in **General** scope below Projects. General sessions are rooted at the current OS user's home directory, can search and edit files available to that user through explicit paths, and do not use repository indexing. Normal Guard protections still apply.

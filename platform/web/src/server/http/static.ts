@@ -9,20 +9,13 @@ export interface AssetHost {
   close(): Promise<void>;
 }
 
-export async function createAssetHost(
-  webRoot: string,
-  development: boolean,
-): Promise<AssetHost> {
+export async function createAssetHost(webRoot: string, development: boolean): Promise<AssetHost> {
   if (development) {
     const { createServer } = await import("vite");
-    const vite: ViteDevServer = await createServer({
-      root: webRoot,
-      appType: "spa",
-      server: { middlewareMode: true },
-    });
+    const vite: ViteDevServer = await createServer({ root: webRoot, appType: "spa", server: { middlewareMode: true } });
     return {
       handle: (request, response) =>
-        new Promise<void>((done) => {
+        new Promise<void>(done => {
           applySecurityHeaders(response, true);
           vite.middlewares(request, response, (error?: unknown) => {
             if (error && !response.writableEnded) {
@@ -51,9 +44,7 @@ export async function createAssetHost(
       }
       let pathname = "/";
       try {
-        pathname = decodeURIComponent(
-          new URL(request.url ?? "/", "http://localhost").pathname,
-        );
+        pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
       } catch {
         response.statusCode = 400;
         response.end();
@@ -76,10 +67,7 @@ export async function createAssetHost(
       const body = await readFile(file);
       response.statusCode = 200;
       response.setHeader("content-type", contentType(file));
-      response.setHeader(
-        "cache-control",
-        file === index ? "no-store" : "public, max-age=31536000, immutable",
-      );
+      response.setHeader("cache-control", file === index ? "no-store" : "public, max-age=31536000, immutable");
       response.setHeader("content-length", body.byteLength);
       response.end(request.method === "HEAD" ? undefined : body);
     },
@@ -89,7 +77,7 @@ export async function createAssetHost(
 
 async function isFile(path: string): Promise<boolean> {
   return stat(path).then(
-    (value) => value.isFile(),
+    value => value.isFile(),
     () => false,
   );
 }

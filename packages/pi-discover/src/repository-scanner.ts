@@ -2,29 +2,15 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import {
-  canonicalPath,
-  escapesRoot,
-  boundedError,
-  SEARCH_TIMEOUT_MS,
-} from "./search-common.ts";
+import { canonicalPath, escapesRoot, boundedError, SEARCH_TIMEOUT_MS } from "./search-common.ts";
 import { extractSymbols, languageFor, type SymbolRow } from "./symbols.ts";
 
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_NESTED_REPOSITORIES = 100;
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
-export type IndexExecutor = (
-  command: string,
-  args: string[],
-  options: { timeout: number },
-) => Promise<ExecResult>;
-export type RepositoryIdentity = {
-  root: string;
-  rootKey: string;
-  head: string;
-  branch: string;
-};
+export type IndexExecutor = (command: string, args: string[], options: { timeout: number }) => Promise<ExecResult>;
+export type RepositoryIdentity = { root: string; rootKey: string; head: string; branch: string };
 export type RepositorySnapshot = RepositoryIdentity & { dirty: Set<string> };
 export type IndexedRepository = RepositorySnapshot & { prefix: string };
 export type PreparedFile = {
@@ -69,10 +55,7 @@ function statusSnapshot(root: string, value: string): RepositorySnapshot {
         dirty.add(match[1]);
         if (token[0] === "2") {
           const original = tokens[++index];
-          if (!original)
-            throw new Error(
-              "git status rename record did not include its original path",
-            );
+          if (!original) throw new Error("git status rename record did not include its original path");
           dirty.add(original);
         }
       } else if (token[0] === "1" || token[0] === "2" || token[0] === "u") {
@@ -84,15 +67,12 @@ function statusSnapshot(root: string, value: string): RepositorySnapshot {
   return { root, rootKey: canonicalPath(root), head, branch, dirty };
 }
 
-export function sameSnapshot(
-  left: RepositorySnapshot,
-  right: RepositorySnapshot,
-): boolean {
+export function sameSnapshot(left: RepositorySnapshot, right: RepositorySnapshot): boolean {
   return (
     left.head === right.head &&
     left.branch === right.branch &&
     left.dirty.size === right.dirty.size &&
-    [...left.dirty].every((path) => right.dirty.has(path))
+    [...left.dirty].every(path => right.dirty.has(path))
   );
 }
 
@@ -109,57 +89,31 @@ export class RepositoryScanner {
 
   /** Workspace root, available once `snapshot()` has run at least once. */
   get root(): string {
-    if (!this.resolvedRoot)
-      throw new Error("pi-discover repository root has not been resolved yet");
+    if (!this.resolvedRoot) throw new Error("pi-discover repository root has not been resolved yet");
     return this.resolvedRoot;
   }
 
   private async gitAt(cwd: string, args: string[]): Promise<ExecResult> {
-    const result = await this.exec("git", ["-C", cwd, ...args], {
-      timeout: SEARCH_TIMEOUT_MS,
-    });
-    if (result.code !== 0)
-      throw new Error(
-        `git ${args[0]} failed: ${boundedError(result.stderr || result.stdout)}`,
-      );
+    const result = await this.exec("git", ["-C", cwd, ...args], { timeout: SEARCH_TIMEOUT_MS });
+    if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${boundedError(result.stderr || result.stdout)}`);
     return result;
   }
 
   async snapshotAt(root: string): Promise<RepositorySnapshot> {
-    const result = await this.gitAt(root, [
-      "status",
-      "--porcelain=v2",
-      "--branch",
-      "-z",
-      "--untracked-files=all",
-    ]);
+    const result = await this.gitAt(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
     return statusSnapshot(root, result.stdout);
   }
 
   async snapshot(): Promise<RepositorySnapshot> {
     if (!this.resolvedRoot)
-      this.resolvedRoot = await realpath(
-        (
-          await this.gitAt(this.cwd, ["rev-parse", "--show-toplevel"])
-        ).stdout.trim(),
-      );
+      this.resolvedRoot = await realpath((await this.gitAt(this.cwd, ["rev-parse", "--show-toplevel"])).stdout.trim());
     return this.snapshotAt(this.resolvedRoot);
   }
 
   /** Every tracked file and untracked-but-not-ignored file in one repository. */
   async inventory(root: string): Promise<Set<string>> {
     return new Set(
-      parseNul(
-        (
-          await this.gitAt(root, [
-            "ls-files",
-            "--full-name",
-            "-co",
-            "--exclude-standard",
-            "-z",
-          ])
-        ).stdout,
-      ),
+      parseNul((await this.gitAt(root, ["ls-files", "--full-name", "-co", "--exclude-standard", "-z"])).stdout),
     );
   }
 
@@ -169,9 +123,7 @@ export class RepositoryScanner {
     physicalRoots: Set<string>,
   ): Promise<Array<{ path: string; snapshot: RepositorySnapshot }>> {
     const children: Array<{ path: string; snapshot: RepositorySnapshot }> = [];
-    for (const entry of parseNul(
-      (await this.gitAt(repository.root, ["ls-files", "--stage", "-z"])).stdout,
-    )) {
+    for (const entry of parseNul((await this.gitAt(repository.root, ["ls-files", "--stage", "-z"])).stdout)) {
       const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
       if (!match) continue;
       const gitlinkPath = match[1].replaceAll("\\", "/");
@@ -186,43 +138,26 @@ export class RepositoryScanner {
       const rootKey = canonicalPath(childRoot);
       let topLevel: string;
       try {
-        topLevel = await realpath(
-          (
-            await this.gitAt(childRoot, ["rev-parse", "--show-toplevel"])
-          ).stdout.trim(),
-        );
+        topLevel = await realpath((await this.gitAt(childRoot, ["rev-parse", "--show-toplevel"])).stdout.trim());
       } catch (error) {
         if (!existsSync(join(childRoot, ".git"))) continue;
         throw error;
       }
       if (canonicalPath(topLevel) !== rootKey) continue;
-      if (
-        !physicalRoots.has(rootKey) &&
-        physicalRoots.size >= MAX_NESTED_REPOSITORIES
-      )
+      if (!physicalRoots.has(rootKey) && physicalRoots.size >= MAX_NESTED_REPOSITORIES)
         throw new Error("pi-discover nested repository limit exceeded");
       physicalRoots.add(rootKey);
-      children.push({
-        path: gitlinkPath,
-        snapshot: await this.snapshotAt(childRoot),
-      });
+      children.push({ path: gitlinkPath, snapshot: await this.snapshotAt(childRoot) });
     }
     return children;
   }
 
   /** The root repository plus every nested repository reachable from it, each with its path prefix. */
-  async indexedRepositories(
-    root: RepositorySnapshot,
-  ): Promise<IndexedRepository[]> {
+  async indexedRepositories(root: RepositorySnapshot): Promise<IndexedRepository[]> {
     const repositories: IndexedRepository[] = [{ ...root, prefix: "" }];
-    const queue = [
-      { repository: repositories[0], ancestors: new Set([root.rootKey]) },
-    ];
+    const queue = [{ repository: repositories[0], ancestors: new Set([root.rootKey]) }];
     const physicalRoots = new Set([root.rootKey]);
-    const childrenByRoot = new Map<
-      string,
-      Array<{ path: string; snapshot: RepositorySnapshot }>
-    >();
+    const childrenByRoot = new Map<string, Array<{ path: string; snapshot: RepositorySnapshot }>>();
     const prefixes = new Set([""]);
     for (let index = 0; index < queue.length; index++) {
       const { repository, ancestors } = queue[index];
@@ -233,36 +168,26 @@ export class RepositoryScanner {
       }
       for (const child of children) {
         if (ancestors.has(child.snapshot.rootKey)) continue;
-        const prefix = repository.prefix
-          ? `${repository.prefix}/${child.path}`
-          : child.path;
+        const prefix = repository.prefix ? `${repository.prefix}/${child.path}` : child.path;
         if (prefixes.has(prefix)) continue;
         prefixes.add(prefix);
         const member = { ...child.snapshot, prefix };
         repositories.push(member);
-        queue.push({
-          repository: member,
-          ancestors: new Set([...ancestors, child.snapshot.rootKey]),
-        });
+        queue.push({ repository: member, ancestors: new Set([...ancestors, child.snapshot.rootKey]) });
       }
     }
     return repositories;
   }
 
   /** Read and symbol-extract one candidate file, or undefined when it is not indexable. */
-  private async prepare(
-    root: string,
-    path: string,
-    dirty: boolean,
-  ): Promise<PreparedFile | undefined> {
+  private async prepare(root: string, path: string, dirty: boolean): Promise<PreparedFile | undefined> {
     const language = languageFor(path);
     if (!language) return undefined;
     const absolute = resolve(root, path);
     if (escapesRoot(root, absolute)) return undefined;
     try {
       const stat = await lstat(absolute);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES)
-        return undefined;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) return undefined;
       const data = await readFile(absolute);
       if (data.includes(0)) return undefined;
       const content = data.toString("utf8");
@@ -296,16 +221,10 @@ export class RepositoryScanner {
       for (;;) {
         const index = next++;
         if (index >= candidates.length) return;
-        outcomes[index] = await this.prepare(
-          root,
-          candidates[index]!,
-          dirty.has(candidates[index]!),
-        );
+        outcomes[index] = await this.prepare(root, candidates[index]!, dirty.has(candidates[index]!));
       }
     };
-    await Promise.all(
-      Array.from({ length: Math.min(8, candidates.length) }, worker),
-    );
+    await Promise.all(Array.from({ length: Math.min(8, candidates.length) }, worker));
     const prepared: PreparedFile[] = [];
     const removals: string[] = [];
     for (const [index, file] of outcomes.entries()) {

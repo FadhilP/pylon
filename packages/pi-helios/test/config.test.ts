@@ -9,15 +9,9 @@ import { readSettings, updateSettings } from "../src/web-settings.ts";
 test("Helios web settings default headless and preserve explicit visibility", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-helios-web-settings-"));
   try {
-    assert.deepEqual(await readSettings({ agentDir }), {
-      kind: "helios",
-      headed: false,
-    });
+    assert.deepEqual(await readSettings({ agentDir }), { kind: "helios", headed: false });
     await updateSettings({ kind: "helios", headed: true }, { agentDir });
-    assert.deepEqual(await readSettings({ agentDir }), {
-      kind: "helios",
-      headed: true,
-    });
+    assert.deepEqual(await readSettings({ agentDir }), { kind: "helios", headed: true });
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }

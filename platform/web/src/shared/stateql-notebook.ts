@@ -1,7 +1,4 @@
-import type {
-  StateQLHistoryEntryReadModel,
-  StateQLSnapshot,
-} from "./protocol/snapshots.js";
+import type { StateQLHistoryEntryReadModel, StateQLSnapshot } from "./protocol/snapshots.js";
 
 export type StateQLActivityFilter = "all" | "read" | "write" | "error";
 export type StateQLActivityTag = Exclude<StateQLActivityFilter, "all">;
@@ -26,16 +23,7 @@ export interface StateQLActivityItem {
   tags: StateQLActivityTag[];
 }
 
-const READ_COMMANDS = new Set([
-  "query",
-  "filter",
-  "show",
-  "rows",
-  "count",
-  "columns",
-  "inspect",
-  "plan",
-]);
+const READ_COMMANDS = new Set(["query", "filter", "show", "rows", "count", "columns", "inspect", "plan"]);
 const WRITE_COMMANDS = new Set(["exec", "apply"]);
 const FAILED_OPERATION_STATES = new Set(["failed", "outcome_unknown"]);
 
@@ -46,28 +34,14 @@ function tagsFor(
 ): StateQLActivityTag[] {
   const tags: StateQLActivityTag[] = [];
   if (result || (entry && READ_COMMANDS.has(entry.command))) tags.push("read");
-  if (operation || (entry && WRITE_COMMANDS.has(entry.command)))
-    tags.push("write");
-  if (
-    (entry && !entry.success) ||
-    (operation && FAILED_OPERATION_STATES.has(operation.status))
-  )
-    tags.push("error");
+  if (operation || (entry && WRITE_COMMANDS.has(entry.command))) tags.push("write");
+  if ((entry && !entry.success) || (operation && FAILED_OPERATION_STATES.has(operation.status))) tags.push("error");
   return tags;
 }
 
-export function buildStateQLActivity(
-  snapshot: StateQLSnapshot,
-): StateQLActivityItem[] {
-  const results = new Map(
-    snapshot.recent_results.map((result) => [result.handle, result]),
-  );
-  const operations = new Map(
-    snapshot.recent_operations.map((operation) => [
-      operation.handle,
-      operation,
-    ]),
-  );
+export function buildStateQLActivity(snapshot: StateQLSnapshot): StateQLActivityItem[] {
+  const results = new Map(snapshot.recent_results.map(result => [result.handle, result]));
+  const operations = new Map(snapshot.recent_operations.map(operation => [operation.handle, operation]));
   const referenced = new Set<string>();
   const history = snapshot.history.map((entry): StateQLActivityItem => {
     const handle = entry.handle ?? undefined;
@@ -94,7 +68,7 @@ export function buildStateQLActivity(
 
   const handles = new Set([...results.keys(), ...operations.keys()]);
   const metadata = [...handles]
-    .filter((handle) => !referenced.has(handle))
+    .filter(handle => !referenced.has(handle))
     .map((handle): StateQLActivityItem => {
       const result = results.get(handle);
       const operation = operations.get(handle);
@@ -120,34 +94,23 @@ export function filterStateQLActivity(
   items: StateQLActivityItem[],
   filter: StateQLActivityFilter,
 ): StateQLActivityItem[] {
-  return filter === "all"
-    ? items
-    : items.filter((item) => item.tags.includes(filter));
+  return filter === "all" ? items : items.filter(item => item.tags.includes(filter));
 }
 
-export function stateqlActivityStatus(item: StateQLActivityItem): {
-  label: string;
-  tone: StateQLActivityTone;
-} {
-  if (item.source === "history" && !item.success)
-    return { label: item.errorCode ?? "failed", tone: "danger" };
+export function stateqlActivityStatus(item: StateQLActivityItem): { label: string; tone: StateQLActivityTone } {
+  if (item.source === "history" && !item.success) return { label: item.errorCode ?? "failed", tone: "danger" };
   if (item.operation)
     return {
       label: item.operation.status,
       tone:
         item.operation.status === "committed"
           ? "success"
-          : item.operation.status === "failed" ||
-              item.operation.status === "outcome_unknown"
+          : item.operation.status === "failed" || item.operation.status === "outcome_unknown"
             ? "danger"
             : "neutral",
     };
-  if (item.source === "metadata" && item.result)
-    return { label: "materialized", tone: "neutral" };
+  if (item.source === "metadata" && item.result) return { label: "materialized", tone: "neutral" };
   if (item.cached) return { label: "cached", tone: "neutral" };
   if (item.executed) return { label: "executed", tone: "success" };
-  return {
-    label: item.success ? "ok" : "failed",
-    tone: item.success ? "success" : "danger",
-  };
+  return { label: item.success ? "ok" : "failed", tone: item.success ? "success" : "danger" };
 }

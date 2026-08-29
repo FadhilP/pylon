@@ -1,28 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  access,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  truncate,
-  writeFile,
-} from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validatePngFile } from "../src/capture.ts";
 import { elementReferences, isElementReference } from "../src/element-ref.ts";
-import {
-  compactSnapshotLines,
-  PlaywrightCli,
-  HeliosCliError,
-  validateNavigationUrl,
-} from "../src/playwright-cli.ts";
-import {
-  PlaywrightClient,
-  PlaywrightClientError,
-} from "../src/playwright-client.ts";
+import { compactSnapshotLines, PlaywrightCli, HeliosCliError, validateNavigationUrl } from "../src/playwright-cli.ts";
+import { PlaywrightClient, PlaywrightClientError } from "../src/playwright-client.ts";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -32,12 +16,9 @@ const SESSION = "helios-0123456789ab-0123456789ab";
 const OTHER_SESSION = "helios-fedcba987654-fedcba987654";
 
 test("element references accept Playwright namespaces without broadening the grammar", () => {
-  for (const ref of ["e1", "f1e41", "f000e0"])
-    assert.equal(isElementReference(ref), true);
-  for (const ref of ["f1", "fe1", "f1e", "f1f2e3", "f1e2x", "xf1e2"])
-    assert.equal(isElementReference(ref), false);
-  const snapshot =
-    "- button [ref=f1e41]\n- link [ref=e2]\n- text: ref=f2e3\n- button [ref=f1f2e3]";
+  for (const ref of ["e1", "f1e41", "f000e0"]) assert.equal(isElementReference(ref), true);
+  for (const ref of ["f1", "fe1", "f1e", "f1f2e3", "f1e2x", "xf1e2"]) assert.equal(isElementReference(ref), false);
+  const snapshot = "- button [ref=f1e41]\n- link [ref=e2]\n- text: ref=f2e3\n- button [ref=f1f2e3]";
   assert.deepEqual(elementReferences(snapshot), ["f1e41", "e2"]);
   assert.deepEqual(elementReferences(snapshot), ["f1e41", "e2"]);
 });
@@ -77,27 +58,13 @@ test("adapter invokes thin pinned CLI launcher with argument array and private c
   let call: { command: string; args: string[]; options: any } | undefined;
   const cli = await PlaywrightCli.create(async (command, args, options) => {
     call = { command, args, options };
-    return {
-      code: 0,
-      stdout: JSON.stringify({ snapshot: "- heading [ref=e1]" }),
-      stderr: "",
-      killed: false,
-    };
+    return { code: 0, stdout: JSON.stringify({ snapshot: "- heading [ref=e1]" }), stderr: "", killed: false };
   });
   try {
     const result = await cli.run(SESSION, { kind: "snapshot", depth: 3 });
     assert.equal(call!.command, process.execPath);
-    assert.match(
-      call!.args[0],
-      /pi-helios[\\/]src[\\/]playwright-thin-cli\.mjs$/,
-    );
-    assert.deepEqual(call!.args.slice(1), [
-      "--json",
-      `-s=${SESSION}`,
-      "snapshot",
-      "--depth=3",
-      "--filename=<auto>",
-    ]);
+    assert.match(call!.args[0], /pi-helios[\\/]src[\\/]playwright-thin-cli\.mjs$/);
+    assert.deepEqual(call!.args.slice(1), ["--json", `-s=${SESSION}`, "snapshot", "--depth=3", "--filename=<auto>"]);
     assert.equal(call!.options.cwd, cli.directory);
     assert.equal(result.snapshot, "- heading [ref=e1]");
     assert.equal(result.value.snapshot, undefined);
@@ -122,9 +89,7 @@ test("persistent client handles hot actions while lifecycle stays on thin launch
           helperCalls.push(command);
           return {
             code: 0,
-            stdout: JSON.stringify({
-              result: "- 0: (current) [](about:blank)",
-            }),
+            stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }),
             stderr: "",
             killed: false,
           };
@@ -136,11 +101,7 @@ test("persistent client handles hot actions while lifecycle stays on thin launch
     },
   );
   await cli.run(SESSION, { kind: "tab-list" });
-  await cli.run(SESSION, {
-    kind: "open",
-    profileDirectory: cli.directory,
-    headed: false,
-  });
+  await cli.run(SESSION, { kind: "open", profileDirectory: cli.directory, headed: false });
   assert.deepEqual(helperCalls, ["tab-list"]);
   assert.equal(thinCalls.length, 1);
   assert.ok(thinCalls[0].includes("open"));
@@ -152,12 +113,7 @@ test("persistent client falls back only before dispatch", async () => {
   let thinCalls = 0;
   const exec = async () => {
     thinCalls++;
-    return {
-      code: 0,
-      stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }),
-      stderr: "",
-      killed: false,
-    };
+    return { code: 0, stdout: JSON.stringify({ result: "- 0: (current) [](about:blank)" }), stderr: "", killed: false };
   };
   const before = await PlaywrightCli.create(exec, {
     persistentClient: true,
@@ -184,15 +140,9 @@ test("persistent client falls back only before dispatch", async () => {
   await assert.rejects(
     after.run(SESSION, { kind: "tab-list" }),
     (error: unknown) =>
-      error instanceof HeliosCliError &&
-      error.uncertainOutcome &&
-      /outcome is uncertain/.test(error.message),
+      error instanceof HeliosCliError && error.uncertainOutcome && /outcome is uncertain/.test(error.message),
   );
-  assert.equal(
-    thinCalls,
-    1,
-    "an uncertain action must not be replayed through the launcher",
-  );
+  assert.equal(thinCalls, 1, "an uncertain action must not be replayed through the launcher");
   await after.dispose();
 });
 
@@ -200,13 +150,7 @@ test("persistent helper performs a versioned missing-session probe", async () =>
   const directory = await mkdtemp(join(tmpdir(), "helios-helper-test-"));
   const client = await PlaywrightClient.create(directory);
   try {
-    const result = await client.run(
-      OTHER_SESSION,
-      "tab-list",
-      [],
-      undefined,
-      5_000,
-    );
+    const result = await client.run(OTHER_SESSION, "tab-list", [], undefined, 5_000);
     assert.equal(result.code, 1);
     assert.match(result.stdout, /not open, please run open first/);
   } finally {
@@ -235,55 +179,35 @@ test("adapter consumes file-backed action snapshots from top-level and nested re
       setTimeout(() => void writeFile(file, content), 10);
     } else if (call === 4) setTimeout(() => void writeFile(file, content), 10);
     else await writeFile(file, content);
-    const snapshot = {
-      file: call === 1 ? join("artifacts", `action-${call}.yml`) : file,
-    };
+    const snapshot = { file: call === 1 ? join("artifacts", `action-${call}.yml`) : file };
     return {
       code: 0,
-      stdout: JSON.stringify(
-        call === 1 ? { snapshot } : { result: { snapshot } },
-      ),
+      stdout: JSON.stringify(call === 1 ? { snapshot } : { result: { snapshot } }),
       stderr: "",
       killed: false,
     };
   });
   try {
-    const first = await cli.run(SESSION, {
-      kind: "navigate",
-      url: "https://example.com",
-    });
-    assert.equal(
-      first.snapshot,
-      '- textbox "Password" [ref=e1]: [value redacted]',
-    );
+    const first = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+    assert.equal(first.snapshot, '- textbox "Password" [ref=e1]: [value redacted]');
     assert.equal(first.value.snapshot, undefined);
 
     const second = await cli.run(SESSION, { kind: "click", target: "e1" });
     assert.equal(second.snapshot, '- button "Continue" [ref=e2]');
     assert.deepEqual(second.value.result, {});
 
-    const empty = await cli.run(SESSION, {
-      kind: "tab-new",
-      url: "about:blank",
-    });
+    const empty = await cli.run(SESSION, { kind: "tab-new", url: "about:blank" });
     assert.equal(empty.snapshot, "");
 
-    const createdLater = await cli.run(SESSION, {
-      kind: "navigate",
-      url: "https://example.com/next",
-    });
+    const createdLater = await cli.run(SESSION, { kind: "navigate", url: "https://example.com/next" });
     assert.equal(createdLater.snapshot, '- link "Created later" [ref=e3]');
-    for (const file of files)
-      await assert.rejects(
-        access(file),
-        (error: any) => error?.code === "ENOENT",
-      );
+    for (const file of files) await assert.rejects(access(file), (error: any) => error?.code === "ENOENT");
   } finally {
     await cli.dispose();
   }
 });
 
-test("file-backed snapshots reject unsafe or invalid artifacts without leaking paths", async (t) => {
+test("file-backed snapshots reject unsafe or invalid artifacts without leaking paths", async t => {
   let payload: unknown;
   const cli = await PlaywrightCli.create(async () => ({
     code: 0,
@@ -292,8 +216,7 @@ test("file-backed snapshots reject unsafe or invalid artifacts without leaking p
     killed: false,
   }));
   const outside = await mkdtemp(join(tmpdir(), "helios-snapshot-outside-"));
-  const run = () =>
-    cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+  const run = () => cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
   try {
     const escaped = join(outside, "escaped.yml");
     await writeFile(escaped, "- button [ref=e1]");
@@ -301,54 +224,30 @@ test("file-backed snapshots reject unsafe or invalid artifacts without leaking p
     await assert.rejects(
       run(),
       (error: any) =>
-        error instanceof HeliosCliError &&
-        error.category === "invalid-output" &&
-        !error.message.includes(outside),
+        error instanceof HeliosCliError && error.category === "invalid-output" && !error.message.includes(outside),
     );
     await access(escaped);
 
     const oversized = join(cli.directory, "artifacts", "oversized.yml");
     await writeFile(oversized, Buffer.alloc(256 * 1024 + 1, 0x61));
     payload = { file: oversized };
-    await assert.rejects(
-      run(),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
-    );
-    await assert.rejects(
-      access(oversized),
-      (error: any) => error?.code === "ENOENT",
-    );
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(oversized), (error: any) => error?.code === "ENOENT");
 
     const malformed = join(cli.directory, "artifacts", "malformed.yml");
     await writeFile(malformed, Buffer.from([0xc3, 0x28]));
     payload = { file: malformed };
-    await assert.rejects(
-      run(),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
-    );
-    await assert.rejects(
-      access(malformed),
-      (error: any) => error?.code === "ENOENT",
-    );
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(malformed), (error: any) => error?.code === "ENOENT");
 
     payload = { file: "missing.yml", extra: true };
-    await assert.rejects(
-      run(),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
-    );
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
 
     const vanished = join(cli.directory, "artifacts", "vanished.yml");
     await writeFile(vanished, "");
     setTimeout(() => void rm(vanished, { force: true }), 10);
     payload = { file: vanished };
-    await assert.rejects(
-      run(),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
-    );
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
 
     const target = join(cli.directory, "artifacts", "target.yml");
     const link = join(cli.directory, "artifacts", "link.yml");
@@ -356,22 +255,12 @@ test("file-backed snapshots reject unsafe or invalid artifacts without leaking p
     try {
       await symlink(target, link);
     } catch (error: any) {
-      if (error?.code === "EPERM")
-        return void t.diagnostic(
-          "symlink assertion skipped: Windows privilege unavailable",
-        );
+      if (error?.code === "EPERM") return void t.diagnostic("symlink assertion skipped: Windows privilege unavailable");
       throw error;
     }
     payload = { file: link };
-    await assert.rejects(
-      run(),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
-    );
-    await assert.rejects(
-      access(link),
-      (error: any) => error?.code === "ENOENT",
-    );
+    await assert.rejects(run(), (error: any) => error instanceof HeliosCliError && error.category === "invalid-output");
+    await assert.rejects(access(link), (error: any) => error?.code === "ENOENT");
     await access(target);
   } finally {
     await cli.dispose();
@@ -392,8 +281,7 @@ test("malformed top-level snapshots do not fall back to valid nested snapshots",
   try {
     await assert.rejects(
       cli.run(SESSION, { kind: "navigate", url: "https://example.com" }),
-      (error: any) =>
-        error instanceof HeliosCliError && error.category === "invalid-output",
+      (error: any) => error instanceof HeliosCliError && error.category === "invalid-output",
     );
   } finally {
     await cli.dispose();
@@ -401,12 +289,7 @@ test("malformed top-level snapshots do not fall back to valid nested snapshots",
 });
 
 test("artifact reads stay inside the private directory and enforce the byte cap", async () => {
-  const cli = await PlaywrightCli.create(async () => ({
-    code: 0,
-    stdout: "{}",
-    stderr: "",
-    killed: false,
-  }));
+  const cli = await PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }));
   const outside = await mkdtemp(join(tmpdir(), "helios-artifact-outside-"));
   try {
     const frame = join(cli.directory, "artifacts", "frame.png");
@@ -415,10 +298,7 @@ test("artifact reads stay inside the private directory and enforce the byte cap"
     await writeFile(escaped, PNG);
     assert.equal((await cli.readArtifact(frame, PNG.length)).equals(PNG), true);
     await assert.rejects(cli.readArtifact(frame, PNG.length - 1), /oversized/);
-    await assert.rejects(
-      cli.readArtifact(escaped, PNG.length),
-      /artifact path/,
-    );
+    await assert.rejects(cli.readArtifact(escaped, PNG.length), /artifact path/);
   } finally {
     await cli.dispose();
     await rm(outside, { recursive: true, force: true });
@@ -427,46 +307,23 @@ test("artifact reads stay inside the private directory and enforce the byte cap"
 
 test("find uses bounded CLI snapshot search output", async () => {
   const calls: string[][] = [];
-  const found =
-    'Found 1 match for "Add to cart":\n\n- button "Add to cart" [ref=e9]';
+  const found = 'Found 1 match for "Add to cart":\n\n- button "Add to cart" [ref=e9]';
   const cli = await PlaywrightCli.create(async (_command, args) => {
     calls.push(args);
-    return {
-      code: 0,
-      stdout: JSON.stringify({ result: found }),
-      stderr: "",
-      killed: false,
-    };
+    return { code: 0, stdout: JSON.stringify({ result: found }), stderr: "", killed: false };
   });
   try {
     const text = await cli.run(SESSION, { kind: "find", text: "Add to cart" });
-    const regex = await cli.run(SESSION, {
-      kind: "find",
-      regex: "/add to cart/i",
-    });
-    assert.deepEqual(calls[0].slice(1), [
-      "--json",
-      `-s=${SESSION}`,
-      "find",
-      "Add to cart",
-    ]);
-    assert.deepEqual(calls[1].slice(1), [
-      "--json",
-      `-s=${SESSION}`,
-      "find",
-      "--regex",
-      "/add to cart/i",
-    ]);
+    const regex = await cli.run(SESSION, { kind: "find", regex: "/add to cart/i" });
+    assert.deepEqual(calls[0].slice(1), ["--json", `-s=${SESSION}`, "find", "Add to cart"]);
+    assert.deepEqual(calls[1].slice(1), ["--json", `-s=${SESSION}`, "find", "--regex", "/add to cart/i"]);
     assert.equal(text.snapshot, found);
     assert.equal(text.value.result, undefined);
     assert.equal(text.findMatches, 1);
     assert.equal(regex.snapshot, found);
     assert.equal(regex.findMatches, 1);
     await assert.rejects(cli.run(SESSION, { kind: "find" }), /exactly one/);
-    await assert.rejects(
-      cli.run(SESSION, { kind: "find", text: "x", regex: "x" }),
-      /exactly one/,
-    );
+    await assert.rejects(cli.run(SESSION, { kind: "find", text: "x", regex: "x" }), /exactly one/);
   } finally {
     await cli.dispose();
   }
@@ -489,8 +346,7 @@ test("find match count ignores page content after the result header", async () =
 });
 
 test("find redacts secrets and drops raw string results", async () => {
-  const raw =
-    'Found 1 match for "Password":\n\n- textbox "Password" [ref=e7]: hunter2';
+  const raw = 'Found 1 match for "Password":\n\n- textbox "Password" [ref=e7]: hunter2';
   const cli = await PlaywrightCli.create(async () => ({
     code: 0,
     stdout: JSON.stringify({ result: raw }),
@@ -511,12 +367,7 @@ test("link URL lookup uses fixed trusted expression and snapshot reference", asy
   let args: string[] = [];
   const cli = await PlaywrightCli.create(async (_command, value) => {
     args = value;
-    return {
-      code: 0,
-      stdout: JSON.stringify({ result: "https://example.com/docs" }),
-      stderr: "",
-      killed: false,
-    };
+    return { code: 0, stdout: JSON.stringify({ result: "https://example.com/docs" }), stderr: "", killed: false };
   });
   try {
     await cli.run(SESSION, { kind: "link-url", target: "f1e7" });
@@ -528,10 +379,7 @@ test("link URL lookup uses fixed trusted expression and snapshot reference", asy
       "f1e7",
     ]);
     for (const target of ["#link", "f1", "fe1", "f1e", "f1f2e3", "f1e2x"]) {
-      await assert.rejects(
-        cli.run(SESSION, { kind: "link-url", target }),
-        /snapshot reference/,
-      );
+      await assert.rejects(cli.run(SESSION, { kind: "link-url", target }), /snapshot reference/);
     }
   } finally {
     await cli.dispose();
@@ -546,17 +394,11 @@ test("owned visibility controls config and headed CLI flag", async () => {
   });
   try {
     await cli.configureOwned(`${cli.directory}/profile`, false);
-    await cli.run(SESSION, {
-      kind: "open",
-      profileDirectory: `${cli.directory}/profile`,
-      headed: false,
-    });
+    await cli.run(SESSION, { kind: "open", profileDirectory: `${cli.directory}/profile`, headed: false });
     assert.ok(!args.includes("--headed"));
-    const configArg = args.find((arg) => arg.startsWith("--config="));
+    const configArg = args.find(arg => arg.startsWith("--config="));
     assert.ok(configArg);
-    const config = JSON.parse(
-      await readFile(configArg.slice("--config=".length), "utf8"),
-    );
+    const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.equal(config.browser.launchOptions.headless, true);
   } finally {
     await cli.dispose();
@@ -571,24 +413,13 @@ test("web isolation config uses a capability endpoint without proxy credentials"
   });
   try {
     const server = "http://127.42.73.99:45678";
-    await cli.configureOwned(`${cli.directory}/profile`, false, {
-      proxy: { server },
-    });
-    await cli.run(SESSION, {
-      kind: "open",
-      profileDirectory: `${cli.directory}/profile`,
-      headed: false,
-    });
-    const configArg = args.find((arg) => arg.startsWith("--config="));
+    await cli.configureOwned(`${cli.directory}/profile`, false, { proxy: { server } });
+    await cli.run(SESSION, { kind: "open", profileDirectory: `${cli.directory}/profile`, headed: false });
+    const configArg = args.find(arg => arg.startsWith("--config="));
     assert.ok(configArg);
-    const config = JSON.parse(
-      await readFile(configArg.slice("--config=".length), "utf8"),
-    );
+    const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.deepEqual(config.browser.launchOptions.proxy, { server });
-    assert.deepEqual(config.browser.contextOptions, {
-      acceptDownloads: false,
-      serviceWorkers: "block",
-    });
+    assert.deepEqual(config.browser.contextOptions, { acceptDownloads: false, serviceWorkers: "block" });
   } finally {
     await cli.dispose();
   }
@@ -596,73 +427,28 @@ test("web isolation config uses a capability endpoint without proxy credentials"
 
 test("navigation permits local HTML file URLs only", () => {
   assert.equal(validateNavigationUrl("about:blank"), "about:blank");
-  assert.equal(
-    validateNavigationUrl("http://example.com"),
-    "http://example.com/",
-  );
-  assert.equal(
-    validateNavigationUrl("https://example.com/prototype"),
-    "https://example.com/prototype",
-  );
-  assert.equal(
-    validateNavigationUrl("file:///tmp/prototype.html"),
-    "file:///tmp/prototype.html",
-  );
+  assert.equal(validateNavigationUrl("http://example.com"), "http://example.com/");
+  assert.equal(validateNavigationUrl("https://example.com/prototype"), "https://example.com/prototype");
+  assert.equal(validateNavigationUrl("file:///tmp/prototype.html"), "file:///tmp/prototype.html");
   assert.equal(
     validateNavigationUrl("file:///C:/work/prototype.HTML?theme=dark#preview"),
     "file:///C:/work/prototype.HTML?theme=dark#preview",
   );
-  assert.equal(
-    validateNavigationUrl("file://localhost/tmp/prototype.%68tml"),
-    "file:///tmp/prototype.%68tml",
-  );
-  assert.equal(
-    validateNavigationUrl("file:///tmp/prototype.htm"),
-    "file:///tmp/prototype.htm",
-  );
-  assert.throws(
-    () => validateNavigationUrl("file://server/share/prototype.html"),
-    /remote hosts/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("file:////server/share/prototype.html"),
-    /network paths/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("file:///%5C%5Cserver/share/prototype.html"),
-    /network paths/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("file:///tmp/prototype.html.txt"),
-    /HTML file/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("file:///tmp/prototype.html/"),
-    /HTML file/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("file:///tmp/prototype%zz.html"),
-    /percent-encoding/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("C:\\work\\prototype.html"),
-    /local HTML file URLs/,
-  );
-  assert.throws(
-    () => validateNavigationUrl(`file:///tmp/${"x".repeat(4096)}.html`),
-    /4096/,
-  );
-  assert.throws(
-    () => validateNavigationUrl("about:srcdoc"),
-    /local HTML file URLs/,
-  );
+  assert.equal(validateNavigationUrl("file://localhost/tmp/prototype.%68tml"), "file:///tmp/prototype.%68tml");
+  assert.equal(validateNavigationUrl("file:///tmp/prototype.htm"), "file:///tmp/prototype.htm");
+  assert.throws(() => validateNavigationUrl("file://server/share/prototype.html"), /remote hosts/);
+  assert.throws(() => validateNavigationUrl("file:////server/share/prototype.html"), /network paths/);
+  assert.throws(() => validateNavigationUrl("file:///%5C%5Cserver/share/prototype.html"), /network paths/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype.html.txt"), /HTML file/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype.html/"), /HTML file/);
+  assert.throws(() => validateNavigationUrl("file:///tmp/prototype%zz.html"), /percent-encoding/);
+  assert.throws(() => validateNavigationUrl("C:\\work\\prototype.html"), /local HTML file URLs/);
+  assert.throws(() => validateNavigationUrl(`file:///tmp/${"x".repeat(4096)}.html`), /4096/);
+  assert.throws(() => validateNavigationUrl("about:srcdoc"), /local HTML file URLs/);
 });
 
 test("adapter rejects unsafe inputs and malformed or oversized output", async () => {
-  assert.throws(
-    () => validateNavigationUrl("http://user:pass@localhost"),
-    /credentials/,
-  );
+  assert.throws(() => validateNavigationUrl("http://user:pass@localhost"), /credentials/);
   const malformed = await PlaywrightCli.create(async () => ({
     code: 0,
     stdout: "not json",
@@ -671,8 +457,7 @@ test("adapter rejects unsafe inputs and malformed or oversized output", async ()
   }));
   await assert.rejects(
     malformed.run(SESSION, { kind: "tab-list" }),
-    (error: any) =>
-      error instanceof HeliosCliError && error.category === "invalid-output",
+    (error: any) => error instanceof HeliosCliError && error.category === "invalid-output",
   );
   await malformed.dispose();
   const oversized = await PlaywrightCli.create(async () => ({
@@ -686,25 +471,20 @@ test("adapter rejects unsafe inputs and malformed or oversized output", async ()
 
   for (const bytes of [0, 1, 2, 3]) {
     await assert.rejects(
-      PlaywrightCli.create(
-        async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
-        { maxSnapshotBytes: bytes },
-      ),
+      PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }), {
+        maxSnapshotBytes: bytes,
+      }),
       /at least 4/,
     );
   }
   await assert.rejects(
-    PlaywrightCli.create(
-      async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
-      { maxSnapshotLines: 0 },
-    ),
+    PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }), { maxSnapshotLines: 0 }),
     /at least 1/,
   );
   await assert.rejects(
-    PlaywrightCli.create(
-      async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
-      { maxActionSnapshotLines: 1.5 },
-    ),
+    PlaywrightCli.create(async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }), {
+      maxActionSnapshotLines: 1.5,
+    }),
     /integer/,
   );
 });
@@ -718,11 +498,7 @@ test("adapter safely identifies missing browser stderr", async () => {
     killed: false,
   }));
   await assert.rejects(
-    missing.run(SESSION, {
-      kind: "open",
-      profileDirectory: missing.directory,
-      headed: false,
-    }),
+    missing.run(SESSION, { kind: "open", profileDirectory: missing.directory, headed: false }),
     (error: any) => {
       assert.equal(error.category, "command-failed");
       assert.equal(
@@ -741,17 +517,10 @@ test("adapter safely identifies missing browser stderr", async () => {
     'Browser "firefox" may not be installed',
     'Error: Browser "firefox" is not installed. Run `playwright-cli install-browser chrome` to install',
   ]) {
-    const unknown = await PlaywrightCli.create(async () => ({
-      code: 1,
-      stdout: "",
-      stderr,
-      killed: false,
-    }));
+    const unknown = await PlaywrightCli.create(async () => ({ code: 1, stdout: "", stderr, killed: false }));
     await assert.rejects(
       unknown.run(SESSION, { kind: "tab-list" }),
-      (error: any) =>
-        error.message ===
-        "Playwright CLI command failed; run /helios-doctor for diagnostics",
+      (error: any) => error.message === "Playwright CLI command failed; run /helios-doctor for diagnostics",
     );
     await unknown.dispose();
   }
@@ -762,42 +531,27 @@ test("adapter safely identifies missing browser stderr", async () => {
     stderr: "x".repeat(17 * 1024),
     killed: false,
   }));
-  await assert.rejects(
-    oversized.run(SESSION, { kind: "tab-list" }),
-    /16KB limit/,
-  );
+  await assert.rejects(oversized.run(SESSION, { kind: "tab-list" }), /16KB limit/);
   await oversized.dispose();
 });
 
 test("adapter classifies only the pinned missing-session error", async () => {
   const missing = await PlaywrightCli.create(async () => ({
     code: 1,
-    stdout: JSON.stringify({
-      isError: true,
-      error: `The browser '${SESSION}' is not open, please run open first`,
-    }),
+    stdout: JSON.stringify({ isError: true, error: `The browser '${SESSION}' is not open, please run open first` }),
     stderr: "",
     killed: false,
   }));
-  await assert.rejects(
-    missing.run(SESSION, { kind: "reload" }),
-    (error: any) => error.category === "session-missing",
-  );
+  await assert.rejects(missing.run(SESSION, { kind: "reload" }), (error: any) => error.category === "session-missing");
   await missing.dispose();
 
   const nearMatch = await PlaywrightCli.create(async () => ({
     code: 1,
-    stdout: JSON.stringify({
-      isError: true,
-      error: `The browser '${SESSION}' is not open; please run open first`,
-    }),
+    stdout: JSON.stringify({ isError: true, error: `The browser '${SESSION}' is not open; please run open first` }),
     stderr: "",
     killed: false,
   }));
-  await assert.rejects(
-    nearMatch.run(SESSION, { kind: "reload" }),
-    (error: any) => error.category === "command-failed",
-  );
+  await assert.rejects(nearMatch.run(SESSION, { kind: "reload" }), (error: any) => error.category === "command-failed");
   await nearMatch.dispose();
 });
 
@@ -808,10 +562,7 @@ test("adapter maps timeout and cancellation without leaking subprocess details",
     stderr: "private failure",
     killed: true,
   }));
-  await assert.rejects(
-    timed.run(SESSION, { kind: "reload" }),
-    (error: any) => error.category === "timeout",
-  );
+  await assert.rejects(timed.run(SESSION, { kind: "reload" }), (error: any) => error.category === "timeout");
   await timed.dispose();
 
   let invoked = false;
@@ -831,9 +582,7 @@ test("adapter maps timeout and cancellation without leaking subprocess details",
 
 test("adapter validates screenshot and redacts credentials in bounded snapshots", async () => {
   const cli = await PlaywrightCli.create(async (_command, args) => {
-    const filename = args
-      .find((arg) => arg.startsWith("--filename="))
-      ?.slice("--filename=".length);
+    const filename = args.find(arg => arg.startsWith("--filename="))?.slice("--filename=".length);
     if (filename && filename !== "<auto>") await writeFile(filename, PNG);
     return {
       code: 0,
@@ -855,10 +604,7 @@ test("adapter validates screenshot and redacts credentials in bounded snapshots"
     );
     assert.equal(snapshot.snapshotRedactions, 6);
     assert.equal(snapshot.snapshotTruncated, false);
-    await assert.rejects(
-      cli.run(SESSION, { kind: "click", target: "#submit" }),
-      /snapshot reference/,
-    );
+    await assert.rejects(cli.run(SESSION, { kind: "click", target: "#submit" }), /snapshot reference/);
   } finally {
     await cli.dispose();
   }
@@ -869,43 +615,21 @@ test("snapshots compact by default while full mode preserves structure and redac
   const calls: string[][] = [];
   const cli = await PlaywrightCli.create(async (_command, args) => {
     calls.push(args);
-    return {
-      code: 0,
-      stdout: JSON.stringify({ snapshot: raw }),
-      stderr: "",
-      killed: false,
-    };
+    return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
   });
   try {
     const compact = await cli.run(SESSION, { kind: "snapshot" });
-    assert.equal(
-      compact.snapshot,
-      '- textbox "Password" [ref=f1e2]: [value redacted]',
-    );
+    assert.equal(compact.snapshot, '- textbox "Password" [ref=f1e2]: [value redacted]');
     assert.equal(compact.snapshotRedactions, 1);
 
-    const full = await cli.run(SESSION, {
-      kind: "snapshot",
-      snapshotMode: "full",
-    });
-    assert.equal(
-      full.snapshot,
-      '- generic [ref=e1]:\n  - textbox "Password" [ref=f1e2]: [value redacted]',
-    );
+    const full = await cli.run(SESSION, { kind: "snapshot", snapshotMode: "full" });
+    assert.equal(full.snapshot, '- generic [ref=e1]:\n  - textbox "Password" [ref=f1e2]: [value redacted]');
     assert.equal(full.snapshotRedactions, 1);
 
-    const action = await cli.run(SESSION, {
-      kind: "navigate",
-      url: "https://example.com",
-    });
+    const action = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
+    assert.equal(action.snapshot, '- textbox "Password" [ref=f1e2]: [value redacted]');
     assert.equal(
-      action.snapshot,
-      '- textbox "Password" [ref=f1e2]: [value redacted]',
-    );
-    assert.equal(
-      calls.every(
-        (args) => !args.includes("compact") && !args.includes("full"),
-      ),
+      calls.every(args => !args.includes("compact") && !args.includes("full")),
       true,
     );
   } finally {
@@ -916,33 +640,18 @@ test("snapshots compact by default while full mode preserves structure and redac
 test("continuation caches compacted structure and reports compacted counts", async () => {
   const raw = Array.from(
     { length: 4 },
-    (_, index) =>
-      `- generic [ref=e${index * 2 + 1}]:\n  - button Item ${index} [ref=e${index * 2 + 2}]`,
+    (_, index) => `- generic [ref=e${index * 2 + 1}]:\n  - button Item ${index} [ref=e${index * 2 + 2}]`,
   ).join("\n");
   const cli = await PlaywrightCli.create(
-    async () => ({
-      code: 0,
-      stdout: JSON.stringify({ snapshot: raw }),
-      stderr: "",
-      killed: false,
-    }),
+    async () => ({ code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false }),
     { maxSnapshotLines: 2, maxSnapshotBytes: 1024 },
   );
   try {
     const first = await cli.run(SESSION, { kind: "snapshot" });
-    assert.equal(
-      first.snapshot,
-      "- button Item 0 [ref=e2]\n- button Item 1 [ref=e4]",
-    );
+    assert.equal(first.snapshot, "- button Item 0 [ref=e2]\n- button Item 1 [ref=e4]");
     assert.equal(first.snapshotOmittedLines, 2);
-    const second = await cli.run(SESSION, {
-      kind: "continue",
-      cursor: first.snapshotContinuation!,
-    });
-    assert.equal(
-      second.snapshot,
-      "- button Item 2 [ref=e6]\n- button Item 3 [ref=e8]",
-    );
+    const second = await cli.run(SESSION, { kind: "continue", cursor: first.snapshotContinuation! });
+    assert.equal(second.snapshot, "- button Item 2 [ref=e6]\n- button Item 3 [ref=e8]");
     assert.equal(second.snapshotTruncated, false);
   } finally {
     await cli.dispose();
@@ -950,10 +659,7 @@ test("continuation caches compacted structure and reports compacted counts", asy
 });
 
 test("action-specific snapshot limits report deterministic omitted counts", async () => {
-  const raw = Array.from(
-    { length: 505 },
-    (_, index) => `- text line ${index}`,
-  ).join("\n");
+  const raw = Array.from({ length: 505 }, (_, index) => `- text line ${index}`).join("\n");
   const cli = await PlaywrightCli.create(async () => ({
     code: 0,
     stdout: JSON.stringify({ snapshot: raw }),
@@ -967,10 +673,7 @@ test("action-specific snapshot limits report deterministic omitted counts", asyn
     assert.ok((snapshot.snapshotOmittedBytes ?? 0) > 0);
     assert.equal(snapshot.snapshot?.split("\n").length, 200);
 
-    const action = await cli.run(SESSION, {
-      kind: "navigate",
-      url: "https://example.com",
-    });
+    const action = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
     assert.equal(action.snapshotOmittedLines, 445);
     assert.equal(action.snapshot?.split("\n").length, 60);
   } finally {
@@ -994,9 +697,7 @@ test("continuation pages cached redacted output without another browser command"
       return {
         code: 0,
         stdout: JSON.stringify(
-          calls === 1
-            ? { snapshot: raw }
-            : { result: "- 0: (current) [Example](https://example.com/)" },
+          calls === 1 ? { snapshot: raw } : { result: "- 0: (current) [Example](https://example.com/)" },
         ),
         stderr: "",
         killed: false,
@@ -1010,35 +711,17 @@ test("continuation pages cached redacted output without another browser command"
     assert.match(first.snapshot!, /ref=e2/);
     assert.ok(first.snapshotContinuation);
 
-    await assert.rejects(
-      cli.run(OTHER_SESSION, {
-        kind: "continue",
-        cursor: first.snapshotContinuation!,
-      }),
-      /stale/,
-    );
+    await assert.rejects(cli.run(OTHER_SESSION, { kind: "continue", cursor: first.snapshotContinuation! }), /stale/);
     await cli.run(SESSION, { kind: "tab-list" });
-    const second = await cli.run(SESSION, {
-      kind: "continue",
-      cursor: first.snapshotContinuation!,
-    });
+    const second = await cli.run(SESSION, { kind: "continue", cursor: first.snapshotContinuation! });
     assert.equal(calls, 2);
     assert.doesNotMatch(second.snapshot!, /hunter2/);
     assert.match(second.snapshot!, /value redacted/);
     assert.match(second.snapshot!, /ref=e4/);
     assert.ok(second.snapshotContinuation);
-    await assert.rejects(
-      cli.run(SESSION, {
-        kind: "continue",
-        cursor: first.snapshotContinuation!,
-      }),
-      /stale/,
-    );
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: first.snapshotContinuation! }), /stale/);
 
-    const third = await cli.run(SESSION, {
-      kind: "continue",
-      cursor: second.snapshotContinuation!,
-    });
+    const third = await cli.run(SESSION, { kind: "continue", cursor: second.snapshotContinuation! });
     assert.match(third.snapshot!, /ref=e5/);
     assert.match(third.snapshot!, /ref=e6/);
     assert.equal(third.snapshotTruncated, false);
@@ -1055,12 +738,7 @@ test("continuation progresses across oversized multibyte lines", async () => {
   const cli = await PlaywrightCli.create(
     async () => {
       calls++;
-      return {
-        code: 0,
-        stdout: JSON.stringify({ snapshot: raw }),
-        stderr: "",
-        killed: false,
-      };
+      return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
     },
     { maxSnapshotLines: 1, maxSnapshotBytes: 40 },
   );
@@ -1069,10 +747,7 @@ test("continuation progresses across oversized multibyte lines", async () => {
     let pages = 1;
     while (result.snapshotContinuation) {
       assert.ok(Buffer.byteLength(result.snapshot!) <= 40);
-      result = await cli.run(SESSION, {
-        kind: "continue",
-        cursor: result.snapshotContinuation,
-      });
+      result = await cli.run(SESSION, { kind: "continue", cursor: result.snapshotContinuation });
       if (++pages > 20) assert.fail("continuation did not progress");
     }
     assert.match(result.snapshot!, /ref=e9/);
@@ -1085,68 +760,33 @@ test("continuation progresses across oversized multibyte lines", async () => {
 test("disposing adapter clears pending continuation", async () => {
   const raw = "- button One [ref=e1]\n- button Two [ref=e2]";
   const cli = await PlaywrightCli.create(
-    async () => ({
-      code: 0,
-      stdout: JSON.stringify({ snapshot: raw }),
-      stderr: "",
-      killed: false,
-    }),
+    async () => ({ code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false }),
     { maxSnapshotLines: 1 },
   );
   const result = await cli.run(SESSION, { kind: "snapshot" });
   assert.ok(result.snapshotContinuation);
   await cli.dispose();
-  await assert.rejects(
-    cli.run(SESSION, {
-      kind: "continue",
-      cursor: result.snapshotContinuation!,
-    }),
-    /stale/,
-  );
+  await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: result.snapshotContinuation! }), /stale/);
 });
 
 test("page-changing and replacement actions invalidate continuation", async () => {
-  const raw = Array.from(
-    { length: 5 },
-    (_, index) => `- button ${index} [ref=e${index}]`,
-  ).join("\n");
+  const raw = Array.from({ length: 5 }, (_, index) => `- button ${index} [ref=e${index}]`).join("\n");
   let failNavigate = false;
   const cli = await PlaywrightCli.create(
     async (_command, args) => {
-      if (args.includes("goto") && failNavigate)
-        return { code: 1, stdout: "", stderr: "failed", killed: false };
-      return {
-        code: 0,
-        stdout: JSON.stringify({ snapshot: raw }),
-        stderr: "",
-        killed: false,
-      };
+      if (args.includes("goto") && failNavigate) return { code: 1, stdout: "", stderr: "failed", killed: false };
+      return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
     },
     { maxSnapshotLines: 2, maxSnapshotBytes: 1024 },
   );
   try {
     const first = await cli.run(SESSION, { kind: "snapshot" });
     const replacement = await cli.run(SESSION, { kind: "snapshot" });
-    await assert.rejects(
-      cli.run(SESSION, {
-        kind: "continue",
-        cursor: first.snapshotContinuation!,
-      }),
-      /stale/,
-    );
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: first.snapshotContinuation! }), /stale/);
 
     failNavigate = true;
-    await assert.rejects(
-      cli.run(SESSION, { kind: "navigate", url: "https://example.com" }),
-      /command failed/i,
-    );
-    await assert.rejects(
-      cli.run(SESSION, {
-        kind: "continue",
-        cursor: replacement.snapshotContinuation!,
-      }),
-      /stale/,
-    );
+    await assert.rejects(cli.run(SESSION, { kind: "navigate", url: "https://example.com" }), /command failed/i);
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: replacement.snapshotContinuation! }), /stale/);
   } finally {
     await cli.dispose();
   }
@@ -1156,10 +796,7 @@ test("find has a smaller cap and preserves total match count", async () => {
   const raw = [
     `Found 140 matches for /item/:`,
     "",
-    ...Array.from(
-      { length: 140 },
-      (_, index) => `- button item ${index} [ref=e${index}]`,
-    ),
+    ...Array.from({ length: 140 }, (_, index) => `- button item ${index} [ref=e${index}]`),
   ].join("\n");
   const cli = await PlaywrightCli.create(async () => ({
     code: 0,
@@ -1180,37 +817,18 @@ test("find has a smaller cap and preserves total match count", async () => {
 });
 
 test("custom snapshot limits bound Web Scout output", async () => {
-  const raw = Array.from(
-    { length: 10 },
-    (_, index) => `- link ${index} [ref=e${index}]`,
-  ).join("\n");
+  const raw = Array.from({ length: 10 }, (_, index) => `- link ${index} [ref=e${index}]`).join("\n");
   const cli = await PlaywrightCli.create(
-    async () => ({
-      code: 0,
-      stdout: JSON.stringify({ result: { snapshot: raw } }),
-      stderr: "",
-      killed: false,
-    }),
-    {
-      maxSnapshotLines: 2,
-      maxSnapshotBytes: 1024,
-      maxActionSnapshotLines: 2,
-      maxActionSnapshotBytes: 64,
-    },
+    async () => ({ code: 0, stdout: JSON.stringify({ result: { snapshot: raw } }), stderr: "", killed: false }),
+    { maxSnapshotLines: 2, maxSnapshotBytes: 1024, maxActionSnapshotLines: 2, maxActionSnapshotBytes: 64 },
   );
   try {
     const result = await cli.run(SESSION, { kind: "snapshot" });
     assert.equal(result.snapshot?.split("\n").length, 2);
     assert.equal(result.snapshotOmittedLines, 8);
-    assert.equal(
-      (result.value.result as Record<string, unknown>).snapshot,
-      undefined,
-    );
+    assert.equal((result.value.result as Record<string, unknown>).snapshot, undefined);
 
-    const action = await cli.run(SESSION, {
-      kind: "navigate",
-      url: "https://example.com",
-    });
+    const action = await cli.run(SESSION, { kind: "navigate", url: "https://example.com" });
     assert.match(action.snapshot!, /ref=e0/);
     assert.match(action.snapshot!, /ref=e1/);
     assert.equal(action.snapshotOmittedLines, 8);
@@ -1220,16 +838,9 @@ test("custom snapshot limits bound Web Scout output", async () => {
 });
 
 test("snapshot byte limits count multibyte text", async () => {
-  const raw = Array.from({ length: 4 }, () => `- ${"é".repeat(100)}`).join(
-    "\n",
-  );
+  const raw = Array.from({ length: 4 }, () => `- ${"é".repeat(100)}`).join("\n");
   const cli = await PlaywrightCli.create(
-    async () => ({
-      code: 0,
-      stdout: JSON.stringify({ snapshot: raw }),
-      stderr: "",
-      killed: false,
-    }),
+    async () => ({ code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false }),
     { maxSnapshotLines: 100, maxSnapshotBytes: 250 },
   );
   try {

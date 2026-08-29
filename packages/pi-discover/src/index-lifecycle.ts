@@ -27,10 +27,7 @@ const ACTIVITY: Record<CommandAction, string> = {
 };
 
 /** Owns the background indexing state machine and everything that reports on it. */
-export function createIndexLifecycle(
-  pi: ExtensionAPI,
-  indexFor: IndexProvider,
-): IndexLifecycle {
+export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider): IndexLifecycle {
   let latestError: string | undefined;
   let ready = false;
   let activeCwd = "";
@@ -40,11 +37,7 @@ export function createIndexLifecycle(
   let shuttingDown = false;
 
   const emit = (state: Record<string, unknown>) =>
-    pi.events.emit("pi-discover:index-state", {
-      version: 1,
-      available: true,
-      ...state,
-    });
+    pi.events.emit("pi-discover:index-state", { version: 1, available: true, ...state });
 
   const publishState = async (cwd = activeCwd) => {
     if (!cwd) return;
@@ -53,16 +46,10 @@ export function createIndexLifecycle(
     try {
       const status = (await indexFor(cwd).status()) as Record<string, unknown>;
       const indexedAt =
-        Number.isSafeInteger(status.indexed_at) &&
-        (status.indexed_at as number) >= 0
+        Number.isSafeInteger(status.indexed_at) && (status.indexed_at as number) >= 0
           ? new Date(status.indexed_at as number).toISOString()
           : undefined;
-      emit({
-        state: "idle",
-        files: status.files,
-        symbols: status.symbols,
-        indexedAt,
-      });
+      emit({ state: "idle", files: status.files, symbols: status.symbols, indexedAt });
     } catch (error) {
       latestError = boundedError(error);
       emit({ state: "error", error: latestError });
@@ -70,9 +57,7 @@ export function createIndexLifecycle(
   };
 
   /** Run one index operation with the shared indexing flag, state events, and error capture. */
-  const withIndexing = async (
-    work: () => Promise<void>,
-  ): Promise<string | undefined> => {
+  const withIndexing = async (work: () => Promise<void>): Promise<string | undefined> => {
     indexing = true;
     await publishState();
     try {
@@ -101,7 +86,7 @@ export function createIndexLifecycle(
         await withIndexing(() => indexFor(cwd).refresh());
       }
     })()
-      .catch((error) => {
+      .catch(error => {
         latestError = boundedError(error);
         indexing = false;
         emit({ state: "error", error: latestError });
@@ -115,13 +100,8 @@ export function createIndexLifecycle(
   return {
     scheduleRefresh,
     hasError: () => Boolean(latestError),
-    healthLine: () =>
-      `Index: ${latestError ? `refresh failed: ${latestError}` : ready ? "ready" : "not initialized"}`,
-    publishUnavailable: () =>
-      pi.events.emit("pi-discover:index-state", {
-        version: 1,
-        available: false,
-      }),
+    healthLine: () => `Index: ${latestError ? `refresh failed: ${latestError}` : ready ? "ready" : "not initialized"}`,
+    publishUnavailable: () => pi.events.emit("pi-discover:index-state", { version: 1, available: false }),
 
     async stop() {
       shuttingDown = true;
@@ -141,32 +121,22 @@ export function createIndexLifecycle(
       request.acknowledge();
       void (async () => {
         if (!activeCwd || indexing)
-          throw new Error(
-            indexing
-              ? "the index is already rebuilding"
-              : "pi-discover has no active workspace",
-          );
+          throw new Error(indexing ? "the index is already rebuilding" : "pi-discover has no active workspace");
         const failure = await withIndexing(() => indexFor(activeCwd).rebuild());
         if (failure) request.reject(new Error(failure));
         else request.resolve();
-      })().catch((error) => request.reject(error));
+      })().catch(error => request.reject(error));
     },
 
     async runCommand(args: string, ctx: any) {
       const action = (args.trim() || "refresh") as CommandAction;
       if (!COMMAND_ACTIONS.includes(action)) {
-        ctx.ui.notify(
-          "Usage: /discover-index [refresh|rebuild|prune|status]",
-          "error",
-        );
+        ctx.ui.notify("Usage: /discover-index [refresh|rebuild|prune|status]", "error");
         return;
       }
       await ctx.waitForIdle?.();
       if (indexing) {
-        ctx.ui.notify(
-          "pi-discover indexing is already in progress.",
-          "warning",
-        );
+        ctx.ui.notify("pi-discover indexing is already in progress.", "warning");
         return;
       }
       ctx.ui.setStatus("pi-discover-index", ACTIVITY[action]);
@@ -190,10 +160,7 @@ export function createIndexLifecycle(
         );
       } catch (error) {
         latestError = boundedError(error);
-        ctx.ui.notify(
-          `pi-discover index ${action} failed: ${latestError}`,
-          "error",
-        );
+        ctx.ui.notify(`pi-discover index ${action} failed: ${latestError}`, "error");
       } finally {
         indexing = false;
         await publishState();

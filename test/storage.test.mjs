@@ -24,7 +24,7 @@ async function legacy(path, files = { "auth.json": "secret", "sessions/repo/sess
 }
 
 test.after(async () => {
-  await Promise.all([...roots].map((path) => rm(path, { recursive: true, force: true })));
+  await Promise.all([...roots].map(path => rm(path, { recursive: true, force: true })));
 });
 
 test("fresh installs select Pylon storage without creating legacy state", async () => {
@@ -44,7 +44,7 @@ test("automatic migration copies legacy state and leaves its source intact", asy
   await writeFile(join(root, ".pylon", "update-check.json"), "cache");
   const env = {};
   const messages = [];
-  const result = await preparePylonStorage({ homeDir: root, env, log: (message) => messages.push(message) });
+  const result = await preparePylonStorage({ homeDir: root, env, log: message => messages.push(message) });
   assert.equal(result.status, "migrated");
   assert.equal(env.PI_CODING_AGENT_DIR, join(root, ".pylon", "agent"));
   assert.equal(await readFile(join(root, ".pylon", "agent", "auth.json"), "utf8"), "secret");
@@ -72,8 +72,10 @@ test("failed automatic migration cleans up and falls back to legacy state", asyn
   const result = await preparePylonStorage({
     homeDir: root,
     env,
-    copy: async () => { throw new Error("copy blocked"); },
-    warn: (message) => warnings.push(message),
+    copy: async () => {
+      throw new Error("copy blocked");
+    },
+    warn: message => warnings.push(message),
   });
   assert.equal(result.status, "legacy-fallback");
   assert.equal(env.PI_CODING_AGENT_DIR, join(root, ".pi", "agent"));
@@ -142,13 +144,17 @@ test("standalone packages retain Pi's default storage", async () => {
   const config = new URL("../packages/pi-advisor/src/config.ts", import.meta.url).href;
   const env = { ...process.env, HOME: root, USERPROFILE: root };
   delete env.PI_CODING_AGENT_DIR;
-  const result = spawnSync(process.execPath, [
-    "--experimental-transform-types",
-    "--input-type=module",
-    "--eval",
-    "const { configPath } = await import(process.argv[1]); console.log(configPath());",
-    config,
-  ], { env, encoding: "utf8" });
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-transform-types",
+      "--input-type=module",
+      "--eval",
+      "const { configPath } = await import(process.argv[1]); console.log(configPath());",
+      config,
+    ],
+    { env, encoding: "utf8" },
+  );
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), join(root, ".pi", "agent", "pi-advisor", "config.json"));
 });

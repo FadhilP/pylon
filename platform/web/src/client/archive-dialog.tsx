@@ -1,9 +1,4 @@
-import {
-  IconArchive,
-  IconLoader2,
-  IconSearch,
-  IconX,
-} from "@tabler/icons-react";
+import { IconArchive, IconLoader2, IconSearch, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useRef,
@@ -21,11 +16,7 @@ interface ArchiveDialogProps {
   onError: (error: unknown, fallback: string) => void;
 }
 
-export function ArchiveDialog({
-  revision,
-  onClose,
-  onError,
-}: ArchiveDialogProps) {
+export function ArchiveDialog({ revision, onClose, onError }: ArchiveDialogProps) {
   const [query, setQuery] = useState("");
   const [snapshot, setSnapshot] = useState<ArchiveListSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -35,22 +26,15 @@ export function ArchiveDialog({
 
   const load = async (cursor?: string) => {
     const revision = ++requestRevision.current;
-    const result = await runtimeStore.listArchived({
-      query: query.trim() || undefined,
-      cursor,
-      limit: 20,
-    });
+    const result = await runtimeStore.listArchived({ query: query.trim() || undefined, cursor, limit: 20 });
     if (revision !== requestRevision.current) return;
-    setSnapshot((current) =>
+    setSnapshot(current =>
       cursor && current
         ? {
             ...result,
             sessions: [
               ...current.sessions,
-              ...result.sessions.filter(
-                (session) =>
-                  !current.sessions.some((old) => old.id === session.id),
-              ),
+              ...result.sessions.filter(session => !current.sessions.some(old => old.id === session.id)),
             ],
           }
         : result,
@@ -58,10 +42,7 @@ export function ArchiveDialog({
   };
 
   useEffect(() => {
-    const previous =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => {
       if (previous?.isConnected) previous.focus();
@@ -76,11 +57,10 @@ export function ArchiveDialog({
       () => {
         void runtimeStore
           .listArchived({ query: query.trim() || undefined, limit: 20 })
-          .then((result) => {
-            if (active && request === requestRevision.current)
-              setSnapshot(result);
+          .then(result => {
+            if (active && request === requestRevision.current) setSnapshot(result);
           })
-          .catch((error) => {
+          .catch(error => {
             if (active) onError(error, "Unable to load archived items");
           })
           .finally(() => {
@@ -127,9 +107,7 @@ export function ArchiveDialog({
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "input:not([disabled]), button:not([disabled])",
-    );
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("input:not([disabled]), button:not([disabled])");
     if (!focusable?.length) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -146,8 +124,7 @@ export function ArchiveDialog({
     if (event.target === event.currentTarget) onClose();
   };
 
-  const empty =
-    !loading && !snapshot?.projects.length && !snapshot?.sessions.length;
+  const empty = !loading && !snapshot?.projects.length && !snapshot?.sessions.length;
   return (
     <div className="archive-backdrop" onMouseDown={closeBackdrop}>
       <div
@@ -156,19 +133,13 @@ export function ArchiveDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="archive-dialog-title"
-        onKeyDown={onKeyDown}
-      >
+        onKeyDown={onKeyDown}>
         <header>
           <div>
             <IconArchive size={18} />
             <strong id="archive-dialog-title">Archived</strong>
           </div>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-            aria-label="Close archived items"
-          >
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close archived items">
             <IconX size={17} />
           </button>
         </header>
@@ -178,18 +149,16 @@ export function ArchiveDialog({
           <input
             data-autofocus
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={event => setQuery(event.target.value)}
             placeholder="Search archived items"
           />
         </label>
         <div className="archive-content">
-          {loading && !snapshot && (
-            <div className="archive-empty">Loading archived items…</div>
-          )}
+          {loading && !snapshot && <div className="archive-empty">Loading archived items…</div>}
           {Boolean(snapshot?.projects.length) && (
             <section>
               <h2>Projects</h2>
-              {snapshot!.projects.map((project) => (
+              {snapshot!.projects.map(project => (
                 <article className="archive-row" key={project.id}>
                   <div>
                     <strong>{project.label}</strong>
@@ -204,11 +173,8 @@ export function ArchiveDialog({
                     type="button"
                     disabled={Boolean(busy)}
                     aria-busy={busy === project.id}
-                    onClick={() => void restoreProject(project.id)}
-                  >
-                    {busy === project.id && (
-                      <IconLoader2 className="feedback-spinner" size={14} />
-                    )}
+                    onClick={() => void restoreProject(project.id)}>
+                    {busy === project.id && <IconLoader2 className="feedback-spinner" size={14} />}
                     {busy === project.id ? "Restoring…" : "Restore"}
                   </button>
                 </article>
@@ -218,13 +184,12 @@ export function ArchiveDialog({
           {Boolean(snapshot?.sessions.length) && (
             <section>
               <h2>Sessions</h2>
-              {snapshot!.sessions.map((session) => (
+              {snapshot!.sessions.map(session => (
                 <article className="archive-row" key={session.id}>
                   <div>
                     <strong>{sessionTitle(session)}</strong>
                     <small>
-                      {session.cwdLabel} · Archived{" "}
-                      {new Date(session.archivedAt).toLocaleDateString()}
+                      {session.cwdLabel} · Archived {new Date(session.archivedAt).toLocaleDateString()}
                     </small>
                   </div>
                   <button
@@ -232,11 +197,8 @@ export function ArchiveDialog({
                     type="button"
                     disabled={Boolean(busy)}
                     aria-busy={busy === session.id}
-                    onClick={() => void restoreSession(session.id)}
-                  >
-                    {busy === session.id && (
-                      <IconLoader2 className="feedback-spinner" size={14} />
-                    )}
+                    onClick={() => void restoreSession(session.id)}>
+                    {busy === session.id && <IconLoader2 className="feedback-spinner" size={14} />}
                     {busy === session.id ? "Restoring…" : "Restore"}
                   </button>
                 </article>
@@ -250,15 +212,10 @@ export function ArchiveDialog({
                   onClick={() => {
                     setLoading(true);
                     void load(snapshot.nextCursor)
-                      .catch((error) =>
-                        onError(error, "Unable to load more archived sessions"),
-                      )
+                      .catch(error => onError(error, "Unable to load more archived sessions"))
                       .finally(() => setLoading(false));
-                  }}
-                >
-                  {loading && (
-                    <IconLoader2 className="feedback-spinner" size={14} />
-                  )}
+                  }}>
+                  {loading && <IconLoader2 className="feedback-spinner" size={14} />}
                   {loading
                     ? "Loading…"
                     : `Show ${Math.min(20, snapshot.totalSessionCount - snapshot.sessions.length)} more`}
@@ -271,9 +228,7 @@ export function ArchiveDialog({
               <IconArchive size={22} />
               <strong>No archived items</strong>
               <span>
-                {query
-                  ? "No archived items match this search."
-                  : "Archived projects and sessions will appear here."}
+                {query ? "No archived items match this search." : "Archived projects and sessions will appear here."}
               </span>
             </div>
           )}

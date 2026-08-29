@@ -12,12 +12,10 @@ import { registerLineEditTools } from "./line-edit.ts";
  * Models with unknown or missing pricing are treated as expensive.
  */
 function modelUsesNumberedLineEdits(model: any): boolean {
-  const rates = model?.cost
-    ? [model.cost, ...(Array.isArray(model.cost.tiers) ? model.cost.tiers : [])]
-    : [];
+  const rates = model?.cost ? [model.cost, ...(Array.isArray(model.cost.tiers) ? model.cost.tiers : [])] : [];
   if (!rates.length) return true;
   return rates.some(
-    (rate) =>
+    rate =>
       !Number.isFinite(rate?.input) ||
       rate.input <= 0 ||
       !Number.isFinite(rate?.output) ||
@@ -31,16 +29,12 @@ export function createLineEditMode(pi: ExtensionAPI) {
   let mode: "native" | "numbered" = "native";
   let overridden = false;
   let configError: string | undefined;
-  const config = loadConfig().catch((error) => {
+  const config = loadConfig().catch(error => {
     configError = error instanceof Error ? error.message : String(error);
     return defaultConfig();
   });
 
-  const apply = (
-    next: "native" | "numbered",
-    cwd: string,
-    sessionStart: boolean,
-  ) => {
+  const apply = (next: "native" | "numbered", cwd: string, sessionStart: boolean) => {
     if (!sessionStart && next === mode) return;
     if (next === "native" && !overridden) {
       mode = next;
@@ -65,13 +59,7 @@ export function createLineEditMode(pi: ExtensionAPI) {
     },
     async update(model: any, cwd: string, sessionStart = false) {
       const resolved = await config;
-      apply(
-        resolved.lineEditEnabled && modelUsesNumberedLineEdits(model)
-          ? "numbered"
-          : "native",
-        cwd,
-        sessionStart,
-      );
+      apply(resolved.lineEditEnabled && modelUsesNumberedLineEdits(model) ? "numbered" : "native", cwd, sessionStart);
     },
   };
 }

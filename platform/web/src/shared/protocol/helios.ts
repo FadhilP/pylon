@@ -77,21 +77,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function integer(
-  value: unknown,
-  minimum: number,
-  maximum: number,
-): value is number {
-  return (
-    Number.isInteger(value) &&
-    (value as number) >= minimum &&
-    (value as number) <= maximum
-  );
+function integer(value: unknown, minimum: number, maximum: number): value is number {
+  return Number.isInteger(value) && (value as number) >= minimum && (value as number) <= maximum;
 }
 
-export function validateHeliosBrowserCommand(
-  value: unknown,
-): HeliosBrowserCommand | undefined {
+export function validateHeliosBrowserCommand(value: unknown): HeliosBrowserCommand | undefined {
   if (
     !record(value) ||
     !Number.isSafeInteger(value.expectedGeneration) ||
@@ -121,28 +111,19 @@ export function validateHeliosBrowserCommand(
     "tab-select": ["tabIndex"],
     "tab-close": ["tabIndex"],
   };
-  const allowed = new Set([
-    "action",
-    "expectedGeneration",
-    ...fields[input.action],
-  ]);
-  if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
-  if (
-    input.url !== undefined &&
-    (typeof input.url !== "string" || !input.url || input.url.length > 4096)
-  )
+  const allowed = new Set(["action", "expectedGeneration", ...fields[input.action]]);
+  if (Object.keys(value).some(key => !allowed.has(key))) return undefined;
+  if (input.url !== undefined && (typeof input.url !== "string" || !input.url || input.url.length > 4096))
     return undefined;
   if (input.action === "start" || input.action === "resize") {
-    if (!integer(input.width, 320, 1920) || !integer(input.height, 240, 1080))
-      return undefined;
+    if (!integer(input.width, 320, 1920) || !integer(input.height, 240, 1080)) return undefined;
   }
   if (input.action === "pointer") {
     if (
       !integer(input.x, 0, 4096) ||
       !integer(input.y, 0, 4096) ||
       !["move", "down", "up"].includes(String(input.phase)) ||
-      (input.phase !== "move" &&
-        !["left", "middle", "right"].includes(String(input.button)))
+      (input.phase !== "move" && !["left", "middle", "right"].includes(String(input.button)))
     )
       return undefined;
   }
@@ -163,10 +144,7 @@ export function validateHeliosBrowserCommand(
       !["down", "up"].includes(String(input.phase)))
   )
     return undefined;
-  if (
-    (input.action === "tab-select" || input.action === "tab-close") &&
-    !integer(input.tabIndex, 0, 100)
-  )
+  if ((input.action === "tab-select" || input.action === "tab-close") && !integer(input.tabIndex, 0, 100))
     return undefined;
   if (input.action === "navigate" && !input.url) return undefined;
   return { ...input };

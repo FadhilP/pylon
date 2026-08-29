@@ -18,18 +18,8 @@ import {
   type RefObject,
 } from "react";
 import type { FileReference } from "../shared/file-reference";
-import type {
-  WorkspaceFileContent,
-  WorkspaceFileDiff,
-  WorkspaceFileReadModel,
-} from "../shared/protocol/snapshots";
-import {
-  FileContent,
-  FileRow,
-  FileTree,
-  FileTypeIcon,
-  type FileView,
-} from "./files-panel";
+import type { WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileReadModel } from "../shared/protocol/snapshots";
+import { FileContent, FileRow, FileTree, FileTypeIcon, type FileView } from "./files-panel";
 import {
   closeFileTab,
   openFileTab,
@@ -46,10 +36,7 @@ export interface FileWorkspaceContentCacheEntry {
   value: WorkspaceFileContent | WorkspaceFileDiff;
 }
 
-export type FileWorkspaceContentStore = Map<
-  string,
-  Map<string, FileWorkspaceContentCacheEntry>
->;
+export type FileWorkspaceContentStore = Map<string, Map<string, FileWorkspaceContentCacheEntry>>;
 
 export function FileWorkspace({
   live,
@@ -73,11 +60,7 @@ export function FileWorkspace({
   onError,
 }: {
   live: RuntimeStoreSnapshot;
-  requestedPath?: FileReference & {
-    requestId: number;
-    sessionId?: string;
-    view?: FileView;
-  };
+  requestedPath?: FileReference & { requestId: number; sessionId?: string; view?: FileView };
   stateStore: MutableRefObject<Map<string, FileWorkspaceState>>;
   contentStore: MutableRefObject<FileWorkspaceContentStore>;
   header: ReactNode;
@@ -98,13 +81,8 @@ export function FileWorkspace({
 }) {
   const runtime = live.runtime;
   const sessionId = runtime?.sessionId ?? "";
-  const [ui, setUi] = useState<FileWorkspaceState>(() =>
-    workspaceStateForSession(stateStore.current, sessionId),
-  );
-  const currentUi =
-    ui.sessionId === sessionId
-      ? ui
-      : workspaceStateForSession(stateStore.current, sessionId);
+  const [ui, setUi] = useState<FileWorkspaceState>(() => workspaceStateForSession(stateStore.current, sessionId));
+  const currentUi = ui.sessionId === sessionId ? ui : workspaceStateForSession(stateStore.current, sessionId);
   const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
   const [loadedContent, setLoadedContent] = useState<{
     key: string;
@@ -113,20 +91,12 @@ export function FileWorkspace({
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
-  const [inventoryProgress, setInventoryProgress] = useState<{
-    loaded: number;
-    total: number;
-  }>();
+  const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
   const requestRevision = useRef(0);
 
-  const updateUi = (
-    update: (current: FileWorkspaceState) => FileWorkspaceState,
-  ) => {
-    setUi((current) => {
-      const base =
-        current.sessionId === sessionId
-          ? current
-          : workspaceStateForSession(stateStore.current, sessionId);
+  const updateUi = (update: (current: FileWorkspaceState) => FileWorkspaceState) => {
+    setUi(current => {
+      const base = current.sessionId === sessionId ? current : workspaceStateForSession(stateStore.current, sessionId);
       const next = update(base);
       if (sessionId) stateStore.current.set(sessionId, next);
       return next;
@@ -157,13 +127,11 @@ export function FileWorkspace({
           setTruncated(wasTruncated);
         },
         (loaded, total) => {
-          if (revision === requestRevision.current)
-            setInventoryProgress({ loaded, total });
+          if (revision === requestRevision.current) setInventoryProgress({ loaded, total });
         },
       )
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          onError(error, "Unable to list workspace files");
+      .catch(error => {
+        if (!controller.signal.aborted) onError(error, "Unable to list workspace files");
       })
       .finally(() => {
         if (revision === requestRevision.current) setInventoryLoading(false);
@@ -172,47 +140,22 @@ export function FileWorkspace({
       controller.abort();
       requestRevision.current++;
     };
-  }, [
-    live.connection,
-    runtime?.ready,
-    runtime?.sessionId,
-    runtime?.sessionGeneration,
-    runtime?.workspace?.revision,
-  ]);
+  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
 
   useEffect(() => {
-    if (
-      !requestedPath ||
-      !sessionId ||
-      (requestedPath.sessionId && requestedPath.sessionId !== sessionId)
-    )
-      return;
-    updateUi((current) =>
-      openFileTab(
-        current,
-        requestedPath.path,
-        requestedPath.view ?? "current",
-        requestedPath.line,
-      ),
-    );
+    if (!requestedPath || !sessionId || (requestedPath.sessionId && requestedPath.sessionId !== sessionId)) return;
+    updateUi(current => openFileTab(current, requestedPath.path, requestedPath.view ?? "current", requestedPath.line));
   }, [requestedPath?.requestId, sessionId]);
 
-  const contentKey = currentUi.selectedPath
-    ? `${currentUi.view}\u0000${currentUi.selectedPath}`
-    : undefined;
-  const cachedContent = contentKey
-    ? contentStore.current.get(sessionId)?.get(contentKey)
-    : undefined;
+  const contentKey = currentUi.selectedPath ? `${currentUi.view}\u0000${currentUi.selectedPath}` : undefined;
+  const cachedContent = contentKey ? contentStore.current.get(sessionId)?.get(contentKey) : undefined;
   const validCachedContent =
     cachedContent &&
     cachedContent.generation === runtime?.sessionGeneration &&
     cachedContent.revision === runtime?.workspace?.revision
       ? cachedContent.value
       : undefined;
-  const visibleContent =
-    loadedContent && loadedContent.key === contentKey
-      ? loadedContent.value
-      : validCachedContent;
+  const visibleContent = loadedContent && loadedContent.key === contentKey ? loadedContent.value : validCachedContent;
 
   useEffect(() => {
     const { selectedPath, view } = currentUi;
@@ -250,11 +193,9 @@ export function FileWorkspace({
     setLoadedContent(undefined);
     setViewerLoading(true);
     const request =
-      view === "diff"
-        ? runtimeStore.workspaceDiff(selectedPath)
-        : runtimeStore.workspaceFile(selectedPath, view);
+      view === "diff" ? runtimeStore.workspaceDiff(selectedPath) : runtimeStore.workspaceFile(selectedPath, view);
     void request
-      .then((value) => {
+      .then(value => {
         const snapshot = runtimeStore.getSnapshot();
         if (
           !active ||
@@ -269,15 +210,11 @@ export function FileWorkspace({
           contentStore.current.set(selectedSessionId, sessionCache);
         }
         sessionCache.set(contentKey, { generation, revision, value });
-        while (sessionCache.size > 40)
-          sessionCache.delete(sessionCache.keys().next().value!);
-        while (contentStore.current.size > 12)
-          contentStore.current.delete(
-            contentStore.current.keys().next().value!,
-          );
+        while (sessionCache.size > 40) sessionCache.delete(sessionCache.keys().next().value!);
+        while (contentStore.current.size > 12) contentStore.current.delete(contentStore.current.keys().next().value!);
         setLoadedContent({ key: contentKey, value });
       })
-      .catch((error) => {
+      .catch(error => {
         if (!active) return;
         setLoadedContent(undefined);
         onError(error, "Unable to read workspace file");
@@ -299,40 +236,23 @@ export function FileWorkspace({
 
   const matchingFiles = useMemo(() => {
     const normalized = currentUi.query.trim().toLocaleLowerCase();
-    return normalized
-      ? files.filter((file) =>
-          file.path.toLocaleLowerCase().includes(normalized),
-        )
-      : files;
+    return normalized ? files.filter(file => file.path.toLocaleLowerCase().includes(normalized)) : files;
   }, [files, currentUi.query]);
-  const visibleFiles =
-    currentUi.tab === "changes"
-      ? matchingFiles.filter((file) => file.status)
-      : matchingFiles;
+  const visibleFiles = currentUi.tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
 
-  const selectFile = (path: string, view: FileView) =>
-    updateUi((current) => openFileTab(current, path, view));
-  const selectOpenFile = (path: string) =>
-    updateUi((current) => selectFileTab(current, path));
+  const selectFile = (path: string, view: FileView) => updateUi(current => openFileTab(current, path, view));
+  const selectOpenFile = (path: string) => updateUi(current => selectFileTab(current, path));
   const setSelectedView = (view: FileView) =>
-    updateUi((current) =>
-      current.selectedPath
-        ? setFileTabView(current, current.selectedPath, view)
-        : current,
-    );
-  const closeFile = (path: string) =>
-    updateUi((current) => closeFileTab(current, path));
+    updateUi(current => (current.selectedPath ? setFileTabView(current, current.selectedPath, view) : current));
+  const closeFile = (path: string) => updateUi(current => closeFileTab(current, path));
   return (
-    <section
-      className={`file-workspace-shell${showExplorer ? "" : " has-session-navigation"}`}
-    >
+    <section className={`file-workspace-shell${showExplorer ? "" : " has-session-navigation"}`}>
       {showExplorer && (
         <aside
           className={`file-workspace-explorer${navigationOpen ? " is-open" : ""}`}
           aria-label="Workspace explorer"
           aria-hidden={mobile && !navigationOpen}
-          inert={mobile && !navigationOpen}
-        >
+          inert={mobile && !navigationOpen}>
           <header>
             <strong>
               <IconFolder size={16} />
@@ -347,30 +267,19 @@ export function FileWorkspace({
             <IconSearch size={15} />
             <input
               value={currentUi.query}
-              onChange={(event) =>
-                updateUi((current) => ({
-                  ...current,
-                  query: event.target.value,
-                }))
-              }
+              onChange={event => updateUi(current => ({ ...current, query: event.target.value }))}
               placeholder="Filter files"
             />
           </label>
           <nav className="files-tabs" aria-label="Explorer view">
             <button
               className={currentUi.tab === "changes" ? "is-active" : ""}
-              onClick={() =>
-                updateUi((current) => ({ ...current, tab: "changes" }))
-              }
-            >
+              onClick={() => updateUi(current => ({ ...current, tab: "changes" }))}>
               Changes <span>{runtime?.workspace?.changedCount ?? 0}</span>
             </button>
             <button
               className={currentUi.tab === "files" ? "is-active" : ""}
-              onClick={() =>
-                updateUi((current) => ({ ...current, tab: "files" }))
-              }
-            >
+              onClick={() => updateUi(current => ({ ...current, tab: "files" }))}>
               Files
             </button>
           </nav>
@@ -380,51 +289,35 @@ export function FileWorkspace({
             )}
             {inventoryLoading && !files.length && inventoryProgress && (
               <span className="files-progress">
-                Loading {inventoryProgress.loaded.toLocaleString()} of{" "}
-                {inventoryProgress.total.toLocaleString()} files…
+                Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
               </span>
             )}
             {!inventoryLoading && !visibleFiles.length && (
               <span className="files-empty">
-                {currentUi.tab === "changes"
-                  ? "No session changes"
-                  : "No files found"}
+                {currentUi.tab === "changes" ? "No session changes" : "No files found"}
               </span>
             )}
             {currentUi.tab === "changes" || currentUi.query.trim() ? (
-              visibleFiles.map((file) => (
+              visibleFiles.map(file => (
                 <FileRow
                   key={file.path}
                   file={file}
                   fullPath={Boolean(currentUi.query.trim())}
                   selectedPath={currentUi.selectedPath}
-                  onSelect={(path) =>
-                    selectFile(
-                      path,
-                      currentUi.tab === "changes" ? "diff" : "current",
-                    )
-                  }
+                  onSelect={path => selectFile(path, currentUi.tab === "changes" ? "diff" : "current")}
                 />
               ))
             ) : (
               <FileTree
                 files={visibleFiles}
                 selectedPath={currentUi.selectedPath}
-                onSelect={(path) => selectFile(path, "current")}
+                onSelect={path => selectFile(path, "current")}
               />
             )}
-            {truncated && (
-              <span className="files-truncated">
-                Showing first 10,000 files
-              </span>
-            )}
+            {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
           </div>
           <div className="sidebar-foot file-workspace-foot">
-            <button
-              className="sidebar-action"
-              type="button"
-              onClick={onOpenSettings}
-            >
+            <button className="sidebar-action" type="button" onClick={onOpenSettings}>
               <IconSettings size={16} />
               Settings
             </button>
@@ -433,8 +326,7 @@ export function FileWorkspace({
               type="button"
               disabled={!terminalAvailable}
               aria-pressed={terminalOpen}
-              onClick={onToggleTerminal}
-            >
+              onClick={onToggleTerminal}>
               <IconTerminal2 size={16} />
               Terminal
             </button>
@@ -443,11 +335,7 @@ export function FileWorkspace({
       )}
 
       {showExplorer && mobile && navigationOpen && (
-        <button
-          className="sidebar-scrim"
-          aria-label="Close explorer"
-          onClick={onCloseNavigation}
-        />
+        <button className="sidebar-scrim" aria-label="Close explorer" onClick={onCloseNavigation} />
       )}
 
       <main className="content-card file-workspace-content" id="main-content">
@@ -455,35 +343,20 @@ export function FileWorkspace({
         <div
           ref={workspaceRef}
           className={`workspace-layout file-workspace-layout${rightPanelOpen ? " has-inspector" : ""}`}
-          style={
-            { "--inspector-width": `${inspectorWidth}px` } as CSSProperties
-          }
-        >
+          style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}>
           <div className="file-workspace-main">
-            <div
-              className="file-workspace-editor-tabs"
-              role="tablist"
-              aria-label="Open files"
-            >
-              {currentUi.openPaths.map((path) => (
-                <div
-                  key={path}
-                  className={currentUi.selectedPath === path ? "is-active" : ""}
-                >
+            <div className="file-workspace-editor-tabs" role="tablist" aria-label="Open files">
+              {currentUi.openPaths.map(path => (
+                <div key={path} className={currentUi.selectedPath === path ? "is-active" : ""}>
                   <button
                     type="button"
                     role="tab"
                     aria-selected={currentUi.selectedPath === path}
-                    onClick={() => selectOpenFile(path)}
-                  >
+                    onClick={() => selectOpenFile(path)}>
                     <FileTypeIcon path={path} size={13} />
                     <span>{path.split("/").at(-1) ?? path}</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => closeFile(path)}
-                    aria-label={`Close ${path}`}
-                  >
+                  <button type="button" onClick={() => closeFile(path)} aria-label={`Close ${path}`}>
                     ×
                   </button>
                 </div>
@@ -493,49 +366,35 @@ export function FileWorkspace({
               {currentUi.selectedPath ? (
                 <>
                   <div className="file-viewer-toolbar">
-                    <code title={currentUi.selectedPath}>
-                      {currentUi.selectedPath}
-                    </code>
+                    <code title={currentUi.selectedPath}>{currentUi.selectedPath}</code>
                     <span>
                       <button
                         className={currentUi.view === "diff" ? "is-active" : ""}
-                        onClick={() => setSelectedView("diff")}
-                      >
+                        onClick={() => setSelectedView("diff")}>
                         Diff
                       </button>
                       <button
-                        className={
-                          currentUi.view === "current" ? "is-active" : ""
-                        }
-                        onClick={() => setSelectedView("current")}
-                      >
+                        className={currentUi.view === "current" ? "is-active" : ""}
+                        onClick={() => setSelectedView("current")}>
                         Working copy
                       </button>
                       {runtime?.workspace?.mode === "worktree" && (
                         <button
-                          className={
-                            currentUi.view === "base" ? "is-active" : ""
-                          }
-                          onClick={() => setSelectedView("base")}
-                        >
+                          className={currentUi.view === "base" ? "is-active" : ""}
+                          onClick={() => setSelectedView("base")}>
                           Baseline
                         </button>
                       )}
                       <button
                         className="icon-button"
                         onClick={() => closeFile(currentUi.selectedPath!)}
-                        aria-label="Close file"
-                      >
+                        aria-label="Close file">
                         <IconX size={14} />
                       </button>
                     </span>
                   </div>
                   <FileContent
-                    value={
-                      viewerLoading && !visibleContent
-                        ? undefined
-                        : visibleContent
-                    }
+                    value={viewerLoading && !visibleContent ? undefined : visibleContent}
                     view={currentUi.view}
                     targetLine={currentUi.selectedLine}
                     onError={onError}

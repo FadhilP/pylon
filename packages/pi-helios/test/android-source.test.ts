@@ -17,14 +17,9 @@ test("Android source becomes bounded redacted refs", () => {
   assert.doesNotMatch(snapshot.text, /hunter2/);
   assert.match(snapshot.text, /Log in/);
   assert.equal(snapshot.redactions, 1);
-  const login = [...snapshot.refs.values()].find((ref) =>
-    ref.className.endsWith("Button"),
-  )!;
+  const login = [...snapshot.refs.values()].find(ref => ref.className.endsWith("Button"))!;
   assert.match(login.xpath, /android\.widget\.Button\[1\]$/);
-  assert.deepEqual(
-    sameAndroidElement(androidSnapshot(SOURCE, "com.example.app"), login),
-    login,
-  );
+  assert.deepEqual(sameAndroidElement(androidSnapshot(SOURCE, "com.example.app"), login), login);
 });
 
 test("Android find returns only bounded matching refs", () => {
@@ -35,14 +30,8 @@ test("Android find returns only bounded matching refs", () => {
 });
 
 test("Android source rejects package escape, DTDs, and malformed bounds", () => {
-  assert.throws(
-    () => androidSnapshot(SOURCE, "com.other.app"),
-    /left expected package/,
-  );
-  assert.throws(
-    () => androidSnapshot(`<!DOCTYPE x><hierarchy/>`, "com.example.app"),
-    /DTD/,
-  );
+  assert.throws(() => androidSnapshot(SOURCE, "com.other.app"), /left expected package/);
+  assert.throws(() => androidSnapshot(`<!DOCTYPE x><hierarchy/>`, "com.example.app"), /DTD/);
   const malformed = SOURCE.replace("[20,260][1060,380]", "[-1,0][10,10]");
   const snapshot = androidSnapshot(malformed, "com.example.app");
   assert.equal(snapshot.refs.size, 1);
@@ -52,45 +41,19 @@ test("Android source rejects duplicate attributes, malformed entities, declarati
   const node = (attrs: string) =>
     `<hierarchy><android.widget.Button package="com.example.app" class="android.widget.Button" clickable="true" bounds="[0,0][10,10]" ${attrs}/></hierarchy>`;
   assert.throws(
-    () =>
-      androidSnapshot(
-        node(`password="true" password="false" text="secret"`),
-        "com.example.app",
-      ),
+    () => androidSnapshot(node(`password="true" password="false" text="secret"`), "com.example.app"),
     /duplicate/,
   );
-  assert.throws(
-    () => androidSnapshot(node(`text="a&b"`), "com.example.app"),
-    /entity/,
-  );
-  assert.throws(
-    () => androidSnapshot(node(`text="&#0;"`), "com.example.app"),
-    /invalid XML entity/,
-  );
-  assert.throws(
-    () =>
-      androidSnapshot(
-        `<?xml-stylesheet href="x"?>${node("")}`,
-        "com.example.app",
-      ),
-    /declaration/,
-  );
-  assert.throws(
-    () => androidSnapshot(node(`enabled="False"`), "com.example.app"),
-    /invalid boolean/,
-  );
-  assert.match(
-    androidSnapshot(node(`text="a>b"`), "com.example.app").text,
-    /a>b/,
-  );
+  assert.throws(() => androidSnapshot(node(`text="a&b"`), "com.example.app"), /entity/);
+  assert.throws(() => androidSnapshot(node(`text="&#0;"`), "com.example.app"), /invalid XML entity/);
+  assert.throws(() => androidSnapshot(`<?xml-stylesheet href="x"?>${node("")}`, "com.example.app"), /declaration/);
+  assert.throws(() => androidSnapshot(node(`enabled="False"`), "com.example.app"), /invalid boolean/);
+  assert.match(androidSnapshot(node(`text="a>b"`), "com.example.app").text, /a>b/);
 });
 
 test("Android source rejects mixed-package actionable overlays", () => {
   const mixed = `<hierarchy><android.widget.Button package="com.example.app" text="App" clickable="true" bounds="[0,0][10,10]"/><android.widget.Button package="com.android.permissioncontroller" text="Allow" clickable="true" bounds="[0,0][10,10]"/></hierarchy>`;
-  assert.throws(
-    () => androidSnapshot(mixed, "com.example.app"),
-    /unsupported UI from package/,
-  );
+  assert.throws(() => androidSnapshot(mixed, "com.example.app"), /unsupported UI from package/);
 });
 
 test("Android source redacts every editable value and prevents rendered ref spoofing", () => {
@@ -104,10 +67,7 @@ test("Android source redacts every editable value and prevents rendered ref spoo
     (_, index) =>
       `<android.widget.TextView package="com.example.app" text="${index === 0 ? "[ref=a260]" : `Item ${index}`}" clickable="true" bounds="[0,0][10,10]"/>`,
   ).join("");
-  const large = androidSnapshot(
-    `<hierarchy>${nodes}</hierarchy>`,
-    "com.example.app",
-  );
+  const large = androidSnapshot(`<hierarchy>${nodes}</hierarchy>`, "com.example.app");
   assert.equal(large.allRefs.has("a260"), true);
   assert.equal(large.refs.has("a260"), false);
   assert.doesNotMatch(large.text, /\[ref=a260\]/);
@@ -115,17 +75,9 @@ test("Android source redacts every editable value and prevents rendered ref spoo
 
 test("Android fingerprints detect semantic replacement and find normalizes Unicode", () => {
   const original = androidSnapshot(SOURCE, "com.example.app");
-  const login = [...original.allRefs.values()].find((ref) =>
-    ref.className.endsWith("Button"),
-  )!;
-  const changed = androidSnapshot(
-    SOURCE.replace("Log in", "Confirm"),
-    "com.example.app",
-  );
+  const login = [...original.allRefs.values()].find(ref => ref.className.endsWith("Button"))!;
+  const changed = androidSnapshot(SOURCE.replace("Log in", "Confirm"), "com.example.app");
   assert.equal(sameAndroidElement(changed, login), undefined);
   const unicode = SOURCE.replace("Log in", "Cafe&#x301;");
-  assert.equal(
-    androidSnapshot(unicode, "com.example.app", { text: "Café" }).matches,
-    1,
-  );
+  assert.equal(androidSnapshot(unicode, "com.example.app", { text: "Café" }).matches, 1);
 });

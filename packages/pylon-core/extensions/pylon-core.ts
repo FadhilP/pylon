@@ -57,7 +57,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     await worktree.agentSettled(ctx);
   });
   pi.on("tool_call", (event, ctx) => worktree.toolCall(event, ctx));
-  pi.on("tool_result", (event) => telemetry.recordToolResult(event));
+  pi.on("tool_result", event => telemetry.recordToolResult(event));
   pi.on("turn_end", (_event, ctx) => worktree.turnEnd(ctx));
   pi.on("session_shutdown", () => {
     for (const dispose of disposers) dispose();
@@ -67,10 +67,9 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("compact", {
-    description:
-      "Compact deterministically; optional instructions guide the configured reviewer",
+    description: "Compact deterministically; optional instructions guide the configured reviewer",
     handler: async (args, ctx) => {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>(resolve => {
         let settled = false;
         const complete = () => {
           if (settled) return;
@@ -80,13 +79,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         const fail = (error: unknown) => {
           if (settled) return;
           settled = true;
-          const detail = (
-            error instanceof Error
-              ? error.message
-              : error == null
-                ? ""
-                : String(error)
-          )
+          const detail = (error instanceof Error ? error.message : error == null ? "" : String(error))
             .trim()
             .slice(0, 1_000);
           ctx.ui.notify(
@@ -96,11 +89,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
           resolve();
         };
         try {
-          ctx.compact({
-            customInstructions: args.trim() || undefined,
-            onComplete: complete,
-            onError: fail,
-          });
+          ctx.compact({ customInstructions: args.trim() || undefined, onComplete: complete, onError: fail });
         } catch (error) {
           fail(error);
         }
@@ -109,8 +98,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("tokens", {
-    description:
-      "Show estimated payload tokens used by each tool in the current session branch",
+    description: "Show estimated payload tokens used by each tool in the current session branch",
     handler: async (_args, ctx) => {
       ctx.ui.notify(telemetry.format(), "info");
     },
@@ -125,12 +113,10 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       const policyLines = [...registry.policies.values()]
         .sort((a, b) => a.owner.localeCompare(b.owner))
         .map(
-          (policy) =>
+          policy =>
             `${policy.owner}: enabled [${policy.enabledTools.join(", ")}], deferred [${policy.deferredTools?.join(", ") ?? ""}], managed [${policy.managedTools.join(", ")}]${policy.allowOnly ? `, gate [${policy.allowOnly.join(", ")}]` : ""}`,
         );
-      const missing = KNOWN_ADAPTERS.filter(
-        (owner) => !registry.policies.has(owner),
-      );
+      const missing = KNOWN_ADAPTERS.filter(owner => !registry.policies.has(owner));
       const diagnosis =
         value.toLowerCase() === "doctor"
           ? await runDoctor({
@@ -155,10 +141,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
       ];
       ctx.ui.notify(
         lines.join("\n"),
-        registry.lastError ||
-          registry.lastAcknowledgeError ||
-          registry.rejected.length ||
-          diagnosis?.warning
+        registry.lastError || registry.lastAcknowledgeError || registry.rejected.length || diagnosis?.warning
           ? "warning"
           : "info",
       );

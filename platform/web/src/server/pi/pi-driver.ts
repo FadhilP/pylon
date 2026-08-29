@@ -1,20 +1,10 @@
-import type {
-  AcceptedCommand,
-  WebCommand,
-} from "../../shared/protocol/commands.ts";
-import type {
-  HeliosBrowserInput,
-  HeliosBrowserResult,
-} from "../../shared/protocol/helios.ts";
+import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
+import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
   HeliosAndroidToolingCommand,
   HeliosAndroidToolingResult,
 } from "../../shared/protocol/helios-android-tooling.ts";
-import type {
-  PromptImage,
-  PromptTextFile,
-  QueuedPromptPayload,
-} from "../../shared/protocol/commands.ts";
+import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type {
   ProviderAuthReadModel,
   QueueReadModel,
@@ -202,14 +192,8 @@ export interface ForkInput {
   mode?: "conversation" | "timeline";
 }
 
-export type UpdateRuntimePolicyInput = Extract<
-  WebCommand,
-  { type: "updateRuntimePolicy" }
->;
-export type UpdateToolPolicyInput = Extract<
-  WebCommand,
-  { type: "updateToolPolicy" }
->;
+export type UpdateRuntimePolicyInput = Extract<WebCommand, { type: "updateRuntimePolicy" }>;
+export type UpdateToolPolicyInput = Extract<WebCommand, { type: "updateToolPolicy" }>;
 
 export interface EditPromptInput extends PromptInput {
   entryId: string;
@@ -287,12 +271,8 @@ export interface MigrateContinuityMemoryInput {
   expectedGeneration: number;
 }
 
-export type ContinuityPlanActionInput = {
-  expectedGeneration: number;
-  expectedRevision: number;
-} & (
-  | { action: "approve"; resetContext: boolean }
-  | { action: "requestChanges"; feedback: string }
+export type ContinuityPlanActionInput = { expectedGeneration: number; expectedRevision: number } & (
+  { action: "approve"; resetContext: boolean } | { action: "requestChanges"; feedback: string }
 );
 
 export interface ReplacementResult {
@@ -302,36 +282,16 @@ export interface ReplacementResult {
 }
 
 export type DriverEvent =
-  | {
-      type: "session.event";
-      sessionId: string;
-      sessionGeneration: number;
-      payload: unknown;
-    }
-  | {
-      type: "provider.auth";
-      sessionId: string;
-      sessionGeneration: number;
-      providerAuth: ProviderAuthReadModel;
-    }
+  | { type: "session.event"; sessionId: string; sessionGeneration: number; payload: unknown }
+  | { type: "provider.auth"; sessionId: string; sessionGeneration: number; providerAuth: ProviderAuthReadModel }
   | {
       type: "session.replaced" | "session.unavailable";
       sessionId: string;
       sessionGeneration: number;
       runtime: RuntimeSnapshot;
     }
-  | {
-      type: "ui.event";
-      sessionId: string;
-      sessionGeneration: number;
-      payload: unknown;
-    }
-  | {
-      type: "ui.closed";
-      sessionId: string;
-      sessionGeneration: number;
-      requestId: string;
-    }
+  | { type: "ui.event"; sessionId: string; sessionGeneration: number; payload: unknown }
+  | { type: "ui.closed"; sessionId: string; sessionGeneration: number; requestId: string }
   | {
       type: "package.event";
       sessionId: string;
@@ -349,29 +309,15 @@ export type DriverEvent =
       completed?: boolean;
       cue?: "turn-complete" | "attention";
     }
-  | {
-      type: "projects.changed";
-      sessionId: string;
-      sessionGeneration: number;
-    }
-  | {
-      type: "queue.changed";
-      sessionId: string;
-      sessionGeneration: number;
-      queue: QueueReadModel;
-    }
+  | { type: "projects.changed"; sessionId: string; sessionGeneration: number }
+  | { type: "queue.changed"; sessionId: string; sessionGeneration: number; queue: QueueReadModel }
   | {
       type: "workspace.revision";
       sessionId: string;
       sessionGeneration: number;
       workspace: NonNullable<RuntimeSnapshot["workspace"]>;
     }
-  | {
-      type: "command.result";
-      sessionId: string;
-      sessionGeneration: number;
-      result?: SlashCommandResultReadModel;
-    };
+  | { type: "command.result"; sessionId: string; sessionGeneration: number; result?: SlashCommandResultReadModel };
 
 export type DriverEventListener = (event: DriverEvent) => void;
 
@@ -379,45 +325,27 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   terminalTarget?(): TerminalTarget;
-  conversationHistory(
-    input: ConversationHistoryQuery,
-  ): Promise<ConversationHistoryPage>;
-  conversationAttachment?(
-    input: ConversationAttachmentQuery,
-  ): Promise<ConversationAttachmentContent>;
+  conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
+  conversationAttachment?(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent>;
   turnDiff?(input: TurnDiffQuery): Promise<TurnDiffResult>;
-  conversationTurnIndex?(
-    input: ConversationTurnIndexQuery,
-  ): Promise<ConversationTurnIndexPage>;
+  conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;
   workspaceFile?(input: WorkspaceFileInput): Promise<WorkspaceFileContent>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
-  timelineCheckpointFiles?(
-    input: TimelineCheckpointInput,
-  ): Promise<TimelineCheckpointFiles>;
-  timelineCheckpointDiff?(
-    input: TimelineCheckpointDiffInput,
-  ): Promise<TimelineCheckpointDiff>;
+  timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
+  timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
-  stateqlRows?(
-    handle: string,
-    offset: number,
-    limit: number,
-  ): Promise<StateQLRowsPage>;
+  stateqlRows?(handle: string, offset: number, limit: number): Promise<StateQLRowsPage>;
   papercutList?(
     status: PapercutStatusReadModel | "all",
     query: string,
     offset: number,
     limit: number,
   ): Promise<PapercutListPage>;
-  papercutMutation?(
-    input: PapercutMutationInput,
-  ): Promise<PapercutMutationResult>;
+  papercutMutation?(input: PapercutMutationInput): Promise<PapercutMutationResult>;
   heliosBrowser?(input: HeliosBrowserInput): Promise<HeliosBrowserResult>;
-  heliosAndroidTooling?(
-    input: HeliosAndroidToolingCommand,
-  ): Promise<HeliosAndroidToolingResult>;
+  heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
@@ -438,13 +366,9 @@ export interface PiDriver {
   reorderProject(input: ReorderProjectInput): Promise<void>;
   archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult>;
   restoreProject(input: ProjectArchiveInput): Promise<void>;
-  updateProjectWorktreeSettings?(
-    input: ProjectWorktreeSettingsInput,
-  ): Promise<void>;
+  updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
   handoffSession?(input: HandoffSessionInput): Promise<ReplacementResult>;
-  applySessionChanges?(
-    input: ApplySessionChangesInput,
-  ): Promise<ReplacementResult>;
+  applySessionChanges?(input: ApplySessionChangesInput): Promise<ReplacementResult>;
   switchSession(input: SwitchSessionInput): Promise<ReplacementResult>;
   deleteSession(input: DeleteSessionInput): Promise<void>;
   archiveSession(input: SessionArchiveInput): Promise<ReplacementResult>;
@@ -459,18 +383,10 @@ export interface PiDriver {
   updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
   updateToolPolicy?(input: UpdateToolPolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
-  updatePackageSettings(
-    input: UpdatePackageSettingsInput,
-  ): Promise<ReplacementResult>;
-  setExtensionEnabled?(
-    input: SetExtensionEnabledInput,
-  ): Promise<ReplacementResult>;
-  installExtensionPackage?(
-    input: ExtensionPackageInput,
-  ): Promise<ReplacementResult>;
-  removeExtensionPackage?(
-    input: ExtensionPackageInput,
-  ): Promise<ReplacementResult>;
+  updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
+  setExtensionEnabled?(input: SetExtensionEnabledInput): Promise<ReplacementResult>;
+  installExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
+  removeExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
   setProjectTrust?(input: SetProjectTrustInput): Promise<ReplacementResult>;
   reloadExtensions?(): Promise<ReplacementResult>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
@@ -486,10 +402,7 @@ export interface PiDriver {
   migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void>;
   continuityPlanAction(input: ContinuityPlanActionInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
-  keepUiRequestAlive(
-    requestId: string,
-    sessionGeneration: number,
-  ): string | undefined | void;
+  keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined | void;
   dismissCommandResult?(resultId: string, sessionGeneration: number): void;
   subscribe(listener: DriverEventListener): () => void;
   dispose(): Promise<void>;

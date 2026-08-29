@@ -12,15 +12,11 @@ if (command !== "resume") {
   process.exit(2);
 }
 
-const sessions = (await SessionManager.list(process.cwd())).filter((session) => {
+const sessions = (await SessionManager.list(process.cwd())).filter(session => {
   try {
     return SessionManager.open(session.path)
       .getEntries()
-      .some(
-        (entry) =>
-          entry.type === "custom" &&
-          entry.customType === "pi-prompt-checkpoint",
-      );
+      .some(entry => entry.type === "custom" && entry.customType === "pi-prompt-checkpoint");
   } catch {
     return false;
   }
@@ -31,9 +27,7 @@ if (!sessions.length) {
 }
 
 sessions.forEach((session, index) =>
-  console.log(
-    `${index + 1}. ${session.name || session.firstMessage} ${session.parentSessionPath ? "[fork]" : ""}`,
-  ),
+  console.log(`${index + 1}. ${session.name || session.firstMessage} ${session.parentSessionPath ? "[fork]" : ""}`),
 );
 const input = createInterface({ input: stdin, output: stdout });
 const answer = await input.question("Session number: ");
@@ -41,17 +35,15 @@ input.close();
 const selected = sessions[Number(answer) - 1];
 if (!selected) process.exit(2);
 
-const packageEntry = fileURLToPath(
-  import.meta.resolve("@earendil-works/pi-coding-agent"),
-);
+const packageEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 const piCli = join(dirname(packageEntry), "cli.js");
 const child = spawn(process.execPath, [piCli, "--session", selected.path], {
   stdio: "inherit",
   shell: false,
   windowsHide: true,
 });
-child.once("error", (error) => {
+child.once("error", error => {
   console.error(`Unable to start Pi: ${error.message}`);
   process.exit(1);
 });
-child.once("close", (code) => process.exit(code ?? 1));
+child.once("close", code => process.exit(code ?? 1));

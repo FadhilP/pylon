@@ -86,11 +86,7 @@ function harness() {
       };
     },
     createSdk: async () => sdk as any,
-    resolveAppium: async () => ({
-      command: "node",
-      args: ["appium.js"],
-      version: "3.0.0",
-    }),
+    resolveAppium: async () => ({ command: "node", args: ["appium.js"], version: "3.0.0" }),
     startServer: async () => server,
     createClient: () => client,
   });
@@ -103,17 +99,12 @@ test("owned Android lifecycle starts, uses fresh refs, and stops emulator", asyn
   assert.equal(started.ownership, "owned");
   assert.match(started.snapshot!, /\[value redacted\]/);
   await manager.operate("owned", { kind: "tap", target: "a1" });
-  await assert.rejects(
-    manager.operate("owned", { kind: "tap", target: "a1" }),
-    /stale/,
-  );
+  await assert.rejects(manager.operate("owned", { kind: "tap", target: "a1" }), /stale/);
   await manager.operate("owned", { kind: "snapshot" });
   await manager.operate("owned", { kind: "fill", target: "a1", text: "hello" });
   await manager.close("owned", "close");
   assert.deepEqual(
-    log.filter((item) =>
-      ["session-delete", "server-stop", "emulator-stop"].includes(item),
-    ),
+    log.filter(item => ["session-delete", "server-stop", "emulator-stop"].includes(item)),
     ["session-delete", "server-stop", "emulator-stop"],
   );
   assert.equal(log[0], "tooling-acquire");
@@ -122,11 +113,7 @@ test("owned Android lifecycle starts, uses fresh refs, and stops emulator", asyn
 
 test("attached Android lifecycle detaches without stopping emulator", async () => {
   const { manager, log } = harness();
-  const attached = await manager.attach(
-    "attached",
-    "emulator-5556",
-    "com.example.app",
-  );
+  const attached = await manager.attach("attached", "emulator-5556", "com.example.app");
   assert.equal(attached.avd, "Pixel_External");
   await assert.rejects(manager.close("attached", "close"), /only be detached/);
   await manager.close("attached", "detach");
@@ -147,12 +134,8 @@ test("Android screenshot artifacts are private and removed on close", async () =
 
 test("failed owned startup cleans server and emulator", async () => {
   const { manager, log, client } = harness();
-  client.source = async () =>
-    SOURCE.replaceAll("com.example.app", "com.other.app");
-  await assert.rejects(
-    manager.start("failed", "Pixel_Test", "com.example.app"),
-    /left expected package/,
-  );
+  client.source = async () => SOURCE.replaceAll("com.example.app", "com.other.app");
+  await assert.rejects(manager.start("failed", "Pixel_Test", "com.example.app"), /left expected package/);
   assert.ok(log.includes("session-delete"));
   assert.ok(log.includes("server-stop"));
   assert.ok(log.includes("emulator-cleanup"));
@@ -163,10 +146,7 @@ test("Android operations reject foreground package escape", async () => {
   const { manager, client } = harness();
   await manager.start("escape", "Pixel_Test", "com.example.app");
   client.currentPackage = async () => "com.android.permissioncontroller";
-  await assert.rejects(
-    manager.operate("escape", { kind: "snapshot" }),
-    /left expected package/,
-  );
+  await assert.rejects(manager.operate("escape", { kind: "snapshot" }), /left expected package/);
   client.currentPackage = async () => "com.example.app";
   await manager.close("escape", "close");
 });
@@ -179,10 +159,7 @@ test("cleanup attempts all owned resources and retains uncertain server cleanup"
     throw new Error("delete failed");
   };
   const closed = await first.manager.close("delete-fails", "close");
-  assert.match(
-    closed.cleanupWarnings?.join(" ") ?? "",
-    /delete Appium session/,
-  );
+  assert.match(closed.cleanupWarnings?.join(" ") ?? "", /delete Appium session/);
   assert.ok(first.log.includes("server-stop"));
   assert.ok(first.log.includes("emulator-stop"));
   assert.equal(first.manager.get("delete-fails"), undefined);
@@ -192,10 +169,7 @@ test("cleanup attempts all owned resources and retains uncertain server cleanup"
   second.server.stop = async () => {
     throw new Error("server failed");
   };
-  await assert.rejects(
-    second.manager.close("server-fails", "close"),
-    /server failed/,
-  );
+  await assert.rejects(second.manager.close("server-fails", "close"), /server failed/);
   assert.equal(second.manager.get("server-fails")?.state, "cleanup-required");
   assert.ok(second.log.includes("emulator-stop"));
   second.server.stop = async () => {
@@ -211,17 +185,14 @@ test("attached cleanup failure never signals the emulator", async () => {
   server.stop = async () => {
     throw new Error("server failed");
   };
-  await assert.rejects(
-    manager.close("attached-failure", "detach"),
-    /server failed/,
-  );
+  await assert.rejects(manager.close("attached-failure", "detach"), /server failed/);
   assert.equal(manager.get("attached-failure")?.state, "cleanup-required");
   assert.ok(!log.includes("emulator-stop"));
 });
 
 function gate() {
   let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
+  const promise = new Promise<void>(resolve => {
     release = resolve;
   });
   return { promise, release };
@@ -238,10 +209,7 @@ test("Android lifecycle reserves synchronously and close waits for startup clean
   };
   const starting = manager.start("racing", "Pixel_Test", "com.example.app");
   await entered.promise;
-  await assert.rejects(
-    manager.start("racing", "Pixel_Test", "com.example.app"),
-    /already has an active/,
-  );
+  await assert.rejects(manager.start("racing", "Pixel_Test", "com.example.app"), /already has an active/);
   const closing = manager.close("racing", "close");
   blocked.release();
   await assert.rejects(starting, /interrupted by cleanup/);
@@ -259,21 +227,14 @@ test("Android shutdown interrupts and drains in-flight startup", async () => {
     await blocked.promise;
     return emulator as any;
   };
-  const starting = manager.start(
-    "shutdown-race",
-    "Pixel_Test",
-    "com.example.app",
-  );
+  const starting = manager.start("shutdown-race", "Pixel_Test", "com.example.app");
   await entered.promise;
   const shutdown = manager.shutdown();
   blocked.release();
   await assert.rejects(starting, /interrupted by cleanup/);
   assert.deepEqual(await shutdown, { failures: [], cleanupWarnings: [] });
   assert.equal(manager.get("shutdown-race"), undefined);
-  await assert.rejects(
-    manager.start("later", "Pixel_Test", "com.example.app"),
-    /shutting down/,
-  );
+  await assert.rejects(manager.start("later", "Pixel_Test", "com.example.app"), /shutting down/);
 });
 
 test("Android actions recheck package, require full bounds, and invalidate refs after partial fill", async () => {
@@ -281,25 +242,16 @@ test("Android actions recheck package, require full bounds, and invalidate refs 
   await first.manager.start("toctou", "Pixel_Test", "com.example.app");
   let packageChecks = 0;
   first.client.currentPackage = async () =>
-    ++packageChecks === 1
-      ? "com.example.app"
-      : "com.android.permissioncontroller";
-  await assert.rejects(
-    first.manager.operate("toctou", { kind: "tap", target: "a1" }),
-    /left expected package/,
-  );
-  assert.ok(!first.log.some((item) => item.startsWith("tap:")));
+    ++packageChecks === 1 ? "com.example.app" : "com.android.permissioncontroller";
+  await assert.rejects(first.manager.operate("toctou", { kind: "tap", target: "a1" }), /left expected package/);
+  assert.ok(!first.log.some(item => item.startsWith("tap:")));
   first.client.currentPackage = async () => "com.example.app";
   await first.manager.close("toctou", "close");
 
   const second = harness();
-  second.client.source = async () =>
-    SOURCE.replace("[20,100][400,220]", "[20,100][1400,220]");
+  second.client.source = async () => SOURCE.replace("[20,100][400,220]", "[20,100][1400,220]");
   await second.manager.start("bounds", "Pixel_Test", "com.example.app");
-  await assert.rejects(
-    second.manager.operate("bounds", { kind: "tap", target: "a1" }),
-    /outside the current viewport/,
-  );
+  await assert.rejects(second.manager.operate("bounds", { kind: "tap", target: "a1" }), /outside the current viewport/);
   await second.manager.close("bounds", "close");
 
   const third = harness();
@@ -308,21 +260,10 @@ test("Android actions recheck package, require full bounds, and invalidate refs 
     throw new Error("value failed after clear");
   };
   await assert.rejects(
-    third.manager.operate("partial-fill", {
-      kind: "fill",
-      target: "a1",
-      text: "secret",
-    }),
+    third.manager.operate("partial-fill", { kind: "fill", target: "a1", text: "secret" }),
     /value failed/,
   );
-  await assert.rejects(
-    third.manager.operate("partial-fill", {
-      kind: "fill",
-      target: "a1",
-      text: "again",
-    }),
-    /stale/,
-  );
+  await assert.rejects(third.manager.operate("partial-fill", { kind: "fill", target: "a1", text: "again" }), /stale/);
   await third.manager.close("partial-fill", "close");
 });
 
@@ -335,12 +276,9 @@ test("Android find refs remain actionable beyond rendered snapshot limits", asyn
   ).join("");
   client.source = async () => `<hierarchy>${nodes}</hierarchy>`;
   await manager.start("large-find", "Pixel_Test", "com.example.app");
-  const found = await manager.operate("large-find", {
-    kind: "find",
-    text: "Target Late",
-  });
+  const found = await manager.operate("large-find", { kind: "find", text: "Target Late" });
   assert.match(found.snapshot!, /Target Late/);
   await manager.operate("large-find", { kind: "tap", target: "a1" });
-  assert.ok(log.some((item) => item.startsWith("tap:")));
+  assert.ok(log.some(item => item.startsWith("tap:")));
   await manager.close("large-find", "close");
 });

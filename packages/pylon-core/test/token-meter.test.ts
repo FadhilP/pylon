@@ -1,17 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createTokenMeter,
-  formatTokenMeter,
-  meterFromBranch,
-  recordToolResult,
-} from "../src/token-meter.ts";
+import { createTokenMeter, formatTokenMeter, meterFromBranch, recordToolResult } from "../src/token-meter.ts";
 
-const message = (id: string, value: any) => ({
-  type: "message",
-  id,
-  message: value,
-});
+const message = (id: string, value: any) => ({ type: "message", id, message: value });
 
 test("rebuilds per-tool usage for built-in and custom calls", () => {
   const meter = meterFromBranch([
@@ -19,18 +10,8 @@ test("rebuilds per-tool usage for built-in and custom calls", () => {
       role: "assistant",
       usage: { input: 120, output: 30, cacheRead: 400, cacheWrite: 20 },
       content: [
-        {
-          type: "toolCall",
-          id: "call-read",
-          name: "read",
-          arguments: { path: "a.ts" },
-        },
-        {
-          type: "toolCall",
-          id: "call-custom",
-          name: "repo_scout",
-          arguments: { task: "trace flow" },
-        },
+        { type: "toolCall", id: "call-read", name: "read", arguments: { path: "a.ts" } },
+        { type: "toolCall", id: "call-custom", name: "repo_scout", arguments: { task: "trace flow" } },
       ],
     }),
     message("read-result", {
@@ -68,24 +49,11 @@ test("rebuilds per-tool usage for built-in and custom calls", () => {
   });
   assert.match(formatTokenMeter(meter), /repo_scout: 1 call/);
   assert.match(formatTokenMeter(meter), /images 1; errors 1/);
-  assert.deepEqual(meter.provider, {
-    turns: 1,
-    input: 120,
-    output: 30,
-    cacheRead: 400,
-    cacheWrite: 20,
-    cost: 0,
-  });
-  assert.match(
-    formatTokenMeter(meter),
-    /input = text results, output = serialized arguments/,
-  );
+  assert.deepEqual(meter.provider, { turns: 1, input: 120, output: 30, cacheRead: 400, cacheWrite: 20, cost: 0 });
+  assert.match(formatTokenMeter(meter), /input = text results, output = serialized arguments/);
   assert.match(formatTokenMeter(meter), /~4 characters\/token/);
   assert.match(formatTokenMeter(meter), /Provider-reported model usage/);
-  assert.match(
-    formatTokenMeter(meter),
-    /1 turns; input 120; output 30; cache read 400; cache write 20/,
-  );
+  assert.match(formatTokenMeter(meter), /1 turns; input 120; output 30; cache read 400; cache write 20/);
 });
 
 test("counts each completed tool call once across rebuild and events", () => {
@@ -108,29 +76,15 @@ test("attributes child model usage, context hashes, recalls, verification, and s
   const meter = meterFromBranch([
     message("assistant", {
       role: "assistant",
-      usage: {
-        input: 10,
-        output: 2,
-        cacheRead: 3,
-        cacheWrite: 0,
-        cost: { total: 0.01 },
-      },
+      usage: { input: 10, output: 2, cacheRead: 3, cacheWrite: 0, cost: { total: 0.01 } },
       content: [
         {
           type: "toolCall",
           id: "advisor-1",
           name: "advisor",
-          arguments: {
-            request: "review this",
-            evidence: [{ path: "a.ts", start: 1, end: 2 }],
-          },
+          arguments: { request: "review this", evidence: [{ path: "a.ts", start: 1, end: 2 }] },
         },
-        {
-          type: "toolCall",
-          id: "recall-1",
-          name: "sieve_recall",
-          arguments: { toolCallId: "old" },
-        },
+        { type: "toolCall", id: "recall-1", name: "sieve_recall", arguments: { toolCallId: "old" } },
       ],
     }),
     message("advisor-result", {
@@ -142,13 +96,7 @@ test("attributes child model usage, context hashes, recalls, verification, and s
       details: {
         durationMs: 20,
         callNumber: 1,
-        usage: {
-          input: 100,
-          output: 20,
-          cacheRead: 50,
-          cacheWrite: 5,
-          cost: 0.25,
-        },
+        usage: { input: 100, output: 20, cacheRead: 50, cacheWrite: 5, cost: 0.25 },
       },
     }),
     message("recall-result", {
@@ -159,16 +107,8 @@ test("attributes child model usage, context hashes, recalls, verification, and s
       isError: false,
       details: { found: true },
     }),
-    {
-      type: "custom",
-      customType: "pi-verify-result",
-      data: { version: 1, runId: "run-1", state: "passed" },
-    },
-    {
-      type: "custom",
-      customType: "pi-verify-result",
-      data: { version: 1, runId: "run-1", state: "passed" },
-    },
+    { type: "custom", customType: "pi-verify-result", data: { version: 1, runId: "run-1", state: "passed" } },
+    { type: "custom", customType: "pi-verify-result", data: { version: 1, runId: "run-1", state: "passed" } },
   ]);
 
   assert.deepEqual(meter.byPackage.get("pi-advisor"), {
@@ -206,14 +146,7 @@ test("detects repeats from complete context tuples, not reused section hashes", 
   const entries = contexts.flatMap((input, index) => [
     message(`assistant-${index}`, {
       role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: `call-${index}`,
-          name: "advisor",
-          arguments: input,
-        },
-      ],
+      content: [{ type: "toolCall", id: `call-${index}`, name: "advisor", arguments: input }],
     }),
     message(`result-${index}`, {
       role: "toolResult",
@@ -221,16 +154,11 @@ test("detects repeats from complete context tuples, not reused section hashes", 
       toolName: "advisor",
       content: [],
       isError: false,
-      details: {
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 },
-      },
+      details: { usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 } },
     }),
   ]);
 
-  assert.equal(
-    meterFromBranch(entries).byPackage.get("pi-advisor")?.repeatedCalls,
-    1,
-  );
+  assert.equal(meterFromBranch(entries).byPackage.get("pi-advisor")?.repeatedCalls, 1);
 });
 
 test("reports an empty current branch clearly", () => {

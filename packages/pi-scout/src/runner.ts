@@ -20,10 +20,7 @@ const SCOUT_PROTOCOL_MAX_BYTES = 5 * 1024 * 1024;
 
 export { cacheReadTokensFromUsage, contextTokensFromUsage, getPiInvocation };
 export type { ChildUsage, Invocation };
-export type ChildTurnUsage = ChildUsage & {
-  model?: string;
-  stopReason?: string;
-};
+export type ChildTurnUsage = ChildUsage & { model?: string; stopReason?: string };
 export type ScoutActivity = ChildActivity;
 export type ScoutRun = {
   text: string;
@@ -69,41 +66,30 @@ export type RunPiOptions = {
   onUsage?: (usage: ChildUsage) => void;
 };
 
-export async function runPi(
-  args: string[],
-  options: RunPiOptions,
-): Promise<ScoutRun> {
+export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
   if (options.concurrent) return runPiUnlocked(args, options);
   const previousRun = scoutRunQueue;
   let releaseRun = () => {};
-  scoutRunQueue = new Promise<void>((resolve) => {
+  scoutRunQueue = new Promise<void>(resolve => {
     releaseRun = resolve;
   });
   await previousRun;
   try {
-    if (options.signal?.aborted)
-      throw new DOMException("Scout run was aborted.", "AbortError");
+    if (options.signal?.aborted) throw new DOMException("Scout run was aborted.", "AbortError");
     return await runPiUnlocked(args, options);
   } finally {
     releaseRun();
   }
 }
 
-async function runPiUnlocked(
-  args: string[],
-  options: RunPiOptions,
-): Promise<ScoutRun> {
+async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<ScoutRun> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? 90_000;
   if (
     options.finalizeAfterMs !== undefined &&
-    (!Number.isFinite(options.finalizeAfterMs) ||
-      options.finalizeAfterMs <= 0 ||
-      options.finalizeAfterMs >= timeoutMs)
+    (!Number.isFinite(options.finalizeAfterMs) || options.finalizeAfterMs <= 0 || options.finalizeAfterMs >= timeoutMs)
   ) {
-    throw new Error(
-      "Scout finalization deadline must be positive and earlier than its timeout",
-    );
+    throw new Error("Scout finalization deadline must be positive and earlier than its timeout");
   }
   const invocation = options.invocation ?? getPiInvocation(args);
   const child = spawn(invocation.command, invocation.args, {
@@ -112,20 +98,12 @@ async function runPiUnlocked(
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
-    env:
-      options.inheritEnv === false
-        ? options.env
-        : options.env
-          ? { ...process.env, ...options.env }
-          : process.env,
+    env: options.inheritEnv === false ? options.env : options.env ? { ...process.env, ...options.env } : process.env,
   });
   const messages: any[] = [];
   const turns: ChildTurnUsage[] = [];
   const usage = emptyUsage();
-  const recorder = activityRecorder(
-    (text) => capText(text, 2000, 40).text,
-    options.onActivity,
-  );
+  const recorder = activityRecorder(text => capText(text, 2000, 40).text, options.onActivity);
   const stderr = stderrTail();
   let timedOut = false,
     aborted = false,
@@ -161,32 +139,16 @@ async function runPiUnlocked(
   const sendCommand = (type: "prompt" | "steer", message: string) => {
     const command = { id: `scout-${++commandId}`, type, message };
     try {
-      child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
-        if (
-          error &&
-          !controlledCompletion &&
-          !timedOut &&
-          !aborted &&
-          !finalization.failed
-        )
+      child.stdin!.write(`${JSON.stringify(command)}\n`, error => {
+        if (error && !controlledCompletion && !timedOut && !aborted && !finalization.failed)
           failCommand(type, error.message);
       });
     } catch (error) {
       failCommand(type, error instanceof Error ? error.message : String(error));
     }
   };
-  const requestFinalization = (
-    reason: "budget" | "deadline",
-    message: string,
-  ) => {
-    if (
-      finalization.attempted ||
-      controlledCompletion ||
-      timedOut ||
-      aborted ||
-      commandError
-    )
-      return;
+  const requestFinalization = (reason: "budget" | "deadline", message: string) => {
+    if (finalization.attempted || controlledCompletion || timedOut || aborted || commandError) return;
     finalization.attempted = true;
     finalization.reason = reason;
     sendCommand("steer", message);
@@ -204,8 +166,7 @@ async function runPiUnlocked(
       return true;
     }
     finalization.message = message;
-    if (message.stopReason !== "error" && message.stopReason !== "aborted")
-      finalization.succeeded = true;
+    if (message.stopReason !== "error" && message.stopReason !== "aborted") finalization.succeeded = true;
     return true;
   };
 
@@ -265,10 +226,7 @@ async function runPiUnlocked(
       const event = JSON.parse(line);
       // RPC responses are envelopes, not agent events. Only rejected commands matter.
       if (event.type === "response") {
-        if (
-          event.success === false &&
-          (event.command === "prompt" || event.command === "steer")
-        )
+        if (event.success === false && (event.command === "prompt" || event.command === "steer"))
           failCommand(event.command, event.error);
         return;
       }
@@ -280,8 +238,7 @@ async function runPiUnlocked(
       }
       if (event.type === "tool_execution_start") return recorder.start(event);
       if (event.type === "tool_execution_end") return recorder.end(event);
-      if (event.type !== "message_end" || event.message?.role !== "assistant")
-        return;
+      if (event.type !== "message_end" || event.message?.role !== "assistant") return;
       observeTurn(event.message);
     } catch {
       /* Malformed lines remain harmless unless no usable final response arrives. */
@@ -292,11 +249,10 @@ async function runPiUnlocked(
     protocolOverflow = true;
     terminate(child);
   });
-  child.stdout!.on("data", (data) => stdout.push(data));
-  child.stderr!.on("data", (data) => stderr.push(data));
-  child.stdin!.on("error", (error) => {
-    if (!controlledCompletion && !timedOut && !aborted && !finalization.failed)
-      failCommand("write", error.message);
+  child.stdout!.on("data", data => stdout.push(data));
+  child.stderr!.on("data", data => stderr.push(data));
+  child.stdin!.on("error", error => {
+    if (!controlledCompletion && !timedOut && !aborted && !finalization.failed) failCommand("write", error.message);
   });
   const abort = () => {
     aborted = true;
@@ -320,9 +276,9 @@ async function runPiUnlocked(
   finalizationTimer?.unref();
   // Attach every handler before the initial command; RPC uses strict LF-delimited JSON.
   if (!aborted) sendCommand("prompt", options.prompt);
-  const exitCode = await new Promise<number>((resolve) => {
+  const exitCode = await new Promise<number>(resolve => {
     child.once("error", () => resolve(1));
-    child.once("close", (code) => resolve(code ?? 1));
+    child.once("close", code => resolve(code ?? 1));
   });
   clearTimeout(timeout);
   if (finalizationTimer) clearTimeout(finalizationTimer);
@@ -341,35 +297,19 @@ async function runPiUnlocked(
       : options.resultMaxBytes === undefined
         ? capText(rawText)
         : capReport(rawText, options.resultMaxBytes);
-  const incompleteFinalization =
-    agentSettled && finalization.attempted && !finalization.succeeded;
+  const incompleteFinalization = agentSettled && finalization.attempted && !finalization.succeeded;
   const finalizationFailure = finalization.failed || incompleteFinalization;
-  const finalizationLabel =
-    finalization.reason === "deadline"
-      ? "deadline finalization"
-      : "budget finalization";
+  const finalizationLabel = finalization.reason === "deadline" ? "deadline finalization" : "budget finalization";
   // First matching row wins; order is the diagnosis priority, most specific cause first.
   const errorLadder: Array<[boolean, string]> = [
     [protocolOverflow, "Scout protocol buffer exceeded 5 MiB."],
     [aborted, "Scout aborted."],
     [timedOut, "Scout timed out."],
     [commandError !== undefined, commandError!],
-    [
-      finalization.failed,
-      `Scout requested more tools during finalization (${finalizationLabel}).`,
-    ],
-    [
-      incompleteFinalization,
-      `Scout settled before returning its finalization (${finalizationLabel}).`,
-    ],
-    [
-      !agentSettled && !controlledCompletion,
-      "Scout exited before agent settlement.",
-    ],
-    [
-      final?.stopReason === "error",
-      final?.errorMessage || "Scout model error.",
-    ],
+    [finalization.failed, `Scout requested more tools during finalization (${finalizationLabel}).`],
+    [incompleteFinalization, `Scout settled before returning its finalization (${finalizationLabel}).`],
+    [!agentSettled && !controlledCompletion, "Scout exited before agent settlement."],
+    [final?.stopReason === "error", final?.errorMessage || "Scout model error."],
     [!rawText, "Scout returned no assistant text."],
   ];
   const error = errorLadder.find(([failed]) => failed)?.[1];
@@ -378,9 +318,7 @@ async function runPiUnlocked(
     model: final?.model,
     stopReason: final?.stopReason,
     error,
-    ...(finalization.reason === "budget" && finalizationFailure
-      ? { failure: "budget_exceeded" as const }
-      : {}),
+    ...(finalization.reason === "budget" && finalizationFailure ? { failure: "budget_exceeded" as const } : {}),
     budgetExceeded,
     finalizationAttempted: finalization.attempted,
     finalizationSucceeded: finalization.succeeded,

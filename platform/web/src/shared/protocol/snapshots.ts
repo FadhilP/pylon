@@ -1,7 +1,4 @@
-import type {
-  EffectiveGuardRules,
-  GuardRuleOverrides,
-} from "../guard-policy.ts";
+import type { EffectiveGuardRules, GuardRuleOverrides } from "../guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type {
   ConversationReadModel,
@@ -49,8 +46,7 @@ export interface RuntimeSnapshot {
   commandResult?: SlashCommandResultReadModel;
 }
 
-export type VerifyPolicyReadModel =
-  { mode: "auto" } | { mode: "selected"; checks: string[] };
+export type VerifyPolicyReadModel = { mode: "auto" } | { mode: "selected"; checks: string[] };
 
 export type WorkspacePolicyMode = "checkout" | "worktree" | "local";
 export type DialogTimeoutSeconds = number | null;
@@ -252,11 +248,7 @@ export interface PapercutMutationResult {
 export interface StateQLSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
-  session: {
-    session_id: string;
-    name: string;
-    status: "active" | "closed";
-  };
+  session: { session_id: string; name: string; status: "active" | "closed" };
   actor_id: string;
   connection: {
     connection_id: string;
@@ -266,25 +258,11 @@ export interface StateQLSnapshot {
     database: string;
     read_only: boolean;
   } | null;
-  transaction: {
-    transaction_id: string;
-    owner_actor_id: string;
-    state: string;
-  } | null;
+  transaction: { transaction_id: string; owner_actor_id: string; state: string } | null;
   state_version: string | null;
   state_confidence:
-    | "authoritative"
-    | "transaction_snapshot"
-    | "database_reported"
-    | "local"
-    | "ttl_based"
-    | "unknown"
-    | null;
-  recent_results: Array<{
-    alias: string | null;
-    handle: string;
-    rows: number;
-  }>;
+    "authoritative" | "transaction_snapshot" | "database_reported" | "local" | "ttl_based" | "unknown" | null;
+  recent_results: Array<{ alias: string | null; handle: string; rows: number }>;
   recent_operations: Array<{
     handle: string;
     actor_id: string;
@@ -344,12 +322,7 @@ export interface TurnDiffQuery {
 }
 
 export type TurnDiffResult =
-  | {
-      protocolVersion: typeof PROTOCOL_VERSION;
-      sessionId: string;
-      sessionGeneration: number;
-      state: "binary";
-    }
+  | { protocolVersion: typeof PROTOCOL_VERSION; sessionId: string; sessionGeneration: number; state: "binary" }
   | {
       protocolVersion: typeof PROTOCOL_VERSION;
       sessionId: string;
@@ -489,16 +462,8 @@ export interface PackageSummary {
 export type PackageModelMode = "disabled" | "session" | "model";
 
 export type PackageSettingsReadModel =
-  | {
-      kind: "pylon-core";
-      lineEditEnabled: boolean;
-    }
-  | {
-      kind: "advisor";
-      mode: PackageModelMode;
-      model?: string;
-      thinking?: import("./events.ts").ThinkingLevelReadModel;
-    }
+  | { kind: "pylon-core"; lineEditEnabled: boolean }
+  | { kind: "advisor"; mode: PackageModelMode; model?: string; thinking?: import("./events.ts").ThinkingLevelReadModel }
   | {
       kind: "scout";
       mode: PackageModelMode;
@@ -532,14 +497,8 @@ export type PackageSettingsReadModel =
       rolloverHighMultiplier: number;
       rolloverLowMultiplier: number;
     }
-  | {
-      kind: "helios";
-      headed: boolean;
-    }
-  | {
-      kind: "timeline";
-      editRollbackDefault: boolean;
-    }
+  | { kind: "helios"; headed: boolean }
+  | { kind: "timeline"; editRollbackDefault: boolean }
   | {
       kind: "spawn";
       agentAvailability: "deferred" | "active";

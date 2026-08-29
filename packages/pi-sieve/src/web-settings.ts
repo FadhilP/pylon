@@ -24,10 +24,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   };
 }
 
-export async function updateSettings(
-  value: any,
-  { agentDir }: { agentDir: string },
-): Promise<void> {
+export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (
     value?.kind !== "sieve" ||
     typeof value.activePruning !== "boolean" ||

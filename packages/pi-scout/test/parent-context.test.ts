@@ -4,10 +4,7 @@ import { buildParentContext } from "../src/parent-context.ts";
 
 test("parent context carries current request and bounded plan intent safely", () => {
   const context = buildParentContext([
-    {
-      type: "message",
-      message: { role: "user", content: "Add OAuth login" },
-    },
+    { type: "message", message: { role: "user", content: "Add OAuth login" } },
     {
       type: "message",
       message: {
@@ -25,10 +22,7 @@ test("parent context carries current request and bounded plan intent safely", ()
         ],
       },
     },
-    {
-      type: "message",
-      message: { role: "user", content: "Execute approved stored plan." },
-    },
+    { type: "message", message: { role: "user", content: "Execute approved stored plan." } },
   ]);
   assert.match(context, /Add OAuth login/);
   assert.match(context, /Inspect routes, then add callback handling/);
@@ -42,20 +36,12 @@ test("parent context includes bounded verification and checkpoint archaeology", 
     {
       type: "custom",
       customType: "pi-verify-result",
-      data: {
-        state: "failed",
-        scope: "changed",
-        results: [{ command: "npm test" }],
-      },
+      data: { state: "failed", scope: "changed", results: [{ command: "npm test" }] },
     },
     {
       type: "custom",
       customType: "pi-prompt-checkpoint",
-      data: {
-        createdAt: "2026-01-01",
-        worktreeRef: "secret-ref",
-        indexRef: "secret-index",
-      },
+      data: { createdAt: "2026-01-01", worktreeRef: "secret-ref", indexRef: "secret-index" },
     },
   ]);
   assert.match(context, /pi-verify-result/);
@@ -67,22 +53,10 @@ test("parent context includes bounded verification and checkpoint archaeology", 
 test("parent context deduplicates clipped items and keeps roles distinct", () => {
   const context = buildParentContext(
     [
-      {
-        type: "message",
-        message: { role: "user", content: "older constraint" },
-      },
-      {
-        type: "message",
-        message: { role: "user", content: "same\r\nevidence" },
-      },
+      { type: "message", message: { role: "user", content: "older constraint" } },
+      { type: "message", message: { role: "user", content: "same\r\nevidence" } },
       { type: "message", message: { role: "user", content: "same\nevidence" } },
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "same\nevidence" }],
-        },
-      },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "same\nevidence" }] } },
     ],
     6000,
     3,
@@ -96,14 +70,8 @@ test("parent context deduplicates clipped items and keeps roles distinct", () =>
 test("parent context keeps complete newest items within its total cap", () => {
   const context = buildParentContext(
     [
-      {
-        type: "message",
-        message: { role: "user", content: `older ${"alpha ".repeat(150)}` },
-      },
-      {
-        type: "message",
-        message: { role: "user", content: `newest ${"bravo ".repeat(150)}` },
-      },
+      { type: "message", message: { role: "user", content: `older ${"alpha ".repeat(150)}` } },
+      { type: "message", message: { role: "user", content: `newest ${"bravo ".repeat(150)}` } },
     ],
     1000,
     2,
@@ -131,11 +99,7 @@ test("parent context omits recursive scout calls and caps output", () => {
         role: "assistant",
         content: [
           { type: "text", text: `${i} ${"x".repeat(2000)}` },
-          {
-            type: "toolCall",
-            name: "repo_scout",
-            arguments: { task: "repeat" },
-          },
+          { type: "toolCall", name: "repo_scout", arguments: { task: "repeat" } },
         ],
       },
     })),

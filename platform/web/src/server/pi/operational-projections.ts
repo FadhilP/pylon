@@ -23,33 +23,16 @@ const verificationStates = new Set([
   "no_checks",
   "clean",
 ]);
-const jobStates = new Set([
-  "running",
-  "cancelling",
-  "completed",
-  "failed",
-  "cancelled",
-  "timed_out",
-]);
+const jobStates = new Set(["running", "cancelling", "completed", "failed", "cancelled", "timed_out"]);
 const todoStates = new Set(["pending", "in_progress", "done", "blocked"]);
-const workModes = new Set([
-  "planning",
-  "executing",
-  "handed_off",
-  "completed",
-  "cancelled",
-]);
+const workModes = new Set(["planning", "executing", "handed_off", "completed", "cancelled"]);
 const idPattern = /^[A-Za-z0-9._:@/-]+$/;
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 function string(value: unknown, maximum: number): string | undefined {
-  return typeof value === "string" && value.length > 0
-    ? value.slice(0, maximum)
-    : undefined;
+  return typeof value === "string" && value.length > 0 ? value.slice(0, maximum) : undefined;
 }
 function timestamp(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -67,14 +50,8 @@ function number(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 function stringList(value: unknown, maximum = 100): string[] | undefined {
-  if (
-    !Array.isArray(value) ||
-    !value.every((item) => typeof item === "string" && item.length > 0)
-  )
-    return undefined;
-  return [
-    ...new Set(value.slice(0, maximum).map((item) => item.slice(0, 200))),
-  ];
+  if (!Array.isArray(value) || !value.every(item => typeof item === "string" && item.length > 0)) return undefined;
+  return [...new Set(value.slice(0, maximum).map(item => item.slice(0, 200)))];
 }
 
 export function initialOperational(
@@ -85,39 +62,14 @@ export function initialOperational(
   const tools = new Set(availableTools);
   const loaded = new Set(loadedExtensions);
   const operational: OperationalReadModel = {
-    verification: {
-      availability: tools.has("verify") ? "available" : "unavailable",
-      checks: [],
-    },
-    jobs: {
-      availability: tools.has("heartbeat_start") ? "available" : "unavailable",
-      items: [],
-    },
-    guard: {
-      availability: loaded.has("pi-guard.ts") ? "available" : "unavailable",
-      blocked: 0,
-      confirmed: 0,
-    },
-    continuity: {
-      availability: "unavailable",
-      revision: 0,
-      memory: [],
-      globalMemory: [],
-      v4MigrationAvailable: false,
-    },
-    papercuts: {
-      availability: "unavailable",
-      revision: 0,
-      counts: { open: 0, resolved: 0, dismissed: 0, total: 0 },
-    },
+    verification: { availability: tools.has("verify") ? "available" : "unavailable", checks: [] },
+    jobs: { availability: tools.has("heartbeat_start") ? "available" : "unavailable", items: [] },
+    guard: { availability: loaded.has("pi-guard.ts") ? "available" : "unavailable", blocked: 0, confirmed: 0 },
+    continuity: { availability: "unavailable", revision: 0, memory: [], globalMemory: [], v4MigrationAvailable: false },
+    papercuts: { availability: "unavailable", revision: 0, counts: { open: 0, resolved: 0, dismissed: 0, total: 0 } },
     timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
-    tools: {
-      availability: loaded.has("pylon-core.ts") ? "available" : "unavailable",
-      policies: [],
-    },
-    sieve: {
-      availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable",
-    },
+    tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
+    sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
     health: { status: "healthy", issues: [] },
   };
   return withHealth(operational, diagnostics);
@@ -129,83 +81,50 @@ export function withOperationalCapabilities(
   loadedExtensions: Iterable<string>,
   diagnostics: RuntimeDiagnostic[] = [],
 ): OperationalReadModel {
-  const fresh = initialOperational(
-    availableTools,
-    loadedExtensions,
-    diagnostics,
-  );
+  const fresh = initialOperational(availableTools, loadedExtensions, diagnostics);
   const next: OperationalReadModel = {
     verification:
       current.verification.state || current.verification.checks.length
-        ? {
-            ...current.verification,
-            availability: fresh.verification.availability,
-          }
+        ? { ...current.verification, availability: fresh.verification.availability }
         : fresh.verification,
-    jobs: current.jobs.items.length
-      ? { ...current.jobs, availability: fresh.jobs.availability }
-      : fresh.jobs,
+    jobs: current.jobs.items.length ? { ...current.jobs, availability: fresh.jobs.availability } : fresh.jobs,
     guard: current.guard.decision
       ? { ...current.guard, availability: fresh.guard.availability }
-      : {
-          ...fresh.guard,
-          blocked: current.guard.blocked,
-          confirmed: current.guard.confirmed,
-        },
-    continuity: current.continuity.revision
-      ? current.continuity
-      : fresh.continuity,
+      : { ...fresh.guard, blocked: current.guard.blocked, confirmed: current.guard.confirmed },
+    continuity: current.continuity.revision ? current.continuity : fresh.continuity,
     papercuts: current.papercuts.revision ? current.papercuts : fresh.papercuts,
     timeline: current.timeline.revision ? current.timeline : fresh.timeline,
-    tools: current.tools.policies.length
-      ? { ...current.tools, availability: fresh.tools.availability }
-      : fresh.tools,
-    sieve: current.sieve.mode
-      ? { ...current.sieve, availability: fresh.sieve.availability }
-      : fresh.sieve,
+    tools: current.tools.policies.length ? { ...current.tools, availability: fresh.tools.availability } : fresh.tools,
+    sieve: current.sieve.mode ? { ...current.sieve, availability: fresh.sieve.availability } : fresh.sieve,
     health: fresh.health,
   };
   return withHealth(next, diagnostics);
 }
 
-export function cloneOperational(
-  value: OperationalReadModel,
-): OperationalReadModel {
+export function cloneOperational(value: OperationalReadModel): OperationalReadModel {
   return {
-    verification: {
-      ...value.verification,
-      checks: value.verification.checks.map((item) => ({ ...item })),
-    },
-    jobs: {
-      ...value.jobs,
-      items: value.jobs.items.map((item) => ({ ...item })),
-    },
+    verification: { ...value.verification, checks: value.verification.checks.map(item => ({ ...item })) },
+    jobs: { ...value.jobs, items: value.jobs.items.map(item => ({ ...item })) },
     guard: { ...value.guard },
     continuity: {
       ...value.continuity,
-      memory: value.continuity.memory.map((note) => ({
+      memory: value.continuity.memory.map(note => ({
         ...note,
         relatedPaths: note.relatedPaths ? [...note.relatedPaths] : undefined,
       })),
-      globalMemory: value.continuity.globalMemory.map((note) => ({
+      globalMemory: value.continuity.globalMemory.map(note => ({
         ...note,
         relatedPaths: note.relatedPaths ? [...note.relatedPaths] : undefined,
       })),
       work: value.continuity.work
-        ? {
-            ...value.continuity.work,
-            todos: value.continuity.work.todos.map((item) => ({ ...item })),
-          }
+        ? { ...value.continuity.work, todos: value.continuity.work.todos.map(item => ({ ...item })) }
         : undefined,
     },
     papercuts: { ...value.papercuts, counts: { ...value.papercuts.counts } },
-    timeline: {
-      ...value.timeline,
-      checkpoints: value.timeline.checkpoints.map((item) => ({ ...item })),
-    },
+    timeline: { ...value.timeline, checkpoints: value.timeline.checkpoints.map(item => ({ ...item })) },
     tools: {
       ...value.tools,
-      policies: value.tools.policies.map((item) => ({
+      policies: value.tools.policies.map(item => ({
         ...item,
         managedTools: [...item.managedTools],
         enabledTools: [...item.enabledTools],
@@ -215,22 +134,13 @@ export function cloneOperational(
     },
     sieve: {
       ...value.sieve,
-      latest: value.sieve.latest
-        ? cloneSieveStats(value.sieve.latest)
-        : undefined,
-      cumulativeActual: value.sieve.cumulativeActual
-        ? cloneSieveStats(value.sieve.cumulativeActual)
-        : undefined,
+      latest: value.sieve.latest ? cloneSieveStats(value.sieve.latest) : undefined,
+      cumulativeActual: value.sieve.cumulativeActual ? cloneSieveStats(value.sieve.cumulativeActual) : undefined,
       cumulativeProjected: value.sieve.cumulativeProjected
         ? cloneSieveStats(value.sieve.cumulativeProjected)
         : undefined,
       recallsByTool: value.sieve.recallsByTool
-        ? Object.fromEntries(
-            Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [
-              name,
-              { ...usage },
-            ]),
-          )
+        ? Object.fromEntries(Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [name, { ...usage }]))
         : undefined,
       epoch: value.sieve.epoch ? { ...value.sieve.epoch } : undefined,
       stability: value.sieve.stability
@@ -252,7 +162,7 @@ export function applyOperationalEvent(
   value: unknown,
   diagnostics: RuntimeDiagnostic[] = [],
   expectedSessionId?: string,
-  redact: (value: string) => string = (value) => value,
+  redact: (value: string) => string = value => value,
 ): OperationalReadModel {
   let next: OperationalReadModel;
   if (channel === "pi-verify:lifecycle" || channel === "pi-verify:result") {
@@ -265,19 +175,11 @@ export function applyOperationalEvent(
     const guardState = guard(current.guard, value);
     next = { ...current, guard: guardState };
   } else if (channel === "pi-continuity:state-change") {
-    const continuityState = continuity(
-      current.continuity,
-      value,
-      expectedSessionId,
-    );
+    const continuityState = continuity(current.continuity, value, expectedSessionId);
     if (continuityState === current.continuity) return current;
     next = { ...current, continuity: continuityState };
   } else if (channel === "pi-papercut:state-change") {
-    const papercutState = papercuts(
-      current.papercuts,
-      value,
-      expectedSessionId,
-    );
+    const papercutState = papercuts(current.papercuts, value, expectedSessionId);
     if (papercutState === current.papercuts) return current;
     next = { ...current, papercuts: papercutState };
   } else if (channel === "pi-timeline:state-change") {
@@ -299,19 +201,8 @@ function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
   const input = record(value);
   const transformedBy = record(input?.transformedBy);
   const rawByTool = record(input?.byTool);
-  if (
-    !input ||
-    !transformedBy ||
-    !rawByTool ||
-    Object.keys(rawByTool).length > 33
-  )
-    return undefined;
-  const keys = [
-    "scanned",
-    "transformed",
-    "omittedChars",
-    "netCharsSaved",
-  ] as const;
+  if (!input || !transformedBy || !rawByTool || Object.keys(rawByTool).length > 33) return undefined;
+  const keys = ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const;
   const reasons = [
     "ageThreshold",
     "budget",
@@ -322,14 +213,8 @@ function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
     "mixedText",
   ] as const;
   if (
-    !keys.every(
-      (key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0,
-    ) ||
-    !reasons.every(
-      (key) =>
-        Number.isSafeInteger(transformedBy[key]) &&
-        Number(transformedBy[key]) >= 0,
-    )
+    !keys.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0) ||
+    !reasons.every(key => Number.isSafeInteger(transformedBy[key]) && Number(transformedBy[key]) >= 0)
   )
     return undefined;
   const byTool: SieveTransformStatsReadModel["byTool"] = {};
@@ -338,14 +223,8 @@ function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
     if (
       !/^[a-zA-Z0-9_-]{1,64}$/.test(name) ||
       !usage ||
-      ![
-        "scanned",
-        "transformed",
-        "sourceChars",
-        "retainedChars",
-        "netCharsSaved",
-      ].every(
-        (key) => Number.isSafeInteger(usage[key]) && Number(usage[key]) >= 0,
+      !["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every(
+        key => Number.isSafeInteger(usage[key]) && Number(usage[key]) >= 0,
       )
     )
       return undefined;
@@ -375,21 +254,15 @@ function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
   };
 }
 
-function cloneSieveStats(
-  value: SieveTransformStatsReadModel,
-): SieveTransformStatsReadModel {
+function cloneSieveStats(value: SieveTransformStatsReadModel): SieveTransformStatsReadModel {
   return {
     ...value,
     transformedBy: { ...value.transformedBy },
-    byTool: Object.fromEntries(
-      Object.entries(value.byTool).map(([name, usage]) => [name, { ...usage }]),
-    ),
+    byTool: Object.fromEntries(Object.entries(value.byTool).map(([name, usage]) => [name, { ...usage }])),
   };
 }
 
-function sieveRecallStats(
-  value: unknown,
-): NonNullable<SieveReadModel["recallsByTool"]> | undefined {
+function sieveRecallStats(value: unknown): NonNullable<SieveReadModel["recallsByTool"]> | undefined {
   const input = record(value);
   if (!input || Object.keys(input).length > 33) return undefined;
   const output: NonNullable<SieveReadModel["recallsByTool"]> = {};
@@ -404,10 +277,7 @@ function sieveRecallStats(
       Number(usage.recalledChars) < 0
     )
       return undefined;
-    output[name] = {
-      recalls: Number(usage.recalls),
-      recalledChars: Number(usage.recalledChars),
-    };
+    output[name] = { recalls: Number(usage.recalls), recalledChars: Number(usage.recalledChars) };
   }
   return output;
 }
@@ -421,23 +291,14 @@ function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
     "rolloverEligibleRetainedChars",
     "recoverableEntries",
   ];
-  if (
-    !input ||
-    !metrics.every(
-      (key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0,
-    )
-  )
-    return undefined;
-  const startedAt =
-    input.startedAt === undefined ? undefined : timestamp(input.startedAt);
+  if (!input || !metrics.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)) return undefined;
+  const startedAt = input.startedAt === undefined ? undefined : timestamp(input.startedAt);
   if (input.startedAt !== undefined && !startedAt) return undefined;
   return {
     ...(string(input.id, 200) ? { id: string(input.id, 200) } : {}),
     ...(string(input.reason, 200) ? { reason: string(input.reason, 200) } : {}),
     ...(startedAt ? { startedAt } : {}),
-    ...(string(input.promptFingerprint, 200)
-      ? { promptFingerprint: string(input.promptFingerprint, 200) }
-      : {}),
+    ...(string(input.promptFingerprint, 200) ? { promptFingerprint: string(input.promptFingerprint, 200) } : {}),
     frozenResultCount: Number(input.frozenResultCount),
     frozenSourceChars: Number(input.frozenSourceChars),
     frozenRetainedChars: Number(input.frozenRetainedChars),
@@ -446,9 +307,7 @@ function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
   };
 }
 
-function sieveStability(
-  value: unknown,
-): SieveReadModel["stability"] | undefined {
+function sieveStability(value: unknown): SieveReadModel["stability"] | undefined {
   const input = record(value);
   const metrics = [
     "newProjections",
@@ -471,18 +330,14 @@ function sieveStability(
   const standardChangesByKind = record(input?.standardChangesByKind);
   if (
     !input ||
-    !metrics.every(
-      (key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0,
-    ) ||
+    !metrics.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0) ||
     (input.earliestChangedPriorMessageIndex !== undefined &&
       (!Number.isSafeInteger(input.earliestChangedPriorMessageIndex) ||
         Number(input.earliestChangedPriorMessageIndex) < 0)) ||
     (input.standardComparisons !== undefined &&
-      (!Number.isSafeInteger(input.standardComparisons) ||
-        Number(input.standardComparisons) < 0)) ||
+      (!Number.isSafeInteger(input.standardComparisons) || Number(input.standardComparisons) < 0)) ||
     (input.standardPrefixChurn !== undefined &&
-      (!Number.isSafeInteger(input.standardPrefixChurn) ||
-        Number(input.standardPrefixChurn) < 0)) ||
+      (!Number.isSafeInteger(input.standardPrefixChurn) || Number(input.standardPrefixChurn) < 0)) ||
     (input.standardEarliestChangedPriorMessageIndex !== undefined &&
       (!Number.isSafeInteger(input.standardEarliestChangedPriorMessageIndex) ||
         Number(input.standardEarliestChangedPriorMessageIndex) < 0)) ||
@@ -492,9 +347,7 @@ function sieveStability(
     (input.standardChangesByKind !== undefined &&
       (!standardChangesByKind ||
         !standardChangeKinds.every(
-          (key) =>
-            Number.isSafeInteger(standardChangesByKind[key]) &&
-            Number(standardChangesByKind[key]) >= 0,
+          key => Number.isSafeInteger(standardChangesByKind[key]) && Number(standardChangesByKind[key]) >= 0,
         )))
   )
     return undefined;
@@ -507,31 +360,15 @@ function sieveStability(
     prefixChurnViolations: Number(input.prefixChurnViolations),
     estimatedInvalidatedChars: Number(input.estimatedInvalidatedChars),
     ...(input.earliestChangedPriorMessageIndex !== undefined
-      ? {
-          earliestChangedPriorMessageIndex: Number(
-            input.earliestChangedPriorMessageIndex,
-          ),
-        }
+      ? { earliestChangedPriorMessageIndex: Number(input.earliestChangedPriorMessageIndex) }
       : {}),
-    ...(input.standardComparisons !== undefined
-      ? { standardComparisons: Number(input.standardComparisons) }
-      : {}),
-    ...(input.standardPrefixChurn !== undefined
-      ? { standardPrefixChurn: Number(input.standardPrefixChurn) }
-      : {}),
+    ...(input.standardComparisons !== undefined ? { standardComparisons: Number(input.standardComparisons) } : {}),
+    ...(input.standardPrefixChurn !== undefined ? { standardPrefixChurn: Number(input.standardPrefixChurn) } : {}),
     ...(input.standardEarliestChangedPriorMessageIndex !== undefined
-      ? {
-          standardEarliestChangedPriorMessageIndex: Number(
-            input.standardEarliestChangedPriorMessageIndex,
-          ),
-        }
+      ? { standardEarliestChangedPriorMessageIndex: Number(input.standardEarliestChangedPriorMessageIndex) }
       : {}),
     ...(input.standardEstimatedInvalidatedChars !== undefined
-      ? {
-          standardEstimatedInvalidatedChars: Number(
-            input.standardEstimatedInvalidatedChars,
-          ),
-        }
+      ? { standardEstimatedInvalidatedChars: Number(input.standardEstimatedInvalidatedChars) }
       : {}),
     ...(standardChangesByKind
       ? {
@@ -559,14 +396,11 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   const updatedAt = timestamp(input.updatedAt);
   const recallsByTool = sieveRecallStats(input.recallsByTool);
   const epoch = input.epoch === undefined ? undefined : sieveEpoch(input.epoch);
-  const stability =
-    input.stability === undefined ? undefined : sieveStability(input.stability);
+  const stability = input.stability === undefined ? undefined : sieveStability(input.stability);
   const contextUsagePercent = input.contextUsagePercent;
   if (
     input.available !== true ||
-    !["stable", "legacy", "standard-v2"].includes(
-      String(input.projectionMode),
-    ) ||
+    !["stable", "legacy", "standard-v2"].includes(String(input.projectionMode)) ||
     (input.epoch !== undefined && !epoch) ||
     (input.stability !== undefined && !stability) ||
     (contextUsagePercent !== undefined &&
@@ -589,17 +423,12 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
     !recallsByTool ||
     !updatedAt
   ) {
-    return {
-      availability: "unavailable",
-      error: "Pi Sieve returned invalid state.",
-    };
+    return { availability: "unavailable", error: "Pi Sieve returned invalid state." };
   }
   return {
     availability: "available",
     mode: input.mode as NonNullable<SieveReadModel["mode"]>,
-    projectionMode: input.projectionMode as NonNullable<
-      SieveReadModel["projectionMode"]
-    >,
+    projectionMode: input.projectionMode as NonNullable<SieveReadModel["projectionMode"]>,
     threshold: input.threshold as number,
     activePruning: input.activePruning,
     latestMode: input.latestMode as NonNullable<SieveReadModel["latestMode"]>,
@@ -617,16 +446,9 @@ function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
   };
 }
 
-function verification(
-  value: unknown,
-  redact: (value: string) => string,
-): VerificationReadModel {
+function verification(value: unknown, redact: (value: string) => string): VerificationReadModel {
   const input = record(value);
-  if (
-    !input ||
-    input.version !== 1 ||
-    !verificationStates.has(String(input.state))
-  )
+  if (!input || input.version !== 1 || !verificationStates.has(String(input.state)))
     return { availability: "unavailable", checks: [] };
   const rawResults = Array.isArray(input.results) ? input.results : [];
   let outputBudget = 16 * 1024;
@@ -638,9 +460,7 @@ function verification(
     const command = redact(string(item.command, 500) ?? "").slice(0, 500);
     const code = item.code === null ? null : number(item.code, Number.NaN);
     const rawOutput = string(item.output, Math.min(8 * 1024, outputBudget));
-    const safeOutput = rawOutput
-      ? redact(rawOutput).slice(0, Math.min(8 * 1024, outputBudget))
-      : undefined;
+    const safeOutput = rawOutput ? redact(rawOutput).slice(0, Math.min(8 * 1024, outputBudget)) : undefined;
     if (safeOutput) outputBudget -= safeOutput.length;
     return [
       {
@@ -663,68 +483,41 @@ function verification(
     availability: "available",
     state: input.state as VerificationReadModel["state"],
     ...(identifier(input.runId) ? { runId: identifier(input.runId) } : {}),
-    ...(input.scope === "changed" || input.scope === "project"
-      ? { scope: input.scope }
-      : {}),
-    ...(string(input.startedAt, 64)
-      ? { startedAt: string(input.startedAt, 64) }
-      : {}),
-    ...(string(input.finishedAt, 64)
-      ? { finishedAt: string(input.finishedAt, 64) }
-      : {}),
-    ...(typeof input.durationMs === "number"
-      ? { durationMs: Math.max(0, number(input.durationMs)) }
-      : {}),
+    ...(input.scope === "changed" || input.scope === "project" ? { scope: input.scope } : {}),
+    ...(string(input.startedAt, 64) ? { startedAt: string(input.startedAt, 64) } : {}),
+    ...(string(input.finishedAt, 64) ? { finishedAt: string(input.finishedAt, 64) } : {}),
+    ...(typeof input.durationMs === "number" ? { durationMs: Math.max(0, number(input.durationMs)) } : {}),
     checks,
-    ...(string(input.skipped, 1_000)
-      ? { message: string(input.skipped, 1_000) }
-      : {}),
+    ...(string(input.skipped, 1_000) ? { message: string(input.skipped, 1_000) } : {}),
   };
 }
 
 function jobs(old: JobsReadModel, value: unknown): JobsReadModel {
   const input = record(value);
   const startedAt = timestamp(input?.startedAt);
-  if (
-    !input ||
-    input.version !== 1 ||
-    !identifier(input.id) ||
-    !jobStates.has(String(input.state)) ||
-    !startedAt
-  )
+  if (!input || input.version !== 1 || !identifier(input.id) || !jobStates.has(String(input.state)) || !startedAt)
     return { availability: "unavailable", items: [] };
   const item = {
     id: identifier(input.id)!,
     label: string(input.label, 120) ?? identifier(input.id)!,
     state: input.state as JobsReadModel["items"][number]["state"],
     startedAt,
-    ...(timestamp(input.finishedAt)
-      ? { finishedAt: timestamp(input.finishedAt) }
-      : {}),
+    ...(timestamp(input.finishedAt) ? { finishedAt: timestamp(input.finishedAt) } : {}),
     ...(typeof input.exitCode === "number" || input.exitCode === null
       ? { exitCode: input.exitCode as number | null }
       : {}),
-    ...(input.purpose === "verification" ||
-    input.purpose === "build" ||
-    input.purpose === "other"
+    ...(input.purpose === "verification" || input.purpose === "build" || input.purpose === "other"
       ? { purpose: input.purpose as "verification" | "build" | "other" }
       : {}),
     ...(identifier(input.todoId) ? { todoId: identifier(input.todoId) } : {}),
   };
-  return {
-    availability: "available",
-    items: [...old.items.filter((old) => old.id !== item.id), item].slice(-50),
-  };
+  return { availability: "available", items: [...old.items.filter(old => old.id !== item.id), item].slice(-50) };
 }
 
 function guard(old: GuardReadModel, value: unknown): GuardReadModel {
   const input = record(value);
   if (!input || input.version !== 1 || typeof input.decision !== "string")
-    return {
-      availability: "unavailable",
-      blocked: old.blocked,
-      confirmed: old.confirmed,
-    };
+    return { availability: "unavailable", blocked: old.blocked, confirmed: old.confirmed };
   return {
     availability: "available",
     decision: input.decision.slice(0, 100),
@@ -749,19 +542,11 @@ function papercuts(
   )
     return input?.version === 1 ? old : { ...old, availability: "unavailable" };
   const rawCounts = record(input.counts);
-  const values =
-    rawCounts &&
-    ["open", "resolved", "dismissed", "total"].map((key) => rawCounts[key]);
+  const values = rawCounts && ["open", "resolved", "dismissed", "total"].map(key => rawCounts[key]);
   if (
     !values ||
-    !values.every(
-      (item) =>
-        Number.isSafeInteger(item) &&
-        Number(item) >= 0 &&
-        Number(item) <= 1_000,
-    ) ||
-    Number(values[0]) + Number(values[1]) + Number(values[2]) !==
-      Number(values[3])
+    !values.every(item => Number.isSafeInteger(item) && Number(item) >= 0 && Number(item) <= 1_000) ||
+    Number(values[0]) + Number(values[1]) + Number(values[2]) !== Number(values[3])
   )
     return old;
   const counts = {
@@ -777,11 +562,7 @@ function papercuts(
   };
 }
 
-function continuity(
-  old: ContinuityReadModel,
-  value: unknown,
-  expectedSessionId?: string,
-): ContinuityReadModel {
+function continuity(old: ContinuityReadModel, value: unknown, expectedSessionId?: string): ContinuityReadModel {
   const input = record(value);
   if (
     !input ||
@@ -818,12 +599,7 @@ function continuity(
       "superseded",
       "revoked",
     ]),
-    enforcementAuthorities = new Set([
-      "context_only",
-      "warning",
-      "validation",
-      "blocking_guard",
-    ]);
+    enforcementAuthorities = new Set(["context_only", "warning", "validation", "blocking_guard"]);
   const safePath = (value: unknown) =>
     typeof value === "string" &&
     value.length > 0 &&
@@ -831,9 +607,7 @@ function continuity(
     !value.startsWith("/") &&
     !value.startsWith("\\") &&
     !/^[a-z]:/i.test(value) &&
-    !value
-      .split(/[\\/]+/)
-      .some((part) => !part || part === "." || part === "..");
+    !value.split(/[\\/]+/).some(part => !part || part === "." || part === "..");
   const parseMemory = (value: unknown, expectedScope: "user" | "project") => {
     if (!Array.isArray(value) || value.length > 1_000) return;
     const output: ContinuityReadModel["memory"] = [];
@@ -843,17 +617,12 @@ function continuity(
         trigger = string(note?.trigger, 240),
         guidance = string(note?.guidance, 800);
       const sourceSummary =
-          typeof note?.sourceSummary === "string" &&
-          note.sourceSummary.length <= 500
-            ? note.sourceSummary
-            : undefined,
+          typeof note?.sourceSummary === "string" && note.sourceSummary.length <= 500 ? note.sourceSummary : undefined,
         updatedAt = timestamp(note?.updatedAt);
       if (
         !note ||
         !id ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          id,
-        ) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ||
         note.scope !== expectedScope ||
         !trigger ||
         trigger !== trigger.trim() ||
@@ -865,16 +634,12 @@ function continuity(
         !scopes.has(String(note.scope)) ||
         !authorities.has(String(note.authority)) ||
         !origins.has(String(note.origin)) ||
-        (note.disposition !== undefined &&
-          !dispositions.has(String(note.disposition))) ||
-        (note.enforcementAuthority !== undefined &&
-          !enforcementAuthorities.has(String(note.enforcementAuthority))) ||
+        (note.disposition !== undefined && !dispositions.has(String(note.disposition))) ||
+        (note.enforcementAuthority !== undefined && !enforcementAuthorities.has(String(note.enforcementAuthority))) ||
         !Number.isSafeInteger(note.revision) ||
         Number(note.revision) < 1 ||
         (note.relatedPaths !== undefined &&
-          (!Array.isArray(note.relatedPaths) ||
-            note.relatedPaths.length > 5 ||
-            !note.relatedPaths.every(safePath)))
+          (!Array.isArray(note.relatedPaths) || note.relatedPaths.length > 5 || !note.relatedPaths.every(safePath)))
       )
         return;
       output.push({
@@ -882,18 +647,13 @@ function continuity(
         scope: expectedScope,
         trigger,
         guidance,
-        authority: note.authority as
-          "user_instruction" | "project_contract" | "imported",
+        authority: note.authority as "user_instruction" | "project_contract" | "imported",
         origin: note.origin as "user" | "agent" | "migration",
         revision: Number(note.revision),
         updatedAt,
         sourceSummary,
         ...(note.disposition !== undefined
-          ? {
-              disposition: note.disposition as NonNullable<
-                ContinuityReadModel["memory"][number]["disposition"]
-              >,
-            }
+          ? { disposition: note.disposition as NonNullable<ContinuityReadModel["memory"][number]["disposition"]> }
           : {}),
         ...(note.enforcementAuthority !== undefined
           ? {
@@ -902,9 +662,7 @@ function continuity(
               >,
             }
           : {}),
-        ...(note.relatedPaths?.length
-          ? { relatedPaths: [...note.relatedPaths] as string[] }
-          : {}),
+        ...(note.relatedPaths?.length ? { relatedPaths: [...note.relatedPaths] as string[] } : {}),
       });
     }
     return output;
@@ -943,18 +701,11 @@ function continuity(
       globalMemory,
       v4MigrationAvailable,
     };
-  const todos = work.todos.slice(0, 12).flatMap((value) => {
+  const todos = work.todos.slice(0, 12).flatMap(value => {
     const item = record(value);
     const id = identifier(item?.id);
     const text = string(item?.text, 500);
-    if (
-      !item ||
-      !id ||
-      !text ||
-      !todoStates.has(String(item.status)) ||
-      typeof item.updatedAt !== "string"
-    )
-      return [];
+    if (!item || !id || !text || !todoStates.has(String(item.status)) || typeof item.updatedAt !== "string") return [];
     return [
       {
         id,
@@ -967,22 +718,13 @@ function continuity(
   const boundedList = (value: unknown, maxItems: number, maxLength: number) =>
     Array.isArray(value) &&
     value.length <= maxItems &&
-    value.every(
-      (item) =>
-        typeof item === "string" && item.length > 0 && item.length <= maxLength,
-    )
+    value.every(item => typeof item === "string" && item.length > 0 && item.length <= maxLength)
       ? (value as string[])
       : undefined;
   const rawHandoff = record(work.handoff);
-  const workingSet = rawHandoff
-    ? boundedList(rawHandoff.workingSet, 20, 240)
-    : undefined;
-  const assumptions = rawHandoff
-    ? boundedList(rawHandoff.assumptions, 12, 500)
-    : undefined;
-  const acceptanceCriteria = rawHandoff
-    ? boundedList(rawHandoff.acceptanceCriteria, 12, 500)
-    : undefined;
+  const workingSet = rawHandoff ? boundedList(rawHandoff.workingSet, 20, 240) : undefined;
+  const assumptions = rawHandoff ? boundedList(rawHandoff.assumptions, 12, 500) : undefined;
+  const acceptanceCriteria = rawHandoff ? boundedList(rawHandoff.acceptanceCriteria, 12, 500) : undefined;
   if (rawHandoff && (!workingSet || !assumptions || !acceptanceCriteria))
     return {
       availability: "unavailable",
@@ -992,23 +734,15 @@ function continuity(
       v4MigrationAvailable,
     };
   const rawFeedback = record(work.revisionFeedback);
-  const feedbackText = rawFeedback
-    ? string(rawFeedback.text, 1_000)
-    : undefined;
-  const feedbackCreatedAt = rawFeedback
-    ? timestamp(rawFeedback.createdAt)
-    : undefined;
+  const feedbackText = rawFeedback ? string(rawFeedback.text, 1_000) : undefined;
+  const feedbackCreatedAt = rawFeedback ? timestamp(rawFeedback.createdAt) : undefined;
   const revisionFeedback =
     rawFeedback &&
     Number.isSafeInteger(rawFeedback.revision) &&
     Number(rawFeedback.revision) > 0 &&
     feedbackText &&
     feedbackCreatedAt
-      ? {
-          revision: Number(rawFeedback.revision),
-          text: feedbackText,
-          createdAt: feedbackCreatedAt,
-        }
+      ? { revision: Number(rawFeedback.revision), text: feedbackText, createdAt: feedbackCreatedAt }
       : undefined;
   if (rawFeedback && !revisionFeedback)
     return {
@@ -1019,9 +753,7 @@ function continuity(
       v4MigrationAvailable,
     };
   const planRevision =
-    Number.isSafeInteger(work.planRevision) && Number(work.planRevision) > 0
-      ? Number(work.planRevision)
-      : undefined;
+    Number.isSafeInteger(work.planRevision) && Number(work.planRevision) > 0 ? Number(work.planRevision) : undefined;
   return {
     availability: "available",
     revision: input.revision as number,
@@ -1046,30 +778,18 @@ function continuity(
         : {}),
       ...(planRevision ? { planRevision } : {}),
       ...(revisionFeedback ? { revisionFeedback } : {}),
-      ...(identifier(work.currentTodoId)
-        ? { currentTodoId: identifier(work.currentTodoId) }
-        : {}),
-      ...(string(work.latestFailure, 1_000)
-        ? { latestFailure: string(work.latestFailure, 1_000) }
-        : {}),
-      ...(string(work.nextAction, 1_000)
-        ? { nextAction: string(work.nextAction, 1_000) }
-        : {}),
+      ...(identifier(work.currentTodoId) ? { currentTodoId: identifier(work.currentTodoId) } : {}),
+      ...(string(work.latestFailure, 1_000) ? { latestFailure: string(work.latestFailure, 1_000) } : {}),
+      ...(string(work.nextAction, 1_000) ? { nextAction: string(work.nextAction, 1_000) } : {}),
       ...(identifier(work.runId) ? { runId: identifier(work.runId) } : {}),
       createdAt: string(work.createdAt, 64) ?? "",
       updatedAt: string(work.updatedAt, 64) ?? "",
-      ...(string(work.completedAt, 64)
-        ? { completedAt: string(work.completedAt, 64) }
-        : {}),
+      ...(string(work.completedAt, 64) ? { completedAt: string(work.completedAt, 64) } : {}),
     },
   };
 }
 
-function timeline(
-  old: TimelineReadModel,
-  value: unknown,
-  expectedSessionId?: string,
-): TimelineReadModel {
+function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: string): TimelineReadModel {
   const input = record(value);
   if (
     !input ||
@@ -1078,26 +798,12 @@ function timeline(
     !Number.isSafeInteger(input.revision) ||
     (input.revision as number) <= old.revision
   )
-    return input?.version === 4
-      ? old
-      : {
-          availability: "unavailable",
-          revision: old.revision,
-          checkpoints: [],
-        };
+    return input?.version === 4 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
   if (input.available !== true)
-    return {
-      availability: "unavailable",
-      revision: input.revision as number,
-      checkpoints: [],
-    };
+    return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
   if (!Array.isArray(input.checkpoints))
-    return {
-      availability: "unavailable",
-      revision: input.revision as number,
-      checkpoints: [],
-    };
-  const checkpoints = input.checkpoints.slice(-100).flatMap((value) => {
+    return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
+  const checkpoints = input.checkpoints.slice(-100).flatMap(value => {
     const item = record(value);
     const id = identifier(item?.id);
     const title = string(item?.title, 500);
@@ -1108,8 +814,7 @@ function timeline(
     const boundedChanges =
       changes &&
       ["fileCount", "additions", "deletions", "binaryCount"].every(
-        (key) =>
-          Number.isSafeInteger(changes[key]) && (changes[key] as number) >= 0,
+        key => Number.isSafeInteger(changes[key]) && (changes[key] as number) >= 0,
       )
         ? {
             fileCount: Math.min(10_000, changes.fileCount as number),
@@ -1125,43 +830,31 @@ function timeline(
         ownerSessionId,
         createdAt,
         verified: item.verified === true,
-        ...(string(item.branch, 200)
-          ? { branch: string(item.branch, 200) }
-          : {}),
+        ...(string(item.branch, 200) ? { branch: string(item.branch, 200) } : {}),
         ...(boundedChanges ? { changes: boundedChanges } : {}),
       },
     ];
   });
-  return {
-    availability: "available",
-    revision: input.revision as number,
-    checkpoints,
-  };
+  return { availability: "available", revision: input.revision as number, checkpoints };
 }
 
 function toolPolicy(old: ToolsReadModel, value: unknown): ToolsReadModel {
   const input = record(value);
   const owner = identifier(input?.owner);
-  if (!input || input.version !== 1 || !owner)
-    return { availability: "unavailable", policies: old.policies };
+  if (!input || input.version !== 1 || !owner) return { availability: "unavailable", policies: old.policies };
   if (input.kind === "unregister")
-    return {
-      availability: "available",
-      policies: old.policies.filter((item) => item.owner !== owner),
-    };
+    return { availability: "available", policies: old.policies.filter(item => item.owner !== owner) };
   const managedTools = stringList(input.managedTools);
   const enabledTools = stringList(input.enabledTools);
-  const deferredTools =
-    input.deferredTools === undefined ? [] : stringList(input.deferredTools);
-  const allowOnly =
-    input.allowOnly === undefined ? undefined : stringList(input.allowOnly);
+  const deferredTools = input.deferredTools === undefined ? [] : stringList(input.deferredTools);
+  const allowOnly = input.allowOnly === undefined ? undefined : stringList(input.allowOnly);
   if (
     input.kind !== "register" ||
     !managedTools ||
     !enabledTools ||
     !deferredTools ||
-    !enabledTools.every((tool) => managedTools.includes(tool)) ||
-    !deferredTools.every((tool) => enabledTools.includes(tool))
+    !enabledTools.every(tool => managedTools.includes(tool)) ||
+    !deferredTools.every(tool => enabledTools.includes(tool))
   )
     return { availability: "unavailable", policies: old.policies };
   const policy: ToolPolicyReadModel = {
@@ -1173,32 +866,20 @@ function toolPolicy(old: ToolsReadModel, value: unknown): ToolsReadModel {
   };
   return {
     availability: "available",
-    policies: [
-      ...old.policies.filter((item) => item.owner !== owner),
-      policy,
-    ].sort((a, b) => a.owner.localeCompare(b.owner)),
+    policies: [...old.policies.filter(item => item.owner !== owner), policy].sort((a, b) =>
+      a.owner.localeCompare(b.owner),
+    ),
   };
 }
 
-function withHealth(
-  value: OperationalReadModel,
-  diagnostics: RuntimeDiagnostic[],
-): OperationalReadModel {
+function withHealth(value: OperationalReadModel, diagnostics: RuntimeDiagnostic[]): OperationalReadModel {
   const issues = [
     ...Object.entries(value)
       .filter(
-        ([key, feature]) =>
-          key !== "health" &&
-          "availability" in feature &&
-          feature.availability === "unavailable",
+        ([key, feature]) => key !== "health" && "availability" in feature && feature.availability === "unavailable",
       )
       .map(([key]) => `${key} unavailable`),
-    ...diagnostics
-      .filter((item) => item.level !== "info")
-      .map((item) => item.message.slice(0, 500)),
+    ...diagnostics.filter(item => item.level !== "info").map(item => item.message.slice(0, 500)),
   ].slice(0, 20);
-  return {
-    ...value,
-    health: { status: issues.length ? "degraded" : "healthy", issues },
-  };
+  return { ...value, health: { status: issues.length ? "degraded" : "healthy", issues } };
 }

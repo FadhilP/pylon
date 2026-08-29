@@ -1,25 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
-import {
-  describeRuntimeSnapshotIssue,
-  validateCommand,
-} from "../../shared/protocol/validation.ts";
+import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
 import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
-import type {
-  AcceptedCommand,
-  WebCommand,
-} from "../../shared/protocol/commands.ts";
+import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
-import {
-  decodeHistoryCursor,
-  decodeTurnIndexCursor,
-  RuntimeProjection,
-} from "../pi/projections.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from "../pi/projections.ts";
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
 import {
@@ -79,26 +69,13 @@ export class ServerTransport {
     initial: Awaited<ReturnType<PiDriver["snapshot"]>>,
     private readonly options: ServerTransportOptions,
   ) {
-    this.journal = new EventJournal(
-      initial.sessionGeneration,
-      initial.sessionId,
-    );
-    this.projection = new RuntimeProjection(initial, (type, payload) =>
-      this.publish(type, payload),
-    );
-    this.unsubscribe = driver.subscribe((event) => this.onDriverEvent(event));
-    this.terminal = new TerminalServer(
-      driver,
-      this.sessions,
-      options,
-      options.terminalSpawn,
-    );
+    this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
+    this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
+    this.unsubscribe = driver.subscribe(event => this.onDriverEvent(event));
+    this.terminal = new TerminalServer(driver, this.sessions, options, options.terminalSpawn);
   }
 
-  static async create(
-    driver: PiDriver,
-    options: ServerTransportOptions,
-  ): Promise<ServerTransport> {
+  static async create(driver: PiDriver, options: ServerTransportOptions): Promise<ServerTransport> {
     return new ServerTransport(driver, await driver.snapshot(), options);
   }
 
@@ -116,57 +93,31 @@ export class ServerTransport {
     this.terminal.dispose();
   }
 
-  handleUpgrade = (
-    request: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ): void => {
+  handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     void this.terminal.handleUpgrade(request, socket, head);
   };
 
-  async handle(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     applySecurityHeaders(response);
     if (!requestAllowed(request, this.options))
-      return this.send(response, 403, {
-        error: "request origin is not allowed",
-      });
+      return this.send(response, 403, { error: "request origin is not allowed" });
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
-      if (request.method === "GET" && url.pathname === "/api/v1/bootstrap")
-        return this.bootstrap(request, response);
-      if (request.method === "GET" && url.pathname === "/api/v1/events")
-        return this.events(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/bootstrap") return this.bootstrap(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions")
         return await this.sessionList(request, response, url);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/v1/conversation-history"
-      )
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-history")
         return await this.conversationHistory(request, response, url);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/v1/conversation-attachment"
-      )
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-attachment")
         return await this.conversationAttachment(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/turn-diff")
         return await this.turnDiff(request, response, url);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/v1/conversation-turns"
-      )
+      if (request.method === "GET" && url.pathname === "/api/v1/conversation-turns")
         return await this.conversationTurnIndex(request, response, url);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/v1/file-suggestions"
-      )
+      if (request.method === "GET" && url.pathname === "/api/v1/file-suggestions")
         return await this.fileSuggestions(request, response, url);
-      if (
-        request.method === "GET" &&
-        url.pathname === "/api/v1/workspace/files"
-      )
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/files")
         return await this.workspaceFiles(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/file")
         return await this.workspaceFile(request, response, url, false);
@@ -192,55 +143,31 @@ export class ServerTransport {
         return await this.stateqlRows(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/papercuts")
         return await this.papercutList(request, response);
-      if (
-        request.method === "POST" &&
-        url.pathname === "/api/v1/papercuts/mutate"
-      )
+      if (request.method === "POST" && url.pathname === "/api/v1/papercuts/mutate")
         return await this.papercutMutation(request, response);
-      if (
-        request.method === "POST" &&
-        url.pathname === "/api/v1/helios-browser"
-      )
+      if (request.method === "POST" && url.pathname === "/api/v1/helios-browser")
         return await this.heliosBrowser(request, response);
-      if (
-        request.method === "POST" &&
-        url.pathname === "/api/v1/helios-android-tooling"
-      )
+      if (request.method === "POST" && url.pathname === "/api/v1/helios-android-tooling")
         return await this.heliosAndroidTooling(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands")
         return await this.command(request, response);
-      if (
-        request.method === "POST" &&
-        url.pathname.startsWith("/api/v1/ui-responses/")
-      )
+      if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/"))
         return await this.uiResponse(
           request,
           response,
-          decodeURIComponent(
-            url.pathname.slice("/api/v1/ui-responses/".length),
-          ),
+          decodeURIComponent(url.pathname.slice("/api/v1/ui-responses/".length)),
         );
-      if (
-        request.method === "POST" &&
-        url.pathname.startsWith("/api/v1/ui-ownership/")
-      )
+      if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-ownership/"))
         return await this.uiOwnership(
           request,
           response,
-          decodeURIComponent(
-            url.pathname.slice("/api/v1/ui-ownership/".length),
-          ),
+          decodeURIComponent(url.pathname.slice("/api/v1/ui-ownership/".length)),
         );
-      if (
-        request.method === "POST" &&
-        url.pathname.startsWith("/api/v1/ui-keepalive/")
-      )
+      if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-keepalive/"))
         return await this.uiKeepAlive(
           request,
           response,
-          decodeURIComponent(
-            url.pathname.slice("/api/v1/ui-keepalive/".length),
-          ),
+          decodeURIComponent(url.pathname.slice("/api/v1/ui-keepalive/".length)),
         );
       if (request.method === "GET" && url.pathname === "/api/v1/health") {
         const runtime = await this.driver.snapshot();
@@ -261,10 +188,7 @@ export class ServerTransport {
             ? (error as { statusCode: number }).statusCode
             : 500;
       this.send(response, status, {
-        error:
-          error instanceof Error
-            ? error.message.slice(0, 500)
-            : "internal server error",
+        error: error instanceof Error ? error.message.slice(0, 500) : "internal server error",
       });
     }
   }
@@ -272,11 +196,7 @@ export class ServerTransport {
   private bootstrap(request: IncomingMessage, response: ServerResponse): void {
     const session = this.session(request, response);
     const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (
-      validTabId(tabId) &&
-      !session.tabs.has(tabId) &&
-      session.tabs.size >= 32
-    )
+    if (validTabId(tabId) && !session.tabs.has(tabId) && session.tabs.size >= 32)
       throw httpError(429, "too many browser tabs");
     if (validTabId(tabId)) session.tabs.add(tabId);
     // Flush, snapshot, and cursor capture are one synchronous serialization boundary.
@@ -296,11 +216,7 @@ export class ServerTransport {
     this.send(response, 200, body);
   }
 
-  private events(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): void {
+  private events(request: IncomingMessage, response: ServerResponse, url: URL): void {
     const session = this.sessions.get(request);
     const tabId = url.searchParams.get("tabId") ?? undefined;
     if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) {
@@ -308,17 +224,13 @@ export class ServerTransport {
       response.setHeader("content-type", "text/event-stream; charset=utf-8");
       response.setHeader("connection", "close");
       response.flushHeaders();
-      response.end(
-        'event: stream.reset-required\ndata: {"reason":"session-invalid"}\n\n',
-      );
+      response.end('event: stream.reset-required\ndata: {"reason":"session-invalid"}\n\n');
       return;
     }
     // EventSource cannot set Last-Event-ID for its first connection, so the
     // browser supplies the bootstrap cursor as a query parameter.
     const replay = this.journal.replay(
-      header(request.headers["last-event-id"]) ??
-        url.searchParams.get("cursor") ??
-        undefined,
+      header(request.headers["last-event-id"]) ?? url.searchParams.get("cursor") ?? undefined,
     );
     response.statusCode = 200;
     response.setHeader("content-type", "text/event-stream; charset=utf-8");
@@ -326,9 +238,7 @@ export class ServerTransport {
     response.setHeader("x-accel-buffering", "no");
     response.flushHeaders();
     if (!replay.ok) {
-      response.write(
-        'event: stream.reset-required\ndata: {"reason":"cursor-invalid"}\n\n',
-      );
+      response.write('event: stream.reset-required\ndata: {"reason":"cursor-invalid"}\n\n');
       response.end();
       return;
     }
@@ -347,64 +257,43 @@ export class ServerTransport {
     response.once("close", close);
   }
 
-  private async heliosBrowser(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async heliosBrowser(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const input = validateHeliosBrowserCommand(await readJson(request));
     if (!input) throw httpError(400, "invalid Helios browser request");
-    if (input.expectedGeneration !== this.journal.sessionGeneration)
-      throw httpError(409, "stale session generation");
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (![...this.clients].some((client) => client.tabId === tabId))
+    if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the browser tab must have an SSE connection");
-    if (!this.driver.heliosBrowser)
-      throw httpError(409, "Helios embedded browser is unavailable");
+    if (!this.driver.heliosBrowser) throw httpError(409, "Helios embedded browser is unavailable");
     this.renew(tabId);
-    const result = await this.driver.heliosBrowser({
-      ...input,
-      owner: `web:${tabId}`,
-    });
+    const result = await this.driver.heliosBrowser({ ...input, owner: `web:${tabId}` });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while controlling Helios browser");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }
 
-  private async heliosAndroidTooling(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async heliosAndroidTooling(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const input = validateHeliosAndroidToolingCommand(await readJson(request));
     if (!input) throw httpError(400, "invalid Helios Android tooling request");
-    if (input.expectedGeneration !== this.journal.sessionGeneration)
-      throw httpError(409, "stale session generation");
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (![...this.clients].some((client) => client.tabId === tabId))
+    if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the browser tab must have an SSE connection");
-    if (!this.driver.heliosAndroidTooling)
-      throw httpError(409, "Helios Android tooling is unavailable");
+    if (!this.driver.heliosAndroidTooling) throw httpError(409, "Helios Android tooling is unavailable");
     this.renew(tabId);
     const result = await this.driver.heliosAndroidTooling(input);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
-      throw httpError(
-        409,
-        "session changed while controlling Helios Android tooling",
-      );
+      throw httpError(409, "session changed while controlling Helios Android tooling");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }
 
-  private async command(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async command(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const body = await readJsonWithSize(request, MAX_COMMAND_BODY_BYTES);
@@ -412,21 +301,15 @@ export class ServerTransport {
     if (!parsed.ok) throw httpError(400, parsed.error);
     const command = parsed.value;
     if (
-      !["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(
-        command.type,
-      ) &&
+      !["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(command.type) &&
       body.bytes > MAX_JSON_BODY_BYTES
     ) {
       throw httpError(413, "request body too large");
     }
-    if (command.expectedGeneration !== this.journal.sessionGeneration)
-      throw httpError(409, "stale session generation");
+    if (command.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
     const runtime = this.projection.snapshot();
     if (!runtime.ready) throw httpError(409, "runtime is not ready");
-    if (
-      command.type !== "abort" &&
-      ![...this.clients].some((client) => client.tabId === tabId)
-    ) {
+    if (command.type !== "abort" && ![...this.clients].some(client => client.tabId === tabId)) {
       throw httpError(409, "the command tab must have an SSE connection");
     }
     this.renew(tabId);
@@ -440,13 +323,8 @@ export class ServerTransport {
       });
       this.send(response, 200, accepted);
     } catch (error) {
-      if (error instanceof Error && error.name === "IdempotencyConflictError")
-        throw httpError(409, error.message);
-      if (
-        error instanceof Error &&
-        (error.name === "StaleGenerationError" ||
-          error.name === "StaleMemoryError")
-      )
+      if (error instanceof Error && error.name === "IdempotencyConflictError") throw httpError(409, error.message);
+      if (error instanceof Error && (error.name === "StaleGenerationError" || error.name === "StaleMemoryError"))
         throw httpError(409, error.message);
       throw error;
     }
@@ -455,47 +333,29 @@ export class ServerTransport {
   private requireTab(request: IncomingMessage): string {
     const session = this.sessions.get(request);
     const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!session || !validTabId(tabId) || !session.tabs.has(tabId))
-      throw httpError(403, "unknown tab");
+    if (!session || !validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
     return tabId;
   }
 
-  private async sessionList(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async sessionList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const projectId = url.searchParams.get("projectId") ?? undefined;
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const query = url.searchParams.get("q")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 10 : Number(rawLimit);
-    if (projectId && !/^[A-Za-z0-9_-]{1,128}$/.test(projectId))
-      throw httpError(400, "invalid projectId");
-    if (
-      cursor &&
-      (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor))
-    )
+    if (projectId && !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw httpError(400, "invalid projectId");
+    if (cursor && (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor)))
       throw httpError(400, "invalid cursor");
     if (query && query.length > 200) throw httpError(400, "query is too long");
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw httpError(400, "invalid limit");
-    const result = await this.driver.listSessions({
-      projectId,
-      cursor,
-      query,
-      limit,
-    });
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid limit");
+    const result = await this.driver.listSessions({ projectId, cursor, query, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing sessions");
     this.send(response, 200, result);
   }
 
-  private async packageList(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async packageList(request: IncomingMessage, response: ServerResponse): Promise<void> {
     this.requireTab(request);
     const result = await this.driver.listPackages();
     if (result.sessionGeneration !== this.journal.sessionGeneration)
@@ -503,42 +363,25 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
-  private async hookSettings(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async hookSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
     this.requireTab(request);
-    if (!this.driver.listHookSettings)
-      throw httpError(409, "hook settings are unavailable");
+    if (!this.driver.listHookSettings) throw httpError(409, "hook settings are unavailable");
     const result = await this.driver.listHookSettings();
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing hook settings");
     this.send(response, 200, result);
   }
 
-  private async stateqlSnapshot(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async stateqlSnapshot(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const historyLimit = Number(url.searchParams.get("historyLimit") ?? 50);
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (
-      !Number.isSafeInteger(historyLimit) ||
-      historyLimit < 1 ||
-      historyLimit > 100
-    )
+    if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 100)
       throw httpError(400, "invalid StateQL history limit");
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (!this.driver.stateqlSnapshot)
-      throw httpError(409, "StateQL snapshot is unavailable");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.stateqlSnapshot) throw httpError(409, "StateQL snapshot is unavailable");
     const result = await this.driver.stateqlSnapshot(historyLimit);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while loading StateQL status");
@@ -546,10 +389,7 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
-  private async stateqlRows(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async stateqlRows(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const input = await readJson(request);
@@ -578,26 +418,17 @@ export class ServerTransport {
     ) {
       throw httpError(400, "invalid StateQL rows request");
     }
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (!this.driver.stateqlRows)
-      throw httpError(409, "StateQL rows are unavailable");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.stateqlRows) throw httpError(409, "StateQL rows are unavailable");
     this.renew(tabId);
-    const result = await this.driver.stateqlRows(
-      body.handle,
-      body.offset,
-      body.limit,
-    );
+    const result = await this.driver.stateqlRows(body.handle, body.offset, body.limit);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while loading StateQL rows");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }
 
-  private async papercutList(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async papercutList(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const input = await readJson(request);
@@ -618,10 +449,8 @@ export class ServerTransport {
       (body.limit as number) > 50
     )
       throw httpError(400, "invalid papercut list request");
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (!this.driver.papercutList)
-      throw httpError(409, "Papercuts are unavailable");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.papercutList) throw httpError(409, "Papercuts are unavailable");
     this.renew(tabId);
     const result = await this.driver.papercutList(
       body.status as "open" | "resolved" | "dismissed" | "all",
@@ -635,40 +464,28 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
-  private async papercutMutation(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async papercutMutation(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const input = await readJson(request);
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw httpError(400, "invalid papercut mutation request");
     const body = input as Record<string, unknown>;
-    if (
-      !Number.isSafeInteger(body.generation) ||
-      body.generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(body.generation) || body.generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
     if (
       !["edit", "delete"].includes(String(body.action)) ||
       typeof body.id !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        body.id,
-      ) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.id) ||
       typeof body.expectedUpdatedAt !== "string" ||
       Number.isNaN(Date.parse(body.expectedUpdatedAt)) ||
       (body.action === "edit" &&
-        (typeof body.message !== "string" ||
-          !body.message.trim() ||
-          body.message.length > 500)) ||
+        (typeof body.message !== "string" || !body.message.trim() || body.message.length > 500)) ||
       (body.action === "delete" && body.message !== undefined)
     )
       throw httpError(400, "invalid papercut mutation request");
-    if (!this.projection.snapshot().ready)
-      throw httpError(409, "runtime is not ready");
-    if (!this.driver.papercutMutation)
-      throw httpError(409, "Papercut mutations are unavailable");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.papercutMutation) throw httpError(409, "Papercut mutations are unavailable");
     this.renew(tabId);
     try {
       const mutation =
@@ -679,54 +496,34 @@ export class ServerTransport {
               expectedUpdatedAt: body.expectedUpdatedAt,
               message: body.message as string,
             }
-          : {
-              action: "delete" as const,
-              id: body.id,
-              expectedUpdatedAt: body.expectedUpdatedAt,
-            };
+          : { action: "delete" as const, id: body.id, expectedUpdatedAt: body.expectedUpdatedAt };
       const result = await this.driver.papercutMutation(mutation);
       if (result.sessionGeneration !== this.journal.sessionGeneration)
         throw httpError(409, "session changed while updating papercut");
       response.setHeader("cache-control", "no-store");
       this.send(response, 200, result);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to update papercut";
-      if (/changed or was removed/i.test(message))
-        throw httpError(409, message);
-      if (/already uses this message/i.test(message))
-        throw httpError(409, message);
+      const message = error instanceof Error ? error.message : "Unable to update papercut";
+      if (/changed or was removed/i.test(message)) throw httpError(409, message);
+      if (/already uses this message/i.test(message)) throw httpError(409, message);
       if (/message is invalid/i.test(message)) throw httpError(400, message);
       throw error;
     }
   }
 
-  private async conversationHistory(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async conversationHistory(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? "";
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 100 : Number(rawLimit);
     const direction = url.searchParams.get("direction") ?? "before";
-    if (
-      !cursor ||
-      cursor.length > 128 ||
-      decodeHistoryCursor(cursor) === undefined
-    )
+    if (!cursor || cursor.length > 128 || decodeHistoryCursor(cursor) === undefined)
       throw httpError(400, "invalid history cursor");
-    if (!["before", "after", "around"].includes(direction))
-      throw httpError(400, "invalid history direction");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!["before", "after", "around"].includes(direction)) throw httpError(400, "invalid history direction");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw httpError(400, "invalid history limit");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid history limit");
     const result = await this.driver.conversationHistory({
       cursor,
       limit,
@@ -737,99 +534,60 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
-  private async conversationAttachment(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async conversationAttachment(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const sourceEntryId = url.searchParams.get("entry") ?? "";
     const index = Number(url.searchParams.get("index"));
     const generation = Number(url.searchParams.get("generation"));
-    if (!sourceEntryId || sourceEntryId.length > 128)
-      throw httpError(400, "invalid attachment entry");
-    if (!Number.isSafeInteger(index) || index < 0 || index >= 100)
-      throw httpError(400, "invalid attachment index");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!sourceEntryId || sourceEntryId.length > 128) throw httpError(400, "invalid attachment entry");
+    if (!Number.isSafeInteger(index) || index < 0 || index >= 100) throw httpError(400, "invalid attachment index");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!this.driver.conversationAttachment)
-      throw httpError(404, "conversation attachments are unavailable");
+    if (!this.driver.conversationAttachment) throw httpError(404, "conversation attachments are unavailable");
     try {
-      const result = await this.driver.conversationAttachment({
-        sourceEntryId,
-        index,
-      });
+      const result = await this.driver.conversationAttachment({ sourceEntryId, index });
       if (result.sessionGeneration !== this.journal.sessionGeneration)
         throw httpError(409, "session changed while loading attachment");
       this.send(response, 200, result);
     } catch (error) {
-      if (
-        error instanceof Error &&
-        /attachment is|attachments are/i.test(error.message)
-      )
+      if (error instanceof Error && /attachment is|attachments are/i.test(error.message))
         throw httpError(404, error.message);
       throw error;
     }
   }
 
-  private async turnDiff(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async turnDiff(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const entryId = url.searchParams.get("entry") ?? "";
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(entryId))
-      throw httpError(400, "invalid turn entry ID");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(entryId)) throw httpError(400, "invalid turn entry ID");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!this.driver.turnDiff)
-      throw httpError(404, "turn diffs are unavailable");
+    if (!this.driver.turnDiff) throw httpError(404, "turn diffs are unavailable");
     try {
       const result = await this.driver.turnDiff({ entryId });
       if (result.sessionGeneration !== this.journal.sessionGeneration)
         throw httpError(409, "session changed while loading turn diff");
       this.send(response, 200, result);
     } catch (error) {
-      if (error instanceof Error && /unavailable/i.test(error.message))
-        throw httpError(404, error.message);
+      if (error instanceof Error && /unavailable/i.test(error.message)) throw httpError(404, error.message);
       throw error;
     }
   }
 
-  private async conversationTurnIndex(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async conversationTurnIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const direction = url.searchParams.get("direction") ?? "earlier";
     const generation = Number(url.searchParams.get("generation"));
     const limit = Number(url.searchParams.get("limit") ?? 250);
-    if (
-      cursor &&
-      (cursor.length > 128 || decodeTurnIndexCursor(cursor) === undefined)
-    )
+    if (cursor && (cursor.length > 128 || decodeTurnIndexCursor(cursor) === undefined))
       throw httpError(400, "invalid turn cursor");
-    if (!["earlier", "later"].includes(direction))
-      throw httpError(400, "invalid turn direction");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!["earlier", "later"].includes(direction)) throw httpError(400, "invalid turn direction");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 250)
-      throw httpError(400, "invalid turn limit");
-    if (!this.driver.conversationTurnIndex)
-      throw httpError(404, "conversation turn index is unavailable");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 250) throw httpError(400, "invalid turn limit");
+    if (!this.driver.conversationTurnIndex) throw httpError(404, "conversation turn index is unavailable");
     const result = await this.driver.conversationTurnIndex({
       cursor,
       direction: direction as "earlier" | "later",
@@ -840,44 +598,28 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
-  private async fileSuggestions(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async fileSuggestions(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const query = url.searchParams.get("q")?.trim() ?? "";
     const generation = Number(url.searchParams.get("generation"));
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 15 : Number(rawLimit);
     if (query.length > 200) throw httpError(400, "query is too long");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
-      throw httpError(400, "invalid limit");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw httpError(400, "invalid limit");
     const result = await this.driver.fileSuggestions({ query, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing files");
     this.send(response, 200, result);
   }
 
-  private async workspaceFiles(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async workspaceFiles(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!this.driver.workspaceFiles)
-      throw httpError(404, "workspace files are unavailable");
+    if (!this.driver.workspaceFiles) throw httpError(404, "workspace files are unavailable");
     const query = url.searchParams.get("q")?.trim() ?? "";
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const limit = Number(url.searchParams.get("limit") ?? 200);
@@ -890,12 +632,7 @@ export class ServerTransport {
       limit > 200
     )
       throw httpError(400, "invalid file query");
-    const result = await this.driver.workspaceFiles({
-      query,
-      cursor,
-      limit,
-      refresh,
-    });
+    const result = await this.driver.workspaceFiles({ query, cursor, limit, refresh });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing files");
     this.send(response, 200, result);
@@ -911,10 +648,7 @@ export class ServerTransport {
     const generation = Number(url.searchParams.get("generation"));
     const path = url.searchParams.get("path") ?? "";
     const view = url.searchParams.get("view") === "base" ? "base" : "current";
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
     if (
       !path ||
@@ -922,7 +656,7 @@ export class ServerTransport {
       path.includes("\\") ||
       path.startsWith("/") ||
       /^[A-Za-z]:/.test(path) ||
-      path.split("/").some((part) => !part || part === "." || part === "..")
+      path.split("/").some(part => !part || part === "." || part === "..")
     ) {
       throw httpError(400, "invalid workspace path");
     }
@@ -943,19 +677,12 @@ export class ServerTransport {
     this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
     const checkpointId = url.searchParams.get("checkpointId") ?? "";
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(checkpointId))
-      throw httpError(400, "invalid checkpoint ID");
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(checkpointId)) throw httpError(400, "invalid checkpoint ID");
     if (!diff) {
-      if (!this.driver.timelineCheckpointFiles)
-        throw httpError(404, "Timeline files are unavailable");
-      const result = await this.driver.timelineCheckpointFiles({
-        checkpointId,
-      });
+      if (!this.driver.timelineCheckpointFiles) throw httpError(404, "Timeline files are unavailable");
+      const result = await this.driver.timelineCheckpointFiles({ checkpointId });
       if (result.sessionGeneration !== this.journal.sessionGeneration)
         throw httpError(409, "session changed while reading Timeline");
       return this.send(response, 200, result);
@@ -967,116 +694,71 @@ export class ServerTransport {
       path.includes("\\") ||
       path.startsWith("/") ||
       /^[A-Za-z]:/.test(path) ||
-      path.split("/").some((part) => !part || part === "." || part === "..")
+      path.split("/").some(part => !part || part === "." || part === "..")
     )
       throw httpError(400, "invalid Timeline path");
-    if (!this.driver.timelineCheckpointDiff)
-      throw httpError(404, "Timeline diff is unavailable");
-    const result = await this.driver.timelineCheckpointDiff({
-      checkpointId,
-      path,
-    });
+    if (!this.driver.timelineCheckpointDiff) throw httpError(404, "Timeline diff is unavailable");
+    const result = await this.driver.timelineCheckpointDiff({ checkpointId, path });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while reading Timeline");
     this.send(response, 200, result);
   }
 
-  private async queuedPrompt(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async queuedPrompt(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     const tabId = this.requireTab(request);
     const queueId = url.searchParams.get("queueId") ?? "";
     const generation = Number(url.searchParams.get("generation"));
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(queueId))
-      throw httpError(400, "invalid queueId");
-    if (
-      !Number.isSafeInteger(generation) ||
-      generation !== this.journal.sessionGeneration
-    )
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(queueId)) throw httpError(400, "invalid queueId");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
-    const queued = await this.driver
-      .queuedPrompt({ queueId, expectedGeneration: generation })
-      .catch((error) => {
-        throw httpError(
-          409,
-          error instanceof Error
-            ? error.message
-            : "queued prompt is unavailable",
-        );
-      });
+    const queued = await this.driver.queuedPrompt({ queueId, expectedGeneration: generation }).catch(error => {
+      throw httpError(409, error instanceof Error ? error.message : "queued prompt is unavailable");
+    });
     this.renew(tabId);
     this.send(response, 200, queued);
   }
 
-  private async extensionList(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async extensionList(request: IncomingMessage, response: ServerResponse): Promise<void> {
     this.requireTab(request);
-    if (!this.driver.listExtensions)
-      throw httpError(409, "native extensions are unavailable");
+    if (!this.driver.listExtensions) throw httpError(409, "native extensions are unavailable");
     const result = await this.driver.listExtensions();
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing extensions");
     this.send(response, 200, result);
   }
 
-  private async archiveList(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ): Promise<void> {
+  private async archiveList(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const query = url.searchParams.get("q")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 20 : Number(rawLimit);
-    if (
-      cursor &&
-      (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor))
-    )
+    if (cursor && (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor)))
       throw httpError(400, "invalid cursor");
     if (query && query.length > 200) throw httpError(400, "query is too long");
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw httpError(400, "invalid limit");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid limit");
     const result = await this.driver.listArchived({ cursor, query, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing archives");
     this.send(response, 200, result);
   }
 
-  private async uiResponse(
-    request: IncomingMessage,
-    response: ServerResponse,
-    requestId: string,
-  ): Promise<void> {
+  private async uiResponse(request: IncomingMessage, response: ServerResponse, requestId: string): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const pending = this.projection.pendingUi;
     const owner = this.dialogOwner;
-    if (
-      !pending ||
-      !owner ||
-      pending.requestId !== requestId ||
-      owner.requestId !== requestId
-    )
+    if (!pending || !owner || pending.requestId !== requestId || owner.requestId !== requestId)
       throw httpError(409, "UI request is not pending");
-    if (owner.tabId !== tabId)
-      throw httpError(409, "UI request belongs to another tab");
+    if (owner.tabId !== tabId) throw httpError(409, "UI request belongs to another tab");
     const body = await readJson(request);
     if (this.dialogOwner !== owner || this.projection.pendingUi !== pending)
       throw httpError(409, "UI request is no longer pending");
-    if (!body || typeof body !== "object" || Array.isArray(body))
-      throw httpError(400, "UI response must be an object");
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw httpError(400, "UI response must be an object");
     const value = body as Record<string, unknown>;
     if (value.requestId !== undefined && value.requestId !== requestId)
       throw httpError(400, "requestId does not match path");
-    if (
-      value.sessionGeneration !== this.journal.sessionGeneration ||
-      value.method !== pending.method
-    )
+    if (value.sessionGeneration !== this.journal.sessionGeneration || value.method !== pending.method)
       throw httpError(409, "UI response does not match pending request");
     const responseValue = {
       requestId,
@@ -1090,30 +772,18 @@ export class ServerTransport {
     try {
       await this.driver.answerUiRequest(responseValue);
     } catch (error) {
-      throw httpError(
-        400,
-        error instanceof Error ? error.message : "invalid UI response",
-      );
+      throw httpError(400, error instanceof Error ? error.message : "invalid UI response");
     }
     this.renew(tabId);
     this.send(response, 200, { accepted: true, requestId });
   }
 
-  private async uiOwnership(
-    request: IncomingMessage,
-    response: ServerResponse,
-    requestId: string,
-  ): Promise<void> {
+  private async uiOwnership(request: IncomingMessage, response: ServerResponse, requestId: string): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const pending = this.projection.pendingUi;
     const owner = this.dialogOwner;
-    if (
-      !pending ||
-      !owner ||
-      pending.requestId !== requestId ||
-      owner.requestId !== requestId
-    )
+    if (!pending || !owner || pending.requestId !== requestId || owner.requestId !== requestId)
       throw httpError(409, "UI request is not pending");
     const body = await readJson(request);
     if (this.dialogOwner !== owner || this.projection.pendingUi !== pending)
@@ -1127,13 +797,11 @@ export class ServerTransport {
     )
       throw httpError(409, "stale session generation");
     if (value.action === "release") {
-      if (owner.tabId !== tabId)
-        throw httpError(409, "UI request belongs to another tab");
+      if (owner.tabId !== tabId) throw httpError(409, "UI request belongs to another tab");
       this.releaseDialogOwner(owner);
     } else if (value.action === "claim") {
-      if (owner.tabId !== undefined && owner.tabId !== tabId)
-        throw httpError(409, "UI request belongs to another tab");
-      if (![...this.clients].some((client) => client.tabId === tabId))
+      if (owner.tabId !== undefined && owner.tabId !== tabId) throw httpError(409, "UI request belongs to another tab");
+      if (![...this.clients].some(client => client.tabId === tabId))
         throw httpError(409, "claiming tab must have an SSE connection");
       owner.tabId = tabId;
       this.renew(tabId);
@@ -1144,33 +812,20 @@ export class ServerTransport {
     this.send(response, 200, { accepted: true, requestId });
   }
 
-  private async uiKeepAlive(
-    request: IncomingMessage,
-    response: ServerResponse,
-    requestId: string,
-  ): Promise<void> {
+  private async uiKeepAlive(request: IncomingMessage, response: ServerResponse, requestId: string): Promise<void> {
     const session = this.mutatingSession(request);
     const tabId = this.tab(request, session);
     const pending = this.projection.pendingUi;
     const owner = this.dialogOwner;
-    if (
-      !pending ||
-      !owner ||
-      pending.requestId !== requestId ||
-      owner.requestId !== requestId
-    ) {
+    if (!pending || !owner || pending.requestId !== requestId || owner.requestId !== requestId) {
       throw httpError(409, "UI request is not pending");
     }
-    if (owner.tabId !== tabId)
-      throw httpError(409, "UI request belongs to another tab");
+    if (owner.tabId !== tabId) throw httpError(409, "UI request belongs to another tab");
     const body = await readJson(request);
     if (!body || typeof body !== "object" || Array.isArray(body))
       throw httpError(400, "keepalive request must be an object");
     const generation = (body as Record<string, unknown>).sessionGeneration;
-    if (
-      generation !== owner.sessionGeneration ||
-      owner.sessionGeneration !== this.journal.sessionGeneration
-    ) {
+    if (generation !== owner.sessionGeneration || owner.sessionGeneration !== this.journal.sessionGeneration) {
       throw httpError(409, "stale session generation");
     }
     let expiresAt: string | undefined;
@@ -1178,17 +833,10 @@ export class ServerTransport {
       const renewed = this.driver.keepUiRequestAlive(requestId, generation);
       expiresAt = typeof renewed === "string" ? renewed : undefined;
     } catch (error) {
-      throw httpError(
-        409,
-        error instanceof Error ? error.message : "UI request is unavailable",
-      );
+      throw httpError(409, error instanceof Error ? error.message : "UI request is unavailable");
     }
     this.renew(tabId);
-    this.send(response, 200, {
-      accepted: true,
-      requestId,
-      ...(expiresAt ? { expiresAt } : {}),
-    });
+    this.send(response, 200, { accepted: true, requestId, ...(expiresAt ? { expiresAt } : {}) });
   }
 
   private execute(command: WebCommand): Promise<AcceptedCommand> {
@@ -1203,9 +851,7 @@ export class ServerTransport {
       case "queuePrompt":
         return this.driver.queuePrompt(command);
       case "restoreQueuedPrompt":
-        return this.driver
-          .restoreQueuedPrompt(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.restoreQueuedPrompt(command).then(() => accepted(command.expectedGeneration));
       case "steerQueuedPrompt":
         return this.driver.steerQueuedPrompt(command);
       case "steer":
@@ -1213,36 +859,23 @@ export class ServerTransport {
       case "followUp":
         return this.driver.followUp(command);
       case "abort":
-        return this.driver
-          .abort()
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.abort().then(() => accepted(command.expectedGeneration));
       case "addProject":
         return this.driver
           .addProject({ expectedGeneration: command.expectedGeneration })
-          .then((result) => accepted(result.sessionGeneration));
+          .then(result => accepted(result.sessionGeneration));
       case "removeProject":
         return this.driver
-          .removeProject({
-            projectId: command.projectId,
-            expectedGeneration: command.expectedGeneration,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .removeProject({ projectId: command.projectId, expectedGeneration: command.expectedGeneration })
+          .then(result => accepted(result.sessionGeneration));
       case "renameProject":
-        return this.driver
-          .renameProject(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.renameProject(command).then(() => accepted(command.expectedGeneration));
       case "reorderProject":
-        return this.driver
-          .reorderProject(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.reorderProject(command).then(() => accepted(command.expectedGeneration));
       case "archiveProject":
-        return this.driver
-          .archiveProject(command)
-          .then((result) => accepted(result.sessionGeneration));
+        return this.driver.archiveProject(command).then(result => accepted(result.sessionGeneration));
       case "restoreProject":
-        return this.driver
-          .restoreProject(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.restoreProject(command).then(() => accepted(command.expectedGeneration));
       case "newSession":
         return this.driver
           .newSession({
@@ -1250,48 +883,33 @@ export class ServerTransport {
             projectId: command.projectId,
             expectedGeneration: command.expectedGeneration,
           })
-          .then((result) => accepted(result.sessionGeneration));
+          .then(result => accepted(result.sessionGeneration));
       case "switchSession":
         return this.driver
           .switchSession({ sessionId: command.sessionId })
-          .then((result) => accepted(result.sessionGeneration));
+          .then(result => accepted(result.sessionGeneration));
       case "deleteSession":
         return this.driver
-          .deleteSession({
-            sessionId: command.sessionId,
-            expectedGeneration: command.expectedGeneration,
-          })
+          .deleteSession({ sessionId: command.sessionId, expectedGeneration: command.expectedGeneration })
           .then(() => accepted(command.expectedGeneration));
       case "archiveSession":
-        return this.driver
-          .archiveSession(command)
-          .then((result) => accepted(result.sessionGeneration));
+        return this.driver.archiveSession(command).then(result => accepted(result.sessionGeneration));
       case "restoreSession":
-        return this.driver
-          .restoreSession(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.restoreSession(command).then(() => accepted(command.expectedGeneration));
       case "renameSession":
         return this.driver
           .renameSession({ sessionId: command.sessionId, name: command.name })
           .then(() => accepted(command.expectedGeneration));
       case "setSessionActive":
         return this.driver
-          .setSessionActive({
-            sessionId: command.sessionId,
-            active: command.active,
-          })
+          .setSessionActive({ sessionId: command.sessionId, active: command.active })
           .then(() => accepted(command.expectedGeneration));
       case "setSessionPinned":
         return this.driver
-          .setSessionPinned({
-            sessionId: command.sessionId,
-            pinned: command.pinned,
-          })
+          .setSessionPinned({ sessionId: command.sessionId, pinned: command.pinned })
           .then(() => accepted(command.expectedGeneration));
       case "reorderActiveSession":
-        return this.driver
-          .reorderActiveSession(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.reorderActiveSession(command).then(() => accepted(command.expectedGeneration));
       case "editPrompt":
         return this.driver.editPrompt(command);
       case "rewindPrompt":
@@ -1305,7 +923,7 @@ export class ServerTransport {
             position: command.position,
             mode: command.mode,
           })
-          .then((result) => accepted(result.sessionGeneration));
+          .then(result => accepted(result.sessionGeneration));
       case "timeline": {
         const action = command.action === "restore" ? "jump" : command.action;
         const message = `/timeline ${action}${command.checkpointId ? ` ${command.checkpointId}` : ""}`;
@@ -1317,84 +935,50 @@ export class ServerTransport {
       }
       case "setPackageEnabled":
         return this.driver
-          .setPackageEnabled({
-            packageId: command.packageId,
-            enabled: command.enabled,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .setPackageEnabled({ packageId: command.packageId, enabled: command.enabled })
+          .then(result => accepted(result.sessionGeneration));
       case "updatePackageSettings":
         return this.driver
-          .updatePackageSettings({
-            packageId: command.packageId,
-            settings: command.settings,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .updatePackageSettings({ packageId: command.packageId, settings: command.settings })
+          .then(result => accepted(result.sessionGeneration));
       case "setExtensionEnabled":
         if (!this.driver.setExtensionEnabled)
-          return Promise.reject(
-            httpError(409, "native extensions are unavailable"),
-          );
+          return Promise.reject(httpError(409, "native extensions are unavailable"));
         return this.driver
-          .setExtensionEnabled({
-            extensionId: command.extensionId,
-            enabled: command.enabled,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .setExtensionEnabled({ extensionId: command.extensionId, enabled: command.enabled })
+          .then(result => accepted(result.sessionGeneration));
       case "installExtensionPackage":
         if (!this.driver.installExtensionPackage)
-          return Promise.reject(
-            httpError(409, "native extensions are unavailable"),
-          );
+          return Promise.reject(httpError(409, "native extensions are unavailable"));
         return this.driver
-          .installExtensionPackage({
-            source: command.source,
-            scope: command.scope,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .installExtensionPackage({ source: command.source, scope: command.scope })
+          .then(result => accepted(result.sessionGeneration));
       case "removeExtensionPackage":
         if (!this.driver.removeExtensionPackage)
-          return Promise.reject(
-            httpError(409, "native extensions are unavailable"),
-          );
+          return Promise.reject(httpError(409, "native extensions are unavailable"));
         return this.driver
-          .removeExtensionPackage({
-            source: command.source,
-            scope: command.scope,
-          })
-          .then((result) => accepted(result.sessionGeneration));
+          .removeExtensionPackage({ source: command.source, scope: command.scope })
+          .then(result => accepted(result.sessionGeneration));
       case "setProjectTrust":
-        if (!this.driver.setProjectTrust)
-          return Promise.reject(httpError(409, "project trust is unavailable"));
+        if (!this.driver.setProjectTrust) return Promise.reject(httpError(409, "project trust is unavailable"));
         return this.driver
           .setProjectTrust({ trusted: command.trusted })
-          .then((result) => accepted(result.sessionGeneration));
+          .then(result => accepted(result.sessionGeneration));
       case "reloadExtensions":
-        if (!this.driver.reloadExtensions)
-          return Promise.reject(
-            httpError(409, "native extensions are unavailable"),
-          );
-        return this.driver
-          .reloadExtensions()
-          .then((result) => accepted(result.sessionGeneration));
+        if (!this.driver.reloadExtensions) return Promise.reject(httpError(409, "native extensions are unavailable"));
+        return this.driver.reloadExtensions().then(result => accepted(result.sessionGeneration));
       case "updateHookSettings":
-        if (!this.driver.updateHookSettings)
-          return Promise.reject(
-            httpError(409, "hook settings are unavailable"),
-          );
+        if (!this.driver.updateHookSettings) return Promise.reject(httpError(409, "hook settings are unavailable"));
         return this.driver
           .updateHookSettings({ settings: command.settings })
           .then(() => accepted(command.expectedGeneration));
       case "rebuildDiscoverIndex":
-        return this.driver
-          .rebuildDiscoverIndex()
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.rebuildDiscoverIndex().then(() => accepted(command.expectedGeneration));
       case "setModel":
-        return this.driver
-          .setModel({ provider: command.provider, modelId: command.modelId })
-          .then(async () => {
-            this.projection.refresh(await this.driver.snapshot());
-            return accepted(command.expectedGeneration);
-          });
+        return this.driver.setModel({ provider: command.provider, modelId: command.modelId }).then(async () => {
+          this.projection.refresh(await this.driver.snapshot());
+          return accepted(command.expectedGeneration);
+        });
       case "setThinkingLevel":
         return Promise.resolve()
           .then(() => this.driver.setThinkingLevel({ level: command.level }))
@@ -1415,100 +999,61 @@ export class ServerTransport {
           });
       case "startProviderLogin":
         if (!this.driver.startProviderLogin)
-          return Promise.reject(
-            httpError(409, "provider authentication is unavailable"),
-          );
-        return this.driver
-          .startProviderLogin(command)
-          .then(() => accepted(command.expectedGeneration));
+          return Promise.reject(httpError(409, "provider authentication is unavailable"));
+        return this.driver.startProviderLogin(command).then(() => accepted(command.expectedGeneration));
       case "cancelProviderLogin":
         if (!this.driver.cancelProviderLogin)
-          return Promise.reject(
-            httpError(409, "provider authentication is unavailable"),
-          );
+          return Promise.reject(httpError(409, "provider authentication is unavailable"));
         return this.driver
           .cancelProviderLogin(command.expectedGeneration)
           .then(() => accepted(command.expectedGeneration));
       case "logoutProvider":
         if (!this.driver.logoutProvider)
-          return Promise.reject(
-            httpError(409, "provider authentication is unavailable"),
-          );
+          return Promise.reject(httpError(409, "provider authentication is unavailable"));
         return this.driver
           .logoutProvider(command.provider, command.expectedGeneration)
           .then(() => accepted(command.expectedGeneration));
       case "updateContinuityMemory":
-        return this.driver
-          .updateContinuityMemory(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.updateContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "deleteContinuityMemory":
-        return this.driver
-          .deleteContinuityMemory(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.deleteContinuityMemory(command).then(() => accepted(command.expectedGeneration));
       case "migrateContinuityMemory":
         return this.driver
-          .migrateContinuityMemory({
-            expectedGeneration: command.expectedGeneration,
-          })
+          .migrateContinuityMemory({ expectedGeneration: command.expectedGeneration })
           .then(() => accepted(command.expectedGeneration));
       case "continuityPlanAction":
-        return this.driver
-          .continuityPlanAction(command)
-          .then(() => accepted(command.expectedGeneration));
+        return this.driver.continuityPlanAction(command).then(() => accepted(command.expectedGeneration));
       case "handoffSession":
-        if (!this.driver.handoffSession)
-          return Promise.reject(
-            httpError(409, "workspace handoff is unavailable"),
-          );
-        return this.driver
-          .handoffSession(command)
-          .then((result) => accepted(result.sessionGeneration));
+        if (!this.driver.handoffSession) return Promise.reject(httpError(409, "workspace handoff is unavailable"));
+        return this.driver.handoffSession(command).then(result => accepted(result.sessionGeneration));
       case "applySessionChanges":
         if (!this.driver.applySessionChanges)
-          return Promise.reject(
-            httpError(409, "applying session changes is unavailable"),
-          );
-        return this.driver
-          .applySessionChanges(command)
-          .then((result) => accepted(result.sessionGeneration));
+          return Promise.reject(httpError(409, "applying session changes is unavailable"));
+        return this.driver.applySessionChanges(command).then(result => accepted(result.sessionGeneration));
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings)
-          return Promise.reject(
-            httpError(409, "worktree settings are unavailable"),
-          );
-        return this.driver
-          .updateProjectWorktreeSettings(command)
-          .then(() => accepted(command.expectedGeneration));
+          return Promise.reject(httpError(409, "worktree settings are unavailable"));
+        return this.driver.updateProjectWorktreeSettings(command).then(() => accepted(command.expectedGeneration));
       case "updateRuntimePolicy":
         return this.driver.updateRuntimePolicy(command).then(async () => {
           this.projection.refresh(await this.driver.snapshot());
           return accepted(command.expectedGeneration);
         });
       case "updateToolPolicy":
-        if (!this.driver.updateToolPolicy)
-          return Promise.reject(httpError(409, "tool policy is unavailable"));
+        if (!this.driver.updateToolPolicy) return Promise.reject(httpError(409, "tool policy is unavailable"));
         return this.driver.updateToolPolicy(command).then(async () => {
           this.projection.refresh(await this.driver.snapshot());
           return accepted(command.expectedGeneration);
         });
       case "dismissCommandResult":
-        if (!this.driver.dismissCommandResult)
-          return Promise.reject(
-            httpError(409, "command results are unavailable"),
-          );
-        this.driver.dismissCommandResult(
-          command.resultId,
-          command.expectedGeneration,
-        );
+        if (!this.driver.dismissCommandResult) return Promise.reject(httpError(409, "command results are unavailable"));
+        this.driver.dismissCommandResult(command.resultId, command.expectedGeneration);
         return Promise.resolve(accepted(command.expectedGeneration));
     }
   }
 
   private onDriverEvent(event: DriverEvent): void {
-    if (
-      event.type === "session.replaced" ||
-      event.type === "session.unavailable"
-    ) {
+    if (event.type === "session.replaced" || event.type === "session.unavailable") {
       this.projection.discardPending();
       this.clearDialogOwner();
       this.lastCommandOwner = undefined;
@@ -1523,82 +1068,48 @@ export class ServerTransport {
           : {};
       if (
         typeof raw.requestId === "string" &&
-        ["select", "confirm", "input", "editor", "questionnaire"].includes(
-          String(raw.method),
-        )
+        ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))
       ) {
-        this.openDialog(
-          raw.requestId,
-          event.sessionGeneration,
-          this.lastCommandOwner,
-        );
+        this.openDialog(raw.requestId, event.sessionGeneration, this.lastCommandOwner);
       }
     }
     this.projection.apply(event);
-    if (
-      event.type === "ui.closed" &&
-      this.dialogOwner?.requestId === event.requestId
-    )
-      this.clearDialogOwner();
+    if (event.type === "ui.closed" && this.dialogOwner?.requestId === event.requestId) this.clearDialogOwner();
   }
 
   private publish(type: string, payload: unknown): void {
     const event = this.journal.append(type, payload);
     const serialized = this.journal.serialized(event);
-    for (const client of this.clients)
-      this.writeEvent(client.response, event, client.tabId, serialized);
+    for (const client of this.clients) this.writeEvent(client.response, event, client.tabId, serialized);
   }
 
-  private writeEvent(
-    response: ServerResponse,
-    event: WebEvent,
-    tabId: string,
-    serialized?: string,
-  ): void {
-    const personalized =
-      event.type === "ui.request" || event.type === "ui.ownership";
-    const eventPayload = personalized
-      ? (event.payload as Record<string, unknown>)
-      : undefined;
-    const matchesCurrent =
-      eventPayload?.requestId === this.dialogOwner?.requestId;
+  private writeEvent(response: ServerResponse, event: WebEvent, tabId: string, serialized?: string): void {
+    const personalized = event.type === "ui.request" || event.type === "ui.ownership";
+    const eventPayload = personalized ? (event.payload as Record<string, unknown>) : undefined;
+    const matchesCurrent = eventPayload?.requestId === this.dialogOwner?.requestId;
     const payload = personalized
       ? {
           ...eventPayload,
           owned: matchesCurrent && this.dialogOwner?.tabId === tabId,
-          ownershipAvailable:
-            matchesCurrent && this.dialogOwner?.tabId === undefined,
+          ownershipAvailable: matchesCurrent && this.dialogOwner?.tabId === undefined,
         }
       : event.payload;
-    const data = personalized
-      ? JSON.stringify({ ...event, payload })
-      : (serialized ?? JSON.stringify(event));
-    response.write(
-      `id: ${eventCursor(event)}\nevent: ${event.type}\ndata: ${data}\n\n`,
-    );
+    const data = personalized ? JSON.stringify({ ...event, payload }) : (serialized ?? JSON.stringify(event));
+    response.write(`id: ${eventCursor(event)}\nevent: ${event.type}\ndata: ${data}\n\n`);
   }
 
-  private session(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): BrowserSession {
-    return (
-      this.sessions.get(request) ??
-      this.sessions.create(response, this.options.secureCookies)
-    );
+  private session(request: IncomingMessage, response: ServerResponse): BrowserSession {
+    return this.sessions.get(request) ?? this.sessions.create(response, this.options.secureCookies);
   }
   private mutatingSession(request: IncomingMessage): BrowserSession {
     const session = this.sessions.get(request);
-    if (
-      !validCsrf(session, request.headers["x-pylon-csrf"] as string | undefined)
-    )
+    if (!validCsrf(session, request.headers["x-pylon-csrf"] as string | undefined))
       throw httpError(403, "invalid CSRF token");
     return session as BrowserSession;
   }
   private tab(request: IncomingMessage, session: BrowserSession): string {
     const tabId = header(request.headers["x-pylon-tab-id"]);
-    if (!validTabId(tabId) || !session.tabs.has(tabId))
-      throw httpError(403, "unknown tab");
+    if (!validTabId(tabId) || !session.tabs.has(tabId)) throw httpError(403, "unknown tab");
     return tabId;
   }
   private pendingFor(tabId: string | string[] | undefined) {
@@ -1610,11 +1121,7 @@ export class ServerTransport {
       ownershipAvailable: this.dialogOwner?.tabId === undefined,
     };
   }
-  private openDialog(
-    requestId: string,
-    sessionGeneration: number,
-    tabId: string | undefined,
-  ): void {
+  private openDialog(requestId: string, sessionGeneration: number, tabId: string | undefined): void {
     this.clearDialogOwner();
     this.dialogOwner = { requestId, sessionGeneration, tabId };
     this.startDialogOwnerLossGrace(this.dialogOwner);
@@ -1642,21 +1149,12 @@ export class ServerTransport {
     this.tabLossTimers.delete(key);
   }
   private startTabLossGrace(session: BrowserSession, tabId: string): void {
-    if (
-      [...this.clients].some(
-        (client) => client.session === session && client.tabId === tabId,
-      )
-    )
-      return;
+    if ([...this.clients].some(client => client.session === session && client.tabId === tabId)) return;
     const key = this.tabTimerKey(session, tabId);
     if (this.tabLossTimers.has(key)) return;
     const timer = setTimeout(() => {
       this.tabLossTimers.delete(key);
-      if (
-        ![...this.clients].some(
-          (client) => client.session === session && client.tabId === tabId,
-        )
-      )
+      if (![...this.clients].some(client => client.session === session && client.tabId === tabId))
         session.tabs.delete(tabId);
     }, this.options.dialogReconnectGraceMs ?? 10_000);
     timer.unref?.();
@@ -1664,12 +1162,7 @@ export class ServerTransport {
   }
   private startDialogOwnerLossGrace(owner: DialogOwner): void {
     const tabId = owner.tabId;
-    if (
-      !tabId ||
-      owner.lossTimer ||
-      [...this.clients].some((client) => client.tabId === tabId)
-    )
-      return;
+    if (!tabId || owner.lossTimer || [...this.clients].some(client => client.tabId === tabId)) return;
     owner.lossTimer = setTimeout(() => {
       if (this.dialogOwner !== owner || owner.tabId !== tabId) return;
       this.releaseDialogOwner(owner);

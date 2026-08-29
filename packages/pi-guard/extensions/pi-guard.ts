@@ -1,8 +1,4 @@
-import {
-  getAgentDir,
-  isToolCallEventType,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { readFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
@@ -19,12 +15,7 @@ import {
 } from "../src/policy.ts";
 
 const APPROVAL_RECORD_VERSION = 1;
-const choices = [
-  "Allow once",
-  "Always allow this session",
-  "Always allow on this project",
-  "Deny",
-] as const;
+const choices = ["Allow once", "Always allow this session", "Always allow on this project", "Deny"] as const;
 
 type ApprovalIdentity = {
   policyVersion: number;
@@ -34,33 +25,20 @@ type ApprovalIdentity = {
   value: string;
 };
 
-type ApprovalRecord = {
-  version: number;
-  approval: ApprovalIdentity;
-};
+type ApprovalRecord = { version: number; approval: ApprovalIdentity };
 
 type StoredApproval = "allowed" | "missing" | "invalid" | "error";
 
-const hash = (value: string) =>
-  createHash("sha256").update(value).digest("hex");
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const identityKey = (approval: ApprovalIdentity) => JSON.stringify(approval);
 
-type SpawnedPolicy = {
-  enabled: boolean;
-  rules: ReturnType<typeof mergeGuardRules>;
-  timeout?: number | null;
-};
+type SpawnedPolicy = { enabled: boolean; rules: ReturnType<typeof mergeGuardRules>; timeout?: number | null };
 
-const failClosed = (): SpawnedPolicy => ({
-  enabled: true,
-  rules: BLOCK_GUARD_RULES,
-});
+const failClosed = (): SpawnedPolicy => ({ enabled: true, rules: BLOCK_GUARD_RULES });
 const validTimeout = (value: unknown) =>
   value === undefined ||
   value === null ||
-  (Number.isInteger(value) &&
-    (value as number) >= 15 &&
-    (value as number) <= 86_400);
+  (Number.isInteger(value) && (value as number) >= 15 && (value as number) <= 86_400);
 
 function spawnedPolicy(): SpawnedPolicy | undefined {
   const serialized = process.env.PI_SPAWN_GUARD_POLICY;
@@ -70,12 +48,7 @@ function spawnedPolicy(): SpawnedPolicy | undefined {
     const value = JSON.parse(serialized) as Record<string, unknown>;
     const rules = validateGuardRules(value.rules);
     const timeout = value.timeoutSeconds;
-    if (
-      value.version !== 1 ||
-      typeof value.enabled !== "boolean" ||
-      !rules ||
-      !validTimeout(timeout)
-    )
+    if (value.version !== 1 || typeof value.enabled !== "boolean" || !rules || !validTimeout(timeout))
       return failClosed();
     return {
       enabled: value.enabled,
@@ -92,10 +65,7 @@ function approvalScope(approval: ApprovalIdentity): {
   candidates: ApprovalIdentity[];
   directory?: string;
 } {
-  if (
-    approval.operation !== "path" ||
-    approval.category !== GUARD_RISK_CATEGORIES.PATH_OUTSIDE_WORKSPACE
-  )
+  if (approval.operation !== "path" || approval.category !== GUARD_RISK_CATEGORIES.PATH_OUTSIDE_WORKSPACE)
     return { remembered: approval, candidates: [approval] };
 
   const root = parse(approval.value).root;
@@ -104,34 +74,17 @@ function approvalScope(approval: ApprovalIdentity): {
   if (parent === root) return { remembered: approval, candidates: [approval] };
 
   const candidates: ApprovalIdentity[] = [];
-  for (
-    let directory = parent;
-    directory !== root;
-    directory = dirname(directory)
-  )
+  for (let directory = parent; directory !== root; directory = dirname(directory))
     candidates.push({ ...approval, operation: "path-tree", value: directory });
-  return {
-    remembered: { ...approval, operation: "path-tree", value: parent },
-    candidates,
-    directory: parent,
-  };
+  return { remembered: { ...approval, operation: "path-tree", value: parent }, candidates, directory: parent };
 }
 
 function recordPath(approval: ApprovalIdentity) {
   // Both project and approval names are hashes so no command or path text becomes a filename.
-  return join(
-    getAgentDir(),
-    "pi-guard",
-    "approvals",
-    hash(approval.cwd),
-    `${hash(identityKey(approval))}.json`,
-  );
+  return join(getAgentDir(), "pi-guard", "approvals", hash(approval.cwd), `${hash(identityKey(approval))}.json`);
 }
 
-function sameApproval(
-  value: unknown,
-  approval: ApprovalIdentity,
-): value is ApprovalIdentity {
+function sameApproval(value: unknown, approval: ApprovalIdentity): value is ApprovalIdentity {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ApprovalIdentity>;
   return (
@@ -143,9 +96,7 @@ function sameApproval(
   );
 }
 
-async function readProjectApproval(
-  approval: ApprovalIdentity,
-): Promise<StoredApproval> {
+async function readProjectApproval(approval: ApprovalIdentity): Promise<StoredApproval> {
   let file: string;
   try {
     file = recordPath(approval);
@@ -153,12 +104,9 @@ async function readProjectApproval(
     return "error";
   }
   try {
-    const record = JSON.parse(
-      await readFile(file, "utf8"),
-    ) as Partial<ApprovalRecord> | null;
+    const record = JSON.parse(await readFile(file, "utf8")) as Partial<ApprovalRecord> | null;
     if (!record || typeof record !== "object") return "invalid";
-    return record.version === APPROVAL_RECORD_VERSION &&
-      sameApproval(record.approval, approval)
+    return record.version === APPROVAL_RECORD_VERSION && sameApproval(record.approval, approval)
       ? "allowed"
       : "invalid";
   } catch (error) {
@@ -168,27 +116,20 @@ async function readProjectApproval(
   }
 }
 
-async function saveProjectApproval(
-  approval: ApprovalIdentity,
-): Promise<boolean> {
+async function saveProjectApproval(approval: ApprovalIdentity): Promise<boolean> {
   let file: string;
   try {
     file = recordPath(approval);
     await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-    await writeFile(
-      file,
-      JSON.stringify({ version: APPROVAL_RECORD_VERSION, approval }),
-      {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      },
-    );
+    await writeFile(file, JSON.stringify({ version: APPROVAL_RECORD_VERSION, approval }), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
     return true;
   } catch (error) {
     // A concurrent writer may have completed the same idempotent approval.
-    if ((error as NodeJS.ErrnoException).code === "EEXIST")
-      return (await readProjectApproval(approval)) === "allowed";
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return (await readProjectApproval(approval)) === "allowed";
     return false;
   }
 }
@@ -210,10 +151,7 @@ export default function guardExtension(pi: ExtensionAPI) {
       if (!enabled) lastCtx?.ui.setStatus("pi-guard", undefined);
     }
     const value = event.dialogTimeouts?.guard;
-    if (
-      value === null ||
-      (Number.isInteger(value) && value >= 15 && value <= 86_400)
-    ) {
+    if (value === null || (Number.isInteger(value) && value >= 15 && value <= 86_400)) {
       approvalTimeoutSeconds = value;
     }
     if (Object.prototype.hasOwnProperty.call(event, "guardRules")) {
@@ -225,45 +163,21 @@ export default function guardExtension(pi: ExtensionAPI) {
   const dialogOptions = () =>
     approvalTimeoutSeconds === undefined
       ? undefined
-      : {
-          timeout:
-            approvalTimeoutSeconds === null
-              ? 0
-              : approvalTimeoutSeconds * 1_000,
-        };
+      : { timeout: approvalTimeoutSeconds === null ? 0 : approvalTimeoutSeconds * 1_000 };
 
-  const publish = (
-    ctx: any,
-    decision: string,
-    reason: string,
-    toolCallId?: string,
-  ) => {
-    pi.events.emit("pi-guard:decision", {
-      version: 1,
-      cwd: ctx.cwd,
-      decision,
-      reason,
-      blocked,
-      confirmed,
-      toolCallId,
-    });
+  const publish = (ctx: any, decision: string, reason: string, toolCallId?: string) => {
+    pi.events.emit("pi-guard:decision", { version: 1, cwd: ctx.cwd, decision, reason, blocked, confirmed, toolCallId });
     if (ctx.hasUI) ctx.ui.setStatus("pi-guard", `guard: ${decision}`);
   };
   const deny = (ctx: any, reason: string, toolCallId?: string) => {
     blocked++;
     publish(ctx, "blocked", reason, toolCallId);
   };
-  const blockedMessage = (reason: string, suffix = "") =>
-    `Pi Guard blocked ${reason}${suffix}.`;
+  const blockedMessage = (reason: string, suffix = "") => `Pi Guard blocked ${reason}${suffix}.`;
 
   /** true = already approved, false = the store is unusable, undefined = ask the user. */
-  const rememberedApproval = async (
-    candidates: ApprovalIdentity[],
-  ): Promise<boolean | undefined> => {
-    if (
-      candidates.some((approval) => sessionApprovals.has(identityKey(approval)))
-    )
-      return true;
+  const rememberedApproval = async (candidates: ApprovalIdentity[]): Promise<boolean | undefined> => {
+    if (candidates.some(approval => sessionApprovals.has(identityKey(approval)))) return true;
     for (const approval of candidates) {
       const stored = await readProjectApproval(approval);
       if (stored === "allowed") return true;
@@ -304,13 +218,7 @@ export default function guardExtension(pi: ExtensionAPI) {
     } catch {
       return false;
     }
-    const scope = approvalScope({
-      policyVersion: POLICY_VERSION,
-      cwd,
-      category,
-      operation,
-      value,
-    });
+    const scope = approvalScope({ policyVersion: POLICY_VERSION, cwd, category, operation, value });
     const remembered = await rememberedApproval(scope.candidates);
     if (remembered !== undefined) return remembered;
 
@@ -318,9 +226,7 @@ export default function guardExtension(pi: ExtensionAPI) {
 
     let selected: string | undefined;
     try {
-      const scopeNote = scope.directory
-        ? `\n\nSession/project approval remembers directory:\n${scope.directory}`
-        : "";
+      const scopeNote = scope.directory ? `\n\nSession/project approval remembers directory:\n${scope.directory}` : "";
       selected = await ctx.ui.select(
         `Pi-guard ${reason}\n\`${detail.slice(0, 2000)}\`${scopeNote}`,
         choices,
@@ -360,9 +266,7 @@ export default function guardExtension(pi: ExtensionAPI) {
       deny(ctx, risk.reason, toolCallId);
       return { allowed: false, message: blockedMessage(risk.reason) };
     }
-    if (
-      await approve(ctx, risk.category, risk.reason, detail, operation, value)
-    ) {
+    if (await approve(ctx, risk.category, risk.reason, detail, operation, value)) {
       confirmed++;
       publish(ctx, "confirmed", risk.reason, toolCallId);
       return { allowed: true };
@@ -372,9 +276,7 @@ export default function guardExtension(pi: ExtensionAPI) {
       allowed: false,
       message: blockedMessage(
         risk.reason,
-        ctx.hasUI
-          ? " after confirmation was declined"
-          : " because no confirmation UI is available",
+        ctx.hasUI ? " after confirmation was declined" : " because no confirmation UI is available",
       ),
     };
   };
@@ -384,15 +286,9 @@ export default function guardExtension(pi: ExtensionAPI) {
   });
   pi.on("tool_call", async (event, ctx) => {
     if (!enabled) return;
-    const block = (message: string) => ({
-      block: true as const,
-      reason: message,
-    });
+    const block = (message: string) => ({ block: true as const, reason: message });
 
-    if (
-      isToolCallEventType("bash", event) ||
-      event.toolName === "heartbeat_start"
-    ) {
+    if (isToolCallEventType("bash", event) || event.toolName === "heartbeat_start") {
       const command = isToolCallEventType("bash", event)
         ? event.input.command
         : (event.input as { command?: unknown })?.command;
@@ -403,22 +299,11 @@ export default function guardExtension(pi: ExtensionAPI) {
       }
       const risk = commandRisk(command);
       if (!risk) return;
-      const verdict = await decide(
-        ctx,
-        risk,
-        command,
-        "command",
-        command,
-        event.toolCallId,
-      );
+      const verdict = await decide(ctx, risk, command, "command", command, event.toolCallId);
       return verdict.allowed ? undefined : block(verdict.message);
     }
 
-    if (
-      !isToolCallEventType("write", event) &&
-      !isToolCallEventType("edit", event)
-    )
-      return;
+    if (!isToolCallEventType("write", event) && !isToolCallEventType("edit", event)) return;
     let risk;
     try {
       risk = await pathRisk(ctx.cwd, event.input.path);
@@ -429,14 +314,7 @@ export default function guardExtension(pi: ExtensionAPI) {
     }
     if (!risk) return;
     const detail = `${event.input.path}\nResolved target: ${risk.target}`;
-    const verdict = await decide(
-      ctx,
-      risk,
-      detail,
-      "path",
-      risk.target!,
-      event.toolCallId,
-    );
+    const verdict = await decide(ctx, risk, detail, "path", risk.target!, event.toolCallId);
     return verdict.allowed ? undefined : block(verdict.message);
   });
 
@@ -444,22 +322,9 @@ export default function guardExtension(pi: ExtensionAPI) {
     if (!enabled) return;
     const risk = commandRisk(event.command);
     if (!risk) return;
-    const verdict = await decide(
-      ctx,
-      risk,
-      event.command,
-      "command",
-      event.command,
-    );
+    const verdict = await decide(ctx, risk, event.command, "command", event.command);
     if (verdict.allowed) return;
-    return {
-      result: {
-        output: verdict.message,
-        exitCode: 126,
-        cancelled: true,
-        truncated: false,
-      },
-    };
+    return { result: { output: verdict.message, exitCode: 126, cancelled: true, truncated: false } };
   });
 
   pi.registerCommand("guard", {

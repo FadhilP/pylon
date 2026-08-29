@@ -25,15 +25,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import type {
-  SessionProjectPage,
-  SessionSummary,
-} from "../shared/protocol/snapshots";
+import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
-import {
-  SESSION_LIST_INITIAL_LIMIT,
-  SESSION_LIST_MORE_LIMIT,
-} from "../shared/session-list";
+import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { showSessionRuntimeState } from "../shared/session-completions";
 import { ChangelogDialog } from "./changelog-dialog";
 import { copyText } from "./clipboard";
@@ -92,14 +86,8 @@ interface SidebarProps {
   onNewSession: (project: SessionProject) => void;
   onNewGeneral: () => void;
   onWorktreeSetup: (project: SessionProject) => void;
-  onReorderProject: (
-    projectId: string,
-    beforeProjectId?: string,
-  ) => Promise<void>;
-  onReorderActiveSession: (
-    sessionId: string,
-    beforeSessionId?: string,
-  ) => Promise<void>;
+  onReorderProject: (projectId: string, beforeProjectId?: string) => Promise<void>;
+  onReorderActiveSession: (sessionId: string, beforeSessionId?: string) => Promise<void>;
 }
 
 export function SessionSidebar({
@@ -153,62 +141,38 @@ export function SessionSidebar({
   const [generalOpen, setGeneralOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const menuTrigger = useRef<HTMLElement | null>(null);
-  const [preview, setPreview] = useState<{
-    kind: "project" | "active";
-    id: string;
-    ids: string[];
-  }>();
+  const [preview, setPreview] = useState<{ kind: "project" | "active"; id: string; ids: string[] }>();
   const [announcement, setAnnouncement] = useState("");
   const visibleProjects = useMemo(
-    () =>
-      orderByIds(
-        projects,
-        preview?.kind === "project" ? preview.ids : undefined,
-      ),
+    () => orderByIds(projects, preview?.kind === "project" ? preview.ids : undefined),
     [preview, projects],
   );
   const visibleActiveSessions = useMemo(
-    () =>
-      orderByIds(
-        activeSessions,
-        preview?.kind === "active" ? preview.ids : undefined,
-      ),
+    () => orderByIds(activeSessions, preview?.kind === "active" ? preview.ids : undefined),
     [activeSessions, preview],
   );
-  const generalPage = general
-    ? pages.find((page) => page.id === general.id)
-    : undefined;
+  const generalPage = general ? pages.find(page => page.id === general.id) : undefined;
   const working =
-    activeSessions.some((session) => session.workStartedAt) ||
-    projects.some((project) =>
-      project.sessions.some((session) => session.workStartedAt),
-    ) ||
-    general?.sessions.some((session) => session.workStartedAt);
+    activeSessions.some(session => session.workStartedAt) ||
+    projects.some(project => project.sessions.some(session => session.workStartedAt)) ||
+    general?.sessions.some(session => session.workStartedAt);
   const announceCopy = (value: string, label: string) => {
     setAnnouncement("");
-    void copyText(value).then((copied) => {
-      setAnnouncement(
-        copied ? `${label} copied` : `Copying ${label.toLowerCase()} failed`,
-      );
+    void copyText(value).then(copied => {
+      setAnnouncement(copied ? `${label} copied` : `Copying ${label.toLowerCase()} failed`);
     });
   };
 
   useEffect(() => {
     setNow(Date.now());
-    const interval = window.setInterval(
-      () => setNow(Date.now()),
-      working ? 1_000 : 60_000,
-    );
+    const interval = window.setInterval(() => setNow(Date.now()), working ? 1_000 : 60_000);
     return () => window.clearInterval(interval);
   }, [working]);
 
   useEffect(() => {
     if (!openMenu) return;
     const onPointerDown = (event: PointerEvent) => {
-      const target =
-        event.target instanceof Element
-          ? event.target.closest(".session-menu")
-          : null;
+      const target = event.target instanceof Element ? event.target.closest(".session-menu") : null;
       if (target?.getAttribute("data-menu-id") !== openMenu) setOpenMenu("");
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -230,25 +194,19 @@ export function SessionSidebar({
   };
   const toggleMenu = (menuId: string, trigger: HTMLElement) => {
     menuTrigger.current = trigger;
-    setOpenMenu((current) => (current === menuId ? "" : menuId));
+    setOpenMenu(current => (current === menuId ? "" : menuId));
   };
   const closeMenu = (restoreFocus = false) => {
     setOpenMenu("");
     if (restoreFocus) requestAnimationFrame(() => menuTrigger.current?.focus());
   };
-  const reorder = async (
-    kind: "project" | "active",
-    id: string,
-    ids: string[],
-  ) => {
+  const reorder = async (kind: "project" | "active", id: string, ids: string[]) => {
     const before = ids[ids.indexOf(id) + 1];
     setPreview({ kind, id, ids });
     try {
       if (kind === "project") await onReorderProject(id, before);
       else await onReorderActiveSession(id, before);
-      setAnnouncement(
-        `${kind === "project" ? "Project" : "Active session"} moved to position ${ids.indexOf(id) + 1}`,
-      );
+      setAnnouncement(`${kind === "project" ? "Project" : "Active session"} moved to position ${ids.indexOf(id) + 1}`);
     } catch {
       setAnnouncement("Reordering failed");
     } finally {
@@ -284,11 +242,7 @@ export function SessionSidebar({
       setAnnouncement("Reordering cancelled");
     };
     const move = (pointer: PointerEvent) => {
-      if (
-        !dragging &&
-        Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5
-      )
-        return;
+      if (!dragging && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5) return;
       if (!dragging) {
         dragging = true;
         setOpenMenu("");
@@ -301,9 +255,7 @@ export function SessionSidebar({
         ?.closest<HTMLElement>(`[data-reorder-kind="${kind}"]`);
       const targetId = target?.dataset.reorderId;
       if (!target || !targetId || targetId === id) return;
-      const after =
-        pointer.clientY >
-        target.getBoundingClientRect().top + target.offsetHeight / 2;
+      const after = pointer.clientY > target.getBoundingClientRect().top + target.offsetHeight / 2;
       const targetIndex = nextIds.indexOf(targetId);
       const before = after ? nextIds[targetIndex + 1] : targetId;
       const reordered = moveBefore(nextIds, id, before);
@@ -314,14 +266,8 @@ export function SessionSidebar({
     const up = () => {
       cleanup();
       if (!dragging) return;
-      document.addEventListener("click", stopClick, {
-        capture: true,
-        once: true,
-      });
-      window.setTimeout(
-        () => document.removeEventListener("click", stopClick, true),
-        0,
-      );
+      document.addEventListener("click", stopClick, { capture: true, once: true });
+      window.setTimeout(() => document.removeEventListener("click", stopClick, true), 0);
       if (sameIds(ids, nextIds)) {
         setPreview(undefined);
         return;
@@ -336,19 +282,11 @@ export function SessionSidebar({
     window.addEventListener("pointercancel", cancel, { once: true });
     window.addEventListener("keydown", keydown);
   };
-  const keyboardReorder = (
-    event: ReactKeyboardEvent,
-    kind: "project" | "active",
-    id: string,
-    ids: string[],
-  ) => {
+  const keyboardReorder = (event: ReactKeyboardEvent, kind: "project" | "active", id: string, ids: string[]) => {
     if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault();
     const current = ids.indexOf(id);
-    const target = Math.max(
-      0,
-      Math.min(ids.length - 1, current + (event.key === "ArrowUp" ? -1 : 1)),
-    );
+    const target = Math.max(0, Math.min(ids.length - 1, current + (event.key === "ArrowUp" ? -1 : 1)));
     if (target === current) return;
     const reordered = [...ids];
     reordered.splice(current, 1);
@@ -363,17 +301,12 @@ export function SessionSidebar({
         className={`sidebar ${isOpen ? "is-open" : ""}`}
         aria-label="Projects and sessions"
         aria-hidden={mobile && !isOpen}
-        inert={mobile && !isOpen}
-      >
+        inert={mobile && !isOpen}>
         {contextual ? (
           <div className="session-context-header">
             <strong>All sessions</strong>
             {onShowFiles && (
-              <button
-                className="session-context-files"
-                type="button"
-                onClick={onShowFiles}
-              >
+              <button className="session-context-files" type="button" onClick={onShowFiles}>
                 <IconFolder size={14} />
                 Files
               </button>
@@ -383,15 +316,10 @@ export function SessionSidebar({
                 className="icon-button"
                 type="button"
                 onClick={() => setChangelogOpen(true)}
-                aria-label="Open changelog"
-              >
+                aria-label="Open changelog">
                 <IconLibrary size={16} />
               </button>
-              <button
-                className="icon-button mobile-close"
-                onClick={onClose}
-                aria-label="Close navigation"
-              >
+              <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
                 <IconX size={18} />
               </button>
             </span>
@@ -402,8 +330,7 @@ export function SessionSidebar({
               className="brand-row"
               type="button"
               onClick={() => setChangelogOpen(true)}
-              aria-label="Open changelog"
-            >
+              aria-label="Open changelog">
               <span className="brand-row-identity">
                 <span className="brand-mark" aria-hidden="true">
                   <img src="/pylon-mark.svg" alt="" />
@@ -414,11 +341,7 @@ export function SessionSidebar({
               </span>
               <IconLibrary className="brand-changelog-icon" size={16} />
             </button>
-            <button
-              className="icon-button mobile-close"
-              onClick={onClose}
-              aria-label="Close navigation"
-            >
+            <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
               <IconX size={18} />
             </button>
           </div>
@@ -430,7 +353,7 @@ export function SessionSidebar({
           <input
             ref={searchRef}
             value={query}
-            onChange={(event) => onQuery(event.target.value)}
+            onChange={event => onQuery(event.target.value)}
             placeholder="Search sessions"
           />
           <kbd>Ctrl K</kbd>
@@ -438,32 +361,21 @@ export function SessionSidebar({
 
         <nav className="project-list">
           {!contextual && (
-            <section
-              className="active-session-group"
-              aria-labelledby="active-sessions-heading"
-            >
-              <h2
-                style={{ marginBottom: 4 }}
-                className="nav-label"
-                id="active-sessions-heading"
-              >
+            <section className="active-session-group" aria-labelledby="active-sessions-heading">
+              <h2 style={{ marginBottom: 4 }} className="nav-label" id="active-sessions-heading">
                 <button
                   type="button"
                   aria-expanded={activeSessionsOpen}
-                  onClick={() => setActiveSessionsOpen((open) => !open)}
-                >
+                  onClick={() => setActiveSessionsOpen(open => !open)}>
                   <span>Active sessions</span>
-                  <IconChevronRight
-                    className={activeSessionsOpen ? "is-expanded" : ""}
-                    size={13}
-                  />
+                  <IconChevronRight className={activeSessionsOpen ? "is-expanded" : ""} size={13} />
                   <small>{activeSessions.length}</small>
                 </button>
               </h2>
               {activeSessionsOpen &&
                 (visibleActiveSessions.length > 0 ? (
                   <div className="active-session-list">
-                    {visibleActiveSessions.map((session) => (
+                    {visibleActiveSessions.map(session => (
                       <SessionRow
                         key={session.id}
                         session={session}
@@ -482,26 +394,23 @@ export function SessionSidebar({
                         onSetPinned={onSetSessionPinned}
                         onToggleMenu={toggleMenu}
                         onCloseMenu={() => closeMenu(true)}
-                        onCopySessionId={(id) => announceCopy(id, "Session ID")}
+                        onCopySessionId={id => announceCopy(id, "Session ID")}
                         reorderKind="active"
-                        dragging={
-                          preview?.kind === "active" &&
-                          preview.id === session.id
-                        }
-                        onPointerDown={(event) =>
+                        dragging={preview?.kind === "active" && preview.id === session.id}
+                        onPointerDown={event =>
                           startPointerReorder(
                             event,
                             "active",
                             session.id,
-                            visibleActiveSessions.map((item) => item.id),
+                            visibleActiveSessions.map(item => item.id),
                           )
                         }
-                        onKeyDown={(event) =>
+                        onKeyDown={event =>
                           keyboardReorder(
                             event,
                             "active",
                             session.id,
-                            visibleActiveSessions.map((item) => item.id),
+                            visibleActiveSessions.map(item => item.id),
                           )
                         }
                       />
@@ -517,13 +426,9 @@ export function SessionSidebar({
               <button
                 type="button"
                 aria-expanded={projectsOpen || Boolean(query.trim())}
-                onClick={() => setProjectsOpen((open) => !open)}
-              >
+                onClick={() => setProjectsOpen(open => !open)}>
                 <span>Projects</span>
-                <IconChevronRight
-                  className={projectsOpen || query.trim() ? "is-expanded" : ""}
-                  size={13}
-                />
+                <IconChevronRight className={projectsOpen || query.trim() ? "is-expanded" : ""} size={13} />
               </button>
             </h2>
             <div>
@@ -531,8 +436,7 @@ export function SessionSidebar({
                 className="project-add"
                 type="button"
                 onClick={onOpenArchives}
-                disabled={Boolean(projectBusy || deleting)}
-              >
+                disabled={Boolean(projectBusy || deleting)}>
                 <IconArchive size={13} />
                 Archived
               </button>
@@ -541,67 +445,49 @@ export function SessionSidebar({
                 type="button"
                 onClick={onAddProject}
                 disabled={Boolean(projectBusy || deleting)}
-                aria-label="Add project"
-              >
+                aria-label="Add project">
                 <IconPlus size={14} />
                 Add project
               </button>
             </div>
           </div>
+          {(projectsOpen || Boolean(query.trim())) && loading && projects.length === 0 && (
+            <div className="sidebar-state">Loading sessions...</div>
+          )}
           {(projectsOpen || Boolean(query.trim())) &&
-            loading &&
-            projects.length === 0 && (
-              <div className="sidebar-state">Loading sessions...</div>
-            )}
-          {(projectsOpen || Boolean(query.trim())) &&
-            visibleProjects.map((project) => {
-              const expanded =
-                Boolean(query.trim()) || expandedProjects.has(project.id);
-              const page = pages.find(
-                (candidate) => candidate.id === project.id,
-              );
+            visibleProjects.map(project => {
+              const expanded = Boolean(query.trim()) || expandedProjects.has(project.id);
+              const page = pages.find(candidate => candidate.id === project.id);
               return (
                 <section
                   className={`project-group${preview?.kind === "project" && preview.id === project.id ? " is-dragging" : ""}`}
-                  key={project.id}
-                >
-                  <div
-                    className="project-row"
-                    data-reorder-kind="project"
-                    data-reorder-id={project.id}
-                  >
+                  key={project.id}>
+                  <div className="project-row" data-reorder-kind="project" data-reorder-id={project.id}>
                     <button
                       type="button"
                       className={`project-toggle ${project.active ? "is-active" : ""}`}
                       onClick={() => onToggleProject(project.id)}
-                      onPointerDown={(event) =>
+                      onPointerDown={event =>
                         startPointerReorder(
                           event,
                           "project",
                           project.id,
-                          visibleProjects.map((item) => item.id),
+                          visibleProjects.map(item => item.id),
                         )
                       }
-                      onKeyDown={(event) =>
+                      onKeyDown={event =>
                         keyboardReorder(
                           event,
                           "project",
                           project.id,
-                          visibleProjects.map((item) => item.id),
+                          visibleProjects.map(item => item.id),
                         )
                       }
                       aria-expanded={expanded}
-                      aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-                    >
-                      {expanded ? (
-                        <IconFolderOpen size={14} />
-                      ) : (
-                        <IconFolder size={14} />
-                      )}
+                      aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">
+                      {expanded ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
                       <span>{project.label}</span>
-                      <small>
-                        {page?.totalCount ?? project.sessions.length}
-                      </small>
+                      <small>{page?.totalCount ?? project.sessions.length}</small>
                     </button>
                     <button
                       className="project-new"
@@ -609,27 +495,21 @@ export function SessionSidebar({
                       onClick={() => onNewSession(project)}
                       disabled={Boolean(busy || deleting || projectBusy)}
                       aria-label={`New session in ${project.label}`}
-                      title={`New session in ${project.label}`}
-                    >
+                      title={`New session in ${project.label}`}>
                       <IconPlus size={14} />
                     </button>
                     <details
                       className="session-menu project-menu"
                       data-menu-id={`project-${project.id}`}
-                      open={openMenu === `project-${project.id}`}
-                    >
+                      open={openMenu === `project-${project.id}`}>
                       <summary
                         aria-label={`More options for ${project.label}`}
                         aria-expanded={openMenu === `project-${project.id}`}
                         title="More options"
-                        onClick={(event) => {
+                        onClick={event => {
                           event.preventDefault();
-                          toggleMenu(
-                            `project-${project.id}`,
-                            event.currentTarget,
-                          );
-                        }}
-                      >
+                          toggleMenu(`project-${project.id}`, event.currentTarget);
+                        }}>
                         <IconDots size={15} />
                       </summary>
                       <div className="session-menu-popover">
@@ -639,8 +519,7 @@ export function SessionSidebar({
                           onClick={() => {
                             closeMenu(true);
                             onRenameProject(project);
-                          }}
-                        >
+                          }}>
                           <IconPencil size={14} />
                           Rename
                         </button>
@@ -649,8 +528,7 @@ export function SessionSidebar({
                           onClick={() => {
                             closeMenu(true);
                             announceCopy(project.cwd, "Project path");
-                          }}
-                        >
+                          }}>
                           <IconCopy size={14} />
                           Copy path
                         </button>
@@ -660,8 +538,7 @@ export function SessionSidebar({
                           onClick={() => {
                             closeMenu(true);
                             onWorktreeSetup(project);
-                          }}
-                        >
+                          }}>
                           <IconTerminal2 size={14} />
                           Worktree setup
                         </button>
@@ -671,8 +548,7 @@ export function SessionSidebar({
                           onClick={() => {
                             closeMenu(true);
                             onArchiveProject(project);
-                          }}
-                        >
+                          }}>
                           <IconArchive size={14} />
                           Archive
                         </button>
@@ -683,8 +559,7 @@ export function SessionSidebar({
                           onClick={() => {
                             closeMenu(true);
                             onRemoveProject(project);
-                          }}
-                        >
+                          }}>
                           <IconTrash size={14} />
                           Remove project
                         </button>
@@ -693,14 +568,12 @@ export function SessionSidebar({
                   </div>
                   {expanded && (
                     <div className="project-sessions">
-                      {project.sessions.map((session) => (
+                      {project.sessions.map(session => (
                         <SessionRow
                           key={session.id}
                           session={session}
                           menuId={`project-${project.id}-${session.id}`}
-                          menuOpen={
-                            openMenu === `project-${project.id}-${session.id}`
-                          }
+                          menuOpen={openMenu === `project-${project.id}-${session.id}`}
                           busy={busy}
                           deleting={deleting}
                           completed={Boolean(unseenCompletions?.[session.id])}
@@ -713,40 +586,33 @@ export function SessionSidebar({
                           onSetPinned={onSetSessionPinned}
                           onToggleMenu={toggleMenu}
                           onCloseMenu={() => closeMenu(true)}
-                          onCopySessionId={(id) =>
-                            announceCopy(id, "Session ID")
-                          }
+                          onCopySessionId={id => announceCopy(id, "Session ID")}
                         />
                       ))}
-                      {page &&
-                        (page.sessions.length > SESSION_LIST_INITIAL_LIMIT ||
-                          page.nextCursor) && (
-                          <div className="session-list-controls">
-                            {page.nextCursor && (
-                              <button
-                                className="session-list-button"
-                                type="button"
-                                onClick={() => onLoadMore(project)}
-                                disabled={projectLoading === project.id}
-                              >
-                                {projectLoading === project.id
-                                  ? "Loading…"
-                                  : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
-                              </button>
-                            )}
-                            {page.sessions.length >
-                              SESSION_LIST_INITIAL_LIMIT && (
-                              <button
-                                className="session-list-button"
-                                type="button"
-                                onClick={() => onShowLess(project)}
-                                disabled={projectLoading === project.id}
-                              >
-                                Show less
-                              </button>
-                            )}
-                          </div>
-                        )}
+                      {page && (page.sessions.length > SESSION_LIST_INITIAL_LIMIT || page.nextCursor) && (
+                        <div className="session-list-controls">
+                          {page.nextCursor && (
+                            <button
+                              className="session-list-button"
+                              type="button"
+                              onClick={() => onLoadMore(project)}
+                              disabled={projectLoading === project.id}>
+                              {projectLoading === project.id
+                                ? "Loading…"
+                                : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
+                            </button>
+                          )}
+                          {page.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
+                            <button
+                              className="session-list-button"
+                              type="button"
+                              onClick={() => onShowLess(project)}
+                              disabled={projectLoading === project.id}>
+                              Show less
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
@@ -757,28 +623,16 @@ export function SessionSidebar({
             projects.length === 0 &&
             (!query || !general?.sessions.length) && (
               <div className="sidebar-state">
-                {query
-                  ? "No matching sessions."
-                  : "No projects yet. Add a folder to start."}
+                {query ? "No matching sessions." : "No projects yet. Add a folder to start."}
               </div>
             )}
           {general && (
-            <section
-              className="general-session-group"
-              aria-labelledby="general-sessions-heading"
-            >
+            <section className="general-session-group" aria-labelledby="general-sessions-heading">
               <div className="project-heading">
                 <h2 className="nav-label" id="general-sessions-heading">
-                  <button
-                    type="button"
-                    aria-expanded={generalOpen}
-                    onClick={() => setGeneralOpen((open) => !open)}
-                  >
+                  <button type="button" aria-expanded={generalOpen} onClick={() => setGeneralOpen(open => !open)}>
                     <span>General</span>
-                    <IconChevronRight
-                      className={generalOpen ? "is-expanded" : ""}
-                      size={13}
-                    />
+                    <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
                   </button>
                 </h2>
                 <div>
@@ -788,8 +642,7 @@ export function SessionSidebar({
                     onClick={onNewGeneral}
                     disabled={Boolean(busy || deleting || projectBusy)}
                     aria-label="New general session"
-                    title="New general session"
-                  >
+                    title="New general session">
                     <IconPlus size={14} />
                   </button>
                 </div>
@@ -797,7 +650,7 @@ export function SessionSidebar({
               {generalOpen && (
                 <div className="active-session-list">
                   {general.sessions.length ? (
-                    general.sessions.map((session) => (
+                    general.sessions.map(session => (
                       <SessionRow
                         key={session.id}
                         session={session}
@@ -815,27 +668,21 @@ export function SessionSidebar({
                         onSetPinned={onSetSessionPinned}
                         onToggleMenu={toggleMenu}
                         onCloseMenu={() => closeMenu(true)}
-                        onCopySessionId={(id) => announceCopy(id, "Session ID")}
+                        onCopySessionId={id => announceCopy(id, "Session ID")}
                       />
                     ))
                   ) : (
-                    <p className="active-session-empty">
-                      Search and work with files accessible on this PC.
-                    </p>
+                    <p className="active-session-empty">Search and work with files accessible on this PC.</p>
                   )}
-                  {(general.sessions.length > SESSION_LIST_INITIAL_LIMIT ||
-                    generalPage?.nextCursor) && (
+                  {(general.sessions.length > SESSION_LIST_INITIAL_LIMIT || generalPage?.nextCursor) && (
                     <div className="session-list-controls">
                       {generalPage?.nextCursor && (
                         <button
                           className="session-list-button"
                           type="button"
                           onClick={() => onLoadMore(general)}
-                          disabled={projectLoading === general.id}
-                        >
-                          {projectLoading === general.id
-                            ? "Loading…"
-                            : "Show more"}
+                          disabled={projectLoading === general.id}>
+                          {projectLoading === general.id ? "Loading…" : "Show more"}
                         </button>
                       )}
                       {general.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
@@ -843,8 +690,7 @@ export function SessionSidebar({
                           className="session-list-button"
                           type="button"
                           onClick={() => onShowLess(general)}
-                          disabled={projectLoading === general.id}
-                        >
+                          disabled={projectLoading === general.id}>
                           Show less
                         </button>
                       )}
@@ -857,11 +703,7 @@ export function SessionSidebar({
         </nav>
 
         <div className="sidebar-foot">
-          <button
-            className="sidebar-action"
-            type="button"
-            onClick={onOpenSettings}
-          >
+          <button className="sidebar-action" type="button" onClick={onOpenSettings}>
             <IconSettings size={16} />
             Settings
           </button>
@@ -870,8 +712,7 @@ export function SessionSidebar({
             type="button"
             disabled={!terminalAvailable}
             aria-pressed={terminalOpen}
-            onClick={onToggleTerminal}
-          >
+            onClick={onToggleTerminal}>
             <IconTerminal2 size={16} />
             Terminal
           </button>
@@ -880,9 +721,7 @@ export function SessionSidebar({
           {announcement}
         </div>
       </aside>
-      {changelogOpen && (
-        <ChangelogDialog onClose={() => setChangelogOpen(false)} />
-      )}
+      {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
     </>
   );
 }
@@ -934,22 +773,15 @@ function SessionRow({
 }) {
   const unavailable = Boolean(busy || deleting);
   const sleeping = session.runtimeState === "sleeping";
-  const workStartedAt = session.workStartedAt
-    ? Date.parse(session.workStartedAt)
-    : Number.NaN;
+  const workStartedAt = session.workStartedAt ? Date.parse(session.workStartedAt) : Number.NaN;
   const working = !Number.isNaN(workStartedAt);
-  const activity = formatSessionActivity(
-    session.modifiedAt,
-    session.workStartedAt,
-    now,
-  );
+  const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
 
   return (
     <div
       className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`}
       data-reorder-kind={reorderKind}
-      data-reorder-id={reorderKind ? session.id : undefined}
-    >
+      data-reorder-id={reorderKind ? session.id : undefined}>
       <button
         className={`session-link ${session.active ? "is-active" : ""}`}
         type="button"
@@ -957,25 +789,15 @@ function SessionRow({
         onPointerDown={onPointerDown}
         onKeyDown={onKeyDown}
         disabled={unavailable}
-        title={
-          session.runningUnderParentSessionId
-            ? "View this running session through its parent"
-            : undefined
-        }
+        title={session.runningUnderParentSessionId ? "View this running session through its parent" : undefined}
         aria-current={session.active ? "page" : undefined}
-        aria-keyshortcuts={
-          reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined
-        }
-      >
+        aria-keyshortcuts={reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined}>
         <span className="session-copy">
           <strong>{sessionTitle(session)}</strong>
           <small>
             {session.parentSession && (
               <>
-                Spawned from{" "}
-                <span title={session.parentSession.id}>
-                  {session.parentSession.title}
-                </span>
+                Spawned from <span title={session.parentSession.id}>{session.parentSession.title}</span>
                 {" · "}
               </>
             )}
@@ -983,10 +805,7 @@ function SessionRow({
               `${session.cwdLabel} · `
             ) : (
               <>
-                <time
-                  dateTime={session.createdAt}
-                  title={`Created ${displayTime(session.createdAt)}`}
-                >
+                <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>
                   {displayDate(session.createdAt)}
                 </time>
                 {" · "}
@@ -998,17 +817,13 @@ function SessionRow({
                 working
                   ? `Working since ${displayTime(session.workStartedAt!)}`
                   : `Last active ${displayTime(session.modifiedAt)}`
-              }
-            >
+              }>
               {activity}
             </time>
           </small>
         </span>
         {busy === session.id || deleting === session.id ? (
-          <span
-            className="status-orb success"
-            aria-label={deleting === session.id ? "Deleting" : "Updating"}
-          />
+          <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
         ) : (
           showSessionRuntimeState(session.runtimeState, completed) && (
             <span
@@ -1024,11 +839,10 @@ function SessionRow({
           aria-label={`More options for ${sessionTitle(session)}`}
           aria-expanded={menuOpen}
           title="More options"
-          onClick={(event) => {
+          onClick={event => {
             event.preventDefault();
             onToggleMenu(menuId, event.currentTarget);
-          }}
-        >
+          }}>
           <IconDots size={15} />
         </summary>
         <div className="session-menu-popover">
@@ -1038,8 +852,7 @@ function SessionRow({
             onClick={() => {
               onCloseMenu();
               onRename(session);
-            }}
-          >
+            }}>
             <IconPencil size={14} />
             Rename
           </button>
@@ -1048,8 +861,7 @@ function SessionRow({
             onClick={() => {
               onCloseMenu();
               onCopySessionId(session.id);
-            }}
-          >
+            }}>
             <IconCopy size={14} />
             Copy session ID
           </button>
@@ -1059,8 +871,7 @@ function SessionRow({
             onClick={() => {
               onCloseMenu();
               onSetPinned(session, !session.pinned);
-            }}
-          >
+            }}>
             <IconPin size={14} />
             {session.pinned ? "Unpin" : "Pin"}
           </button>
@@ -1070,8 +881,7 @@ function SessionRow({
             onClick={() => {
               onCloseMenu();
               onArchive(session);
-            }}
-          >
+            }}>
             <IconArchive size={14} />
             Archive
           </button>
@@ -1088,8 +898,7 @@ function SessionRow({
             onClick={() => {
               onCloseMenu();
               onSetActive(session, sleeping);
-            }}
-          >
+            }}>
             <IconPower size={14} />
             {sleeping ? "Activate" : "Deactivate"}
           </button>
@@ -1097,14 +906,11 @@ function SessionRow({
             className="is-danger"
             type="button"
             disabled={unavailable || session.active}
-            title={
-              session.active ? "Active session cannot be deleted" : undefined
-            }
+            title={session.active ? "Active session cannot be deleted" : undefined}
             onClick={() => {
               onCloseMenu();
               onDelete(session);
-            }}
-          >
+            }}>
             <IconTrash size={14} />
             Delete
           </button>
@@ -1116,23 +922,17 @@ function SessionRow({
 
 function orderByIds<T extends { id: string }>(items: T[], ids?: string[]): T[] {
   if (!ids) return items;
-  const byId = new Map(items.map((item) => [item.id, item]));
-  return [
-    ...ids.flatMap((id) => byId.get(id) ?? []),
-    ...items.filter((item) => !ids.includes(item.id)),
-  ];
+  const byId = new Map(items.map(item => [item.id, item]));
+  return [...ids.flatMap(id => byId.get(id) ?? []), ...items.filter(item => !ids.includes(item.id))];
 }
 
 function moveBefore(ids: string[], id: string, before?: string): string[] {
-  const next = ids.filter((value) => value !== id);
+  const next = ids.filter(value => value !== id);
   const index = before ? next.indexOf(before) : -1;
   next.splice(index < 0 ? next.length : index, 0, id);
   return next;
 }
 
 function sameIds(left: string[], right: string[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((id, index) => id === right[index])
-  );
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }

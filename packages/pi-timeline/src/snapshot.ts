@@ -16,12 +16,8 @@ export type RepositorySnapshot = {
   worktreeTree: string;
   indexTree: string;
 };
-export type Snapshot = Omit<RepositorySnapshot, "prefix"> & {
-  snapshotId: string;
-  nested?: RepositorySnapshot[];
-};
-const canonical = (path: string) =>
-  process.platform === "win32" ? path.toLowerCase() : path;
+export type Snapshot = Omit<RepositorySnapshot, "prefix"> & { snapshotId: string; nested?: RepositorySnapshot[] };
+const canonical = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
 const ident = {
   GIT_AUTHOR_NAME: "pi-timeline",
   GIT_AUTHOR_EMAIL: "pi-timeline@local",
@@ -37,38 +33,22 @@ async function trees(repository: RepositoryState) {
     const indexTree = await git(repository.root, ["write-tree"]);
     await git(repository.root, ["read-tree", "HEAD"], env);
     await git(repository.root, ["add", "-A", "--", "."], env);
-    return {
-      indexTree,
-      worktreeTree: await git(repository.root, ["write-tree"], env),
-    };
+    return { indexTree, worktreeTree: await git(repository.root, ["write-tree"], env) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
-export async function worktreeFingerprint(
-  cwd: string,
-): Promise<string | undefined> {
+export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
   try {
     const { repositories } = await preflight(cwd),
       statuses = await Promise.all(
-        repositories.map((repository) =>
-          git(repository.root, [
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-          ]),
-        ),
+        repositories.map(repository => git(repository.root, ["status", "--porcelain=v1", "--untracked-files=all"])),
       );
-    if (statuses.every((status) => !status))
-      return repositories
-        .map(({ prefix, root, head }) => `${prefix}\n${root}\n${head}\nclean`)
-        .join("\n");
+    if (statuses.every(status => !status))
+      return repositories.map(({ prefix, root, head }) => `${prefix}\n${root}\n${head}\nclean`).join("\n");
     const values = await Promise.all(
-      repositories.map(async (repository) => ({
-        repository,
-        ...(await trees(repository)),
-      })),
+      repositories.map(async repository => ({ repository, ...(await trees(repository)) })),
     );
     return values
       .map(
@@ -81,35 +61,17 @@ export async function worktreeFingerprint(
   }
 }
 
-async function captureRepository(
-  repository: RepositoryState,
-  sessionId: string,
-  id: string,
-) {
+async function captureRepository(repository: RepositoryState, sessionId: string, id: string) {
   const { indexTree, worktreeTree } = await trees(repository),
     headRef = await symbolicHead(repository.root),
     wc = await git(
       repository.root,
-      [
-        "commit-tree",
-        worktreeTree,
-        "-p",
-        repository.head,
-        "-m",
-        "pi-timeline worktree checkpoint",
-      ],
+      ["commit-tree", worktreeTree, "-p", repository.head, "-m", "pi-timeline worktree checkpoint"],
       ident,
     ),
     ic = await git(
       repository.root,
-      [
-        "commit-tree",
-        indexTree,
-        "-p",
-        repository.head,
-        "-m",
-        "pi-timeline index checkpoint",
-      ],
+      ["commit-tree", indexTree, "-p", repository.head, "-m", "pi-timeline index checkpoint"],
       ident,
     ),
     owner = createHash("sha256").update(sessionId).digest("hex").slice(0, 16),
@@ -120,9 +82,7 @@ async function captureRepository(
   try {
     await git(repository.root, ["update-ref", indexRef, ic]);
   } catch (error) {
-    await git(repository.root, ["update-ref", "-d", worktreeRef]).catch(
-      () => {},
-    );
+    await git(repository.root, ["update-ref", "-d", worktreeRef]).catch(() => {});
     throw error;
   }
   return {
@@ -139,10 +99,7 @@ async function captureRepository(
 }
 
 /** Assembles a Snapshot from the captured repositories, root first. */
-function toSnapshot(
-  snapshotId: string,
-  repositories: RepositorySnapshot[],
-): Snapshot {
+function toSnapshot(snapshotId: string, repositories: RepositorySnapshot[]): Snapshot {
   const [root, ...nested] = repositories;
   return {
     snapshotId,
@@ -160,16 +117,8 @@ function toSnapshot(
 
 /** Best-effort cleanup for a partial capture; failures are ignored deliberately. */
 async function discardRepositoryRefs(repository: RepositorySnapshot) {
-  await git(repository.gitRoot, [
-    "update-ref",
-    "-d",
-    repository.worktreeRef,
-  ]).catch(() => {});
-  await git(repository.gitRoot, [
-    "update-ref",
-    "-d",
-    repository.indexRef,
-  ]).catch(() => {});
+  await git(repository.gitRoot, ["update-ref", "-d", repository.worktreeRef]).catch(() => {});
+  await git(repository.gitRoot, ["update-ref", "-d", repository.indexRef]).catch(() => {});
 }
 
 export async function capture(
@@ -203,10 +152,7 @@ export async function capture(
   }
 }
 
-export async function makePortable(
-  snapshot: Snapshot,
-  cwd: string,
-): Promise<Snapshot> {
+export async function makePortable(snapshot: Snapshot, cwd: string): Promise<Snapshot> {
   const current = await preflight(cwd);
   const expected: RepositorySnapshot[] = [
     {
@@ -227,10 +173,7 @@ export async function makePortable(
   }
   const portable = expected.map((repository, index) => {
     const actual = current.repositories[index];
-    if (
-      repository.prefix !== actual.prefix ||
-      repository.head !== actual.head
-    ) {
+    if (repository.prefix !== actual.prefix || repository.head !== actual.head) {
       throw Error("Checkpoint repository graph or HEAD changed.");
     }
     if (repository.commonDir) {
@@ -238,9 +181,7 @@ export async function makePortable(
         throw Error("Checkpoint belongs to a different Git repository.");
       }
     } else if (canonical(repository.gitRoot) !== canonical(actual.root)) {
-      throw Error(
-        "Version 3 checkpoint must be migrated from its original checkout.",
-      );
+      throw Error("Version 3 checkpoint must be migrated from its original checkout.");
     }
     return { ...repository, gitRoot: actual.root, commonDir: actual.commonDir };
   });

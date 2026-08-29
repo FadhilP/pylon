@@ -67,9 +67,5 @@
     "thinkingMax": "red",
     "bashMode": "amber"
   },
-  "export": {
-    "pageBg": "#111318",
-    "cardBg": "#181c22",
-    "infoBg": "#20242b"
-  }
+  "export": { "pageBg": "#111318", "cardBg": "#181c22", "infoBg": "#20242b" }
 }

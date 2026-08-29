@@ -18,13 +18,7 @@ const credentialRequest: CredentialRequest = {
   session: { id: "s_1", name: "shared-workspace" },
   operation: "query",
   access: "read",
-  connection: {
-    id: "c_1",
-    name: "app",
-    driver: "postgres",
-    database: "app",
-    readOnly: true,
-  },
+  connection: { id: "c_1", name: "app", driver: "postgres", database: "app", readOnly: true },
 };
 
 const baseSnapshot: StateQLSnapshot = {
@@ -84,7 +78,7 @@ function harness(real = false) {
         return () =>
           events.set(
             name,
-            (events.get(name) ?? []).filter((item) => item !== handler),
+            (events.get(name) ?? []).filter(item => item !== handler),
           );
       },
       emit(name: string, value: unknown) {
@@ -162,14 +156,7 @@ test("composes environment and active Pylon credential resolution without retain
   };
   value.instances[0].executeImpl = async () => {
     assert.equal(await resolver(credentialRequest), sentinel);
-    return {
-      ok: true,
-      command_id: "cmd_secret",
-      session_id: "s_1",
-      data: {},
-      warnings: [],
-      meta: { duration_ms: 1 },
-    };
+    return { ok: true, command_id: "cmd_secret", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
   };
   try {
     delete process.env.APP_DATABASE_URL;
@@ -201,8 +188,7 @@ test("composes environment and active Pylon credential resolution without retain
 test("Pylon Web password-brokers username-only server targets without leaking the password", async () => {
   const value = await start();
   const tool = value.tools.get("stateql");
-  const target =
-    "postgresql://postgres@db.example.com:5432/app?sslmode=require";
+  const target = "postgresql://postgres@db.example.com:5432/app?sslmode=require";
   const password = "p%@:/# Ü";
   const envSentinel = "postgresql://postgres:wrong@evil.example.com/app";
   let confirmations = 0;
@@ -218,11 +204,7 @@ test("Pylon Web password-brokers username-only server targets without leaking th
     async requestStateQLCredential() {
       throw new Error("full source prompt should not run");
     },
-    async requestStateQLPassword(
-      request: CredentialRequest,
-      metadata: Record<string, unknown>,
-      options: unknown,
-    ) {
+    async requestStateQLPassword(request: CredentialRequest, metadata: Record<string, unknown>, options: unknown) {
       passwordRequests++;
       passwordOptions = options;
       internalReference = request.reference;
@@ -237,7 +219,7 @@ test("Pylon Web password-brokers username-only server targets without leaking th
       return password;
     },
   };
-  value.instances[0].executeImpl = async (command) => {
+  value.instances[0].executeImpl = async command => {
     assert.equal(command.command, "connect");
     assert.equal(command.target, undefined);
     assert.match(String(command.secret_env), /^PYLON_STATEQL_BROKERED_/);
@@ -250,8 +232,7 @@ test("Pylon Web password-brokers username-only server targets without leaking th
       access: "read",
       requestedReadOnly: true,
     };
-    const resolved =
-      await value.instances[0].options.credentialResolver!(request);
+    const resolved = await value.instances[0].options.credentialResolver!(request);
     const url = new URL(String(resolved));
     assert.equal(url.username, "postgres");
     assert.equal(decodeURIComponent(url.password), password);
@@ -284,20 +265,8 @@ test("Pylon Web password-brokers username-only server targets without leaking th
     assert.equal(passwordRequests, 1);
     assert.deepEqual(passwordOptions, { timeoutMs: 90_000 });
     assert.equal(confirmations, 0);
-    assert.equal(
-      JSON.stringify({
-        result,
-        commands: value.instances[0].commands,
-      }).includes(password),
-      false,
-    );
-    assert.equal(
-      JSON.stringify({
-        result,
-        commands: value.instances[0].commands,
-      }).includes(envSentinel),
-      false,
-    );
+    assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(password), false);
+    assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(envSentinel), false);
   } finally {
     if (internalReference) delete process.env[internalReference];
   }
@@ -322,7 +291,7 @@ test("Pylon requires insecure TLS approval before releasing the brokered passwor
       return "private";
     },
   };
-  value.instances[0].executeImpl = async (command) => {
+  value.instances[0].executeImpl = async command => {
     await value.instances[0].options.credentialResolver!({
       reference: String(command.secret_env),
       actorId: "pi-session",
@@ -364,10 +333,7 @@ test("Pylon requires insecure TLS approval before releasing the brokered passwor
     targets.flatMap(() => ["confirm", "password"]),
   );
   assert.match(confirmation, /Allow insecure database TLS/);
-  assert.match(
-    confirmation,
-    /weakens or disables TLS certificate or hostname verification/,
-  );
+  assert.match(confirmation, /weakens or disables TLS certificate or hostname verification/);
 });
 
 test("Pylon invalidates brokered PostgreSQL and MySQL passwords after authentication failure", async () => {
@@ -393,7 +359,7 @@ test("Pylon invalidates brokered PostgreSQL and MySQL passwords after authentica
       assert.match(request.reference, /^PYLON_STATEQL_BROKERED_/);
     },
   };
-  value.instances[0].executeImpl = async (command) => {
+  value.instances[0].executeImpl = async command => {
     await value.instances[0].options.credentialResolver!({
       reference: String(command.secret_env),
       actorId: "pi-session",
@@ -406,12 +372,7 @@ test("Pylon invalidates brokered PostgreSQL and MySQL passwords after authentica
       ok: false,
       command_id: "cmd_auth",
       session_id: "s_1",
-      error: {
-        code: "CONNECTION_FAILED",
-        message: failures.shift()!,
-        retryable: true,
-        executed: false,
-      },
+      error: { code: "CONNECTION_FAILED", message: failures.shift()!, retryable: true, executed: false },
       meta: { duration_ms: 1 },
     };
   };
@@ -422,13 +383,7 @@ test("Pylon invalidates brokered PostgreSQL and MySQL passwords after authentica
     await assert.rejects(
       value.tools
         .get("stateql")
-        .execute(
-          callId,
-          { command: "connect", target, read_only: true },
-          undefined,
-          undefined,
-          context({ ui }),
-        ),
+        .execute(callId, { command: "connect", target, read_only: true }, undefined, undefined, context({ ui })),
       /password authentication failed|Access denied for user/,
     );
   }
@@ -448,19 +403,10 @@ test("regular Pi leaves username-only server targets unchanged and warns about i
   };
   await value.tools
     .get("stateql")
-    .execute(
-      "target",
-      { command: "connect", target },
-      undefined,
-      undefined,
-      context({ ui }),
-    );
+    .execute("target", { command: "connect", target }, undefined, undefined, context({ ui }));
   assert.equal(value.instances[0].commands[0].target, target);
   assert.equal(value.instances[0].commands[0].secret_env, undefined);
-  assert.match(
-    confirmation,
-    /weakens or disables TLS certificate or hostname verification/,
-  );
+  assert.match(confirmation, /weakens or disables TLS certificate or hostname verification/);
 });
 
 test("unknown internal password references fail closed without environment or full-source fallback", async () => {
@@ -490,35 +436,16 @@ test("unknown internal password references fail closed without environment or fu
       session: { id: "s_1", name: "workspace" },
       operation: "query",
       access: "read",
-      connection: {
-        id: "c_1",
-        name: "app",
-        driver: "postgres",
-        database: "app",
-        readOnly: true,
-      },
+      connection: { id: "c_1", name: "app", driver: "postgres", database: "app", readOnly: true },
     });
     assert.equal(resolved, undefined);
-    return {
-      ok: true,
-      command_id: "cmd_unknown",
-      session_id: "s_1",
-      data: {},
-      warnings: [],
-      meta: { duration_ms: 1 },
-    };
+    return { ok: true, command_id: "cmd_unknown", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
   };
   try {
     process.env[reference] = sentinel;
     await value.tools
       .get("stateql")
-      .execute(
-        "unknown",
-        { command: "query", sql: "SELECT 1" },
-        undefined,
-        undefined,
-        context({ ui }),
-      );
+      .execute("unknown", { command: "query", sql: "SELECT 1" }, undefined, undefined, context({ ui }));
     assert.equal(credentialCalls, 0);
     assert.equal(passwordCalls, 0);
   } finally {
@@ -532,10 +459,7 @@ test("missing Pylon credential capability fails closed without prompting or fall
   try {
     delete process.env.APP_DATABASE_URL;
     value.instances[0].executeImpl = async () => {
-      assert.equal(
-        await value.instances[0].options.credentialResolver!(credentialRequest),
-        undefined,
-      );
+      assert.equal(await value.instances[0].options.credentialResolver!(credentialRequest), undefined);
       return {
         ok: true,
         command_id: "cmd_missing",
@@ -547,13 +471,7 @@ test("missing Pylon credential capability fails closed without prompting or fall
     };
     await value.tools
       .get("stateql")
-      .execute(
-        "missing",
-        { command: "query", sql: "SELECT 1" },
-        undefined,
-        undefined,
-        context(),
-      );
+      .execute("missing", { command: "query", sql: "SELECT 1" }, undefined, undefined, context());
   } finally {
     if (previous === undefined) delete process.env.APP_DATABASE_URL;
     else process.env.APP_DATABASE_URL = previous;
@@ -576,22 +494,14 @@ test("executes reads without confirmation and returns compact details", async ()
     .get("stateql")
     .execute(
       "call-1",
-      {
-        command: "query",
-        sql: "SELECT id FROM users ORDER BY id LIMIT 5",
-        params: [],
-      },
+      { command: "query", sql: "SELECT id FROM users ORDER BY id LIMIT 5", params: [] },
       undefined,
       undefined,
       ctx,
     );
   assert.equal(confirmations, 0);
   assert.deepEqual(value.instances[0].commands, [
-    {
-      command: "query",
-      sql: "SELECT id FROM users ORDER BY id LIMIT 5",
-      params: [],
-    },
+    { command: "query", sql: "SELECT id FROM users ORDER BY id LIMIT 5", params: [] },
   ]);
   assert.equal(result.details.commandId, "cmd_1");
   assert.equal("data" in result.details, false);
@@ -600,7 +510,7 @@ test("executes reads without confirmation and returns compact details", async ()
 
 test("formats materialized rows as parallel arrays for model output", async () => {
   const value = await start();
-  value.instances[0].executeImpl = async (command) => ({
+  value.instances[0].executeImpl = async command => ({
     ok: true,
     command_id: "cmd_table",
     session_id: "s_1",
@@ -642,13 +552,7 @@ test("formats materialized rows as parallel arrays for model output", async () =
 
   const queryResult = await value.tools
     .get("stateql")
-    .execute(
-      "query",
-      { command: "query", sql: "SELECT id, name FROM users" },
-      undefined,
-      undefined,
-      context(),
-    );
+    .execute("query", { command: "query", sql: "SELECT id, name FROM users" }, undefined, undefined, context());
   const queryOutput = JSON.parse(queryResult.content[0].text);
   assert.deepEqual(queryOutput.data.columns, ["id", "name"]);
   assert.deepEqual(queryOutput.data.column_types, ["integer", "text"]);
@@ -660,13 +564,7 @@ test("formats materialized rows as parallel arrays for model output", async () =
 
   const rowsResult = await value.tools
     .get("stateql")
-    .execute(
-      "rows",
-      { command: "rows", handle: "q_1", offset: 0, limit: 2 },
-      undefined,
-      undefined,
-      context(),
-    );
+    .execute("rows", { command: "rows", handle: "q_1", offset: 0, limit: 2 }, undefined, undefined, context());
   const rowsOutput = JSON.parse(rowsResult.content[0].text);
   assert.deepEqual(rowsOutput.data.columns, ["id", "name"]);
   assert.deepEqual(rowsOutput.data.rows, [
@@ -728,9 +626,7 @@ test("rows bridge forwards bounded actor-scoped requests and only returns data",
   });
   assert.ok(response);
   assert.deepEqual(await response, { command: "rows" });
-  assert.deepEqual(value.instances[0].commands, [
-    { command: "rows", handle: "result-1", offset: 2, limit: 10 },
-  ]);
+  assert.deepEqual(value.instances[0].commands, [{ command: "rows", handle: "result-1", offset: 2, limit: 10 }]);
   let claimed = false;
   handler({
     version: 1,
@@ -797,10 +693,7 @@ test("rows bridge forwards bounded actor-scoped requests and only returns data",
   assert.ok(cancelledResponse);
   await assert.rejects(cancelledResponse, /rows request cancelled/);
   assert.equal(value.instances[0].commands.length, 1);
-  value.instances[0].executeImpl = async () => ({
-    ok: false,
-    error: { code: "ROWS_FAILED", message: "no rows" },
-  });
+  value.instances[0].executeImpl = async () => ({ ok: false, error: { code: "ROWS_FAILED", message: "no rows" } });
   let failed: Promise<unknown> | undefined;
   handler({
     version: 1,
@@ -825,12 +718,7 @@ test("confirmed operations fail closed and declined commands do not execute", as
   let confirmation = "";
   const declined = await tool.execute(
     "call",
-    {
-      command: "exec",
-      sql: "DROP TABLE users",
-      replay: true,
-      allow_destructive: true,
-    },
+    { command: "exec", sql: "DROP TABLE users", replay: true, allow_destructive: true },
     undefined,
     undefined,
     context({
@@ -847,13 +735,7 @@ test("confirmed operations fail closed and declined commands do not execute", as
   assert.match(confirmation, /replay, destructive operation overrides/);
   assert.equal(value.instances[0].commands.length, 0);
   await assert.rejects(
-    tool.execute(
-      "call",
-      { command: "transaction.commit" },
-      undefined,
-      undefined,
-      context({ hasUI: false }),
-    ),
+    tool.execute("call", { command: "transaction.commit" }, undefined, undefined, context({ hasUI: false })),
     /requires interactive confirmation/,
   );
   assert.equal(value.instances[0].commands.length, 0);
@@ -873,13 +755,7 @@ test("confirmed operations use the Guard timeout only while Guard is enabled", a
     },
   });
   const attempt = async (id: string) => {
-    const result = await tool.execute(
-      id,
-      { command: "profile.remove", name: "unused" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const result = await tool.execute(id, { command: "profile.remove", name: "unused" }, undefined, undefined, ctx);
     assert.equal(result.details.declined, true);
     return dialogOptions.at(-1);
   };
@@ -942,19 +818,10 @@ test("rejects irrelevant, ambiguous, and oversized inputs before StateQL", async
   const tool = value.tools.get("stateql");
   for (const [input, message] of [
     [{ command: "status", sql: "SELECT 1" }, /status does not accept sql/],
-    [
-      { command: "inspect", kind: "columns", table: "items", limit: 10 },
-      /inspect does not accept limit/,
-    ],
-    [
-      { command: "query", sql: "SELECT 1", read_only: true },
-      /query does not accept read_only/,
-    ],
+    [{ command: "inspect", kind: "columns", table: "items", limit: 10 }, /inspect does not accept limit/],
+    [{ command: "query", sql: "SELECT 1", read_only: true }, /query does not accept read_only/],
   ] as const) {
-    await assert.rejects(
-      tool.execute("call", input, undefined, undefined, context()),
-      message,
-    );
+    await assert.rejects(tool.execute("call", input, undefined, undefined, context()), message);
   }
   await assert.rejects(
     tool.execute(
@@ -995,13 +862,7 @@ test("failures redact credentials and successful output stays within its adverti
     meta: { duration_ms: 1 },
   });
   await assert.rejects(
-    tool.execute(
-      "error",
-      { command: "query", sql: "SELECT 1" },
-      undefined,
-      undefined,
-      context(),
-    ),
+    tool.execute("error", { command: "query", sql: "SELECT 1" }, undefined, undefined, context()),
     (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.doesNotMatch(error.message, /password@example|hunter2/);
@@ -1017,13 +878,7 @@ test("failures redact credentials and successful output stays within its adverti
     warnings: [],
     meta: { duration_ms: 1 },
   });
-  const result = await tool.execute(
-    "large",
-    { command: "query", sql: "SELECT 1" },
-    undefined,
-    undefined,
-    context(),
-  );
+  const result = await tool.execute("large", { command: "query", sql: "SELECT 1" }, undefined, undefined, context());
   assert.equal(result.details.truncated, true);
   assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 40 * 1024);
 });
@@ -1031,7 +886,7 @@ test("failures redact credentials and successful output stays within its adverti
 test("cancellation aborts, replaces the session instance, and permits the next command", async () => {
   const value = await start();
   value.instances[0].executeImpl = async () =>
-    new Promise((resolve) => {
+    new Promise(resolve => {
       value.instances[0].options.signal!.addEventListener(
         "abort",
         () =>
@@ -1039,12 +894,7 @@ test("cancellation aborts, replaces the session instance, and permits the next c
             ok: false,
             command_id: "cmd_2",
             session_id: "s_1",
-            error: {
-              code: "OPERATION_CANCELLED",
-              message: "Operation cancelled",
-              retryable: true,
-              executed: false,
-            },
+            error: { code: "OPERATION_CANCELLED", message: "Operation cancelled", retryable: true, executed: false },
             meta: { duration_ms: 1 },
           }),
         { once: true },
@@ -1053,14 +903,8 @@ test("cancellation aborts, replaces the session instance, and permits the next c
   const controller = new AbortController();
   const running = value.tools
     .get("stateql")
-    .execute(
-      "call",
-      { command: "query", sql: "SELECT 1" },
-      controller.signal,
-      undefined,
-      context(),
-    );
-  await new Promise((resolve) => setImmediate(resolve));
+    .execute("call", { command: "query", sql: "SELECT 1" }, controller.signal, undefined, context());
+  await new Promise(resolve => setImmediate(resolve));
   controller.abort();
   await assert.rejects(running, /OPERATION_CANCELLED/);
   assert.equal(value.instances.length, 2);
@@ -1068,13 +912,7 @@ test("cancellation aborts, replaces the session instance, and permits the next c
   assert.equal(value.instances[1].options.signal?.aborted, false);
   const next = await value.tools
     .get("stateql")
-    .execute(
-      "next",
-      { command: "query", sql: "SELECT 2" },
-      undefined,
-      undefined,
-      context(),
-    );
+    .execute("next", { command: "query", sql: "SELECT 2" }, undefined, undefined, context());
   assert.equal(next.details.commandId, "cmd_1");
   assert.equal(value.instances[1].commands.length, 1);
 });
@@ -1083,7 +921,7 @@ test("snapshot remains available while database work is running", async () => {
   const value = await start();
   let release!: () => void;
   value.instances[0].executeImpl = async () =>
-    new Promise((resolve) => {
+    new Promise(resolve => {
       release = () =>
         resolve({
           ok: true,
@@ -1096,14 +934,8 @@ test("snapshot remains available while database work is running", async () => {
     });
   const running = value.tools
     .get("stateql")
-    .execute(
-      "query",
-      { command: "query", sql: "SELECT 1" },
-      undefined,
-      undefined,
-      context(),
-    );
-  await new Promise((resolve) => setImmediate(resolve));
+    .execute("query", { command: "query", sql: "SELECT 1" }, undefined, undefined, context());
+  await new Promise(resolve => setImmediate(resolve));
   let snapshot: Promise<StateQLSnapshot> | undefined;
   value.events.get("pylon:stateql-snapshot-request")![0]({
     version: 1,
@@ -1120,10 +952,7 @@ test("snapshot remains available while database work is running", async () => {
     const result = await Promise.race([
       snapshot,
       new Promise<never>((_resolve, reject) =>
-        setTimeout(
-          () => reject(new Error("snapshot waited for database work")),
-          100,
-        ),
+        setTimeout(() => reject(new Error("snapshot waited for database work")), 100),
       ),
     ]);
     assert.deepEqual(result, baseSnapshot);
@@ -1168,7 +997,7 @@ test(
           assert.equal(request.operation, "connect");
           assert.equal(request.access, "read");
           assert.equal(request.requestedReadOnly, true);
-          return new Promise<string>((resolve) => {
+          return new Promise<string>(resolve => {
             resolveCredential = resolve;
           });
         },
@@ -1182,17 +1011,12 @@ test(
         .get("stateql")
         .execute(
           "credential-connect",
-          {
-            command: "connect",
-            secret_env: "APP_DATABASE_URL",
-            read_only: true,
-            timeout_ms: 1_000,
-          },
+          { command: "connect", secret_env: "APP_DATABASE_URL", read_only: true, timeout_ms: 1_000 },
           undefined,
           (update: unknown) => updates.push(update),
           ctx,
         );
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
       assert.equal(requests, 1);
       resolveCredential(sentinel);
       await assert.rejects(running, (error: unknown) => {
@@ -1215,10 +1039,7 @@ test(
       assert.ok(response);
       const snapshot = await response;
       assert.equal(snapshot.connection, null);
-      assert.equal(
-        JSON.stringify({ updates, snapshot }).includes(sentinel),
-        false,
-      );
+      assert.equal(JSON.stringify({ updates, snapshot }).includes(sentinel), false);
       const persisted = await persistedText(home);
       assert.equal(persisted.includes(sentinel), false);
       assert.equal(persisted.includes("sentinel-password"), false);
@@ -1282,9 +1103,7 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
   try {
     await owner.connect(database, { readOnly: false });
     await owner.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
-    const result = await owner.query(
-      "SELECT id, name FROM users ORDER BY id LIMIT 5",
-    );
+    const result = await owner.query("SELECT id, name FROM users ORDER BY id LIMIT 5");
     if (!result.ok) throw new Error(result.error.message);
     const handle = String((result.data as { result_id: string }).result_id);
     await owner.setAlias("users", handle);
@@ -1294,13 +1113,7 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
     await value.handlers.get("session_start")![0]({}, ctx);
     const shown = await value.tools
       .get("stateql")
-      .execute(
-        "show",
-        { command: "show", handle: "users" },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("show", { command: "show", handle: "users" }, undefined, undefined, ctx);
     assert.match(shown.content[0].text, new RegExp(handle));
 
     let response: Promise<StateQLSnapshot> | undefined;
@@ -1343,32 +1156,19 @@ test("real StateQL integration persists commands and exposes bounded SQL snapsho
     );
     await tool.execute(
       "create",
-      {
-        command: "exec",
-        sql: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        allow_destructive: true,
-      },
+      { command: "exec", sql: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", allow_destructive: true },
       undefined,
       undefined,
       ctx,
     );
     await tool.execute(
       "query",
-      {
-        command: "query",
-        sql: "SELECT id, name FROM users ORDER BY id LIMIT 5",
-      },
+      { command: "query", sql: "SELECT id, name FROM users ORDER BY id LIMIT 5" },
       undefined,
       undefined,
       ctx,
     );
-    const doctor = await tool.execute(
-      "doctor",
-      { command: "doctor" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const doctor = await tool.execute("doctor", { command: "doctor" }, undefined, undefined, ctx);
     assert.match(doctor.content[0].text, /"integrity": "ok"/);
     assert.match(doctor.content[0].text, /"initial_schema_v1"/);
 
@@ -1385,25 +1185,19 @@ test("real StateQL integration persists commands and exposes bounded SQL snapsho
     assert.ok(response);
     const first = await response;
     assert.deepEqual(
-      first.history.map((entry) => entry.command),
+      first.history.map(entry => entry.command),
       ["doctor", "query", "exec", "connect"],
     );
     assert.equal(
-      first.history.find((entry) => entry.command === "query")?.sql,
+      first.history.find(entry => entry.command === "query")?.sql,
       "SELECT id, name FROM users ORDER BY id LIMIT 5",
     );
     assert.equal(
-      first.history.find((entry) => entry.command === "exec")?.sql,
+      first.history.find(entry => entry.command === "exec")?.sql,
       "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
     );
-    assert.equal(
-      first.history.find((entry) => entry.command === "doctor")?.sql,
-      null,
-    );
-    assert.equal(
-      first.history.find((entry) => entry.command === "connect")?.sql,
-      null,
-    );
+    assert.equal(first.history.find(entry => entry.command === "doctor")?.sql, null);
+    assert.equal(first.history.find(entry => entry.command === "connect")?.sql, null);
     const before = JSON.stringify(first);
 
     let repeated: Promise<StateQLSnapshot> | undefined;

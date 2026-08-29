@@ -2,9 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 test("copyText reports clipboard success and rejection", async () => {
-  const { copyText } = await import(
-    new URL("../src/client/clipboard.ts", import.meta.url).href
-  );
+  const { copyText } = await import(new URL("../src/client/clipboard.ts", import.meta.url).href);
   const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const writes: string[] = [];
   let reject = false;

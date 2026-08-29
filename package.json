@@ -54,6 +54,7 @@
     "check:packages": "node scripts/run-packages.mjs check",
     "test:packages": "node scripts/run-packages.mjs test",
     "install:packages": "npm install --workspaces --include-workspace-root",
+    "format": "prettier --write .",
     "prepack": "npm run build --workspace @pylon/web",
     "prepublishOnly": "npm run verify && npm run test:package",
     "web": "node scripts/web.mjs",
@@ -105,6 +106,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.84.3",
-    "@earendil-works/pi-tui": "0.84.3"
+    "@earendil-works/pi-tui": "0.84.3",
+    "prettier": "3.9.6"
   }
 }

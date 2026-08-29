@@ -14,9 +14,7 @@ export function validCompletionSessionIds(value: unknown): value is string[] {
 }
 
 export function completionRecord(sessionIds: string[]): Record<string, true> {
-  return Object.fromEntries(
-    sessionIds.map((sessionId) => [sessionId, true]),
-  ) as Record<string, true>;
+  return Object.fromEntries(sessionIds.map(sessionId => [sessionId, true])) as Record<string, true>;
 }
 
 export function recordCompletion(
@@ -32,20 +30,11 @@ export function recordCompletion(
     return current;
   const next = { ...current };
   delete next[status.sessionId];
-  Object.defineProperty(next, status.sessionId, {
-    value: true,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
-  while (Object.keys(next).length > MAX_UNSEEN_COMPLETIONS)
-    delete next[Object.keys(next)[0]!];
+  Object.defineProperty(next, status.sessionId, { value: true, enumerable: true, configurable: true, writable: true });
+  while (Object.keys(next).length > MAX_UNSEEN_COMPLETIONS) delete next[Object.keys(next)[0]!];
   return next;
 }
 
-export function showSessionRuntimeState(
-  state: string,
-  completed: boolean,
-): boolean {
+export function showSessionRuntimeState(state: string, completed: boolean): boolean {
   return completed || state !== "sleeping";
 }

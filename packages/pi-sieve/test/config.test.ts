@@ -20,15 +20,7 @@ test("sieve config persists active pruning and threshold atomically", async () =
   const path = join(directory, "nested", "config.json");
 
   assert.deepEqual(await loadConfig(path), { version: 1 });
-  await saveConfig(
-    {
-      version: 1,
-      activePruning: true,
-      threshold: 12_000,
-      projectionMode: "legacy",
-    },
-    path,
-  );
+  await saveConfig({ version: 1, activePruning: true, threshold: 12_000, projectionMode: "legacy" }, path);
   assert.deepEqual(await loadConfig(path), {
     version: 1,
     activePruning: true,
@@ -37,15 +29,8 @@ test("sieve config persists active pruning and threshold atomically", async () =
   });
   assert.match(await readFile(path, "utf8"), /"threshold": 12000/);
 
-  await saveConfig(
-    { version: 1, activePruning: false, threshold: SIEVE_THRESHOLD },
-    path,
-  );
-  assert.deepEqual(await loadConfig(path), {
-    version: 1,
-    activePruning: false,
-    threshold: SIEVE_THRESHOLD,
-  });
+  await saveConfig({ version: 1, activePruning: false, threshold: SIEVE_THRESHOLD }, path);
+  assert.deepEqual(await loadConfig(path), { version: 1, activePruning: false, threshold: SIEVE_THRESHOLD });
 });
 
 test("web settings round-trip projection mode", async () => {
@@ -88,10 +73,7 @@ test("web settings round-trip projection mode", async () => {
     },
     { agentDir },
   );
-  assert.equal(
-    (await readSettings({ agentDir })).projectionMode,
-    "standard-v2",
-  );
+  assert.equal((await readSettings({ agentDir })).projectionMode, "standard-v2");
   await assert.rejects(
     updateSettings(
       {
@@ -130,14 +112,8 @@ test("sieve config defaults safely and quarantines invalid settings", async () =
   assert.equal(configuredActivePruning({ version: 1 }), true);
   assert.equal(configuredThreshold({ version: 1 }), SIEVE_THRESHOLD);
   assert.equal(configuredProjectionMode({ version: 1 }), "standard-v2");
-  assert.equal(
-    configuredProjectionMode({ version: 1, projectionMode: "legacy" }),
-    "legacy",
-  );
-  assert.equal(
-    configuredProjectionMode({ version: 1, projectionMode: "standard-v2" }),
-    "standard-v2",
-  );
+  assert.equal(configuredProjectionMode({ version: 1, projectionMode: "legacy" }), "legacy");
+  assert.equal(configuredProjectionMode({ version: 1, projectionMode: "standard-v2" }), "standard-v2");
   assert.equal(configuredRolloverHighMultiplier({ version: 1 }), 8);
   assert.equal(configuredRolloverLowMultiplier({ version: 1 }), 4);
 
@@ -156,11 +132,7 @@ test("sieve config defaults safely and quarantines invalid settings", async () =
     const path = join(directory, "config.json");
     await writeFile(path, JSON.stringify(value));
     assert.deepEqual(await loadConfig(path), { version: 1 });
-    assert.ok(
-      (await readdir(directory)).some((name) =>
-        name.startsWith("config.json.corrupt-"),
-      ),
-    );
+    assert.ok((await readdir(directory)).some(name => name.startsWith("config.json.corrupt-")));
   }
 
   const unreadable = await mkdtemp(join(tmpdir(), "pi-sieve-unreadable-"));
@@ -170,9 +142,6 @@ test("sieve config defaults safely and quarantines invalid settings", async () =
   const blocker = join(blockedDirectory, "not-a-directory");
   await writeFile(blocker, "block");
   await assert.rejects(
-    saveConfig(
-      { version: 1, activePruning: true, threshold: SIEVE_THRESHOLD },
-      join(blocker, "config.json"),
-    ),
+    saveConfig({ version: 1, activePruning: true, threshold: SIEVE_THRESHOLD }, join(blocker, "config.json")),
   );
 });

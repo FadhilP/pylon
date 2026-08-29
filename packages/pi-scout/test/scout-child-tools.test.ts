@@ -11,10 +11,7 @@ import registerScoutChildTools, {
 
 test("search paths cannot escape workspace", () => {
   assert.equal(workspacePath("/workspace", "src"), "src");
-  assert.throws(
-    () => workspacePath("/workspace", "../secret"),
-    /within workspace/,
-  );
+  assert.throws(() => workspacePath("/workspace", "../secret"), /within workspace/);
 });
 
 test("read override applies the child-local cap", async () => {
@@ -26,17 +23,9 @@ test("read override applies the child-local cap", async () => {
     },
   } as any);
   try {
-    await writeFile(
-      join(root, "large.txt"),
-      "x".repeat(SCOUT_TOOL_MAX_BYTES * 2),
-    );
-    const result = await tools
-      .get("read")
-      .execute("id", { path: "large.txt" }, undefined, undefined, {
-        cwd: root,
-      });
-    const text =
-      result.content.find((part: any) => part.type === "text")?.text ?? "";
+    await writeFile(join(root, "large.txt"), "x".repeat(SCOUT_TOOL_MAX_BYTES * 2));
+    const result = await tools.get("read").execute("id", { path: "large.txt" }, undefined, undefined, { cwd: root });
+    const text = result.content.find((part: any) => part.type === "text")?.text ?? "";
     assert.ok(Buffer.byteLength(text) <= SCOUT_TOOL_MAX_BYTES);
     assert.match(text, /omitted output/i);
   } finally {
@@ -54,8 +43,7 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
       },
       async exec(command: string, args: string[]) {
         calls.push({ command, args });
-        if (command === "rg")
-          return { stdout: "", stderr: "", code: 1, killed: false };
+        if (command === "rg") return { stdout: "", stderr: "", code: 1, killed: false };
         return {
           stdout: "src/a.ts-9-before\nsrc/a.ts:10:needle\nsrc/a.ts-11-after\n",
           stderr: "",
@@ -64,19 +52,15 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
         };
       },
     } as any,
-    async (command) => command === "grep",
+    async command => command === "grep",
   );
   const result = await tools
     .get("search_excerpt")
-    .execute(
-      "id",
-      { pattern: "needle", path: "src", glob: "*.ts", context: 1 },
-      undefined,
-      undefined,
-      { cwd: process.cwd() },
-    );
+    .execute("id", { pattern: "needle", path: "src", glob: "*.ts", context: 1 }, undefined, undefined, {
+      cwd: process.cwd(),
+    });
   assert.deepEqual(
-    calls.map((call) => call.command),
+    calls.map(call => call.command),
     ["rg", "grep"],
   );
   assert.ok(calls[0].args.includes("--sort"));
@@ -87,13 +71,7 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
   await assert.rejects(
     tools
       .get("search_excerpt")
-      .execute(
-        "id",
-        { pattern: "x", path: "../secret" },
-        undefined,
-        undefined,
-        { cwd: process.cwd() },
-      ),
+      .execute("id", { pattern: "x", path: "../secret" }, undefined, undefined, { cwd: process.cwd() }),
     /within workspace/,
   );
 });
@@ -108,12 +86,7 @@ test("search_excerpt does not treat an invalid path as a missing ripgrep executa
       },
       async exec(command: string) {
         calls.push(command);
-        return {
-          stdout: "",
-          stderr: "The system cannot find the path specified",
-          code: 2,
-          killed: false,
-        };
+        return { stdout: "", stderr: "The system cannot find the path specified", code: 2, killed: false };
       },
     } as any,
     async () => true,
@@ -121,13 +94,7 @@ test("search_excerpt does not treat an invalid path as a missing ripgrep executa
   await assert.rejects(
     tools
       .get("search_excerpt")
-      .execute(
-        "id",
-        { pattern: "needle", path: "missing" },
-        undefined,
-        undefined,
-        { cwd: process.cwd() },
-      ),
+      .execute("id", { pattern: "needle", path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
     /ripgrep failed.*cannot find the path/i,
   );
   assert.deepEqual(calls, ["rg"]);
@@ -136,8 +103,7 @@ test("search_excerpt does not treat an invalid path as a missing ripgrep executa
 test("bounded search samples citations across files instead of keeping only the head", () => {
   const output = Array.from(
     { length: 80 },
-    (_, index) =>
-      `src/file-${String(index).padStart(2, "0")}.ts:1:needle ${"x".repeat(500)}`,
+    (_, index) => `src/file-${String(index).padStart(2, "0")}.ts:1:needle ${"x".repeat(500)}`,
   ).join("\n");
   const result = boundedSearch(output);
   assert.ok(Buffer.byteLength(result) <= SCOUT_TOOL_MAX_BYTES);
@@ -155,10 +121,7 @@ test("bounded search keeps context blocks intact while sampling", () => {
     ].join("\n"),
   ).join("\n--\n");
   const result = boundedSearch(output);
-  assert.match(
-    result,
-    /src\/file-29\.ts-9-before\nsrc\/file-29\.ts:10:needle\nsrc\/file-29\.ts-11-after/,
-  );
+  assert.match(result, /src\/file-29\.ts-9-before\nsrc\/file-29\.ts:10:needle\nsrc\/file-29\.ts-11-after/);
 });
 
 test("search_excerpt output is capped and reports omitted results", async () => {
@@ -168,19 +131,12 @@ test("search_excerpt output is capped and reports omitted results", async () => 
       tools.set(tool.name, tool);
     },
     async exec() {
-      return {
-        stdout: "a.ts:1:" + "x".repeat(SCOUT_TOOL_MAX_BYTES * 2),
-        stderr: "",
-        code: 0,
-        killed: false,
-      };
+      return { stdout: "a.ts:1:" + "x".repeat(SCOUT_TOOL_MAX_BYTES * 2), stderr: "", code: 0, killed: false };
     },
   } as any);
   const result = await tools
     .get("search_excerpt")
-    .execute("id", { pattern: "x" }, undefined, undefined, {
-      cwd: process.cwd(),
-    });
+    .execute("id", { pattern: "x" }, undefined, undefined, { cwd: process.cwd() });
   assert.ok(Buffer.byteLength(result.content[0].text) <= SCOUT_TOOL_MAX_BYTES);
   assert.match(result.content[0].text, /matching excerpts omitted/i);
 });

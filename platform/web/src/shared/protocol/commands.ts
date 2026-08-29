@@ -100,43 +100,19 @@ export type WebCommand =
   | ({ type: "addProject" } & CommandBase)
   | ({ type: "removeProject"; projectId: string } & CommandBase)
   | ({ type: "renameProject"; projectId: string; name: string } & CommandBase)
-  | ({
-      type: "reorderProject";
-      projectId: string;
-      beforeProjectId?: string;
-    } & CommandBase)
+  | ({ type: "reorderProject"; projectId: string; beforeProjectId?: string } & CommandBase)
   | ({ type: "archiveProject"; projectId: string } & CommandBase)
   | ({ type: "restoreProject"; projectId: string } & CommandBase)
-  | ({
-      type: "newSession";
-      parentSessionId?: string;
-      projectId?: string;
-    } & CommandBase)
+  | ({ type: "newSession"; parentSessionId?: string; projectId?: string } & CommandBase)
   | ({ type: "switchSession"; sessionId: string } & CommandBase)
   | ({ type: "deleteSession"; sessionId: string } & CommandBase)
   | ({ type: "archiveSession"; sessionId: string } & CommandBase)
   | ({ type: "restoreSession"; sessionId: string } & CommandBase)
   | ({ type: "renameSession"; sessionId: string; name: string } & CommandBase)
-  | ({
-      type: "setSessionActive";
-      sessionId: string;
-      active: boolean;
-    } & CommandBase)
-  | ({
-      type: "setSessionPinned";
-      sessionId: string;
-      pinned: boolean;
-    } & CommandBase)
-  | ({
-      type: "reorderActiveSession";
-      sessionId: string;
-      beforeSessionId?: string;
-    } & CommandBase)
-  | ({
-      type: "editPrompt";
-      entryId: string;
-      rollbackFiles: boolean;
-    } & MessageCommand)
+  | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
+  | ({ type: "setSessionPinned"; sessionId: string; pinned: boolean } & CommandBase)
+  | ({ type: "reorderActiveSession"; sessionId: string; beforeSessionId?: string } & CommandBase)
+  | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "rewindPrompt"; entryId: string } & CommandBase)
   | ({
       type: "fork";
@@ -145,66 +121,25 @@ export type WebCommand =
       position?: "before" | "at";
       mode?: "conversation" | "timeline";
     } & CommandBase)
-  | ({
-      type: "timeline";
-      action: "restore" | "fork" | "clear";
-      checkpointId?: string;
-    } & CommandBase)
-  | ({
-      type: "setPackageEnabled";
-      packageId: string;
-      enabled: boolean;
-    } & CommandBase)
-  | ({
-      type: "updatePackageSettings";
-      packageId: string;
-      settings: PackageSettingsReadModel;
-    } & CommandBase)
-  | ({
-      type: "setExtensionEnabled";
-      extensionId: string;
-      enabled: boolean;
-    } & CommandBase)
-  | ({
-      type: "installExtensionPackage";
-      source: string;
-      scope: "user" | "project";
-      confirmed: true;
-    } & CommandBase)
-  | ({
-      type: "removeExtensionPackage";
-      source: string;
-      scope: "user" | "project";
-      confirmed: true;
-    } & CommandBase)
-  | ({
-      type: "setProjectTrust";
-      trusted: boolean;
-      confirmed: true;
-    } & CommandBase)
+  | ({ type: "timeline"; action: "restore" | "fork" | "clear"; checkpointId?: string } & CommandBase)
+  | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
+  | ({ type: "updatePackageSettings"; packageId: string; settings: PackageSettingsReadModel } & CommandBase)
+  | ({ type: "setExtensionEnabled"; extensionId: string; enabled: boolean } & CommandBase)
+  | ({ type: "installExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
+  | ({ type: "removeExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
+  | ({ type: "setProjectTrust"; trusted: boolean; confirmed: true } & CommandBase)
   | ({ type: "reloadExtensions"; confirmed: true } & CommandBase)
-  | ({
-      type: "updateHookSettings";
-      settings: HookSettingsReadModel;
-    } & CommandBase)
+  | ({ type: "updateHookSettings"; settings: HookSettingsReadModel } & CommandBase)
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
-  | ({
-      type: "setThinkingLevel";
-      level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-    } & CommandBase)
+  | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({
       type: "setSessionControls";
       provider: string;
       modelId: string;
-      thinkingLevel:
-        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+      thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
     } & CommandBase)
-  | ({
-      type: "startProviderLogin";
-      provider: string;
-      authType: "api_key" | "oauth";
-    } & CommandBase)
+  | ({ type: "startProviderLogin"; provider: string; authType: "api_key" | "oauth" } & CommandBase)
   | ({ type: "cancelProviderLogin" } & CommandBase)
   | ({ type: "logoutProvider"; provider: string } & CommandBase)
   | ({
@@ -215,28 +150,15 @@ export type WebCommand =
       guidance: string;
       expectedRevision: number;
     } & CommandBase)
-  | ({
-      type: "deleteContinuityMemory";
-      scope: "user" | "project";
-      id: string;
-      expectedRevision: number;
-    } & CommandBase)
+  | ({ type: "deleteContinuityMemory"; scope: "user" | "project"; id: string; expectedRevision: number } & CommandBase)
   | ({ type: "migrateContinuityMemory" } & CommandBase)
   | ({ type: "continuityPlanAction"; expectedRevision: number } & (
-      | { action: "approve"; resetContext: boolean }
-      | { action: "requestChanges"; feedback: string }
+      { action: "approve"; resetContext: boolean } | { action: "requestChanges"; feedback: string }
     ) &
       CommandBase)
-  | ({
-      type: "handoffSession";
-      destination: "checkout" | "worktree";
-    } & CommandBase)
+  | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
   | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
-  | ({
-      type: "updateProjectWorktreeSettings";
-      projectId: string;
-      setupCommand: string;
-    } & CommandBase)
+  | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
   | ({
       type: "updateRuntimePolicy";
       scope: "global" | "project" | "session";

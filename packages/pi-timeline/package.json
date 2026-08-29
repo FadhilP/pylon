@@ -3,21 +3,43 @@
   "version": "0.1.0",
   "description": "Git-backed filesystem checkpoints paired with Pi prompts",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=24.15.0" },
-  "files": ["bin", "extensions", "src", "README.md", "LICENSE"],
-  "bin": { "pi-timeline": "./bin/pi-timeline.mjs" },
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "bin",
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "pi-timeline": "./bin/pi-timeline.mjs"
+  },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit"
   },
-  "pi": { "extensions": ["./extensions/pi-timeline.ts"] },
-  "pylon": { "settings": "./src/web-settings.ts" },
-  "dependencies": { "pylon-core": "0.1.0" },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-timeline.ts"
+    ]
+  },
+  "pylon": {
+    "settings": "./src/web-settings.ts"
+  },
+  "dependencies": {
+    "pylon-core": "0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
-  "devDependencies": { "typescript": "^5.8.0" },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
   "license": "MIT"
 }

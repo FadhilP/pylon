@@ -10,18 +10,18 @@ const output = resolve(root, "platform/web/dist/index.html");
 
 function currentState() {
   try {
-    const files = execFileSync(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { cwd: root },
-    )
+    const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: root })
       .toString()
       .split("\0")
       .filter(Boolean)
       .sort();
     const hash = createHash("sha256");
     for (const file of files) {
-      hash.update(file).update("\0").update(readFileSync(resolve(root, file))).update("\0");
+      hash
+        .update(file)
+        .update("\0")
+        .update(readFileSync(resolve(root, file)))
+        .update("\0");
     }
     return hash.digest("hex");
   } catch {
@@ -32,10 +32,7 @@ function currentState() {
 function run(script) {
   const [command, args] =
     process.platform === "win32"
-      ? [
-          process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", `npm run ${script} --workspace @pylon/web`],
-        ]
+      ? [process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `npm run ${script} --workspace @pylon/web`]]
       : ["npm", ["run", script, "--workspace", "@pylon/web"]];
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
   if (result.status !== 0) process.exit(result.status ?? 1);
@@ -43,10 +40,7 @@ function run(script) {
 
 const state = currentState();
 const unchanged =
-  state !== undefined &&
-  existsSync(output) &&
-  existsSync(marker) &&
-  readFileSync(marker, "utf8").trim() === state;
+  state !== undefined && existsSync(output) && existsSync(marker) && readFileSync(marker, "utf8").trim() === state;
 
 if (unchanged) {
   console.log("Web build is unchanged; starting existing build.");

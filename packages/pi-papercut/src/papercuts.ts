@@ -6,11 +6,7 @@ export const MAX_METADATA_LENGTH = 200;
 export const MAX_RECORDS = 1_000;
 
 export type PapercutStatus = "open" | "resolved" | "dismissed";
-export type CaptureSource = {
-  sessionId?: string;
-  provider?: string;
-  model?: string;
-};
+export type CaptureSource = { sessionId?: string; provider?: string; model?: string };
 export type PapercutRecord = {
   id: string;
   message: string;
@@ -43,8 +39,7 @@ const secretPatterns = [
 ];
 
 const isMetadata = (value: unknown) =>
-  value === undefined ||
-  (typeof value === "string" && value.length <= MAX_METADATA_LENGTH);
+  value === undefined || (typeof value === "string" && value.length <= MAX_METADATA_LENGTH);
 const isSource = (value: any): value is CaptureSource =>
   value &&
   typeof value === "object" &&
@@ -54,24 +49,14 @@ const isSource = (value: any): value is CaptureSource =>
 const boundedSource = (source: CaptureSource): CaptureSource =>
   Object.fromEntries(
     Object.entries(source)
-      .filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      )
-      .map(([key, value]) => [
-        key,
-        value
-          .replace(/[\u0000-\u001f\u007f]/g, "�")
-          .slice(0, MAX_METADATA_LENGTH),
-      ]),
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .map(([key, value]) => [key, value.replace(/[\u0000-\u001f\u007f]/g, "�").slice(0, MAX_METADATA_LENGTH)]),
   );
-const isTimestamp = (value: unknown) =>
-  typeof value === "string" && !Number.isNaN(Date.parse(value));
+const isTimestamp = (value: unknown) => typeof value === "string" && !Number.isNaN(Date.parse(value));
 
 const isNote = (value: unknown) =>
-  value === undefined ||
-  (typeof value === "string" && value.length <= MAX_NOTE_LENGTH);
-const isOptionalTimestamp = (value: unknown) =>
-  value === undefined || isTimestamp(value);
+  value === undefined || (typeof value === "string" && value.length <= MAX_NOTE_LENGTH);
+const isOptionalTimestamp = (value: unknown) => value === undefined || isTimestamp(value);
 
 function isPapercutRecord(record: any): record is PapercutRecord {
   return (
@@ -97,7 +82,7 @@ function isPapercutRecord(record: any): record is PapercutRecord {
 }
 
 function hasUniqueIds(records: any[]) {
-  return new Set(records.map((record) => record?.id)).size === records.length;
+  return new Set(records.map(record => record?.id)).size === records.length;
 }
 
 export function isPapercutState(value: any): value is PapercutState {
@@ -114,17 +99,8 @@ export function isPapercutState(value: any): value is PapercutState {
   );
 }
 
-export function emptyState(
-  projectRoot: string,
-  now = new Date().toISOString(),
-): PapercutState {
-  return {
-    version: 1,
-    projectRoot,
-    createdAt: now,
-    updatedAt: now,
-    records: [],
-  };
+export function emptyState(projectRoot: string, now = new Date().toISOString()): PapercutState {
+  return { version: 1, projectRoot, createdAt: now, updatedAt: now, records: [] };
 }
 
 export function cleanText(value: string, maxLength: number, name: string) {
@@ -134,19 +110,13 @@ export function cleanText(value: string, maxLength: number, name: string) {
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) throw new Error(`${name} is required`);
-  if (cleaned.length > maxLength)
-    throw new Error(`${name} must be at most ${maxLength} characters`);
-  if (secretPatterns.some((pattern) => pattern.test(cleaned)))
-    throw new Error(`${name} rejected: possible credential`);
+  if (cleaned.length > maxLength) throw new Error(`${name} must be at most ${maxLength} characters`);
+  if (secretPatterns.some(pattern => pattern.test(cleaned))) throw new Error(`${name} rejected: possible credential`);
   return cleaned;
 }
 
 export const normalizedMessage = (message: string) =>
-  message
-    .normalize("NFKC")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase("en-US");
+  message.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
 
 export function capturePapercut(
   state: PapercutState,
@@ -159,9 +129,7 @@ export function capturePapercut(
   const safeSource = boundedSource(source);
   const next = structuredClone(state);
   const duplicate = next.records.find(
-    (record) =>
-      record.status === "open" &&
-      normalizedMessage(record.message) === normalizedMessage(message),
+    record => record.status === "open" && normalizedMessage(record.message) === normalizedMessage(message),
   );
   if (duplicate) {
     duplicate.occurrences++;
@@ -171,8 +139,7 @@ export function capturePapercut(
     next.updatedAt = now;
     return { state: next, record: duplicate, duplicate: true };
   }
-  if (next.records.length >= MAX_RECORDS)
-    throw new Error(`papercut storage limit reached (${MAX_RECORDS} records)`);
+  if (next.records.length >= MAX_RECORDS) throw new Error(`papercut storage limit reached (${MAX_RECORDS} records)`);
   const record: PapercutRecord = {
     id,
     message,
@@ -193,18 +160,14 @@ export type LifecycleAction = "resolve" | "dismiss" | "reopen";
 
 function selectRecords(records: PapercutRecord[], ids: string[]) {
   if (!ids.length) throw new Error("at least one papercut id is required");
-  const selected = ids.map((prefix) => {
-    const matches = records.filter(
-      (record) => record.id === prefix || record.id.startsWith(prefix),
-    );
+  const selected = ids.map(prefix => {
+    const matches = records.filter(record => record.id === prefix || record.id.startsWith(prefix));
     if (!matches.length) throw new Error(`unknown papercut id: ${prefix}`);
     if (matches.length > 1)
-      throw new Error(
-        `ambiguous papercut id: ${prefix}; matches: ${matches.map((record) => record.id).join(", ")}`,
-      );
+      throw new Error(`ambiguous papercut id: ${prefix}; matches: ${matches.map(record => record.id).join(", ")}`);
     return matches[0];
   });
-  if (new Set(selected.map((record) => record.id)).size !== selected.length)
+  if (new Set(selected.map(record => record.id)).size !== selected.length)
     throw new Error("papercut ids must identify distinct records");
   return selected;
 }
@@ -219,15 +182,9 @@ export function updatePapercuts(
   const note =
     rawNote === undefined || !rawNote.trim()
       ? undefined
-      : cleanText(
-          rawNote,
-          MAX_NOTE_LENGTH,
-          action === "resolve" ? "resolution" : "reason",
-        );
-  if (action === "resolve" && !note)
-    throw new Error("resolution is required when resolving papercuts");
-  if (action === "reopen" && note)
-    throw new Error("note is not valid when reopening papercuts");
+      : cleanText(rawNote, MAX_NOTE_LENGTH, action === "resolve" ? "resolution" : "reason");
+  if (action === "resolve" && !note) throw new Error("resolution is required when resolving papercuts");
+  if (action === "reopen" && note) throw new Error("note is not valid when reopening papercuts");
   const next = structuredClone(state);
   const selected = selectRecords(next.records, ids);
   for (const record of selected) {
@@ -266,19 +223,13 @@ export class PapercutMutationError extends Error {
     this.code = code;
   }
 }
-export function mutatePapercut(
-  state: PapercutState,
-  input: PapercutMutation,
-  now = new Date().toISOString(),
-) {
+export function mutatePapercut(state: PapercutState, input: PapercutMutation, now = new Date().toISOString()) {
   const next = structuredClone(state);
-  const index = next.records.findIndex((record) => record.id === input.id);
+  const index = next.records.findIndex(record => record.id === input.id);
   const record = next.records[index];
   if (!record || record.updatedAt !== input.expectedUpdatedAt)
     throw new PapercutMutationError("stale", "Papercut changed or was removed");
-  const mutationAt = new Date(
-    Math.max(Date.parse(now), Date.parse(record.updatedAt) + 1),
-  ).toISOString();
+  const mutationAt = new Date(Math.max(Date.parse(now), Date.parse(record.updatedAt) + 1)).toISOString();
   if (input.action === "delete") {
     next.records.splice(index, 1);
     next.updatedAt = mutationAt;
@@ -294,15 +245,10 @@ export function mutatePapercut(
     record.status === "open" &&
     next.records.some(
       (item, itemIndex) =>
-        itemIndex !== index &&
-        item.status === "open" &&
-        normalizedMessage(item.message) === normalizedMessage(message),
+        itemIndex !== index && item.status === "open" && normalizedMessage(item.message) === normalizedMessage(message),
     )
   ) {
-    throw new PapercutMutationError(
-      "duplicate",
-      "Another open papercut already uses this message",
-    );
+    throw new PapercutMutationError("duplicate", "Another open papercut already uses this message");
   }
   record.message = message;
   record.updatedAt = mutationAt;
@@ -310,18 +256,10 @@ export function mutatePapercut(
   return { state: next, record };
 }
 
-export function listPapercuts(
-  state: PapercutState,
-  status: PapercutStatus | "all" = "open",
-  limit = 50,
-) {
+export function listPapercuts(state: PapercutState, status: PapercutStatus | "all" = "open", limit = 50) {
   return [...state.records]
-    .filter((record) => status === "all" || record.status === status)
-    .sort(
-      (left, right) =>
-        right.lastSeenAt.localeCompare(left.lastSeenAt) ||
-        left.id.localeCompare(right.id),
-    )
+    .filter(record => status === "all" || record.status === status)
+    .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt) || left.id.localeCompare(right.id))
     .slice(0, limit);
 }
 
@@ -334,21 +272,14 @@ export function queryPapercuts(
 ) {
   const needle = normalizedMessage(query);
   const records = [...state.records]
-    .filter((record) => status === "all" || record.status === status)
+    .filter(record => status === "all" || record.status === status)
     .filter(
-      (record) =>
+      record =>
         !needle ||
         [record.message, record.resolution, record.dismissal].some(
-          (value) => value && normalizedMessage(value).includes(needle),
+          value => value && normalizedMessage(value).includes(needle),
         ),
     )
-    .sort(
-      (left, right) =>
-        right.lastSeenAt.localeCompare(left.lastSeenAt) ||
-        left.id.localeCompare(right.id),
-    );
-  return {
-    records: records.slice(offset, offset + limit),
-    total: records.length,
-  };
+    .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt) || left.id.localeCompare(right.id));
+  return { records: records.slice(offset, offset + limit), total: records.length };
 }

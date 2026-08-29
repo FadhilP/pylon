@@ -10,8 +10,7 @@ export function unlockWebAudio(): void {
   if (!context) {
     const AudioContextConstructor =
       window.AudioContext ??
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextConstructor) return;
     try {
       context = new AudioContextConstructor();
@@ -108,8 +107,5 @@ function schedule(audio: AudioContext, kind: WebAudioCueKind): void {
     }
     throw error;
   }
-  nextStartAt =
-    start +
-    Math.max(...pattern.map((tone) => tone.offset + tone.duration)) +
-    0.08;
+  nextStartAt = start + Math.max(...pattern.map(tone => tone.offset + tone.duration)) + 0.08;
 }

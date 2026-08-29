@@ -11,13 +11,7 @@ import { basename, join, resolve } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
 export type Invocation = { command: string; args: string[] };
-export type ChildUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-};
+export type ChildUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 export type ChildActivity = {
   id?: string;
   kind: "call" | "result";
@@ -39,16 +33,10 @@ export function getPiInvocation(args: string[]): Invocation {
     join(packageDir, "src", "cli.ts"),
     join(packageDir, "src", "cli-new.ts"),
     join(packageDir, "src", "rpc-entry.ts"),
-  ].map((path) => resolve(path));
-  if (
-    script &&
-    !script.startsWith("/$bunfs/root/") &&
-    existsSync(script) &&
-    piEntrypoints.includes(resolve(script))
-  )
+  ].map(path => resolve(path));
+  if (script && !script.startsWith("/$bunfs/root/") && existsSync(script) && piEntrypoints.includes(resolve(script)))
     return { command: process.execPath, args: [script, ...args] };
-  if (!/^(node|bun)(\.exe)?$/i.test(basename(process.execPath)))
-    return { command: process.execPath, args };
+  if (!/^(node|bun)(\.exe)?$/i.test(basename(process.execPath))) return { command: process.execPath, args };
   return { command: process.execPath, args: [cli, ...args] };
 }
 
@@ -56,10 +44,7 @@ export function getPiInvocation(args: string[]): Invocation {
 export function terminate(child: ChildProcess): void {
   if (child.exitCode !== null) return;
   if (process.platform === "win32" && child.pid)
-    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      shell: false,
-      stdio: "ignore",
-    });
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { shell: false, stdio: "ignore" });
   else if (child.pid) {
     try {
       process.kill(-child.pid, "SIGTERM");
@@ -77,13 +62,7 @@ export function terminate(child: ChildProcess): void {
   }
 }
 
-export const emptyUsage = (): ChildUsage => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-});
+export const emptyUsage = (): ChildUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 
 /** Coerces a reported token count, treating anything non-finite or negative as zero. */
 export const validTokens = (value: unknown): number => {
@@ -94,22 +73,15 @@ export const validTokens = (value: unknown): number => {
 export const validCost = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 
-export const cacheReadTokensFromUsage = (usage: any): number =>
-  validTokens(usage?.cacheRead);
+export const cacheReadTokensFromUsage = (usage: any): number => validTokens(usage?.cacheRead);
 
 /** Live context size: the provider's own total when present, otherwise the summed parts, less cache reads. */
 export function contextTokensFromUsage(usage: any): number {
   const cacheRead = cacheReadTokensFromUsage(usage);
   const nativeTotal = Number(usage?.totalTokens);
-  if (Number.isFinite(nativeTotal) && nativeTotal > 0)
-    return Math.max(0, nativeTotal - cacheRead);
-  const parts = [
-    usage?.input,
-    usage?.output,
-    usage?.cacheRead,
-    usage?.cacheWrite,
-  ].map(Number);
-  if (!parts.every((value) => Number.isFinite(value) && value >= 0)) return 0;
+  if (Number.isFinite(nativeTotal) && nativeTotal > 0) return Math.max(0, nativeTotal - cacheRead);
+  const parts = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite].map(Number);
+  if (!parts.every(value => Number.isFinite(value) && value >= 0)) return 0;
   return Math.max(0, parts.reduce((sum, value) => sum + value, 0) - cacheRead);
 }
 
@@ -130,8 +102,7 @@ export function activityRecorder(
     if (items.length > MAX_ACTIVITY_ITEMS) items.shift();
     onActivity?.(item, items);
   };
-  const idOf = (event: any) =>
-    typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+  const idOf = (event: any) => (typeof event.toolCallId === "string" ? event.toolCallId : undefined);
   return {
     items,
     start(event: any) {
@@ -154,10 +125,7 @@ export function activityRecorder(
       const id = idOf(event);
       const startedAtMs = id ? startedById.get(id) : undefined;
       if (id) startedById.delete(id);
-      const durationMs =
-        startedAtMs === undefined
-          ? undefined
-          : Math.max(0, Date.now() - startedAtMs);
+      const durationMs = startedAtMs === undefined ? undefined : Math.max(0, Date.now() - startedAtMs);
       push({
         ...(id ? { id } : {}),
         kind: "result",
@@ -175,11 +143,7 @@ export function activityRecorder(
  * Exceeding `maxBytes` before a newline arrives calls `onOverflow` and drops the buffer,
  * so a child that never emits a newline cannot exhaust memory.
  */
-export function lineBuffer(
-  onLine: (line: string) => void,
-  maxBytes: number,
-  onOverflow: () => void,
-) {
+export function lineBuffer(onLine: (line: string) => void, maxBytes: number, onOverflow: () => void) {
   let pending = "";
   return {
     push(chunk: unknown) {
@@ -207,8 +171,7 @@ export function stderrTail(maxBytes = 8192) {
   return {
     push(chunk: unknown) {
       text += chunk;
-      if (Buffer.byteLength(text) > maxBytes)
-        text = Buffer.from(text).subarray(-maxBytes).toString("utf8");
+      if (Buffer.byteLength(text) > maxBytes) text = Buffer.from(text).subarray(-maxBytes).toString("utf8");
     },
     get text() {
       return text;

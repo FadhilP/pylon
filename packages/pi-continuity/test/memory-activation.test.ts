@@ -11,10 +11,7 @@ import {
   type EventFrame,
 } from "../src/memory-activation.ts";
 
-const frame = (
-  kind: EventFrame["kind"],
-  facts: EventFrame["facts"] = {},
-): EventFrame => ({
+const frame = (kind: EventFrame["kind"], facts: EventFrame["facts"] = {}): EventFrame => ({
   kind,
   sequence: 1,
   sessionId: "session",
@@ -35,18 +32,8 @@ const grounded = (): ActivationDraft => ({
   delivery: "warn",
   lifecycle: { activateUntil: "event_complete", rearmOn: [] },
   examples: {
-    positive: [
-      {
-        event: "after_tool_result",
-        facts: { "tool.name": "npm", "tool.exitCode": 1 },
-      },
-    ],
-    hardNegative: [
-      {
-        event: "after_tool_result",
-        facts: { "tool.name": "npm", "tool.exitCode": 0 },
-      },
-    ],
+    positive: [{ event: "after_tool_result", facts: { "tool.name": "npm", "tool.exitCode": 1 } }],
+    hardNegative: [{ event: "after_tool_result", facts: { "tool.name": "npm", "tool.exitCode": 0 } }],
   },
 });
 
@@ -55,23 +42,12 @@ test("activation compiles grounded rules, indexes deterministically, and evaluat
   const two = compileActivationDraft("a", 1, grounded())!;
   const index = buildRuleIndex([one, two, two]);
   assert.deepEqual(
-    candidateRules(index, frame("after_tool_result")).map(
-      (rule) => rule.memoryId,
-    ),
+    candidateRules(index, frame("after_tool_result")).map(rule => rule.memoryId),
     ["a", "b"],
   );
+  assert.equal(evaluateCompiledRule(one, frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 2 })), true);
   assert.equal(
-    evaluateCompiledRule(
-      one,
-      frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 2 }),
-    ),
-    true,
-  );
-  assert.equal(
-    evaluateCompiledRule(
-      one,
-      frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 0 }),
-    ),
+    evaluateCompiledRule(one, frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 0 })),
     false,
   );
   assert.deepEqual(candidateRules(index, frame("task_started")), []);
@@ -90,39 +66,17 @@ test("activation supports bounded command predicates with hard negatives", () =>
     delivery: "warn",
     lifecycle: { activateUntil: "event_complete", rearmOn: [] },
     examples: {
-      positive: [
-        {
-          event: "before_tool_call",
-          facts: { "tool.name": "bash", "tool.command": "dart format lib" },
-        },
-      ],
-      hardNegative: [
-        {
-          event: "before_tool_call",
-          facts: { "tool.name": "bash", "tool.command": "echo dart format" },
-        },
-      ],
+      positive: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "dart format lib" } }],
+      hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "echo dart format" } }],
     },
   };
   const rule = compileActivationDraft("command", 1, command)!;
   assert.equal(
-    evaluateCompiledRule(
-      rule,
-      frame("before_tool_call", {
-        "tool.name": "bash",
-        "tool.command": "dart format .",
-      }),
-    ),
+    evaluateCompiledRule(rule, frame("before_tool_call", { "tool.name": "bash", "tool.command": "dart format ." })),
     true,
   );
   assert.equal(
-    evaluateCompiledRule(
-      rule,
-      frame("before_tool_call", {
-        "tool.name": "bash",
-        "tool.command": "echo dart format",
-      }),
-    ),
+    evaluateCompiledRule(rule, frame("before_tool_call", { "tool.name": "bash", "tool.command": "echo dart format" })),
     false,
   );
 });
@@ -130,22 +84,10 @@ test("activation supports bounded command predicates with hard negatives", () =>
 test("activation rejects hard-negative matches and preserves missing-fact tri-state", () => {
   const invalid = grounded();
   invalid.examples.hardNegative[0]!.facts["tool.exitCode"] = 2;
-  assert.throws(
-    () => validateActivationDraft(invalid),
-    /invalid activation draft/,
-  );
+  assert.throws(() => validateActivationDraft(invalid), /invalid activation draft/);
+  assert.equal(evaluateTrigger({ fact: "tool.name", op: "eq", value: "npm" }, frame("after_tool_result")), "unknown");
   assert.equal(
-    evaluateTrigger(
-      { fact: "tool.name", op: "eq", value: "npm" },
-      frame("after_tool_result"),
-    ),
-    "unknown",
-  );
-  assert.equal(
-    evaluateTrigger(
-      { not: { fact: "tool.name", op: "eq", value: "npm" } },
-      frame("after_tool_result"),
-    ),
+    evaluateTrigger({ not: { fact: "tool.name", op: "eq", value: "npm" } }, frame("after_tool_result")),
     "unknown",
   );
   assert.throws(
@@ -153,12 +95,7 @@ test("activation rejects hard-negative matches and preserves missing-fact tri-st
       validateActivationDraft({
         ...grounded(),
         examples: {
-          positive: [
-            {
-              event: "after_tool_result",
-              facts: { "tool.name": "npm", "tool.exitCode": Number.NaN },
-            },
-          ],
+          positive: [{ event: "after_tool_result", facts: { "tool.name": "npm", "tool.exitCode": Number.NaN } }],
           hardNegative: grounded().examples.hardNegative,
         },
       }),
@@ -169,23 +106,14 @@ test("activation rejects hard-negative matches and preserves missing-fact tri-st
 test("activation semantic rules abstain after a deterministic match", () => {
   const draft = grounded();
   draft.classification = "semantic_guarded";
-  draft.semanticGuard = {
-    condition: "Only when the failure is relevant.",
-    abstainOnUnknown: true,
-  };
+  draft.semanticGuard = { condition: "Only when the failure is relevant.", abstainOnUnknown: true };
   const rule = compileActivationDraft("semantic", 1, draft)!;
   assert.equal(
-    evaluateCompiledRule(
-      rule,
-      frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 1 }),
-    ),
+    evaluateCompiledRule(rule, frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 1 })),
     "unknown",
   );
   assert.equal(
-    evaluateCompiledRule(
-      rule,
-      frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 0 }),
-    ),
+    evaluateCompiledRule(rule, frame("after_tool_result", { "tool.name": "npm", "tool.exitCode": 0 })),
     false,
   );
 });
@@ -202,33 +130,18 @@ test("activation handles archival drafts without compilation", () => {
 });
 
 test("activation validates exact keys, bounds, depth, and operators", () => {
-  assert.throws(
-    () => validateActivationDraft({ ...grounded(), extra: true }),
-    /invalid activation draft/,
-  );
+  assert.throws(() => validateActivationDraft({ ...grounded(), extra: true }), /invalid activation draft/);
   const oversized = grounded();
-  oversized.subscriptions = Array.from(
-    { length: 17 },
-    () => "after_tool_result",
-  );
-  assert.throws(
-    () => validateActivationDraft(oversized),
-    /invalid activation draft/,
-  );
+  oversized.subscriptions = Array.from({ length: 17 }, () => "after_tool_result");
+  assert.throws(() => validateActivationDraft(oversized), /invalid activation draft/);
   const deep = grounded();
   let expression: any = { fact: "tool.name", op: "eq", value: "npm" };
   for (let index = 0; index < 8; index++) expression = { not: expression };
   deep.predicate = expression;
-  assert.throws(
-    () => validateActivationDraft(deep),
-    /invalid activation draft/,
-  );
+  assert.throws(() => validateActivationDraft(deep), /invalid activation draft/);
   const operator = grounded();
   operator.predicate = { fact: "tool.name", op: "gte", value: "npm" } as any;
-  assert.throws(
-    () => validateActivationDraft(operator),
-    /invalid activation draft/,
-  );
+  assert.throws(() => validateActivationDraft(operator), /invalid activation draft/);
 });
 
 test("activation uses native path glob matching", () => {

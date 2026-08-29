@@ -12,12 +12,7 @@ test("workspace registration prunes only old missing inert entries", async () =>
   await writeFile(
     join(root, "workspaces.json"),
     JSON.stringify([
-      {
-        id: "inert",
-        canonicalPath: join(root, "missing-inert"),
-        createdAt: old,
-        lastSeenAt: old,
-      },
+      { id: "inert", canonicalPath: join(root, "missing-inert"), createdAt: old, lastSeenAt: old },
       {
         id: "owned",
         canonicalPath: join(root, "missing-owned"),
@@ -29,9 +24,7 @@ test("workspace registration prunes only old missing inert entries", async () =>
   );
 
   await registerWorkspace(root, current);
-  const workspaces = JSON.parse(
-    await readFile(join(root, "workspaces.json"), "utf8"),
-  );
+  const workspaces = JSON.parse(await readFile(join(root, "workspaces.json"), "utf8"));
   assert.equal(
     workspaces.some((item: any) => item.id === "inert"),
     false,

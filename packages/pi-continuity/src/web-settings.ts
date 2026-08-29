@@ -13,24 +13,15 @@ import {
 import { withFileLock, writeJsonAtomic } from "./storage.ts";
 
 const validReserveTokens = (value: unknown): value is number =>
-  Number.isSafeInteger(value) &&
-  (value as number) >= 1_000 &&
-  (value as number) <= 1_000_000;
+  Number.isSafeInteger(value) && (value as number) >= 1_000 && (value as number) <= 1_000_000;
 const object = (value: unknown): value is Record<string, any> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 const piSettingsPath = (agentDir: string) => join(agentDir, "settings.json");
-type ReserveState = {
-  value: number;
-  explicit: boolean;
-  compactionPresent: boolean;
-};
+type ReserveState = { value: number; explicit: boolean; compactionPresent: boolean };
 async function readPiSettings(path: string): Promise<Record<string, any>> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
-    if (
-      !object(value) ||
-      (value.compaction !== undefined && !object(value.compaction))
-    )
+    if (!object(value) || (value.compaction !== undefined && !object(value.compaction)))
       throw new Error("invalid Pi settings");
     return value;
   } catch (error: any) {
@@ -40,25 +31,14 @@ async function readPiSettings(path: string): Promise<Record<string, any>> {
 }
 function reserveState(settings: Record<string, any>): ReserveState {
   const explicit = settings.compaction?.reserveTokens !== undefined;
-  const value = explicit
-    ? settings.compaction.reserveTokens
-    : DEFAULT_COMPACTION_SETTINGS.reserveTokens;
-  if (!validReserveTokens(value))
-    throw new Error("invalid Pi compaction reserve");
-  return {
-    value,
-    explicit,
-    compactionPresent: settings.compaction !== undefined,
-  };
+  const value = explicit ? settings.compaction.reserveTokens : DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+  if (!validReserveTokens(value)) throw new Error("invalid Pi compaction reserve");
+  return { value, explicit, compactionPresent: settings.compaction !== undefined };
 }
 async function readReserveState(agentDir: string): Promise<ReserveState> {
   return reserveState(await readPiSettings(piSettingsPath(agentDir)));
 }
-async function updateReserveState(
-  agentDir: string,
-  next: ReserveState,
-  expected: ReserveState,
-): Promise<void> {
+async function updateReserveState(agentDir: string, next: ReserveState, expected: ReserveState): Promise<void> {
   const path = piSettingsPath(agentDir);
   await withFileLock(path, async () => {
     const settings = await readPiSettings(path);
@@ -79,8 +59,7 @@ async function updateReserveState(
     const compaction = { ...settings.compaction };
     if (next.explicit) compaction.reserveTokens = next.value;
     else delete compaction.reserveTokens;
-    if (!next.compactionPresent && !Object.keys(compaction).length)
-      delete updated.compaction;
+    if (!next.compactionPresent && !Object.keys(compaction).length) delete updated.compaction;
     else updated.compaction = compaction;
     await writeJsonAtomic(path, updated);
   });
@@ -95,10 +74,7 @@ function profile(value: any): ModelProfile | undefined {
   ) {
     throw new Error("invalid Continuity model profile");
   }
-  return {
-    model: value.model.trim(),
-    ...(value.thinking ? { thinking: value.thinking } : {}),
-  };
+  return { model: value.model.trim(), ...(value.thinking ? { thinking: value.thinking } : {}) };
 }
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
@@ -111,16 +87,11 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
     ...(config.memoryReviewer ? { memoryReviewer: config.memoryReviewer } : {}),
-    ...(config.compactionReviewer
-      ? { compactionReviewer: config.compactionReviewer }
-      : {}),
+    ...(config.compactionReviewer ? { compactionReviewer: config.compactionReviewer } : {}),
   };
 }
 
-export async function updateSettings(
-  value: any,
-  { agentDir }: { agentDir: string },
-): Promise<void> {
+export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (
     value?.kind !== "continuity" ||
     typeof value.memoryEnabled !== "boolean" ||
@@ -133,11 +104,7 @@ export async function updateSettings(
   const memoryReviewer = profile(value.memoryReviewer);
   const compactionReviewer = profile(value.compactionReviewer);
   const previousReserve = await readReserveState(agentDir);
-  const updatedReserve = {
-    value: value.reserveTokens,
-    explicit: true,
-    compactionPresent: true,
-  };
+  const updatedReserve = { value: value.reserveTokens, explicit: true, compactionPresent: true };
   await updateReserveState(agentDir, updatedReserve, previousReserve);
   try {
     await updateConfig(
@@ -153,9 +120,7 @@ export async function updateSettings(
       configPath(agentDir),
     );
   } catch (error) {
-    await updateReserveState(agentDir, previousReserve, updatedReserve).catch(
-      () => undefined,
-    );
+    await updateReserveState(agentDir, previousReserve, updatedReserve).catch(() => undefined);
     throw error;
   }
 }

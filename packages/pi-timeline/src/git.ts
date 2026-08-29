@@ -1,20 +1,10 @@
 import { execFile } from "node:child_process";
-export function git(
-  cwd: string,
-  args: string[],
-  env: Record<string, string> = {},
-) {
+export function git(cwd: string, args: string[], env: Record<string, string> = {}) {
   return new Promise<string>((resolve, reject) =>
     execFile(
       "git",
       args,
-      {
-        cwd,
-        env: { ...process.env, ...env },
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: 120_000,
-        windowsHide: true,
-      },
+      { cwd, env: { ...process.env, ...env }, maxBuffer: 64 * 1024 * 1024, timeout: 120_000, windowsHide: true },
       (error, stdout, stderr) =>
         error
           ? reject(Error(String(stderr || error.message).slice(0, 8192)))

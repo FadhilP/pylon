@@ -2,15 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomInt } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:net";
-import {
-  basename,
-  delimiter,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-} from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Exec } from "./capture.ts";
@@ -79,30 +71,20 @@ const MANAGED_ENVIRONMENT_KEYS = new Set([
   "NPM_CONFIG_STRICT_SSL",
 ]);
 
-export function managedAppiumEnvironment(
-  env: NodeJS.ProcessEnv,
-  appiumHome: string,
-): NodeJS.ProcessEnv {
+export function managedAppiumEnvironment(env: NodeJS.ProcessEnv, appiumHome: string): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     const normalized = key.toUpperCase();
-    if (
-      value !== undefined &&
-      (MANAGED_ENVIRONMENT_KEYS.has(normalized) || normalized.startsWith("LC_"))
-    )
+    if (value !== undefined && (MANAGED_ENVIRONMENT_KEYS.has(normalized) || normalized.startsWith("LC_")))
       result[key] = value;
   }
   result.APPIUM_HOME = appiumHome;
   return result;
 }
 
-async function regularCanonicalFile(
-  path: string,
-  label = "Appium CLI path",
-): Promise<string> {
+async function regularCanonicalFile(path: string, label = "Appium CLI path"): Promise<string> {
   const original = await lstat(path);
-  if (!original.isFile() || original.isSymbolicLink())
-    throw new Error(`${label} must be a non-symlink regular file`);
+  if (!original.isFile() || original.isSymbolicLink()) throw new Error(`${label} must be a non-symlink regular file`);
   const canonical = await realpath(path);
   const info = await lstat(canonical);
   if (!info.isFile()) throw new Error(`${label} must be a regular file`);
@@ -112,10 +94,7 @@ async function regularCanonicalFile(
 export async function windowsNpmCli(env: NodeJS.ProcessEnv): Promise<string> {
   const explicit = env.npm_execpath;
   if (explicit) {
-    if (
-      !isAbsolute(explicit) ||
-      basename(explicit).toLowerCase() !== "npm-cli.js"
-    )
+    if (!isAbsolute(explicit) || basename(explicit).toLowerCase() !== "npm-cli.js")
       throw new Error("npm_execpath must be an absolute npm-cli.js path");
     return regularCanonicalFile(explicit, "npm CLI path");
   }
@@ -123,10 +102,8 @@ export async function windowsNpmCli(env: NodeJS.ProcessEnv): Promise<string> {
     join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
     ...(env.PATH ?? env.Path ?? "")
       .split(delimiter)
-      .filter((directory) => directory && isAbsolute(directory))
-      .map((directory) =>
-        join(directory, "node_modules", "npm", "bin", "npm-cli.js"),
-      ),
+      .filter(directory => directory && isAbsolute(directory))
+      .map(directory => join(directory, "node_modules", "npm", "bin", "npm-cli.js")),
   ];
   const seen = new Set<string>();
   for (const candidate of candidates) {
@@ -141,14 +118,10 @@ export async function windowsNpmCli(env: NodeJS.ProcessEnv): Promise<string> {
       throw new Error("npm CLI candidate exists but could not be validated");
     }
   }
-  throw new Error(
-    "npm CLI is unavailable; set APPIUM_PATH to Appium's CLI JavaScript file",
-  );
+  throw new Error("npm CLI is unavailable; set APPIUM_PATH to Appium's CLI JavaScript file");
 }
 
-export function managedAndroidToolingDirectory(
-  agentDir = getAgentDir(),
-): string {
+export function managedAndroidToolingDirectory(agentDir = getAgentDir()): string {
   return join(agentDir, "pi-helios", "android-tooling", "current");
 }
 
@@ -164,50 +137,34 @@ export async function resolveManagedAppiumAt(
     throw error;
   }
   if (!info.isDirectory() || info.isSymbolicLink())
-    throw new Error(
-      "Managed Android tooling directory is invalid; repair it in Settings",
-    );
+    throw new Error("Managed Android tooling directory is invalid; repair it in Settings");
   const root = await realpath(directory);
-  const manifest = JSON.parse(
-    await readFile(join(root, "package.json"), "utf8"),
-  ) as { dependencies?: Record<string, string> };
+  const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
   if (
     manifest.dependencies?.appium !== MANAGED_APPIUM_VERSION ||
-    manifest.dependencies?.["appium-uiautomator2-driver"] !==
-      MANAGED_UIAUTOMATOR2_VERSION
+    manifest.dependencies?.["appium-uiautomator2-driver"] !== MANAGED_UIAUTOMATOR2_VERSION
   ) {
-    throw new Error(
-      "Managed Android tooling versions are invalid; repair them in Settings",
-    );
+    throw new Error("Managed Android tooling versions are invalid; repair them in Settings");
   }
   const appiumDirectory = await realpath(join(root, "node_modules", "appium"));
-  const driverDirectory = await realpath(
-    join(root, "node_modules", "appium-uiautomator2-driver"),
-  );
+  const driverDirectory = await realpath(join(root, "node_modules", "appium-uiautomator2-driver"));
   for (const dependency of [appiumDirectory, driverDirectory]) {
     const fromRoot = relative(root, dependency);
     if (!fromRoot || fromRoot.startsWith("..") || isAbsolute(fromRoot))
-      throw new Error(
-        "Managed Android tooling dependency resolves outside its directory",
-      );
+      throw new Error("Managed Android tooling dependency resolves outside its directory");
   }
-  const appiumManifest = JSON.parse(
-    await readFile(join(appiumDirectory, "package.json"), "utf8"),
-  ) as { version?: string; bin?: string | Record<string, string> };
-  const driverManifest = JSON.parse(
-    await readFile(join(driverDirectory, "package.json"), "utf8"),
-  ) as { version?: string };
-  if (
-    appiumManifest.version !== MANAGED_APPIUM_VERSION ||
-    driverManifest.version !== MANAGED_UIAUTOMATOR2_VERSION
-  )
-    throw new Error(
-      "Managed Android tooling package versions are invalid; repair them in Settings",
-    );
-  const binPath =
-    typeof appiumManifest.bin === "string"
-      ? appiumManifest.bin
-      : appiumManifest.bin?.appium;
+  const appiumManifest = JSON.parse(await readFile(join(appiumDirectory, "package.json"), "utf8")) as {
+    version?: string;
+    bin?: string | Record<string, string>;
+  };
+  const driverManifest = JSON.parse(await readFile(join(driverDirectory, "package.json"), "utf8")) as {
+    version?: string;
+  };
+  if (appiumManifest.version !== MANAGED_APPIUM_VERSION || driverManifest.version !== MANAGED_UIAUTOMATOR2_VERSION)
+    throw new Error("Managed Android tooling package versions are invalid; repair them in Settings");
+  const binPath = typeof appiumManifest.bin === "string" ? appiumManifest.bin : appiumManifest.bin?.appium;
   if (!binPath) throw new Error("Managed Appium has no CLI entrypoint");
   const cli = await regularCanonicalFile(resolve(appiumDirectory, binPath));
   const fromPackage = relative(appiumDirectory, cli);
@@ -236,9 +193,7 @@ export async function resolveManagedAppium(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  throw new Error(
-    "Managed Android tooling recovery is incomplete; repair it in Settings",
-  );
+  throw new Error("Managed Android tooling recovery is incomplete; repair it in Settings");
 }
 
 export async function resolveAppium(
@@ -256,74 +211,43 @@ export async function resolveAppium(
   }
   let cli: string | undefined;
   if (env.APPIUM_PATH) {
-    if (!isAbsolute(env.APPIUM_PATH))
-      throw new Error("APPIUM_PATH must be absolute");
+    if (!isAbsolute(env.APPIUM_PATH)) throw new Error("APPIUM_PATH must be absolute");
     cli = await regularCanonicalFile(env.APPIUM_PATH);
   } else {
     const root =
       process.platform === "win32"
-        ? await exec(
-            process.execPath,
-            [await windowsNpmCli(env), "root", "-g"],
-            { timeout: 10_000, signal },
-          )
+        ? await exec(process.execPath, [await windowsNpmCli(env), "root", "-g"], { timeout: 10_000, signal })
         : await exec("npm", ["root", "-g"], { timeout: 10_000, signal });
     cancelled();
     if (root.killed || root.code !== 0 || !root.stdout.trim())
-      throw new Error(
-        "Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file",
-      );
-    const packageDirectory = await realpath(
-      resolve(root.stdout.trim(), "appium"),
-    ).catch(() => {
-      throw new Error(
-        "Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file",
-      );
+      throw new Error("Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file");
+    const packageDirectory = await realpath(resolve(root.stdout.trim(), "appium")).catch(() => {
+      throw new Error("Appium is unavailable; install Appium globally or set APPIUM_PATH to its CLI JavaScript file");
     });
-    const manifest = JSON.parse(
-      await readFile(join(packageDirectory, "package.json"), "utf8"),
-    ) as { bin?: string | Record<string, string> };
-    const binPath =
-      typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.appium;
-    if (!binPath)
-      throw new Error("Installed Appium package has no CLI entrypoint");
+    const manifest = JSON.parse(await readFile(join(packageDirectory, "package.json"), "utf8")) as {
+      bin?: string | Record<string, string>;
+    };
+    const binPath = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.appium;
+    if (!binPath) throw new Error("Installed Appium package has no CLI entrypoint");
     const candidate = resolve(packageDirectory, binPath);
-    if (
-      !candidate.startsWith(
-        `${resolve(packageDirectory)}${process.platform === "win32" ? "\\" : "/"}`,
-      )
-    )
+    if (!candidate.startsWith(`${resolve(packageDirectory)}${process.platform === "win32" ? "\\" : "/"}`))
       throw new Error("Installed Appium CLI entrypoint is invalid");
     cli = await regularCanonicalFile(candidate);
     const fromPackage = relative(packageDirectory, cli);
     if (!fromPackage || fromPackage.startsWith("..") || isAbsolute(fromPackage))
       throw new Error("Installed Appium CLI resolves outside its package");
   }
-  const versionResult = await exec(process.execPath, [cli, "--version"], {
-    timeout: 10_000,
+  const versionResult = await exec(process.execPath, [cli, "--version"], { timeout: 10_000, signal });
+  cancelled();
+  if (versionResult.killed || versionResult.code !== 0 || !versionResult.stdout.trim())
+    throw new Error("Appium CLI could not start");
+  const driverResult = await exec(process.execPath, [cli, "driver", "list", "--installed"], {
+    timeout: 20_000,
     signal,
   });
   cancelled();
-  if (
-    versionResult.killed ||
-    versionResult.code !== 0 ||
-    !versionResult.stdout.trim()
-  )
-    throw new Error("Appium CLI could not start");
-  const driverResult = await exec(
-    process.execPath,
-    [cli, "driver", "list", "--installed"],
-    { timeout: 20_000, signal },
-  );
-  cancelled();
-  if (
-    driverResult.killed ||
-    driverResult.code !== 0 ||
-    !/uiautomator2/i.test(driverResult.stdout)
-  )
-    throw new Error(
-      "Appium UiAutomator2 driver is not installed; run: appium driver install uiautomator2",
-    );
+  if (driverResult.killed || driverResult.code !== 0 || !/uiautomator2/i.test(driverResult.stdout))
+    throw new Error("Appium UiAutomator2 driver is not installed; run: appium driver install uiautomator2");
   return {
     command: process.execPath,
     args: [cli],
@@ -339,13 +263,11 @@ async function reservePort(): Promise<PortReservation> {
     const port = randomInt(40_000, 49_999);
     const reservation = await reserveHeliosPort(port);
     if (!reservation) continue;
-    const available = await new Promise<boolean>((resolveAvailable) => {
+    const available = await new Promise<boolean>(resolveAvailable => {
       const server = createServer();
       server.unref();
       server.once("error", () => resolveAvailable(false));
-      server.listen(port, "127.0.0.1", () =>
-        server.close(() => resolveAvailable(true)),
-      );
+      server.listen(port, "127.0.0.1", () => server.close(() => resolveAvailable(true)));
     });
     if (available) return reservation;
     await reservation.release();
@@ -355,9 +277,7 @@ async function reservePort(): Promise<PortReservation> {
 
 function tail(value: string, chunk: Buffer, maximum = 8_192): string {
   const next = value + chunk.toString("utf8");
-  return Buffer.byteLength(next) <= maximum
-    ? next
-    : Buffer.from(next).subarray(-maximum).toString("utf8");
+  return Buffer.byteLength(next) <= maximum ? next : Buffer.from(next).subarray(-maximum).toString("utf8");
 }
 
 export class AppiumServer {
@@ -378,7 +298,7 @@ export class AppiumServer {
     child.stderr?.on("data", (data: Buffer) => {
       this.stderr = tail(this.stderr, data);
     });
-    child.once("error", (error) => {
+    child.once("error", error => {
       this.startError = error.message;
     });
   }
@@ -430,14 +350,9 @@ export class AppiumServer {
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new Error("Appium startup cancelled");
-      if (this.startError)
-        throw new Error(
-          `Appium server could not start: ${compactError(this.startError)}`,
-        );
+      if (this.startError) throw new Error(`Appium server could not start: ${compactError(this.startError)}`);
       if (this.child.exitCode !== null)
-        throw new Error(
-          `Appium server exited during startup: ${compactError(this.stderr || this.stdout)}`,
-        );
+        throw new Error(`Appium server exited during startup: ${compactError(this.stderr || this.stdout)}`);
       try {
         await new AppiumClient(this.url).status(signal);
         return;
@@ -446,9 +361,7 @@ export class AppiumServer {
         throw new Error("Appium startup cancelled");
       });
     }
-    throw new Error(
-      `Appium server did not become ready: ${compactError(this.stderr || this.stdout)}`,
-    );
+    throw new Error(`Appium server did not become ready: ${compactError(this.stderr || this.stdout)}`);
   }
 
   async stop(): Promise<void> {
@@ -475,13 +388,9 @@ function compactError(value: string): string {
   );
 }
 
-async function responseBytes(
-  response: Response,
-  maximum: number,
-): Promise<Buffer> {
+async function responseBytes(response: Response, maximum: number): Promise<Buffer> {
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maximum)
-    throw new Error("Appium response is oversized");
+  if (Number.isFinite(declared) && declared > maximum) throw new Error("Appium response is oversized");
   const reader = response.body?.getReader();
   if (!reader) return Buffer.alloc(0);
   const chunks: Buffer[] = [];
@@ -499,13 +408,8 @@ async function responseBytes(
   return Buffer.concat(chunks, size);
 }
 
-function requestSignal(
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
-): AbortSignal {
-  return signal
-    ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
-    : AbortSignal.timeout(timeoutMs);
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  return signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
 }
 
 export class AppiumClient {
@@ -514,13 +418,7 @@ export class AppiumClient {
 
   constructor(endpoint: string) {
     const url = loopbackUrl(endpoint, ["http:"]);
-    if (
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash ||
-      !["", "/"].includes(url.pathname)
-    )
+    if (url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname))
       throw new Error("Appium endpoint must be a loopback HTTP origin");
     url.pathname = "/";
     this.baseUrl = url;
@@ -538,8 +436,7 @@ export class AppiumClient {
     const response = await fetch(url, {
       method,
       redirect: "error",
-      headers:
-        body === undefined ? undefined : { "content-type": "application/json" },
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: requestSignal(signal, timeoutMs),
     });
@@ -553,9 +450,7 @@ export class AppiumClient {
     const value = payload?.value;
     if (!response.ok || value?.error)
       throw new Error(
-        `Appium ${value?.error || response.status}: ${String(
-          value?.message || response.statusText,
-        )
+        `Appium ${value?.error || response.status}: ${String(value?.message || response.statusText)
           .replace(/[\r\n]+/g, " ")
           .slice(0, 500)}`,
       );
@@ -563,22 +458,11 @@ export class AppiumClient {
   }
 
   async status(signal?: AbortSignal): Promise<void> {
-    const payload = await this.request(
-      "GET",
-      "status",
-      undefined,
-      signal,
-      MAX_JSON_BYTES,
-      5_000,
-    );
-    if (payload?.value?.ready !== true)
-      throw new Error("Appium server is not ready");
+    const payload = await this.request("GET", "status", undefined, signal, MAX_JSON_BYTES, 5_000);
+    if (payload?.value?.ready !== true) throw new Error("Appium server is not ready");
   }
 
-  async createSession(
-    capabilities: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  async createSession(capabilities: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const payload = await this.request(
       "POST",
       "session",
@@ -588,8 +472,7 @@ export class AppiumClient {
       120_000,
     );
     const id = payload.sessionId ?? payload.value?.sessionId;
-    if (typeof id !== "string" || !id || id.length > 200)
-      throw new Error("Appium returned no valid session ID");
+    if (typeof id !== "string" || !id || id.length > 200) throw new Error("Appium returned no valid session ID");
     this.sessionId = id;
     return id;
   }
@@ -603,26 +486,14 @@ export class AppiumClient {
     if (!this.sessionId) return;
     const id = this.sessionId;
     try {
-      await this.request(
-        "DELETE",
-        `session/${encodeURIComponent(id)}`,
-        undefined,
-        signal,
-        MAX_JSON_BYTES,
-        15_000,
-      );
+      await this.request("DELETE", `session/${encodeURIComponent(id)}`, undefined, signal, MAX_JSON_BYTES, 15_000);
     } finally {
       this.sessionId = undefined;
     }
   }
 
   async currentPackage(signal?: AbortSignal): Promise<string> {
-    const payload = await this.request(
-      "GET",
-      this.path("/appium/device/current_package"),
-      undefined,
-      signal,
-    );
+    const payload = await this.request("GET", this.path("/appium/device/current_package"), undefined, signal);
     if (
       typeof payload.value !== "string" ||
       !payload.value ||
@@ -634,16 +505,8 @@ export class AppiumClient {
   }
 
   async source(signal?: AbortSignal): Promise<string> {
-    const payload = await this.request(
-      "GET",
-      this.path("/source"),
-      undefined,
-      signal,
-      MAX_JSON_BYTES,
-      30_000,
-    );
-    if (typeof payload.value !== "string")
-      throw new Error("Appium returned invalid Android source");
+    const payload = await this.request("GET", this.path("/source"), undefined, signal, MAX_JSON_BYTES, 30_000);
+    if (typeof payload.value !== "string") throw new Error("Appium returned invalid Android source");
     return payload.value;
   }
 
@@ -667,22 +530,11 @@ export class AppiumClient {
     return image;
   }
 
-  async windowRect(
-    signal?: AbortSignal,
-  ): Promise<{ width: number; height: number }> {
-    const payload = await this.request(
-      "GET",
-      this.path("/window/rect"),
-      undefined,
-      signal,
-    );
+  async windowRect(signal?: AbortSignal): Promise<{ width: number; height: number }> {
+    const payload = await this.request("GET", this.path("/window/rect"), undefined, signal);
     const width = Number(payload.value?.width),
       height = Number(payload.value?.height);
-    if (
-      ![width, height].every(
-        (value) => Number.isInteger(value) && value > 0 && value <= 16_384,
-      )
-    )
+    if (![width, height].every(value => Number.isInteger(value) && value > 0 && value <= 16_384))
       throw new Error("Appium returned an invalid window size");
     return { width, height };
   }
@@ -710,11 +562,7 @@ export class AppiumClient {
     );
   }
 
-  async swipe(
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async swipe(from: { x: number; y: number }, to: { x: number; y: number }, signal?: AbortSignal): Promise<void> {
     await this.request(
       "POST",
       this.path("/actions"),
@@ -738,31 +586,17 @@ export class AppiumClient {
   }
 
   async findByXpath(xpath: string, signal?: AbortSignal): Promise<string> {
-    const payload = await this.request(
-      "POST",
-      this.path("/element"),
-      { using: "xpath", value: xpath },
-      signal,
-    );
+    const payload = await this.request("POST", this.path("/element"), { using: "xpath", value: xpath }, signal);
     const id = payload.value?.[ELEMENT_KEY] ?? payload.value?.ELEMENT;
     if (typeof id !== "string" || !id || id.length > 500)
       throw new Error("Appium returned an invalid element reference");
     return id;
   }
 
-  async fillElement(
-    elementId: string,
-    text: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async fillElement(elementId: string, text: string, signal?: AbortSignal): Promise<void> {
     const element = `${this.path("/element/")}${encodeURIComponent(elementId)}`;
     await this.request("POST", `${element}/clear`, {}, signal);
-    await this.request(
-      "POST",
-      `${element}/value`,
-      { text, value: Array.from(text) },
-      signal,
-    );
+    await this.request("POST", `${element}/value`, { text, value: Array.from(text) }, signal);
   }
 
   async back(signal?: AbortSignal): Promise<void> {

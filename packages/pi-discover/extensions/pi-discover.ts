@@ -6,15 +6,10 @@ import { createIndexRegistry, registerIndexTools } from "../src/index.ts";
 import { createIndexLifecycle } from "../src/index-lifecycle.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 import { registerRg } from "../src/rg.ts";
-import {
-  registerSessionSearch,
-  registerSessionStats,
-} from "../src/sessions.ts";
+import { registerSessionSearch, registerSessionStats } from "../src/sessions.ts";
 import { createToolDiscovery } from "../src/tool-discovery.ts";
 
-const discoverChildToolsExtension = fileURLToPath(
-  new URL("../src/discover-child-tools.ts", import.meta.url),
-);
+const discoverChildToolsExtension = fileURLToPath(new URL("../src/discover-child-tools.ts", import.meta.url));
 
 export { workspacePath } from "../src/search-common.ts";
 export { relationshipRoles } from "../src/relationship-graph.ts";
@@ -32,18 +27,14 @@ export {
 /** Tools this extension owns, and the capability phrase each advertises to search_tools. */
 const TOOL_USAGE: Record<string, string> = {
   search_tools: "find and activate inactive tools by capability",
-  symbol_search:
-    "search local repository symbols by name, kind, language, or path",
+  symbol_search: "search local repository symbols by name, kind, language, or path",
   fd: "find files and directories by path pattern",
   rg: "search file contents with regex and line-numbered matches",
   code_search: "search indexed source with ranked lexical snippets",
-  relationship_graph:
-    "map source symbols or tokens to related files and source locations",
+  relationship_graph: "map source symbols or tokens to related files and source locations",
   index_status: "inspect local repository code-index status",
-  search_sessions:
-    "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
-  session_stats:
-    "inspect historical Pi session usage and tool-call statistics when explicitly requested",
+  search_sessions: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
+  session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
 };
 const MANAGED_TOOLS = Object.keys(TOOL_USAGE);
 /** Managed tools that stay inactive until search_tools activates them; search_tools, fd, and rg are always on. */
@@ -82,27 +73,20 @@ export default function discoverExtension(pi: ExtensionAPI) {
         coordinated = true;
       },
     });
-    if (!coordinated)
-      pi.setActiveTools(
-        pi.getActiveTools().filter((name) => !DEFERRED_TOOLS.includes(name)),
-      );
+    if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter(name => !DEFERRED_TOOLS.includes(name)));
   };
 
-  const disposeChildCapability = pi.events.on(
-    "pi-discover:child-tools-capability",
-    (request: any) => {
-      if (request?.version !== 2 || typeof request.respond !== "function")
-        return;
-      request.respond(
-        Object.freeze({
-          version: 2,
-          owner: "pi-discover",
-          childExtensionPath: discoverChildToolsExtension,
-          toolNames: Object.freeze([...DISCOVER_CHILD_TOOL_NAMES]),
-        }),
-      );
-    },
-  );
+  const disposeChildCapability = pi.events.on("pi-discover:child-tools-capability", (request: any) => {
+    if (request?.version !== 2 || typeof request.respond !== "function") return;
+    request.respond(
+      Object.freeze({
+        version: 2,
+        owner: "pi-discover",
+        childExtensionPath: discoverChildToolsExtension,
+        toolNames: Object.freeze([...DISCOVER_CHILD_TOOL_NAMES]),
+      }),
+    );
+  });
   const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond({
@@ -113,10 +97,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
       warning: index.hasError(),
     });
   });
-  const disposeIndexActions = pi.events.on(
-    "pi-discover:index-action",
-    index.handleAction,
-  );
+  const disposeIndexActions = pi.events.on("pi-discover:index-action", index.handleAction);
 
   pi.on("session_start", (_event, ctx) => {
     discovery.clearSessionState();
@@ -132,18 +113,13 @@ export default function discoverExtension(pi: ExtensionAPI) {
     disposeHealth();
     disposeIndexActions();
     index.publishUnavailable();
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "unregister",
-      owner: "pi-discover",
-    });
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-discover" });
     discovery.clearSessionState();
     await closeIndexes();
   });
 
   pi.registerCommand("discover-index", {
-    description:
-      "Refresh, rebuild, prune, or report the local pi-discover index",
+    description: "Refresh, rebuild, prune, or report the local pi-discover index",
     handler: (args, ctx) => index.runCommand(args, ctx),
   });
 }

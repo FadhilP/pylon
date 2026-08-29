@@ -14,10 +14,7 @@ export type ContinuityMemoryNoteReadModel = Pick<
   | "enforcementAuthority"
   | "revision"
   | "updatedAt"
-> & {
-  relatedPaths?: string[];
-  sourceSummary: string;
-};
+> & { relatedPaths?: string[]; sourceSummary: string };
 export interface ContinuityStateSnapshot {
   version: typeof CONTINUITY_STATE_VERSION;
   revision: number;
@@ -42,12 +39,7 @@ export interface ContinuityStateSnapshot {
     | "createdAt"
     | "updatedAt"
     | "completedAt"
-  > & {
-    approvalPending: boolean;
-    todos: Array<
-      Pick<Work["todos"][number], "id" | "text" | "status" | "updatedAt">
-    >;
-  };
+  > & { approvalPending: boolean; todos: Array<Pick<Work["todos"][number], "id" | "text" | "status" | "updatedAt">> };
 }
 export interface ContinuityStateRequest {
   version: typeof CONTINUITY_STATE_VERSION;
@@ -55,15 +47,10 @@ export interface ContinuityStateRequest {
   respond(value: ContinuityStateSnapshot): void;
 }
 const sourceSummary = (note: NotebookNote) => {
-  const repository = note.sourceRefs.filter(
-    (ref) => ref.type === "repository",
-  ).length;
-  if (repository)
-    return `${repository} repository source${repository === 1 ? "" : "s"}`;
-  if (note.sourceRefs.some((ref) => ref.type === "user_message"))
-    return "user instruction";
-  if (note.sourceRefs.some((ref) => ref.type === "direct_user_edit"))
-    return "direct user edit";
+  const repository = note.sourceRefs.filter(ref => ref.type === "repository").length;
+  if (repository) return `${repository} repository source${repository === 1 ? "" : "s"}`;
+  if (note.sourceRefs.some(ref => ref.type === "user_message")) return "user instruction";
+  if (note.sourceRefs.some(ref => ref.type === "direct_user_edit")) return "direct user edit";
   return "migration";
 };
 const memoryNote = (note: NotebookNote): ContinuityMemoryNoteReadModel => ({
@@ -75,9 +62,7 @@ const memoryNote = (note: NotebookNote): ContinuityMemoryNoteReadModel => ({
   origin: note.origin,
   disposition: note.disposition,
   enforcementAuthority: note.enforcementAuthority,
-  ...(note.relatedPaths?.length
-    ? { relatedPaths: note.relatedPaths.slice(0, 5) }
-    : {}),
+  ...(note.relatedPaths?.length ? { relatedPaths: note.relatedPaths.slice(0, 5) } : {}),
   revision: note.revision,
   updatedAt: note.updatedAt,
   sourceSummary: sourceSummary(note),
@@ -110,15 +95,9 @@ export function continuityStateSnapshot(
             ...(work.handoff
               ? {
                   handoff: {
-                    workingSet: work.handoff.workingSet
-                      .slice(0, 20)
-                      .map((value) => value.slice(0, 240)),
-                    assumptions: work.handoff.assumptions
-                      .slice(0, 12)
-                      .map((value) => value.slice(0, 500)),
-                    acceptanceCriteria: work.handoff.acceptanceCriteria
-                      .slice(0, 12)
-                      .map((value) => value.slice(0, 500)),
+                    workingSet: work.handoff.workingSet.slice(0, 20).map(value => value.slice(0, 240)),
+                    assumptions: work.handoff.assumptions.slice(0, 12).map(value => value.slice(0, 500)),
+                    acceptanceCriteria: work.handoff.acceptanceCriteria.slice(0, 12).map(value => value.slice(0, 500)),
                   },
                 }
               : {}),
@@ -132,22 +111,16 @@ export function continuityStateSnapshot(
                   },
                 }
               : {}),
-            ...(work.currentTodoId
-              ? { currentTodoId: work.currentTodoId.slice(0, 120) }
-              : {}),
-            ...(work.latestFailure
-              ? { latestFailure: work.latestFailure.slice(0, 1_000) }
-              : {}),
-            ...(work.nextAction
-              ? { nextAction: work.nextAction.slice(0, 1_000) }
-              : {}),
+            ...(work.currentTodoId ? { currentTodoId: work.currentTodoId.slice(0, 120) } : {}),
+            ...(work.latestFailure ? { latestFailure: work.latestFailure.slice(0, 1_000) } : {}),
+            ...(work.nextAction ? { nextAction: work.nextAction.slice(0, 1_000) } : {}),
             ...(work.runId ? { runId: work.runId.slice(0, 128) } : {}),
             createdAt: work.createdAt,
             updatedAt: work.updatedAt,
             ...(work.completedAt ? { completedAt: work.completedAt } : {}),
             todos: work.todos
               .slice(0, 12)
-              .map((todo) => ({
+              .map(todo => ({
                 id: todo.id.slice(0, 120),
                 text: todo.text.slice(0, 500),
                 status: todo.status,

@@ -1,17 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,9 +15,7 @@ import {
 } from "./appium.ts";
 import { terminateProcessTree } from "./process.ts";
 
-const TEMPLATE_DIRECTORY = fileURLToPath(
-  new URL("../tooling/android", import.meta.url),
-);
+const TEMPLATE_DIRECTORY = fileURLToPath(new URL("../tooling/android", import.meta.url));
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_BYTES = 16 * 1024;
 
@@ -40,34 +27,17 @@ export interface AndroidToolingStatus {
   message?: string;
 }
 
-type RunOptions = {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  timeout: number;
-  signal?: AbortSignal;
-};
-type RunCommand = (
-  command: string,
-  args: string[],
-  options: RunOptions,
-) => Promise<{ stdout: string }>;
+type RunOptions = { cwd: string; env: NodeJS.ProcessEnv; timeout: number; signal?: AbortSignal };
+type RunCommand = (command: string, args: string[], options: RunOptions) => Promise<{ stdout: string }>;
 
 function tail(current: string, chunk: Buffer): string {
-  if (chunk.length >= OUTPUT_BYTES)
-    return chunk.subarray(-OUTPUT_BYTES).toString("utf8");
+  if (chunk.length >= OUTPUT_BYTES) return chunk.subarray(-OUTPUT_BYTES).toString("utf8");
   const data = Buffer.concat([Buffer.from(current), chunk]);
-  return (
-    data.length <= OUTPUT_BYTES ? data : data.subarray(-OUTPUT_BYTES)
-  ).toString("utf8");
+  return (data.length <= OUTPUT_BYTES ? data : data.subarray(-OUTPUT_BYTES)).toString("utf8");
 }
 
-async function runCommand(
-  command: string,
-  args: string[],
-  options: RunOptions,
-): Promise<{ stdout: string }> {
-  if (options.signal?.aborted)
-    throw new Error("Android tooling setup cancelled");
+async function runCommand(command: string, args: string[], options: RunOptions): Promise<{ stdout: string }> {
+  if (options.signal?.aborted) throw new Error("Android tooling setup cancelled");
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -85,30 +55,22 @@ async function runCommand(
   child.stderr?.on("data", (data: Buffer) => {
     stderr = tail(stderr, data);
   });
-  child.once("error", (error) => {
+  child.once("error", error => {
     spawnError = error;
   });
-  const closed = new Promise<"closed">((resolve) =>
-    child.once("close", () => resolve("closed")),
-  );
+  const closed = new Promise<"closed">(resolve => child.once("close", () => resolve("closed")));
   let abort!: () => void;
-  const aborted = new Promise<"aborted">((resolve) => {
+  const aborted = new Promise<"aborted">(resolve => {
     abort = () => resolve("aborted");
   });
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
-  const outcome = await Promise.race([
-    closed,
-    aborted,
-    delay(options.timeout, "timeout" as const, { ref: false }),
-  ]);
-  if (outcome !== "closed" && child.pid)
-    await terminateProcessTree(child, "Android tooling setup", 1_000, 5_000);
+  const outcome = await Promise.race([closed, aborted, delay(options.timeout, "timeout" as const, { ref: false })]);
+  if (outcome !== "closed" && child.pid) await terminateProcessTree(child, "Android tooling setup", 1_000, 5_000);
   options.signal?.removeEventListener("abort", abort);
   if (outcome === "aborted") throw new Error("Android tooling setup cancelled");
   if (outcome === "timeout") throw new Error("Android tooling setup timed out");
-  if (spawnError)
-    throw new Error("Android tooling setup process could not start");
+  if (spawnError) throw new Error("Android tooling setup process could not start");
   if (child.exitCode !== 0)
     throw new Error(
       `Android tooling setup failed: ${
@@ -122,9 +84,7 @@ async function runCommand(
 }
 
 function concise(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error))
-    .replace(/[\r\n]+/g, " ")
-    .slice(0, 300);
+  return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, " ").slice(0, 300);
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -137,13 +97,9 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function requireOwnedDirectory(
-  path: string,
-  label: string,
-): Promise<string> {
+async function requireOwnedDirectory(path: string, label: string): Promise<string> {
   const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink())
-    throw new Error(`${label} is not a managed directory`);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`${label} is not a managed directory`);
   return realpath(path);
 }
 
@@ -155,12 +111,7 @@ export class AndroidToolingManager {
   private mutating = false;
 
   constructor(
-    options: {
-      agentDir?: string;
-      templateDirectory?: string;
-      run?: RunCommand;
-      env?: NodeJS.ProcessEnv;
-    } = {},
+    options: { agentDir?: string; templateDirectory?: string; run?: RunCommand; env?: NodeJS.ProcessEnv } = {},
   ) {
     this.agentDir = options.agentDir ?? getAgentDir();
     this.templateDirectory = options.templateDirectory ?? TEMPLATE_DIRECTORY;
@@ -174,36 +125,24 @@ export class AndroidToolingManager {
 
   private async ensureRoot(): Promise<void> {
     await mkdir(this.agentDir, { recursive: true, mode: 0o700 });
-    const agent = await requireOwnedDirectory(
-      this.agentDir,
-      "Pylon agent directory",
-    );
+    const agent = await requireOwnedDirectory(this.agentDir, "Pylon agent directory");
     const heliosPath = join(agent, "pi-helios");
     await mkdir(heliosPath, { recursive: true, mode: 0o700 });
-    const helios = await requireOwnedDirectory(
-      heliosPath,
-      "Helios data directory",
-    );
+    const helios = await requireOwnedDirectory(heliosPath, "Helios data directory");
     const rootPath = join(helios, "android-tooling");
     await mkdir(rootPath, { recursive: true, mode: 0o700 });
     const root = await requireOwnedDirectory(rootPath, "Android tooling root");
     if (relative(agent, root) !== join("pi-helios", "android-tooling"))
-      throw new Error(
-        "Android tooling root resolves outside the Pylon agent directory",
-      );
+      throw new Error("Android tooling root resolves outside the Pylon agent directory");
     const configured = await realpath(this.paths().root);
-    if (relative(root, configured) !== "")
-      throw new Error("Android tooling root is not canonical");
+    if (relative(root, configured) !== "") throw new Error("Android tooling root is not canonical");
   }
 
   private async staleLock(lock: string): Promise<boolean> {
     try {
       await requireOwnedDirectory(lock, "Android tooling lock");
-      const owner = JSON.parse(
-        await readFile(join(lock, "owner.json"), "utf8"),
-      ) as { pid?: unknown };
-      if (!Number.isSafeInteger(owner.pid) || (owner.pid as number) <= 0)
-        return false;
+      const owner = JSON.parse(await readFile(join(lock, "owner.json"), "utf8")) as { pid?: unknown };
+      if (!Number.isSafeInteger(owner.pid) || (owner.pid as number) <= 0) return false;
       if (owner.pid === process.pid) return false;
       try {
         process.kill(owner.pid as number, 0);
@@ -221,11 +160,7 @@ export class AndroidToolingManager {
       try {
         await mkdir(lock, { mode: 0o700 });
         try {
-          await writeFile(
-            join(lock, "owner.json"),
-            `${JSON.stringify({ pid: process.pid })}\n`,
-            { mode: 0o600 },
-          );
+          await writeFile(join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
         } catch (error) {
           await rm(lock, { recursive: true, force: true }).catch(() => {});
           throw error;
@@ -243,9 +178,7 @@ export class AndroidToolingManager {
             /* another process changed the lock */
           }
         }
-        throw new Error(
-          "Android tooling setup is locked by another Pylon process",
-        );
+        throw new Error("Android tooling setup is locked by another Pylon process");
       }
     }
   }
@@ -269,10 +202,7 @@ export class AndroidToolingManager {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const directory = await requireOwnedDirectory(
-      usage,
-      "Android tooling usage directory",
-    );
+    const directory = await requireOwnedDirectory(usage, "Android tooling usage directory");
     let active = 0;
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const candidate = join(directory, entry.name);
@@ -282,14 +212,8 @@ export class AndroidToolingManager {
       }
       let stale = false;
       try {
-        const owner = JSON.parse(
-          await readFile(join(candidate, "owner.json"), "utf8"),
-        ) as { pid?: unknown };
-        if (
-          Number.isSafeInteger(owner.pid) &&
-          (owner.pid as number) > 0 &&
-          owner.pid !== process.pid
-        ) {
+        const owner = JSON.parse(await readFile(join(candidate, "owner.json"), "utf8")) as { pid?: unknown };
+        if (Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0 && owner.pid !== process.pid) {
           try {
             process.kill(owner.pid as number, 0);
           } catch (error) {
@@ -297,11 +221,7 @@ export class AndroidToolingManager {
           }
         }
       } catch (error) {
-        if (
-          (error as NodeJS.ErrnoException).code === "ENOENT" &&
-          !(await exists(candidate))
-        )
-          continue;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && !(await exists(candidate))) continue;
       }
       if (!stale) {
         active++;
@@ -324,9 +244,7 @@ export class AndroidToolingManager {
     await this.ensureRoot();
     const { lock, usage } = this.paths();
     if (await exists(lock))
-      throw new Error(
-        "Android tooling setup is running; wait before starting an Android session",
-      );
+      throw new Error("Android tooling setup is running; wait before starting an Android session");
     try {
       await mkdir(usage, { mode: 0o700 });
     } catch (error) {
@@ -336,20 +254,14 @@ export class AndroidToolingManager {
     const lease = join(usage, `lease-${process.pid}-${randomUUID()}`);
     await mkdir(lease, { mode: 0o700 });
     try {
-      await writeFile(
-        join(lease, "owner.json"),
-        `${JSON.stringify({ pid: process.pid })}\n`,
-        { mode: 0o600 },
-      );
+      await writeFile(join(lease, "owner.json"), `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
     } catch (error) {
       await rm(lease, { recursive: true, force: true }).catch(() => {});
       throw error;
     }
     if (await exists(lock)) {
       await rm(lease, { recursive: true, force: true });
-      throw new Error(
-        "Android tooling setup is running; wait before starting an Android session",
-      );
+      throw new Error("Android tooling setup is running; wait before starting an Android session");
     }
     let released = false;
     return async () => {
@@ -365,46 +277,31 @@ export class AndroidToolingManager {
   async status(): Promise<AndroidToolingStatus> {
     const { lock, current, previous } = this.paths();
     if (this.mutating || (await exists(lock)))
-      return {
-        state: "busy",
-        appiumVersion: MANAGED_APPIUM_VERSION,
-        driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-      };
+      return { state: "busy", appiumVersion: MANAGED_APPIUM_VERSION, driverVersion: MANAGED_UIAUTOMATOR2_VERSION };
     if (!(await exists(current)) && (await exists(previous)))
       return {
         state: "invalid",
         appiumVersion: MANAGED_APPIUM_VERSION,
         driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-        message:
-          "Managed Android tooling recovery is incomplete. Use Repair to restore it.",
+        message: "Managed Android tooling recovery is incomplete. Use Repair to restore it.",
       };
     try {
       const invocation = await resolveManagedAppiumAt(current, this.env);
       return invocation
-        ? {
-            state: "ready",
-            appiumVersion: invocation.version,
-            driverVersion: invocation.driverVersion!,
-          }
-        : {
-            state: "missing",
-            appiumVersion: MANAGED_APPIUM_VERSION,
-            driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-          };
+        ? { state: "ready", appiumVersion: invocation.version, driverVersion: invocation.driverVersion! }
+        : { state: "missing", appiumVersion: MANAGED_APPIUM_VERSION, driverVersion: MANAGED_UIAUTOMATOR2_VERSION };
     } catch {
       return {
         state: "invalid",
         appiumVersion: MANAGED_APPIUM_VERSION,
         driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-        message:
-          "Managed Android tooling is invalid or incomplete. Use Repair to replace it.",
+        message: "Managed Android tooling is invalid or incomplete. Use Repair to replace it.",
       };
     }
   }
 
   private async acquire(): Promise<() => Promise<void>> {
-    if (this.mutating)
-      throw new Error("Android tooling setup is already running");
+    if (this.mutating) throw new Error("Android tooling setup is already running");
     this.mutating = true;
     const { lock } = this.paths();
     let claimed = false;
@@ -413,9 +310,7 @@ export class AndroidToolingManager {
       await this.claimLock(lock);
       claimed = true;
       if (await this.activeUsageLeases())
-        throw new Error(
-          "Close active Helios Android sessions before changing managed tooling",
-        );
+        throw new Error("Close active Helios Android sessions before changing managed tooling");
       return async () => {
         try {
           await rm(lock, { recursive: true, force: true });
@@ -424,8 +319,7 @@ export class AndroidToolingManager {
         }
       };
     } catch (error) {
-      if (claimed)
-        await rm(lock, { recursive: true, force: true }).catch(() => {});
+      if (claimed) await rm(lock, { recursive: true, force: true }).catch(() => {});
       this.mutating = false;
       throw error;
     }
@@ -444,34 +338,26 @@ export class AndroidToolingManager {
       await requireOwnedDirectory(candidate, "Abandoned Android tooling data");
       await rm(candidate, { recursive: true, force: true });
     }
-    if (!(await exists(current)) && (await exists(previous)))
-      await rename(previous, current);
+    if (!(await exists(current)) && (await exists(previous))) await rename(previous, current);
     if ((await exists(current)) && (await exists(previous))) {
       await requireOwnedDirectory(previous, "Previous Android tooling");
       await rm(previous, { recursive: true, force: true });
     }
   }
 
-  async install(
-    activeSessions = 0,
-    signal?: AbortSignal,
-  ): Promise<AndroidToolingStatus> {
+  async install(activeSessions = 0, signal?: AbortSignal): Promise<AndroidToolingStatus> {
     const release = await this.acquire();
     const { root, current, previous } = this.paths();
     const stage = join(root, `stage-${process.pid}-${randomUUID()}`);
     try {
-      if (activeSessions > 0)
-        throw new Error(
-          "Close active Helios Android sessions before repairing managed tooling",
-        );
+      if (activeSessions > 0) throw new Error("Close active Helios Android sessions before repairing managed tooling");
       await this.recover();
-      const template = JSON.parse(
-        await readFile(join(this.templateDirectory, "package.json"), "utf8"),
-      ) as { dependencies?: Record<string, string> };
+      const template = JSON.parse(await readFile(join(this.templateDirectory, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
       if (
         template.dependencies?.appium !== MANAGED_APPIUM_VERSION ||
-        template.dependencies?.["appium-uiautomator2-driver"] !==
-          MANAGED_UIAUTOMATOR2_VERSION
+        template.dependencies?.["appium-uiautomator2-driver"] !== MANAGED_UIAUTOMATOR2_VERSION
       )
         throw new Error("Bundled Android tooling versions are invalid");
       await mkdir(stage, { mode: 0o700 });
@@ -507,13 +393,13 @@ export class AndroidToolingManager {
         { cwd: stage, env, timeout: INSTALL_TIMEOUT_MS, signal },
       );
       const invocation = await resolveManagedAppiumAt(stage, env);
-      if (!invocation)
-        throw new Error("Managed Android tooling verification failed");
-      const version = await this.run(
-        invocation.command,
-        [...invocation.args, "--version"],
-        { cwd: stage, env, timeout: 30_000, signal },
-      );
+      if (!invocation) throw new Error("Managed Android tooling verification failed");
+      const version = await this.run(invocation.command, [...invocation.args, "--version"], {
+        cwd: stage,
+        env,
+        timeout: 30_000,
+        signal,
+      });
       if (version.stdout.trim() !== MANAGED_APPIUM_VERSION)
         throw new Error("Managed Appium version verification failed");
       const drivers = await this.run(
@@ -523,9 +409,7 @@ export class AndroidToolingManager {
       );
       let driver: Record<string, unknown> | undefined;
       try {
-        driver = (
-          JSON.parse(drivers.stdout) as Record<string, Record<string, unknown>>
-        ).uiautomator2;
+        driver = (JSON.parse(drivers.stdout) as Record<string, Record<string, unknown>>).uiautomator2;
       } catch {}
       if (
         !driver ||
@@ -538,9 +422,7 @@ export class AndroidToolingManager {
       const installPath = await realpath(driver.installPath);
       const fromStage = relative(await realpath(stage), installPath);
       if (!fromStage || fromStage.startsWith("..") || isAbsolute(fromStage))
-        throw new Error(
-          "Managed UiAutomator2 resolves outside the staged installation",
-        );
+        throw new Error("Managed UiAutomator2 resolves outside the staged installation");
       if (signal?.aborted) throw new Error("Android tooling setup cancelled");
       if (await exists(current)) {
         await requireOwnedDirectory(current, "Current Android tooling");
@@ -560,34 +442,22 @@ export class AndroidToolingManager {
         }
         throw error;
       }
-      if (await exists(previous))
-        await rm(previous, { recursive: true, force: true });
-      return {
-        state: "ready",
-        appiumVersion: MANAGED_APPIUM_VERSION,
-        driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-      };
+      if (await exists(previous)) await rm(previous, { recursive: true, force: true });
+      return { state: "ready", appiumVersion: MANAGED_APPIUM_VERSION, driverVersion: MANAGED_UIAUTOMATOR2_VERSION };
     } finally {
       try {
-        if (await exists(stage))
-          await rm(stage, { recursive: true, force: true }).catch(() => {});
+        if (await exists(stage)) await rm(stage, { recursive: true, force: true }).catch(() => {});
       } finally {
         await release();
       }
     }
   }
 
-  async remove(
-    activeSessions: number,
-    signal?: AbortSignal,
-  ): Promise<AndroidToolingStatus> {
+  async remove(activeSessions: number, signal?: AbortSignal): Promise<AndroidToolingStatus> {
     const release = await this.acquire();
     const { current, previous, root } = this.paths();
     try {
-      if (activeSessions > 0)
-        throw new Error(
-          "Close active Helios Android sessions before removing managed tooling",
-        );
+      if (activeSessions > 0) throw new Error("Close active Helios Android sessions before removing managed tooling");
       if (signal?.aborted) throw new Error("Android tooling removal cancelled");
       await this.recover();
       if (signal?.aborted) throw new Error("Android tooling removal cancelled");
@@ -597,13 +467,8 @@ export class AndroidToolingManager {
         await rename(current, removed);
         await rm(removed, { recursive: true, force: true });
       }
-      if (await exists(previous))
-        throw new Error("Previous Android tooling recovery is incomplete");
-      return {
-        state: "missing",
-        appiumVersion: MANAGED_APPIUM_VERSION,
-        driverVersion: MANAGED_UIAUTOMATOR2_VERSION,
-      };
+      if (await exists(previous)) throw new Error("Previous Android tooling recovery is incomplete");
+      return { state: "missing", appiumVersion: MANAGED_APPIUM_VERSION, driverVersion: MANAGED_UIAUTOMATOR2_VERSION };
     } finally {
       await release();
     }

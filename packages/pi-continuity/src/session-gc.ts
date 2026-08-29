@@ -1,12 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { listSessionInventory } from "pylon-core/session-inventory";
@@ -25,12 +18,7 @@ function isLease(value: any): value is Lease {
   );
 }
 function isLockOwner(value: any): value is LockOwner {
-  return (
-    value?.version === 1 &&
-    Number.isInteger(value.pid) &&
-    value.pid > 0 &&
-    typeof value.token === "string"
-  );
+  return value?.version === 1 && Number.isInteger(value.pid) && value.pid > 0 && typeof value.token === "string";
 }
 function processIsAlive(pid: number) {
   try {
@@ -71,15 +59,13 @@ async function withLock<T>(root: string, task: () => Promise<T>): Promise<T> {
         if (error?.code === "ENOENT") return true;
         throw Error("Unreadable continuity session-artifact lock.");
       }
-      if (!isLockOwner(active))
-        throw Error("Unreadable continuity session-artifact lock.");
+      if (!isLockOwner(active)) throw Error("Unreadable continuity session-artifact lock.");
       if (processIsAlive(active.pid)) return false;
       await rm(lock, { force: true });
       return true;
     } finally {
       const recoveryOwner = await readJson(recoveryLock);
-      if (isLockOwner(recoveryOwner) && recoveryOwner.token === token)
-        await rm(recoveryLock, { force: true });
+      if (isLockOwner(recoveryOwner) && recoveryOwner.token === token) await rm(recoveryLock, { force: true });
     }
   };
   try {
@@ -100,8 +86,7 @@ async function withLock<T>(root: string, task: () => Promise<T>): Promise<T> {
     return await task();
   } finally {
     const active = await readJson(lock);
-    if (isLockOwner(active) && active.token === token)
-      await rm(lock, { force: true });
+    if (isLockOwner(active) && active.token === token) await rm(lock, { force: true });
   }
 }
 
@@ -112,9 +97,7 @@ async function readLease(path: string): Promise<Lease | undefined> {
 
 async function liveLeases(directory: string) {
   const sessionIds = new Set<string>();
-  for (const entry of await readdir(directory, { withFileTypes: true }).catch(
-    () => [],
-  )) {
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(directory, entry.name),
       active = await readLease(path);
@@ -132,18 +115,12 @@ export async function startSessionGc(
   root: string,
   sessionId: string,
   cleanup: (liveSessionIds: ReadonlySet<string>) => Promise<void>,
-  listSessions: () => Promise<Array<{ id: string }>> = () =>
-    listSessionInventory(undefined, { strict: true }),
+  listSessions: () => Promise<Array<{ id: string }>> = () => listSessionInventory(undefined, { strict: true }),
 ) {
   const leases = join(root, "session-artifacts"),
     token = randomUUID(),
     leasePath = join(leases, `${encodeURIComponent(sessionId)}.${token}.json`),
-    lease: Lease = {
-      version: LEASE_VERSION,
-      sessionId,
-      pid: process.pid,
-      token,
-    };
+    lease: Lease = { version: LEASE_VERSION, sessionId, pid: process.pid, token };
 
   await withLock(root, async () => {
     await mkdir(leases, { recursive: true });
@@ -156,7 +133,7 @@ export async function startSessionGc(
     }
     const active = await liveLeases(leases);
     if (!active.safe) return;
-    const live = new Set(sessions.map((item) => item.id));
+    const live = new Set(sessions.map(item => item.id));
     live.add(sessionId);
     for (const id of active.sessionIds) live.add(id);
     await cleanup(live);
@@ -169,24 +146,16 @@ export async function startSessionGc(
       await rm(leasePath, { force: true });
       if (!cleanupIfLast) return;
       const active = await liveLeases(leases);
-      if (active.safe && !active.sessionIds.has(sessionId))
-        await cleanupIfLast();
+      if (active.safe && !active.sessionIds.has(sessionId)) await cleanupIfLast();
     });
 }
 
-export async function pruneOrphanWorkFiles(
-  root: string,
-  liveSessionIds: ReadonlySet<string>,
-) {
+export async function pruneOrphanWorkFiles(root: string, liveSessionIds: ReadonlySet<string>) {
   const workspaces = join(root, "workspaces");
-  for (const workspace of await readdir(workspaces, {
-    withFileTypes: true,
-  }).catch(() => [])) {
+  for (const workspace of await readdir(workspaces, { withFileTypes: true }).catch(() => [])) {
     if (!workspace.isDirectory()) continue;
     const sessions = join(workspaces, workspace.name, "sessions");
-    for (const entry of await readdir(sessions, { withFileTypes: true }).catch(
-      () => [],
-    )) {
+    for (const entry of await readdir(sessions, { withFileTypes: true }).catch(() => [])) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const encoded = entry.name.slice(0, -5);
       let sessionId: string;
@@ -195,11 +164,7 @@ export async function pruneOrphanWorkFiles(
       } catch {
         continue;
       }
-      if (
-        `${encodeURIComponent(sessionId)}.json` !== entry.name ||
-        liveSessionIds.has(sessionId)
-      )
-        continue;
+      if (`${encodeURIComponent(sessionId)}.json` !== entry.name || liveSessionIds.has(sessionId)) continue;
       await rm(join(sessions, entry.name), { force: true });
     }
   }

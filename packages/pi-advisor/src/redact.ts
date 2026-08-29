@@ -14,8 +14,5 @@ export function redact(text: string): { text: string; count: number } {
       count++;
       return marker;
     });
-  return {
-    text: output.replaceAll(marker, "[possible credential redacted]"),
-    count,
-  };
+  return { text: output.replaceAll(marker, "[possible credential redacted]"), count };
 }

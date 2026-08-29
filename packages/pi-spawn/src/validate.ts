@@ -8,10 +8,8 @@ const creationOnlyAgentFields = (params: any) =>
   params.systemPrompt !== undefined ||
   params.tools !== undefined ||
   params.disableSpecialists !== undefined;
-const creationOnlySessionFields = (params: any) =>
-  params.name !== undefined || params.model !== undefined;
-const runControlFields = (params: any) =>
-  params.runId !== undefined || params.background !== undefined;
+const creationOnlySessionFields = (params: any) => params.name !== undefined || params.model !== undefined;
+const runControlFields = (params: any) => params.runId !== undefined || params.background !== undefined;
 const creationOnlyFields = (kind: SpawnKind, params: any) =>
   kind === "agent"
     ? creationOnlyAgentFields(params)
@@ -21,25 +19,16 @@ const creationOnlyFields = (kind: SpawnKind, params: any) =>
 type Rule = (kind: SpawnKind, params: any) => string | undefined;
 
 const create: Rule = (kind, params) => {
-  if (params.id !== undefined || params.runId !== undefined)
-    return `${kind} create does not accept id or runId.`;
+  if (params.id !== undefined || params.runId !== undefined) return `${kind} create does not accept id or runId.`;
   if (!params.prompt?.trim()) return `${kind} create requires prompt.`;
   if (params.limit !== undefined || params.maxChars !== undefined)
     return `${kind} create does not accept recent limits.`;
-  if (
-    kind === "session" &&
-    params.project !== undefined &&
-    !params.project.trim()
-  )
+  if (kind === "session" && params.project !== undefined && !params.project.trim())
     return "session project must not be empty.";
   if (kind !== "agent" || params.tools === undefined) return;
-  const excluded = new Set([
-    ...SPAWN_TOOLS,
-    ...(params.disableSpecialists === false ? [] : SPECIALIST_TOOLS),
-  ]);
+  const excluded = new Set([...SPAWN_TOOLS, ...(params.disableSpecialists === false ? [] : SPECIALIST_TOOLS)]);
   const forbidden = params.tools.find((tool: string) => excluded.has(tool));
-  if (forbidden)
-    return `Agent tool allowlist cannot include excluded tool: ${forbidden}.`;
+  if (forbidden) return `Agent tool allowlist cannot include excluded tool: ${forbidden}.`;
 };
 
 const adopt: Rule = (kind, params) => {
@@ -47,28 +36,23 @@ const adopt: Rule = (kind, params) => {
   if (!params.id) return "session adopt requires id.";
   if (params.runId !== undefined) return "session adopt does not accept runId.";
   if (!params.prompt?.trim()) return "session adopt requires prompt.";
-  if (params.project !== undefined && !params.project.trim())
-    return "session project must not be empty.";
-  if (creationOnlySessionFields(params))
-    return "Session name and model cannot be changed on adopt.";
+  if (params.project !== undefined && !params.project.trim()) return "session project must not be empty.";
+  if (creationOnlySessionFields(params)) return "Session name and model cannot be changed on adopt.";
 };
 
 const proceed: Rule = (kind, params) => {
   if (!params.id) return `${kind} continue requires id.`;
-  if (params.runId !== undefined)
-    return `${kind} continue does not accept runId.`;
+  if (params.runId !== undefined) return `${kind} continue does not accept runId.`;
   if (!params.prompt?.trim()) return `${kind} continue requires prompt.`;
   if (params.limit !== undefined || params.maxChars !== undefined)
     return `${kind} continue does not accept recent limits.`;
-  if (kind === "agent" && creationOnlyAgentFields(params))
-    return "Agent creation policy cannot change on continue.";
+  if (kind === "agent" && creationOnlyAgentFields(params)) return "Agent creation policy cannot change on continue.";
   if (kind === "session" && creationOnlyFields(kind, params))
     return "Session name, model, and project can only be set on create or adopt.";
 };
 
 const collect: Rule = (kind, params) => {
-  if (!params.id || !params.runId)
-    return `${kind} ${params.action} requires id and runId.`;
+  if (!params.id || !params.runId) return `${kind} ${params.action} requires id and runId.`;
   if (
     params.prompt !== undefined ||
     params.background !== undefined ||
@@ -80,25 +64,15 @@ const collect: Rule = (kind, params) => {
 };
 
 const recent: Rule = (kind, params) => {
-  if (kind !== "agent")
-    return "Only private agents support recent transcript inspection.";
+  if (kind !== "agent") return "Only private agents support recent transcript inspection.";
   if (!params.id) return "agent recent requires id.";
-  if (
-    params.prompt !== undefined ||
-    runControlFields(params) ||
-    creationOnlyAgentFields(params)
-  )
+  if (params.prompt !== undefined || runControlFields(params) || creationOnlyAgentFields(params))
     return "agent recent does not accept prompts, runs, or creation fields.";
-  if (
-    params.limit !== undefined &&
-    (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 50)
-  )
+  if (params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 50))
     return "agent recent limit must be an integer between 1 and 50.";
   if (
     params.maxChars !== undefined &&
-    (!Number.isInteger(params.maxChars) ||
-      params.maxChars < 80 ||
-      params.maxChars > 2_000)
+    (!Number.isInteger(params.maxChars) || params.maxChars < 80 || params.maxChars > 2_000)
   )
     return "agent recent maxChars must be an integer between 80 and 2000.";
 };

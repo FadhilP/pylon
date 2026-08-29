@@ -12,11 +12,7 @@ function contentText(content: unknown): string {
     .join("\n");
 }
 
-export function buildParentContext(
-  entries: readonly any[],
-  maxChars = 6000,
-  maxItems = 10,
-): string {
+export function buildParentContext(entries: readonly any[], maxChars = 6000, maxItems = 10): string {
   if (maxChars <= 0 || maxItems <= 0) return "";
   const items: string[] = [];
   for (const entry of entries) {
@@ -25,10 +21,7 @@ export function buildParentContext(
       if (message?.role === "user") {
         const text = contentText(message.content);
         if (text) items.push(`User: ${text}`);
-      } else if (
-        message?.role === "assistant" &&
-        Array.isArray(message.content)
-      ) {
+      } else if (message?.role === "assistant" && Array.isArray(message.content)) {
         const text = contentText(message.content);
         if (text) items.push(`Main assistant: ${text}`);
         for (const part of message.content) {
@@ -46,17 +39,12 @@ export function buildParentContext(
       items.push(`Earlier context summary: ${entry.summary}`);
     } else if (entry?.type === "branch_summary" && entry.summary) {
       items.push(`Branch summary: ${entry.summary}`);
-    } else if (
-      entry?.type === "custom" &&
-      ["pi-prompt-checkpoint", "pi-verify-result"].includes(entry.customType)
-    ) {
+    } else if (entry?.type === "custom" && ["pi-prompt-checkpoint", "pi-verify-result"].includes(entry.customType)) {
       try {
         const data = { ...entry.data };
         delete data.worktreeRef;
         delete data.indexRef;
-        items.push(
-          `Repository state (${entry.customType}): ${JSON.stringify(data)}`,
-        );
+        items.push(`Repository state (${entry.customType}): ${JSON.stringify(data)}`);
       } catch {
         items.push(`Repository state (${entry.customType}): [unserializable]`);
       }
@@ -64,12 +52,6 @@ export function buildParentContext(
   }
 
   // Redact and clip each candidate before packing, so the budget reflects what is actually sent.
-  const bounded = items.map((item) =>
-    redact(item).text.slice(0, MAX_ITEM_CHARS),
-  );
-  return packRecentRecords(bounded, {
-    maxChars,
-    maxItems,
-    identity: (record) => record.replace(/\r\n/g, "\n").trim(),
-  });
+  const bounded = items.map(item => redact(item).text.slice(0, MAX_ITEM_CHARS));
+  return packRecentRecords(bounded, { maxChars, maxItems, identity: record => record.replace(/\r\n/g, "\n").trim() });
 }

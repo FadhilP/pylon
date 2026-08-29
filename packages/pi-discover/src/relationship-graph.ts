@@ -1,18 +1,7 @@
-import {
-  DEFAULT_MAX_BYTES,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
-import {
-  executableAvailable,
-  type ExecutableProbe,
-} from "pylon-core/executable";
+import { DEFAULT_MAX_BYTES, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { executableAvailable, type ExecutableProbe } from "pylon-core/executable";
 import { Type } from "typebox";
-import {
-  fitJson,
-  runSearch,
-  workspacePath,
-  type SearchRunOptions,
-} from "./search-common.ts";
+import { fitJson, runSearch, workspacePath, type SearchRunOptions } from "./search-common.ts";
 
 const MAX_GRAPH_RESULTS = 100;
 const DEFAULT_GRAPH_RESULTS = 40;
@@ -22,52 +11,30 @@ const MAX_MATCHING_FILES = 100;
 const MAX_PARSED_EVENTS = 1_000;
 const MAX_SEARCH_FILE_BYTES = 512 * 1024;
 
-type RelationshipRole =
-  | "possible_definition"
-  | "possible_import"
-  | "possible_export"
-  | "possible_call"
-  | "reference";
-type RelationshipMatch = {
-  path: string;
-  line: number;
-  text: string;
-  roles: RelationshipRole[];
-};
-type RelationshipFile = {
-  path: string;
-  locations: Array<Omit<RelationshipMatch, "path">>;
-};
+type RelationshipRole = "possible_definition" | "possible_import" | "possible_export" | "possible_call" | "reference";
+type RelationshipMatch = { path: string; line: number; text: string; roles: RelationshipRole[] };
+type RelationshipFile = { path: string; locations: Array<Omit<RelationshipMatch, "path">> };
 
 function regexpEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function relationshipRoles(
-  query: string,
-  source: string,
-): RelationshipRole[] {
+export function relationshipRoles(query: string, source: string): RelationshipRole[] {
   const symbol = regexpEscape(query);
   const roles: RelationshipRole[] = [];
   if (
     new RegExp(
       `\\b(?:function|class|interface|type|enum|namespace|const|let|var|def|fn)\\s+${symbol}(?:\\b|\\s*[:=(<])`,
     ).test(source) ||
-    new RegExp(`\\bfunc(?:\\s*\\([^)]*\\))?\\s+${symbol}\\s*\\(`).test(
-      source,
-    ) ||
+    new RegExp(`\\bfunc(?:\\s*\\([^)]*\\))?\\s+${symbol}\\s*\\(`).test(source) ||
     new RegExp(
       `^\\s*(?:(?:public|private|protected|static|abstract|async|override)\\s+)*(?:[A-Za-z_$][\\w$<>,.?\\[\\]]*\\s+)?${symbol}\\s*\\([^;{}]*\\)\\s*(?::[^;{=]+)?\\s*(?:\\{|=>)`,
     ).test(source)
   )
     roles.push("possible_definition");
-  if (/\b(?:import|from|require|use|using|include)\b/.test(source))
-    roles.push("possible_import");
+  if (/\b(?:import|from|require|use|using|include)\b/.test(source)) roles.push("possible_import");
   if (/\bexport\b/.test(source)) roles.push("possible_export");
-  if (
-    !roles.includes("possible_definition") &&
-    new RegExp(`${symbol}\\s*(?:\\?\\.)?\\(`).test(source)
-  )
+  if (!roles.includes("possible_definition") && new RegExp(`${symbol}\\s*(?:\\?\\.)?\\(`).test(source))
     roles.push("possible_call");
   return roles.length ? roles : ["reference"];
 }
@@ -76,12 +43,7 @@ function parseRelationshipMatches(
   output: string,
   query: string,
   perFileLimit: number,
-): {
-  matches: RelationshipMatch[];
-  observed: number;
-  malformed: number;
-  searchMayBeTruncated: boolean;
-} {
+): { matches: RelationshipMatch[]; observed: number; malformed: number; searchMayBeTruncated: boolean } {
   const matches: RelationshipMatch[] = [];
   const seen = new Set<string>();
   const pathCounts = new Map<string, number>();
@@ -101,11 +63,7 @@ function parseRelationshipMatches(
       const path = event.data?.path?.text;
       const line = event.data?.line_number;
       const source = event.data?.lines?.text;
-      if (
-        typeof path !== "string" ||
-        typeof line !== "number" ||
-        typeof source !== "string"
-      ) {
+      if (typeof path !== "string" || typeof line !== "number" || typeof source !== "string") {
         malformed++;
         continue;
       }
@@ -114,9 +72,7 @@ function parseRelationshipMatches(
       if (seen.has(key)) continue;
       seen.add(key);
       observed++;
-      const text = source
-        .replace(/[\r\n]+$/, "")
-        .slice(0, MAX_GRAPH_SOURCE_CHARS);
+      const text = source.replace(/[\r\n]+$/, "").slice(0, MAX_GRAPH_SOURCE_CHARS);
       matches.push({ path, line, text, roles: relationshipRoles(query, text) });
     } catch {
       malformed++;
@@ -126,9 +82,7 @@ function parseRelationshipMatches(
     matches,
     observed,
     malformed,
-    searchMayBeTruncated:
-      parserTruncated ||
-      [...pathCounts.values()].some((count) => count >= perFileLimit),
+    searchMayBeTruncated: parserTruncated || [...pathCounts.values()].some(count => count >= perFileLimit),
   };
 }
 
@@ -168,8 +122,7 @@ function relationshipValue(report: RelationshipReport, returned: number) {
     metadata: {
       observedMatchCount: report.observed,
       returnedCount: selected.length,
-      truncated:
-        selected.length < report.observed || report.searchMayBeTruncated,
+      truncated: selected.length < report.observed || report.searchMayBeTruncated,
       searchMayBeTruncated: report.searchMayBeTruncated,
       malformedEvents: report.malformed,
       matchingFileCount: report.matchingFileCount,
@@ -182,13 +135,10 @@ function relationshipValue(report: RelationshipReport, returned: number) {
 
 function relationshipMap(report: RelationshipReport, maxBytes: number) {
   const fitted = fitJson(
-    (returned) => relationshipValue(report, returned),
+    returned => relationshipValue(report, returned),
     Math.min(report.requested, report.matches.length),
     maxBytes,
-    [
-      { files: [], metadata: { returnedCount: 0, truncated: true } },
-      { files: [] },
-    ],
+    [{ files: [], metadata: { returnedCount: 0, truncated: true } }, { files: [] }],
   );
   return { value: relationshipValue(report, fitted.count), text: fitted.text };
 }
@@ -203,8 +153,7 @@ export function registerRelationshipGraph(
     label: "Relationship map",
     description:
       "Build a bounded grouped heuristic map of files and source locations mentioning a function, type, variable, command, or token. Roles are candidates, not semantic resolution; confirm important relationships from source before relying on them.",
-    promptSnippet:
-      "Map a query token to grouped file and source-location relationships",
+    promptSnippet: "Map a query token to grouped file and source-location relationships",
     promptGuidelines: [
       "Use relationship_graph to orient around a known symbol or token. Treat roles as heuristics; confirm important relationships from source.",
     ],
@@ -217,17 +166,9 @@ export function registerRelationshipGraph(
           description: "Exact symbol or token to map",
         }),
         path: Type.Optional(
-          Type.String({
-            maxLength: 500,
-            description: "Workspace-relative file or directory; default .",
-          }),
+          Type.String({ maxLength: 500, description: "Workspace-relative file or directory; default ." }),
         ),
-        glob: Type.Optional(
-          Type.String({
-            maxLength: 200,
-            description: "Optional file glob, such as *.ts",
-          }),
-        ),
+        glob: Type.Optional(Type.String({ maxLength: 200, description: "Optional file glob, such as *.ts" })),
         max_results: Type.Optional(
           Type.Integer({
             minimum: 1,
@@ -240,10 +181,7 @@ export function registerRelationshipGraph(
     ),
     async execute(_id, params, signal, _update, ctx) {
       const query = params.query.trim();
-      if (!query)
-        throw new Error(
-          "Relationship query must contain a non-whitespace token",
-        );
+      if (!query) throw new Error("Relationship query must contain a non-whitespace token");
       const path = workspacePath(ctx.cwd, params.path);
       const maxResults = params.max_results ?? DEFAULT_GRAPH_RESULTS;
       const perFileLimit = Math.min(maxResults, MAX_MATCHES_PER_FILE);
@@ -263,12 +201,7 @@ export function registerRelationshipGraph(
         return args;
       };
       const unavailableResult = () => ({
-        content: [
-          {
-            type: "text" as const,
-            text: "ripgrep unavailable; relationship map was not built.",
-          },
-        ],
+        content: [{ type: "text" as const, text: "ripgrep unavailable; relationship map was not built." }],
         details: { unavailable: true },
       });
       // rg reporting no matches is trusted here; probing on every empty map is not worth the spawn.
@@ -281,17 +214,9 @@ export function registerRelationshipGraph(
         run,
       );
       if (fileOutcome.status === "missing") return unavailableResult();
-      const matchingFiles =
-        fileOutcome.status === "empty"
-          ? []
-          : fileOutcome.result.stdout.split("\0").filter(Boolean);
+      const matchingFiles = fileOutcome.status === "empty" ? [] : fileOutcome.result.stdout.split("\0").filter(Boolean);
       const files = matchingFiles.slice(0, MAX_MATCHING_FILES);
-      let parsed = {
-        matches: [] as RelationshipMatch[],
-        observed: 0,
-        malformed: 0,
-        searchMayBeTruncated: false,
-      };
+      let parsed = { matches: [] as RelationshipMatch[], observed: 0, malformed: 0, searchMayBeTruncated: false };
       if (files.length) {
         const outcome = await runSearch(
           pi,
@@ -311,12 +236,7 @@ export function registerRelationshipGraph(
           run,
         );
         if (outcome.status === "missing") return unavailableResult();
-        if (outcome.status === "ok")
-          parsed = parseRelationshipMatches(
-            outcome.result.stdout,
-            query,
-            perFileLimit,
-          );
+        if (outcome.status === "ok") parsed = parseRelationshipMatches(outcome.result.stdout, query, perFileLimit);
       }
       parsed.searchMayBeTruncated ||= matchingFiles.length > files.length;
       const { value, text } = relationshipMap(
@@ -333,10 +253,7 @@ export function registerRelationshipGraph(
         },
         maxBytes,
       );
-      return {
-        content: [{ type: "text" as const, text }],
-        details: value.metadata,
-      };
+      return { content: [{ type: "text" as const, text }], details: value.metadata };
     },
   });
 }

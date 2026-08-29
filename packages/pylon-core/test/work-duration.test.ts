@@ -38,70 +38,31 @@ function assistant(text: string) {
 }
 
 test("work durations are validated", () => {
-  const valid = {
-    version: 1,
-    assistantEntryId: "assistant-1",
-    durationMs: 12_345,
-  };
+  const valid = { version: 1, assistantEntryId: "assistant-1", durationMs: 12_345 };
   assert.deepEqual(parseWorkDuration(valid), valid);
-  assert.equal(
-    parseWorkDuration({ ...valid, assistantEntryId: "../assistant" }),
-    undefined,
-  );
+  assert.equal(parseWorkDuration({ ...valid, assistantEntryId: "../assistant" }), undefined);
   assert.equal(parseWorkDuration({ ...valid, durationMs: -1 }), undefined);
-  assert.equal(
-    parseWorkDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }),
-    undefined,
-  );
+  assert.equal(parseWorkDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }), undefined);
   assert.equal(parseWorkDuration({ ...valid, durationMs: 1.5 }), undefined);
-  assert.equal(
-    parseWorkDuration({ ...valid, padding: "x".repeat(1_024) }),
-    undefined,
-  );
+  assert.equal(parseWorkDuration({ ...valid, padding: "x".repeat(1_024) }), undefined);
 });
 
 test("turn Git branches are validated", () => {
-  const valid = {
-    version: 1,
-    assistantEntryId: "assistant-1",
-    gitBranch: "feature/turn-branches",
-  };
+  const valid = { version: 1, assistantEntryId: "assistant-1", gitBranch: "feature/turn-branches" };
   assert.deepEqual(parseTurnGitBranch(valid), valid);
-  assert.equal(
-    parseTurnGitBranch({ ...valid, assistantEntryId: "../assistant" }),
-    undefined,
-  );
+  assert.equal(parseTurnGitBranch({ ...valid, assistantEntryId: "../assistant" }), undefined);
   assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "" }), undefined);
-  assert.equal(
-    parseTurnGitBranch({ ...valid, gitBranch: "x".repeat(201) }),
-    undefined,
-  );
-  assert.equal(
-    parseTurnGitBranch({ ...valid, gitBranch: "feature\nunsafe" }),
-    undefined,
-  );
+  assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "x".repeat(201) }), undefined);
+  assert.equal(parseTurnGitBranch({ ...valid, gitBranch: "feature\nunsafe" }), undefined);
 });
 
 test("tool durations accept provider IDs and reject unsafe bounds", () => {
-  const valid = {
-    version: 1,
-    toolCallId: "call_h4vNJBk3x4Tca1eaI8kOlmab|fc_0051fc92ddf5b487",
-    durationMs: 1_250,
-  };
+  const valid = { version: 1, toolCallId: "call_h4vNJBk3x4Tca1eaI8kOlmab|fc_0051fc92ddf5b487", durationMs: 1_250 };
   assert.deepEqual(parseToolDuration(valid), valid);
-  assert.equal(
-    parseToolDuration({ ...valid, toolCallId: "call\u0000one" }),
-    undefined,
-  );
-  assert.equal(
-    parseToolDuration({ ...valid, toolCallId: "x".repeat(129) }),
-    undefined,
-  );
+  assert.equal(parseToolDuration({ ...valid, toolCallId: "call\u0000one" }), undefined);
+  assert.equal(parseToolDuration({ ...valid, toolCallId: "x".repeat(129) }), undefined);
   assert.equal(parseToolDuration({ ...valid, durationMs: -1 }), undefined);
-  assert.equal(
-    parseToolDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }),
-    undefined,
-  );
+  assert.equal(parseToolDuration({ ...valid, durationMs: MAX_WORK_DURATION_MS + 1 }), undefined);
 });
 
 test("work durations survive reload and follow the active branch", async () => {
@@ -122,19 +83,11 @@ test("work durations survive reload and follow the active branch", async () => {
     assert.equal(appendWorkDuration(session, "../assistant", 1), false);
 
     const resumed = SessionManager.open(session.getSessionFile()!);
-    assert.equal(
-      readPersistedWorkDurations(resumed).get(assistantEntryId),
-      23_456,
-    );
+    assert.equal(readPersistedWorkDurations(resumed).get(assistantEntryId), 23_456);
 
     resumed.branch(userEntryId);
-    const otherAssistantEntryId = resumed.appendMessage(
-      assistant("Different branch"),
-    );
-    assert.equal(
-      appendWorkDuration(resumed, otherAssistantEntryId, 34_567),
-      true,
-    );
+    const otherAssistantEntryId = resumed.appendMessage(assistant("Different branch"));
+    assert.equal(appendWorkDuration(resumed, otherAssistantEntryId, 34_567), true);
     const branchDurations = readPersistedWorkDurations(resumed);
     assert.equal(branchDurations.has(assistantEntryId), false);
     assert.equal(branchDurations.get(otherAssistantEntryId), 34_567);
@@ -156,33 +109,16 @@ test("turn Git branches survive reload and follow the active branch", async () =
       timestamp: Date.now(),
     });
     const assistantEntryId = session.appendMessage(assistant("Done"));
-    assert.equal(
-      appendTurnGitBranch(session, assistantEntryId, "feature/one"),
-      true,
-    );
-    assert.equal(
-      appendTurnGitBranch(session, assistantEntryId, "feature/two"),
-      true,
-    );
-    assert.equal(
-      appendTurnGitBranch(session, "../assistant", "feature/unsafe"),
-      false,
-    );
+    assert.equal(appendTurnGitBranch(session, assistantEntryId, "feature/one"), true);
+    assert.equal(appendTurnGitBranch(session, assistantEntryId, "feature/two"), true);
+    assert.equal(appendTurnGitBranch(session, "../assistant", "feature/unsafe"), false);
 
     const resumed = SessionManager.open(session.getSessionFile()!);
-    assert.equal(
-      readPersistedTurnGitBranches(resumed).get(assistantEntryId),
-      "feature/two",
-    );
+    assert.equal(readPersistedTurnGitBranches(resumed).get(assistantEntryId), "feature/two");
 
     resumed.branch(userEntryId);
-    const otherAssistantEntryId = resumed.appendMessage(
-      assistant("Different branch"),
-    );
-    assert.equal(
-      appendTurnGitBranch(resumed, otherAssistantEntryId, "feature/other"),
-      true,
-    );
+    const otherAssistantEntryId = resumed.appendMessage(assistant("Different branch"));
+    assert.equal(appendTurnGitBranch(resumed, otherAssistantEntryId, "feature/other"), true);
     const branches = readPersistedTurnGitBranches(resumed);
     assert.equal(branches.has(assistantEntryId), false);
     assert.equal(branches.get(otherAssistantEntryId), "feature/other");
@@ -206,14 +142,7 @@ test("tool durations survive reload and follow the active branch", async () => {
     });
     session.appendMessage({
       ...assistant(""),
-      content: [
-        {
-          type: "toolCall",
-          id: toolCallId,
-          name: "read",
-          arguments: { path: "a.ts" },
-        },
-      ],
+      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: { path: "a.ts" } }],
     });
     assert.equal(appendToolDuration(session, toolCallId, 1_250), true);
     assert.equal(appendToolDuration(session, toolCallId, 2_500), true);

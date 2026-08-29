@@ -103,14 +103,8 @@ const extensionKinds: Record<string, FileIconKind> = {
 };
 
 export function fileIconKind(path: string): FileIconKind {
-  const name =
-    path.replaceAll("\\", "/").split("/").at(-1)?.toLocaleLowerCase() ?? "";
-  if (
-    name === "package.json" ||
-    name === "package-lock.json" ||
-    name === "npm-shrinkwrap.json"
-  )
-    return "npm";
+  const name = path.replaceAll("\\", "/").split("/").at(-1)?.toLocaleLowerCase() ?? "";
+  if (name === "package.json" || name === "package-lock.json" || name === "npm-shrinkwrap.json") return "npm";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "docker";
   if (name === "readme" || name.startsWith("readme.")) return "markdown";
   if (name === "license" || name.startsWith("license.")) return "text";

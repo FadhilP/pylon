@@ -3,11 +3,7 @@ import { matchesGlob } from "node:path";
 export const MEMORY_TRIGGER_DSL_VERSION = 1;
 export const MEMORY_COMPILER_VERSION = 1;
 
-export type AgentEventKind =
-  | "task_started"
-  | "before_tool_call"
-  | "after_tool_result"
-  | "context_compacted";
+export type AgentEventKind = "task_started" | "before_tool_call" | "after_tool_result" | "context_compacted";
 export type TriggerFact =
   | "event.kind"
   | "tool.name"
@@ -19,18 +15,14 @@ export type TriggerFact =
   | "task.phase"
   | "attempt.count";
 type Primitive = string | number | boolean;
-type TriggerOperator =
-  "eq" | "neq" | "contains" | "startsWith" | "matchesGlob" | "gte";
+type TriggerOperator = "eq" | "neq" | "contains" | "startsWith" | "matchesGlob" | "gte";
 
 export type TriggerExpression =
   | { all: TriggerExpression[] }
   | { any: TriggerExpression[] }
   | { not: TriggerExpression }
   | { fact: TriggerFact; op: TriggerOperator; value: Primitive };
-export type EventFixture = {
-  event: AgentEventKind;
-  facts: Partial<Record<TriggerFact, Primitive>>;
-};
+export type EventFixture = { event: AgentEventKind; facts: Partial<Record<TriggerFact, Primitive>> };
 export type ActivationDraft = {
   classification: "grounded" | "semantic_guarded" | "archival";
   subscriptions: AgentEventKind[];
@@ -38,12 +30,7 @@ export type ActivationDraft = {
   semanticGuard?: { condition: string; abstainOnUnknown: true };
   delivery: "inject_once" | "warn" | "block_candidate" | "validate_candidate";
   lifecycle: {
-    activateUntil:
-      | "event_complete"
-      | "task_complete"
-      | "session_complete"
-      | "source_changes"
-      | "explicit_revocation";
+    activateUntil: "event_complete" | "task_complete" | "session_complete" | "source_changes" | "explicit_revocation";
     rearmOn: AgentEventKind[];
   };
   examples: { positive: EventFixture[]; hardNegative: EventFixture[] };
@@ -91,28 +78,20 @@ const FACTS: readonly TriggerFact[] = [
   "task.phase",
   "attempt.count",
 ];
-const OPERATORS: readonly TriggerOperator[] = [
-  "eq",
-  "neq",
-  "contains",
-  "startsWith",
-  "matchesGlob",
-  "gte",
-];
+const OPERATORS: readonly TriggerOperator[] = ["eq", "neq", "contains", "startsWith", "matchesGlob", "gte"];
 const DELIVERIES: readonly ActivationDraft["delivery"][] = [
   "inject_once",
   "warn",
   "block_candidate",
   "validate_candidate",
 ];
-const ACTIVATION_UNTIL: readonly ActivationDraft["lifecycle"]["activateUntil"][] =
-  [
-    "event_complete",
-    "task_complete",
-    "session_complete",
-    "source_changes",
-    "explicit_revocation",
-  ];
+const ACTIVATION_UNTIL: readonly ActivationDraft["lifecycle"]["activateUntil"][] = [
+  "event_complete",
+  "task_complete",
+  "session_complete",
+  "source_changes",
+  "explicit_revocation",
+];
 const EMPTY_RULES: readonly CompiledRule[] = Object.freeze([]);
 
 const invalid = (): never => {
@@ -120,17 +99,11 @@ const invalid = (): never => {
 };
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const exactKeys = (
-  value: unknown,
-  keys: readonly string[],
-): value is Record<string, unknown> =>
-  isRecord(value) && Object.keys(value).every((key) => keys.includes(key));
+const exactKeys = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
+  isRecord(value) && Object.keys(value).every(key => keys.includes(key));
 const isPrimitive = (value: unknown): value is Primitive =>
-  typeof value === "string" ||
-  (typeof value === "number" && Number.isFinite(value)) ||
-  typeof value === "boolean";
-const validString = (value: unknown): value is string =>
-  typeof value === "string" && value.length <= 500;
+  typeof value === "string" || (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean";
+const validString = (value: unknown): value is string => typeof value === "string" && value.length <= 500;
 const validEvent = (value: unknown): value is AgentEventKind =>
   typeof value === "string" && EVENT_KINDS.includes(value as AgentEventKind);
 const validFact = (value: unknown): value is TriggerFact =>
@@ -151,45 +124,29 @@ function parseFacts(value: unknown): Partial<Record<TriggerFact, Primitive>> {
     facts: Partial<Record<TriggerFact, Primitive>> = {};
   for (const key of Object.keys(input)) {
     const fact = input[key];
-    if (!isPrimitive(fact) || (typeof fact === "string" && !validString(fact)))
-      invalid();
+    if (!isPrimitive(fact) || (typeof fact === "string" && !validString(fact))) invalid();
     facts[key as TriggerFact] = fact as Primitive;
   }
   return facts;
 }
 
-function parseExpression(
-  value: unknown,
-  state: { nodes: number },
-  depth: number,
-): TriggerExpression {
+function parseExpression(value: unknown, state: { nodes: number }, depth: number): TriggerExpression {
   if (++state.nodes > 64 || depth > 8 || !isRecord(value)) invalid();
   const input = value as Record<string, unknown>;
   if ("all" in input) {
-    if (
-      !exactKeys(input, ["all"]) ||
-      Object.keys(input).length !== 1 ||
-      !Array.isArray(input.all)
-    )
-      invalid();
+    if (!exactKeys(input, ["all"]) || Object.keys(input).length !== 1 || !Array.isArray(input.all)) invalid();
     const list = input.all as unknown[];
     if (list.length < 1 || list.length > 16) invalid();
-    return { all: list.map((item) => parseExpression(item, state, depth + 1)) };
+    return { all: list.map(item => parseExpression(item, state, depth + 1)) };
   }
   if ("any" in input) {
-    if (
-      !exactKeys(input, ["any"]) ||
-      Object.keys(input).length !== 1 ||
-      !Array.isArray(input.any)
-    )
-      invalid();
+    if (!exactKeys(input, ["any"]) || Object.keys(input).length !== 1 || !Array.isArray(input.any)) invalid();
     const list = input.any as unknown[];
     if (list.length < 1 || list.length > 16) invalid();
-    return { any: list.map((item) => parseExpression(item, state, depth + 1)) };
+    return { any: list.map(item => parseExpression(item, state, depth + 1)) };
   }
   if ("not" in input) {
-    if (!exactKeys(input, ["not"]) || Object.keys(input).length !== 1)
-      invalid();
+    if (!exactKeys(input, ["not"]) || Object.keys(input).length !== 1) invalid();
     return { not: parseExpression(input.not, state, depth + 1) };
   }
   if (
@@ -221,28 +178,16 @@ function parseFixture(value: unknown): EventFixture {
   return { event, facts: { ...facts, "event.kind": event } };
 }
 
-function parseExamples(
-  value: unknown,
-  classification: ActivationDraft["classification"],
-): ActivationDraft["examples"] {
+function parseExamples(value: unknown, classification: ActivationDraft["classification"]): ActivationDraft["examples"] {
   if (!exactKeys(value, ["positive", "hardNegative"])) invalid();
   const input = value as Record<string, unknown>;
-  if (!Array.isArray(input.positive) || !Array.isArray(input.hardNegative))
-    invalid();
+  if (!Array.isArray(input.positive) || !Array.isArray(input.hardNegative)) invalid();
   const positive = input.positive as unknown[],
     hardNegative = input.hardNegative as unknown[],
     minimum = classification === "archival" ? 0 : 1;
-  if (
-    positive.length < minimum ||
-    positive.length > 8 ||
-    hardNegative.length < minimum ||
-    hardNegative.length > 8
-  )
+  if (positive.length < minimum || positive.length > 8 || hardNegative.length < minimum || hardNegative.length > 8)
     invalid();
-  return {
-    positive: positive.map(parseFixture),
-    hardNegative: hardNegative.map(parseFixture),
-  };
+  return { positive: positive.map(parseFixture), hardNegative: hardNegative.map(parseFixture) };
 }
 
 function parseLifecycle(value: unknown): ActivationDraft["lifecycle"] {
@@ -250,14 +195,11 @@ function parseLifecycle(value: unknown): ActivationDraft["lifecycle"] {
   const input = value as Record<string, unknown>;
   if (
     typeof input.activateUntil !== "string" ||
-    !ACTIVATION_UNTIL.includes(
-      input.activateUntil as ActivationDraft["lifecycle"]["activateUntil"],
-    )
+    !ACTIVATION_UNTIL.includes(input.activateUntil as ActivationDraft["lifecycle"]["activateUntil"])
   )
     invalid();
   return {
-    activateUntil:
-      input.activateUntil as ActivationDraft["lifecycle"]["activateUntil"],
+    activateUntil: input.activateUntil as ActivationDraft["lifecycle"]["activateUntil"],
     rearmOn: parseEventList(input.rearmOn),
   };
 }
@@ -275,27 +217,13 @@ function cloneDraft(draft: ActivationDraft): ActivationDraft {
     subscriptions: [...draft.subscriptions],
     ...(draft.predicate ? { predicate: cloneExpression(draft.predicate) } : {}),
     ...(draft.semanticGuard
-      ? {
-          semanticGuard: {
-            condition: draft.semanticGuard.condition,
-            abstainOnUnknown: true,
-          },
-        }
+      ? { semanticGuard: { condition: draft.semanticGuard.condition, abstainOnUnknown: true } }
       : {}),
     delivery: draft.delivery,
-    lifecycle: {
-      activateUntil: draft.lifecycle.activateUntil,
-      rearmOn: [...draft.lifecycle.rearmOn],
-    },
+    lifecycle: { activateUntil: draft.lifecycle.activateUntil, rearmOn: [...draft.lifecycle.rearmOn] },
     examples: {
-      positive: draft.examples.positive.map((fixture) => ({
-        event: fixture.event,
-        facts: { ...fixture.facts },
-      })),
-      hardNegative: draft.examples.hardNegative.map((fixture) => ({
-        event: fixture.event,
-        facts: { ...fixture.facts },
-      })),
+      positive: draft.examples.positive.map(fixture => ({ event: fixture.event, facts: { ...fixture.facts } })),
+      hardNegative: draft.examples.hardNegative.map(fixture => ({ event: fixture.event, facts: { ...fixture.facts } })),
     },
   };
 }
@@ -315,48 +243,24 @@ export function validateActivationDraft(value: unknown): ActivationDraft {
     invalid();
   const input = value as Record<string, unknown>,
     rawClassification = input.classification;
-  if (
-    rawClassification !== "grounded" &&
-    rawClassification !== "semantic_guarded" &&
-    rawClassification !== "archival"
-  )
+  if (rawClassification !== "grounded" && rawClassification !== "semantic_guarded" && rawClassification !== "archival")
     invalid();
   const classification = rawClassification as ActivationDraft["classification"];
   const subscriptions = parseEventList(input.subscriptions),
     examples = parseExamples(input.examples, classification),
     lifecycle = parseLifecycle(input.lifecycle);
-  if (
-    typeof input.delivery !== "string" ||
-    !DELIVERIES.includes(input.delivery as ActivationDraft["delivery"])
-  )
+  if (typeof input.delivery !== "string" || !DELIVERIES.includes(input.delivery as ActivationDraft["delivery"]))
     invalid();
-  const predicate =
-    input.predicate === undefined
-      ? undefined
-      : parseExpression(input.predicate, { nodes: 0 }, 1);
+  const predicate = input.predicate === undefined ? undefined : parseExpression(input.predicate, { nodes: 0 }, 1);
   let semanticGuard: ActivationDraft["semanticGuard"];
   if (input.semanticGuard !== undefined) {
-    if (!exactKeys(input.semanticGuard, ["condition", "abstainOnUnknown"]))
-      invalid();
+    if (!exactKeys(input.semanticGuard, ["condition", "abstainOnUnknown"])) invalid();
     const guard = input.semanticGuard as Record<string, unknown>;
-    if (
-      !validString(guard.condition) ||
-      !guard.condition.length ||
-      guard.abstainOnUnknown !== true
-    )
-      invalid();
-    semanticGuard = {
-      condition: guard.condition as string,
-      abstainOnUnknown: true,
-    };
+    if (!validString(guard.condition) || !guard.condition.length || guard.abstainOnUnknown !== true) invalid();
+    semanticGuard = { condition: guard.condition as string, abstainOnUnknown: true };
   }
   if (classification === "archival") {
-    if (
-      subscriptions.length ||
-      predicate !== undefined ||
-      semanticGuard !== undefined
-    )
-      invalid();
+    if (subscriptions.length || predicate !== undefined || semanticGuard !== undefined) invalid();
   } else if (classification === "grounded") {
     if (!predicate || semanticGuard !== undefined) invalid();
   } else if (!predicate || !semanticGuard) invalid();
@@ -364,12 +268,8 @@ export function validateActivationDraft(value: unknown): ActivationDraft {
     if (!subscriptions.includes(fixture.event)) invalid();
   if (
     predicate &&
-    (!examples.positive.every(
-      (fixture) => evaluateTrigger(predicate, fixture) === true,
-    ) ||
-      !examples.hardNegative.every(
-        (fixture) => evaluateTrigger(predicate, fixture) === false,
-      ))
+    (!examples.positive.every(fixture => evaluateTrigger(predicate, fixture) === true) ||
+      !examples.hardNegative.every(fixture => evaluateTrigger(predicate, fixture) === false))
   )
     invalid();
   return cloneDraft({
@@ -383,18 +283,12 @@ export function validateActivationDraft(value: unknown): ActivationDraft {
   });
 }
 
-function factValue(
-  event: EventFrame | EventFixture,
-  fact: TriggerFact,
-): Primitive | undefined {
+function factValue(event: EventFrame | EventFixture, fact: TriggerFact): Primitive | undefined {
   if (fact === "event.kind") return "kind" in event ? event.kind : event.event;
   return event.facts[fact];
 }
 
-export function evaluateTrigger(
-  expression: TriggerExpression,
-  event: EventFrame | EventFixture,
-): TriggerResult {
+export function evaluateTrigger(expression: TriggerExpression, event: EventFrame | EventFixture): TriggerResult {
   if ("all" in expression) {
     let unknown = false;
     for (const item of expression.all) {
@@ -422,16 +316,10 @@ export function evaluateTrigger(
   if (expression.op === "eq") return actual === expression.value;
   if (expression.op === "neq") return actual !== expression.value;
   if (expression.op === "gte")
-    return (
-      typeof actual === "number" &&
-      typeof expression.value === "number" &&
-      actual >= expression.value
-    );
-  if (typeof actual !== "string" || typeof expression.value !== "string")
-    return false;
+    return typeof actual === "number" && typeof expression.value === "number" && actual >= expression.value;
+  if (typeof actual !== "string" || typeof expression.value !== "string") return false;
   if (expression.op === "contains") return actual.includes(expression.value);
-  if (expression.op === "startsWith")
-    return actual.startsWith(expression.value);
+  if (expression.op === "startsWith") return actual.startsWith(expression.value);
   try {
     return matchesGlob(actual, expression.value);
   } catch {
@@ -458,46 +346,26 @@ export function compileActivationDraft(
     subscriptions: [...validated.subscriptions],
     predicate: cloneExpression(validated.predicate!),
     ...(validated.semanticGuard
-      ? {
-          semanticGuard: {
-            condition: validated.semanticGuard.condition,
-            abstainOnUnknown: true,
-          },
-        }
+      ? { semanticGuard: { condition: validated.semanticGuard.condition, abstainOnUnknown: true } }
       : {}),
     delivery: validated.delivery,
-    lifecycle: {
-      activateUntil: validated.lifecycle.activateUntil,
-      rearmOn: [...validated.lifecycle.rearmOn],
-    },
+    lifecycle: { activateUntil: validated.lifecycle.activateUntil, rearmOn: [...validated.lifecycle.rearmOn] },
   };
 }
 
-export function buildRuleIndex(
-  rules: readonly CompiledRule[],
-): ReadonlyMap<AgentEventKind, readonly CompiledRule[]> {
+export function buildRuleIndex(rules: readonly CompiledRule[]): ReadonlyMap<AgentEventKind, readonly CompiledRule[]> {
   const indexed = new Map<AgentEventKind, CompiledRule[]>();
   const ordered = [...rules].sort(
-    (left, right) =>
-      left.memoryId.localeCompare(right.memoryId) ||
-      left.noteRevision - right.noteRevision,
+    (left, right) => left.memoryId.localeCompare(right.memoryId) || left.noteRevision - right.noteRevision,
   );
   for (const rule of ordered)
     for (const subscription of rule.subscriptions) {
       const entries = indexed.get(subscription) ?? [];
-      if (
-        !entries.some(
-          (entry) =>
-            entry.memoryId === rule.memoryId &&
-            entry.noteRevision === rule.noteRevision,
-        )
-      )
+      if (!entries.some(entry => entry.memoryId === rule.memoryId && entry.noteRevision === rule.noteRevision))
         entries.push(rule);
       indexed.set(subscription, entries);
     }
-  return new Map(
-    [...indexed].map(([kind, entries]) => [kind, Object.freeze(entries)]),
-  );
+  return new Map([...indexed].map(([kind, entries]) => [kind, Object.freeze(entries)]));
 }
 
 export function candidateRules(
@@ -507,12 +375,7 @@ export function candidateRules(
   return index.get(event.kind) ?? EMPTY_RULES;
 }
 
-export function evaluateCompiledRule(
-  rule: CompiledRule,
-  event: EventFrame,
-): TriggerResult {
+export function evaluateCompiledRule(rule: CompiledRule, event: EventFrame): TriggerResult {
   const deterministic = evaluateTrigger(rule.predicate, event);
-  return rule.classification === "semantic_guarded" && deterministic === true
-    ? "unknown"
-    : deterministic;
+  return rule.classification === "semantic_guarded" && deterministic === true ? "unknown" : deterministic;
 }

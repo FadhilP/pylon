@@ -1,24 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  chmod,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  rmdir,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const WEB_SCOUT_GRANT_ENV = "PI_HELIOS_WEB_SCOUT_GRANT";
 const GRANT_ROOT = join(tmpdir(), "pi-helios-web-grants");
@@ -43,17 +26,9 @@ function equal(left: string, right: string): boolean {
 export async function issueWebScoutGrant(
   options: WebScoutGrant,
 ): Promise<{ value: string; revoke: () => Promise<void> }> {
-  if (
-    !Number.isInteger(options.maxPages) ||
-    options.maxPages < 1 ||
-    options.maxPages > 12
-  )
+  if (!Number.isInteger(options.maxPages) || options.maxPages < 1 || options.maxPages > 12)
     throw new Error("Web Scout maxPages must be 1 to 12");
-  if (
-    !Number.isInteger(options.maxActions) ||
-    options.maxActions < options.maxPages ||
-    options.maxActions > 80
-  )
+  if (!Number.isInteger(options.maxActions) || options.maxActions < options.maxPages || options.maxActions > 80)
     throw new Error("Web Scout maxActions is invalid");
   await mkdir(GRANT_ROOT, { recursive: true, mode: 0o700 });
   await chmod(GRANT_ROOT, 0o700).catch(() => {});
@@ -61,30 +36,17 @@ export async function issueWebScoutGrant(
   await chmod(directory, 0o700).catch(() => {});
   const path = join(directory, "grant.json");
   const token = randomBytes(32).toString("base64url");
-  const grant: GrantFile = {
-    version: 1,
-    token,
-    expiresAt: Date.now() + 60_000,
-    ...options,
-  };
+  const grant: GrantFile = { version: 1, token, expiresAt: Date.now() + 60_000, ...options };
   await writeFile(path, `${JSON.stringify(grant)}\n`, { mode: 0o600 });
   const revoke = async () => {
     await rm(path, { force: true }).catch(() => {});
     await rmdir(directory).catch(() => {});
   };
-  return {
-    value: Buffer.from(JSON.stringify({ path, token }), "utf8").toString(
-      "base64url",
-    ),
-    revoke,
-  };
+  return { value: Buffer.from(JSON.stringify({ path, token }), "utf8").toString("base64url"), revoke };
 }
 
-export async function consumeWebScoutGrant(
-  encoded = process.env[WEB_SCOUT_GRANT_ENV],
-): Promise<WebScoutGrant> {
-  if (!encoded || encoded.length > 4096)
-    throw new Error("Web Scout browser grant is missing");
+export async function consumeWebScoutGrant(encoded = process.env[WEB_SCOUT_GRANT_ENV]): Promise<WebScoutGrant> {
+  if (!encoded || encoded.length > 4096) throw new Error("Web Scout browser grant is missing");
   let envelope: { path?: unknown; token?: unknown };
   try {
     envelope = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
@@ -110,11 +72,7 @@ export async function consumeWebScoutGrant(
       realpath(directory),
       lstat(path),
     ]);
-    if (
-      relative(rootPath, directoryPath).startsWith("..") ||
-      fileInfo.isSymbolicLink() ||
-      !fileInfo.isFile()
-    )
+    if (relative(rootPath, directoryPath).startsWith("..") || fileInfo.isSymbolicLink() || !fileInfo.isFile())
       throw new Error();
   } catch {
     throw new Error("Web Scout browser grant path is invalid");
@@ -143,9 +101,5 @@ export async function consumeWebScoutGrant(
   await rm(path, { force: true });
   await rmdir(directory).catch(() => {});
   delete process.env[WEB_SCOUT_GRANT_ENV];
-  return {
-    maxPages: grant.maxPages,
-    maxActions: grant.maxActions,
-    headed: grant.headed,
-  };
+  return { maxPages: grant.maxPages, maxActions: grant.maxActions, headed: grant.headed };
 }

@@ -1,15 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -34,9 +26,7 @@ import { projectContext, worktreeFingerprint } from "../src/worktree.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const isolatedAgentDir = await mkdtemp(
-  join(tmpdir(), "continuity-extension-agent-"),
-);
+const isolatedAgentDir = await mkdtemp(join(tmpdir(), "continuity-extension-agent-"));
 process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
 after(async () => {
   if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -45,13 +35,8 @@ after(async () => {
 });
 
 async function waitFor(predicate: () => boolean) {
-  for (let attempt = 0; attempt < 100 && !predicate(); attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(
-    predicate(),
-    true,
-    "timed out waiting for asynchronous extension action",
-  );
+  for (let attempt = 0; attempt < 100 && !predicate(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
 }
 
 const generatedWriteDraft = (): ActivationDraft => ({
@@ -66,18 +51,8 @@ const generatedWriteDraft = (): ActivationDraft => ({
   delivery: "warn",
   lifecycle: { activateUntil: "task_complete", rearmOn: ["context_compacted"] },
   examples: {
-    positive: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" },
-      },
-    ],
-    hardNegative: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "edit", "file.path": "src/source/client.ts" },
-      },
-    ],
+    positive: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" } }],
+    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/source/client.ts" } }],
   },
 });
 const formatCommandDraft = (): ActivationDraft => ({
@@ -92,23 +67,11 @@ const formatCommandDraft = (): ActivationDraft => ({
   delivery: "warn",
   lifecycle: { activateUntil: "event_complete", rearmOn: [] },
   examples: {
-    positive: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "bash", "tool.command": "dart format lib" },
-      },
-    ],
-    hardNegative: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "bash", "tool.command": "echo dart format" },
-      },
-    ],
+    positive: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "dart format lib" } }],
+    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "echo dart format" } }],
   },
 });
-const activatedNote = (
-  overrides: Partial<NotebookNote> = {},
-): NotebookNote => ({
+const activatedNote = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
   id: serverNoteId(),
   scope: "user",
   owner: "default",
@@ -120,10 +83,7 @@ const activatedNote = (
   disposition: "eligible_advisory",
   enforcementAuthority: "warning",
   activationDraft: generatedWriteDraft(),
-  rawProposal: {
-    trigger: "editing generated files",
-    guidance: "Edit the generator instead.",
-  },
+  rawProposal: { trigger: "editing generated files", guidance: "Edit the generator instead." },
   rewriteCharacter: "format_only",
   revision: 1,
   createdAt: "2025-01-01T00:00:00.000Z",
@@ -164,11 +124,9 @@ function runtime(initialActive = ["read", "edit", "continuity_update"]) {
     setActiveTools: (next: string[]) => {
       active = [...next];
     },
-    on: (name: string, handler: Function) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    registerCommand: (name: string, command: any) =>
-      commands.set(name, command),
+    registerCommand: (name: string, command: any) => commands.set(name, command),
     appendEntry: (customType: string, data: any) => {
       if (appendFailure) {
         const error = appendFailure;
@@ -236,12 +194,7 @@ test("package settings disable durable memory while keeping planning and recall"
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
   try {
     await saveConfig({ version: 2, memoryEnabled: false });
-    const app = runtime([
-      "read",
-      "memory",
-      "continuity_recall",
-      "continuity_update",
-    ]);
+    const app = runtime(["read", "memory", "continuity_recall", "continuity_update"]);
     const ctx: any = {
       cwd,
       hasUI: false,
@@ -255,23 +208,16 @@ test("package settings disable durable memory while keeping planning and recall"
       },
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     assert.equal(app.active().includes("memory"), false);
     assert.equal(app.active().includes("continuity_recall"), true);
     assert.equal(app.active().includes("continuity_update"), true);
     const policy = app.emitted
-      .filter(
-        (event) =>
-          event.channel === "pylon:tool-policy" &&
-          event.value?.kind === "register",
-      )
+      .filter(event => event.channel === "pylon:tool-policy" && event.value?.kind === "register")
       .at(-1)?.value;
     assert.deepEqual(policy.deferredTools, ["continuity_recall"]);
     assert.equal(policy.toolUsage.memory, undefined);
-    const result = await app.tools
-      .get("memory")
-      .execute("stale", { action: "list" }, undefined, undefined, ctx);
+    const result = await app.tools.get("memory").execute("stale", { action: "list" }, undefined, undefined, ctx);
     assert.equal(result.details.memoryError, true);
     assert.match(result.content[0].text, /disabled in package settings/i);
     const beforeAgentStart = app.handlers.get("before_agent_start")![0];
@@ -287,18 +233,14 @@ test("memory is deferred only until a Memory Reviewer is configured", async () =
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
     for (const reviewerConfigured of [false, true]) {
-      const root = await mkdtemp(
-        join(tmpdir(), `continuity-memory-exposure-${reviewerConfigured}-`),
-      );
+      const root = await mkdtemp(join(tmpdir(), `continuity-memory-exposure-${reviewerConfigured}-`));
       process.env.PI_CODING_AGENT_DIR = join(root, "agent");
       try {
         await mkdir(join(root, "repo"));
         await saveConfig({
           version: 2,
           memoryEnabled: true,
-          ...(reviewerConfigured
-            ? { memoryReviewer: { model: "openai/reviewer" } }
-            : {}),
+          ...(reviewerConfigured ? { memoryReviewer: { model: "openai/reviewer" } } : {}),
         });
         const app = runtime(["read", "continuity_update"]);
         const ctx: any = {
@@ -314,23 +256,15 @@ test("memory is deferred only until a Memory Reviewer is configured", async () =
           },
           ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
         };
-        for (const handler of app.handlers.get("session_start") ?? [])
-          await handler({}, ctx);
+        for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
         const policy = app.emitted
-          .filter(
-            (event) =>
-              event.channel === "pylon:tool-policy" &&
-              event.value?.kind === "register",
-          )
+          .filter(event => event.channel === "pylon:tool-policy" && event.value?.kind === "register")
           .at(-1)?.value;
         assert.deepEqual(
           policy.deferredTools,
-          reviewerConfigured
-            ? ["continuity_recall"]
-            : ["continuity_recall", "memory"],
+          reviewerConfigured ? ["continuity_recall"] : ["continuity_recall", "memory"],
         );
-        for (const handler of app.handlers.get("session_shutdown") ?? [])
-          await handler();
+        for (const handler of app.handlers.get("session_shutdown") ?? []) await handler();
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -386,38 +320,19 @@ test("V5 notes migrate losslessly to archival V6 without prompt-similarity activ
           getBranch: () => [],
           buildContextEntries: () => [],
         },
-        ui: {
-          notify: () => {},
-          confirm: async () => true,
-          setStatus: () => {},
-          setWidget: () => {},
-        },
+        ui: { notify: () => {}, confirm: async () => true, setStatus: () => {}, setWidget: () => {} },
       };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
-    const migrated = JSON.parse(
-      await readFile(
-        join(agentDir, "pi-continuity", "memory-v6", "state.json"),
-        "utf8",
-      ),
-    );
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const migrated = JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "state.json"), "utf8"));
     assert.equal(migrated.schemaVersion, 6);
     assert.equal(migrated.notes[0].guidance, "Restart runtime services.");
     assert.equal(migrated.notes[0].disposition, "archival");
     assert.equal(
-      JSON.parse(
-        await readFile(
-          join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"),
-          "utf8",
-        ),
-      ).status,
+      JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"), "utf8")).status,
       "activated",
     );
     assert.equal(
-      await app.handlers.get("before_agent_start")![0](
-        { prompt: "package configuration runtime" },
-        ctx,
-      ),
+      await app.handlers.get("before_agent_start")![0]({ prompt: "package configuration runtime" }, ctx),
       undefined,
     );
     const oldMemory = {
@@ -431,28 +346,16 @@ test("V5 notes migrate losslessly to archival V6 without prompt-similarity activ
       ctx,
     );
     assert.deepEqual(
-      result.messages.filter(
-        (message: any) => message.customType === "pi-continuity-memory",
-      ),
+      result.messages.filter((message: any) => message.customType === "pi-continuity-memory"),
       [],
     );
     await app.commands.get("memory").handler("rollback", ctx);
     assert.deepEqual(
-      JSON.parse(
-        await readFile(
-          join(agentDir, "pi-continuity", "memory-v6", "state.json"),
-          "utf8",
-        ),
-      ).notes,
+      JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "state.json"), "utf8")).notes,
       [],
     );
     assert.equal(
-      JSON.parse(
-        await readFile(
-          join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"),
-          "utf8",
-        ),
-      ).status,
+      JSON.parse(await readFile(join(agentDir, "pi-continuity", "memory-v6", "migration-v5.json"), "utf8")).status,
       "rolled_back",
     );
     assert.equal(await readFile(v5Path, "utf8"), rawV5);
@@ -474,24 +377,18 @@ test("grounded rules activate from typed tool events without interrupting the ac
     trigger: "running Dart formatting",
     guidance: "Do not run Dart format.",
     activationDraft: formatCommandDraft(),
-    rawProposal: {
-      trigger: "running Dart formatting",
-      guidance: "Do not run Dart format.",
-    },
+    rawProposal: { trigger: "running Dart formatting", guidance: "Do not run Dart format." },
   });
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await saveConfig({ version: 2, memoryEnabled: true });
-    await writeJsonAtomic(
-      join(agentDir, "pi-continuity", "memory-v6", "state.json"),
-      {
-        ...emptyMemoryState(),
-        revision: 1,
-        notes: [memory, commandMemory],
-        updatedAt: new Date().toISOString(),
-      },
-    );
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), {
+      ...emptyMemoryState(),
+      revision: 1,
+      notes: [memory, commandMemory],
+      updatedAt: new Date().toISOString(),
+    });
     const app = runtime(["read", "edit", "continuity_update"]),
       ctx: any = {
         cwd,
@@ -506,49 +403,23 @@ test("grounded rules activate from typed tool events without interrupting the ac
         },
         ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
       };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const toolCall = app.handlers.get("tool_call")![0];
     assert.equal(
-      await toolCall(
-        {
-          toolName: "edit",
-          toolCallId: "source",
-          input: { path: "src/source/client.ts" },
-        },
-        ctx,
-      ),
+      await toolCall({ toolName: "edit", toolCallId: "source", input: { path: "src/source/client.ts" } }, ctx),
       undefined,
     );
+    assert.equal(app.customMessages.length, 0, "hard negative produces no intervention");
     assert.equal(
-      app.customMessages.length,
-      0,
-      "hard negative produces no intervention",
-    );
-    assert.equal(
-      await toolCall(
-        {
-          toolName: "edit",
-          toolCallId: "generated",
-          input: { path: "src/generated/client.ts" },
-        },
-        ctx,
-      ),
+      await toolCall({ toolName: "edit", toolCallId: "generated", input: { path: "src/generated/client.ts" } }, ctx),
       undefined,
     );
     assert.equal(app.customMessages.length, 1);
-    assert.match(
-      app.customMessages[0]!.message.content,
-      /Edit the generator instead/,
-    );
+    assert.match(app.customMessages[0]!.message.content, /Edit the generator instead/);
     assert.equal(app.customMessages[0]!.options.deliverAs, "steer");
     assert.equal(
       await toolCall(
-        {
-          toolName: "edit",
-          toolCallId: "generated-sibling",
-          input: { path: "src/generated/other.ts" },
-        },
+        { toolName: "edit", toolCallId: "generated-sibling", input: { path: "src/generated/other.ts" } },
         ctx,
       ),
       undefined,
@@ -559,34 +430,20 @@ test("grounded rules activate from typed tool events without interrupting the ac
       "a visible event-complete memory is not queued again for a sibling tool call",
     );
     assert.equal(
-      await toolCall(
-        {
-          toolName: "read",
-          toolCallId: "sibling",
-          input: { path: "README.md" },
-        },
-        ctx,
-      ),
+      await toolCall({ toolName: "read", toolCallId: "sibling", input: { path: "README.md" } }, ctx),
       undefined,
       "unrelated siblings are never blocked",
     );
     const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
     assert.equal(
       await toolCall(
-        {
-          toolName: "bash",
-          toolCallId: "format",
-          input: { command: `dart format lib --token=${credential}` },
-        },
+        { toolName: "bash", toolCallId: "format", input: { command: `dart format lib --token=${credential}` } },
         ctx,
       ),
       undefined,
     );
     assert.equal(app.customMessages.length, 2);
-    assert.match(
-      app.customMessages[1]!.message.content,
-      /Do not run Dart format/,
-    );
+    assert.match(app.customMessages[1]!.message.content, /Do not run Dart format/);
     await app.handlers.get("tool_result")![0](
       {
         toolName: "bash",
@@ -598,11 +455,7 @@ test("grounded rules activate from typed tool events without interrupting the ac
       },
       ctx,
     );
-    assert.equal(
-      app.customMessages.length,
-      2,
-      "before/result hooks deduplicate by causal tool call",
-    );
+    assert.equal(app.customMessages.length, 2, "before/result hooks deduplicate by causal tool call");
     assert.doesNotMatch(
       JSON.stringify({ appended: app.appended, messages: app.customMessages }),
       new RegExp(credential),
@@ -658,31 +511,22 @@ test("changed project evidence suppresses new activation and active reinjection"
       projectOwner: owner,
       reviewedAt: memory.createdAt,
       status: "committed",
-      verificationStatus: {
-        status: "verified",
-        verifiedAt: memory.createdAt,
-        sourceSnapshotId: sha256(excerptSha256),
-      },
+      verificationStatus: { status: "verified", verifiedAt: memory.createdAt, sourceSnapshotId: sha256(excerptSha256) },
       operations: [operation],
       rejectionCounts: {},
       generation: 1,
       taskGeneration: 1,
-      evidenceBatches: [
-        [{ path: "README.md", start: 1, end: 1, excerptSha256 }],
-      ],
+      evidenceBatches: [[{ path: "README.md", start: 1, end: 1, excerptSha256 }]],
       settledAt: memory.createdAt,
     };
     assert.equal(isReviewRecord(review), true);
-    await writeJsonAtomic(
-      join(agentDir, "pi-continuity", "memory-v6", "state.json"),
-      {
-        ...emptyMemoryState(),
-        revision: 1,
-        notes: [memory],
-        reviews: [review],
-        updatedAt: new Date().toISOString(),
-      },
-    );
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), {
+      ...emptyMemoryState(),
+      revision: 1,
+      notes: [memory],
+      reviews: [review],
+      updatedAt: new Date().toISOString(),
+    });
     const app = runtime(["edit", "continuity_update"]),
       ctx: any = {
         cwd,
@@ -697,18 +541,10 @@ test("changed project evidence suppresses new activation and active reinjection"
         },
         ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
       };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const toolCall = app.handlers.get("tool_call")![0],
       toolResult = app.handlers.get("tool_result")![0];
-    await toolCall(
-      {
-        toolName: "edit",
-        toolCallId: "first",
-        input: { path: "src/generated/client.ts" },
-      },
-      ctx,
-    );
+    await toolCall({ toolName: "edit", toolCallId: "first", input: { path: "src/generated/client.ts" } }, ctx);
     assert.equal(app.customMessages.length, 1);
     await writeFile(join(cwd, "README.md"), "Contract changed.\n");
     await toolResult(
@@ -722,28 +558,11 @@ test("changed project evidence suppresses new activation and active reinjection"
       },
       ctx,
     );
-    for (const handler of app.handlers.get("session_compact") ?? [])
-      await handler({}, ctx);
-    assert.equal(
-      app.customMessages.length,
-      1,
-      "stale active rule is not reinjected",
-    );
-    for (const handler of app.handlers.get("input") ?? [])
-      handler({ source: "interactive", text: "new task" });
-    await toolCall(
-      {
-        toolName: "edit",
-        toolCallId: "after-change",
-        input: { path: "src/generated/new.ts" },
-      },
-      ctx,
-    );
-    assert.equal(
-      app.customMessages.length,
-      1,
-      "stale rule is removed from the runtime index",
-    );
+    for (const handler of app.handlers.get("session_compact") ?? []) await handler({}, ctx);
+    assert.equal(app.customMessages.length, 1, "stale active rule is not reinjected");
+    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "new task" });
+    await toolCall({ toolName: "edit", toolCallId: "after-change", input: { path: "src/generated/new.ts" } }, ctx);
+    assert.equal(app.customMessages.length, 1, "stale rule is removed from the runtime index");
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -761,15 +580,12 @@ test("active advisory delivery rearms after compaction and resets at a new task"
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await saveConfig({ version: 2, memoryEnabled: true });
-    await writeJsonAtomic(
-      join(agentDir, "pi-continuity", "memory-v6", "state.json"),
-      {
-        ...emptyMemoryState(),
-        revision: 1,
-        notes: [memory],
-        updatedAt: new Date().toISOString(),
-      },
-    );
+    await writeJsonAtomic(join(agentDir, "pi-continuity", "memory-v6", "state.json"), {
+      ...emptyMemoryState(),
+      revision: 1,
+      notes: [memory],
+      updatedAt: new Date().toISOString(),
+    });
     let branch: any[] = [];
     const app = runtime(["edit", "continuity_update"]),
       ctx: any = {
@@ -786,61 +602,25 @@ test("active advisory delivery rearms after compaction and resets at a new task"
         },
         ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
       };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const toolCall = app.handlers.get("tool_call")![0];
-    await toolCall(
-      {
-        toolName: "edit",
-        toolCallId: "first",
-        input: { path: "src/generated/client.ts" },
-      },
-      ctx,
-    );
+    await toolCall({ toolName: "edit", toolCallId: "first", input: { path: "src/generated/client.ts" } }, ctx);
     assert.equal(app.customMessages.length, 1);
-    await toolCall(
-      {
-        toolName: "edit",
-        toolCallId: "same-task",
-        input: { path: "src/generated/other.ts" },
-      },
-      ctx,
-    );
-    assert.equal(
-      app.customMessages.length,
-      1,
-      "visible active memory is not repeated",
-    );
-    branch = app.appended.map((entry) => ({ type: "custom", ...entry }));
-    for (const handler of app.handlers.get("session_tree") ?? [])
-      await handler({}, ctx);
-    for (const handler of app.handlers.get("session_compact") ?? [])
-      await handler({}, ctx);
+    await toolCall({ toolName: "edit", toolCallId: "same-task", input: { path: "src/generated/other.ts" } }, ctx);
+    assert.equal(app.customMessages.length, 1, "visible active memory is not repeated");
+    branch = app.appended.map(entry => ({ type: "custom", ...entry }));
+    for (const handler of app.handlers.get("session_tree") ?? []) await handler({}, ctx);
+    for (const handler of app.handlers.get("session_compact") ?? []) await handler({}, ctx);
     assert.equal(app.customMessages.length, 2);
-    assert.match(
-      app.customMessages[1]!.message.content,
-      /Edit the generator instead/,
-    );
-    for (const handler of app.handlers.get("input") ?? [])
-      handler({ source: "interactive", text: "new task" });
-    await toolCall(
-      {
-        toolName: "edit",
-        toolCallId: "new-task",
-        input: { path: "src/generated/new.ts" },
-      },
-      ctx,
-    );
+    assert.match(app.customMessages[1]!.message.content, /Edit the generator instead/);
+    for (const handler of app.handlers.get("input") ?? []) handler({ source: "interactive", text: "new task" });
+    await toolCall({ toolName: "edit", toolCallId: "new-task", input: { path: "src/generated/new.ts" } }, ctx);
     assert.equal(
       app.customMessages.length,
       2,
       "a new task does not duplicate a rule that remains visible in the same context epoch",
     );
-    assert.ok(
-      app.appended.some(
-        (entry) => entry.customType === "pi-continuity-memory-ledger-v1",
-      ),
-    );
+    assert.ok(app.appended.some(entry => entry.customType === "pi-continuity-memory-ledger-v1"));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -852,12 +632,7 @@ test("manual and automatic compaction always use deterministic Continuity output
   await saveConfig({ version: 2, memoryEnabled: true });
   const app = runtime();
   const compact = app.handlers.get("session_before_compact")![0];
-  const message = (
-    id: string,
-    role: string,
-    text: string,
-    parentId: string | null,
-  ) => ({
+  const message = (id: string, role: string, text: string, parentId: string | null) => ({
     id,
     parentId,
     type: "message",
@@ -866,26 +641,13 @@ test("manual and automatic compaction always use deterministic Continuity output
   });
   const branch = [
     message("old-user", "user", "Keep old sessions compatible", null),
-    message(
-      "old-assistant",
-      "assistant",
-      "Use deterministic extraction",
-      "old-user",
-    ),
+    message("old-assistant", "assistant", "Use deterministic extraction", "old-user"),
     message("current", "user", "Current request", "old-assistant"),
     message("suffix", "assistant", "Current response", "current"),
   ];
-  const event = (
-    reason: string,
-    customInstructions?: string,
-    signal = new AbortController().signal,
-  ) => ({
+  const event = (reason: string, customInstructions?: string, signal = new AbortController().signal) => ({
     branchEntries: branch,
-    preparation: {
-      firstKeptEntryId: "suffix",
-      tokensBefore: 42_000,
-      settings: { keepRecentTokens: 1 },
-    },
+    preparation: { firstKeptEntryId: "suffix", tokensBefore: 42_000, settings: { keepRecentTokens: 1 } },
     reason,
     willRetry: false,
     customInstructions,
@@ -902,43 +664,23 @@ test("manual and automatic compaction always use deterministic Continuity output
     assert.equal(result.compaction.details.mode, "generic");
     assert.match(result.compaction.summary, /Deterministic Transcript Context/);
   }
-  assert.deepEqual(
-    await compact(event("manual", undefined, AbortSignal.abort()), ctx),
-    { cancel: true },
-  );
+  assert.deepEqual(await compact(event("manual", undefined, AbortSignal.abort()), ctx), { cancel: true });
   assert.deepEqual(notices, []);
 
-  assert.deepEqual(await compact(event("manual", "focus on decisions"), ctx), {
-    cancel: true,
-  });
-  assert.deepEqual(notices, [
-    "Compaction cancelled because Continuity could not produce deterministic output.",
-  ]);
+  assert.deepEqual(await compact(event("manual", "focus on decisions"), ctx), { cancel: true });
+  assert.deepEqual(notices, ["Compaction cancelled because Continuity could not produce deterministic output."]);
 
-  await saveConfig({
-    version: 2,
-    memoryEnabled: true,
-    compactionReviewer: { model: "provider/reviewer" },
-  });
+  await saveConfig({ version: 2, memoryEnabled: true, compactionReviewer: { model: "provider/reviewer" } });
   const fallback = await compact(event("manual"), ctx);
   assert.equal(fallback.compaction.details.mode, "generic");
   assert.equal(fallback.compaction.details.supplements.length, 0);
 });
 
 test("Continuity retained-token setting overrides a cloned Pi preparation", async () => {
-  await saveConfig({
-    version: 2,
-    memoryEnabled: true,
-    keepRecentTokens: 1_000,
-  });
+  await saveConfig({ version: 2, memoryEnabled: true, keepRecentTokens: 1_000 });
   const app = runtime();
   const compact = app.handlers.get("session_before_compact")![0];
-  const message = (
-    id: string,
-    role: string,
-    text: string,
-    parentId: string | null,
-  ) => ({
+  const message = (id: string, role: string, text: string, parentId: string | null) => ({
     id,
     parentId,
     type: "message",
@@ -950,28 +692,14 @@ test("Continuity retained-token setting overrides a cloned Pi preparation", asyn
     message("suffix-1", "assistant", "x".repeat(20_000), "current"),
     message("suffix-2", "assistant", "y".repeat(20_000), "suffix-1"),
   ];
-  const preparation = {
-    firstKeptEntryId: "current",
-    tokensBefore: 42_000,
-    settings: { keepRecentTokens: 50_000 },
-  };
+  const preparation = { firstKeptEntryId: "current", tokensBefore: 42_000, settings: { keepRecentTokens: 50_000 } };
   for (const reason of ["manual", "threshold"]) {
     const result = await compact(
-      {
-        branchEntries: branch,
-        preparation,
-        reason,
-        willRetry: false,
-        signal: new AbortController().signal,
-      },
+      { branchEntries: branch, preparation, reason, willRetry: false, signal: new AbortController().signal },
       { modelRegistry: { find: () => undefined }, ui: { notify: () => {} } },
     );
     assert.equal(result.compaction.firstKeptEntryId, "suffix-2");
-    assert.equal(
-      preparation.settings.keepRecentTokens,
-      50_000,
-      "incoming Pi preparation remains unchanged",
-    );
+    assert.equal(preparation.settings.keepRecentTokens, 50_000, "incoming Pi preparation remains unchanged");
   }
 });
 
@@ -983,16 +711,10 @@ test("over-threshold tool work compacts and resumes through public extension API
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    await saveConfig({
-      version: 2,
-      memoryEnabled: false,
-      keepRecentTokens: 50_000,
-    });
+    await saveConfig({ version: 2, memoryEnabled: false, keepRecentTokens: 50_000 });
     await writeFile(
       join(agentDir, "settings.json"),
-      JSON.stringify({
-        compaction: { enabled: true, reserveTokens: 30_000 },
-      }),
+      JSON.stringify({ compaction: { enabled: true, reserveTokens: 30_000 } }),
     );
     const app = runtime();
     const compactCalls: any[] = [];
@@ -1004,11 +726,7 @@ test("over-threshold tool work compacts and resumes through public extension API
       isIdle: () => true,
       isProjectTrusted: () => false,
       hasPendingMessages: () => false,
-      getContextUsage: () => ({
-        tokens: 250_000,
-        contextWindow: 272_000,
-        percent: 91.9,
-      }),
+      getContextUsage: () => ({ tokens: 250_000, contextWindow: 272_000, percent: 91.9 }),
       compact: (options: any) => compactCalls.push(options),
       sessionManager: {
         getSessionId: () => "mid-task-session",
@@ -1020,71 +738,40 @@ test("over-threshold tool work compacts and resumes through public extension API
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const turnCtx = { ...ctx };
     assert.notEqual(turnCtx, ctx);
     for (const handler of app.handlers.get("tool_execution_end") ?? [])
-      await handler(
-        { toolCallId: "call-1", result: { terminate: false } },
-        turnCtx,
-      );
+      await handler({ toolCallId: "call-1", result: { terminate: false } }, turnCtx);
     for (const handler of app.handlers.get("turn_end") ?? [])
       await handler(
         {
           message: {
             role: "assistant",
             stopReason: "toolUse",
-            content: [
-              { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-            ],
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
           },
           toolResults: [{ role: "toolResult", toolCallId: "call-1" }],
         },
         turnCtx,
       );
 
-    assert.equal(
-      compactCalls.length,
-      1,
-      "custom reserveTokens threshold should trigger before Pi's default threshold",
-    );
-    const duplicateAutoCompact = await app.handlers.get(
-      "session_before_compact",
-    )![0]({ reason: "threshold" }, ctx);
+    assert.equal(compactCalls.length, 1, "custom reserveTokens threshold should trigger before Pi's default threshold");
+    const duplicateAutoCompact = await app.handlers.get("session_before_compact")![0]({ reason: "threshold" }, ctx);
     assert.deepEqual(duplicateAutoCompact, { cancel: true });
-    const requestId = app.emitted.find(
-      (event) => event.channel === "pi-continuity:compaction-continuation",
-    )!.value.requestId;
+    const requestId = app.emitted.find(event => event.channel === "pi-continuity:compaction-continuation")!.value
+      .requestId;
     const messageEnd = app.handlers.get("message_end")![0];
-    for (const errorMessage of [
-      "This operation was aborted",
-      "request was aborted.",
-    ]) {
-      const interruption = {
-        role: "assistant",
-        stopReason: "error",
-        errorMessage,
-        content: [],
-      };
+    for (const errorMessage of ["This operation was aborted", "request was aborted."]) {
+      const interruption = { role: "assistant", stopReason: "error", errorMessage, content: [] };
       const annotated = await messageEnd({ message: interruption }, ctx);
       assert.equal(annotated.message.stopReason, "aborted");
       assert.equal(annotated.message.errorMessage, errorMessage);
-      assert.equal(
-        annotated.message.diagnostics.at(-1).details.requestId,
-        requestId,
-      );
+      assert.equal(annotated.message.diagnostics.at(-1).details.requestId, requestId);
     }
     assert.equal(
       await messageEnd(
-        {
-          message: {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "Provider rejected request",
-            content: [],
-          },
-        },
+        { message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected request", content: [] } },
         ctx,
       ),
       undefined,
@@ -1094,57 +781,28 @@ test("over-threshold tool work compacts and resumes through public extension API
     compactCalls[0].onComplete();
     assert.equal(app.customMessages.length, 1);
     assert.deepEqual(app.customMessages[0].options, { triggerTurn: true });
-    assert.equal(
-      app.customMessages[0].message.customType,
-      "pi-continuity-resume",
-    );
+    assert.equal(app.customMessages[0].message.customType, "pi-continuity-resume");
     assert.equal(app.customMessages[0].message.display, false);
-    assert.match(
-      app.customMessages[0].message.content,
-      /Continue the unfinished task/,
-    );
-    const lifecycle = app.emitted.filter(
-      (event) => event.channel === "pi-continuity:compaction-continuation",
-    );
+    assert.match(app.customMessages[0].message.content, /Continue the unfinished task/);
+    const lifecycle = app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation");
     assert.equal(lifecycle.length, 2);
     assert.equal(lifecycle[0]!.value.action, "begin");
     assert.equal(lifecycle[1]!.value.action, "resume");
     assert.equal(lifecycle[1]!.value.requestId, lifecycle[0]!.value.requestId);
-    assert.equal(
-      app.customMessages[0].message.details.requestId,
-      lifecycle[0]!.value.requestId,
-    );
-    const laterUserAbort = {
-      role: "assistant",
-      stopReason: "aborted",
-      content: [{ type: "text", text: "partial" }],
-    };
+    assert.equal(app.customMessages[0].message.details.requestId, lifecycle[0]!.value.requestId);
+    const laterUserAbort = { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "partial" }] };
     const laterAnnotation = await messageEnd({ message: laterUserAbort }, ctx);
-    assert.equal(
-      laterAnnotation,
-      undefined,
-      "completed continuation no longer annotates unrelated user aborts",
-    );
+    assert.equal(laterAnnotation, undefined, "completed continuation no longer annotates unrelated user aborts");
 
     for (const handler of app.handlers.get("tool_execution_end") ?? [])
-      await handler(
-        { toolCallId: "send-failure", result: { terminate: false } },
-        turnCtx,
-      );
+      await handler({ toolCallId: "send-failure", result: { terminate: false } }, turnCtx);
     for (const handler of app.handlers.get("turn_end") ?? [])
       await handler(
         {
           message: {
             role: "assistant",
             stopReason: "toolUse",
-            content: [
-              {
-                type: "toolCall",
-                id: "send-failure",
-                name: "read",
-                arguments: {},
-              },
-            ],
+            content: [{ type: "toolCall", id: "send-failure", name: "read", arguments: {} }],
           },
           toolResults: [{ role: "toolResult", toolCallId: "send-failure" }],
         },
@@ -1154,11 +812,7 @@ test("over-threshold tool work compacts and resumes through public extension API
     compactCalls.at(-1).onComplete();
     assert.equal(app.customMessages.length, 1);
     assert.equal(
-      app.emitted
-        .filter(
-          (event) => event.channel === "pi-continuity:compaction-continuation",
-        )
-        .at(-1)?.value.action,
+      app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action,
       "abandon",
     );
   } finally {
@@ -1189,11 +843,7 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
       isIdle: () => true,
       isProjectTrusted: () => false,
       hasPendingMessages: () => pending,
-      getContextUsage: () => ({
-        tokens: 260_000,
-        contextWindow: 272_000,
-        percent: 95.6,
-      }),
+      getContextUsage: () => ({ tokens: 260_000, contextWindow: 272_000, percent: 95.6 }),
       compact: (options: any) => {
         if (compactThrows) throw Error("synchronous compact failure");
         compactCalls.push(options);
@@ -1224,17 +874,12 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
           ctx,
         );
     };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
 
     for (const handler of app.handlers.get("turn_end") ?? [])
       await handler(
         {
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "done" }],
-          },
+          message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
           toolResults: [{ role: "toolResult", toolCallId: "not-a-tool-turn" }],
         },
         ctx,
@@ -1251,14 +896,9 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     await finishToolTurn("newer-input");
     assert.equal(compactCalls.length, 1);
     const cancelledRequest = app.emitted
-      .filter(
-        (event) => event.channel === "pi-continuity:compaction-continuation",
-      )
+      .filter(event => event.channel === "pi-continuity:compaction-continuation")
       .at(-1)!.value;
-    app.emit("pi-continuity:compaction-continuation", {
-      ...cancelledRequest,
-      action: "cancel",
-    });
+    app.emit("pi-continuity:compaction-continuation", { ...cancelledRequest, action: "cancel" });
     const cancelledError = {
       role: "assistant",
       stopReason: "error",
@@ -1266,10 +906,7 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
       content: [],
     };
     assert.equal(
-      await app.handlers.get("message_end")![0](
-        { message: cancelledError },
-        ctx,
-      ),
+      await app.handlers.get("message_end")![0]({ message: cancelledError }, ctx),
       undefined,
       "scoped cancellation clears the request before an abort-shaped provider result",
     );
@@ -1280,17 +917,9 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
 
     await finishToolTurn("terminating-after-request", true);
     compactCalls[1].onComplete();
+    assert.equal(app.customMessages.length, 0, "a later terminating batch invalidates the superseded continuation");
     assert.equal(
-      app.customMessages.length,
-      0,
-      "a later terminating batch invalidates the superseded continuation",
-    );
-    assert.equal(
-      app.emitted
-        .filter(
-          (event) => event.channel === "pi-continuity:compaction-continuation",
-        )
-        .at(-1)?.value.action,
+      app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action,
       "abandon",
     );
 
@@ -1299,11 +928,7 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     compactCalls[2].onError(new Error("failed"));
     assert.equal(app.customMessages.length, 0);
     assert.equal(
-      app.emitted
-        .filter(
-          (event) => event.channel === "pi-continuity:compaction-continuation",
-        )
-        .at(-1)?.value.action,
+      app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action,
       "abandon",
     );
 
@@ -1312,11 +937,7 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     compactThrows = false;
     assert.equal(compactCalls.length, 3);
     assert.equal(
-      app.emitted
-        .filter(
-          (event) => event.channel === "pi-continuity:compaction-continuation",
-        )
-        .at(-1)?.value.action,
+      app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action,
       "abandon",
     );
 
@@ -1326,24 +947,15 @@ test("mid-task compaction respects termination, cancellation, pending input, fai
     await finishToolTurn("pending-invalidates-request");
     pending = false;
     compactCalls[3].onComplete();
-    assert.equal(
-      app.customMessages.length,
-      0,
-      "queued input invalidates the superseded continuation",
-    );
+    assert.equal(app.customMessages.length, 0, "queued input invalidates the superseded continuation");
 
     await finishToolTurn("shutdown");
     assert.equal(compactCalls.length, 5);
-    for (const handler of app.handlers.get("session_shutdown") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
     compactCalls[4].onComplete();
     assert.equal(app.customMessages.length, 0);
     assert.equal(
-      app.emitted
-        .filter(
-          (event) => event.channel === "pi-continuity:compaction-continuation",
-        )
-        .at(-1)?.value.action,
+      app.emitted.filter(event => event.channel === "pi-continuity:compaction-continuation").at(-1)?.value.action,
       "abandon",
     );
   } finally {
@@ -1367,11 +979,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
       parentId: null,
       timestamp: new Date().toISOString(),
       type: "message",
-      message: {
-        role: "user",
-        content: "Visible evidence",
-        timestamp: Date.now(),
-      },
+      message: { role: "user", content: "Visible evidence", timestamp: Date.now() },
     },
   ];
   const ctx: any = {
@@ -1380,8 +988,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     mode: "json",
     sessionManager: {
       getSessionId: () => "recall-session",
-      getSessionFile: () =>
-        persisted ? join(root, "session.jsonl") : undefined,
+      getSessionFile: () => (persisted ? join(root, "session.jsonl") : undefined),
       getEntries: () => {
         getEntriesCalls++;
         return visible;
@@ -1396,10 +1003,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
     const recall = app.tools.get("continuity_recall");
     assert.equal(recall.executionMode, "sequential");
     assert.match(recall.description, /historical evidence/i);
-    assert.match(
-      recall.description,
-      /not an exact historical session-ID lookup.*search_sessions/i,
-    );
+    assert.match(recall.description, /not an exact historical session-ID lookup.*search_sessions/i);
     assert.match(
       recall.promptGuidelines.join("\n"),
       /Never use project_sessions to locate an exact historical session ID.*sessionId.*requested subject as query/i,
@@ -1408,15 +1012,10 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
       JSON.stringify(recall.parameters),
       /execution.*lineage.*all.*project_sessions.*text.*files.*touched.*since.*before/,
     );
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 
     const historical = SessionManager.create(cwd);
-    historical.appendMessage({
-      role: "user",
-      content: "Historical project-session marker",
-      timestamp: Date.now(),
-    });
+    historical.appendMessage({ role: "user", content: "Historical project-session marker", timestamp: Date.now() });
     historical.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Historical response" }],
@@ -1441,10 +1040,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
       undefined,
       ctx,
     );
-    assert.match(
-      projectRecall.content[0].text,
-      /Historical project-session marker/,
-    );
+    assert.match(projectRecall.content[0].text, /Historical project-session marker/);
     assert.equal(projectRecall.details.effectiveScope, "project_sessions");
     assert.equal(projectRecall.details.sessionsSearched, 1);
     assert.equal(app.appended.length, 0);
@@ -1452,34 +1048,16 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
 
     await app.tools
       .get("continuity_update")
-      .execute(
-        "plan",
-        { action: "set_plan", goal: "Recall", todos: ["Recall history"] },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("plan", { action: "set_plan", goal: "Recall", todos: ["Recall history"] }, undefined, undefined, ctx);
 
-    const ephemeral = await recall.execute(
-      "recall",
-      {},
-      undefined,
-      undefined,
-      ctx,
-    );
+    const ephemeral = await recall.execute("recall", {}, undefined, undefined, ctx);
     assert.match(ephemeral.content[0].text, /ephemeral.*no persisted history/i);
 
     persisted = true;
     const callsBefore = getEntriesCalls;
     const appendedBefore = app.appended.length;
     const messagesBefore = app.customMessages.length;
-    const downgraded = await recall.execute(
-      "recall",
-      { scope: "all" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const downgraded = await recall.execute("recall", { scope: "all" }, undefined, undefined, ctx);
     assert.match(downgraded.content[0].text, /effective scope: visible/);
     assert.deepEqual(downgraded.details, {
       recall: true,
@@ -1489,11 +1067,7 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
       collected: 1,
       hasMore: false,
     });
-    assert.equal(
-      getEntriesCalls,
-      callsBefore,
-      "all entries must not be read before boundary proof",
-    );
+    assert.equal(getEntriesCalls, callsBefore, "all entries must not be read before boundary proof");
     assert.equal(app.appended.length, appendedBefore);
     assert.equal(app.customMessages.length, messagesBefore);
   } finally {
@@ -1511,52 +1085,28 @@ test("state rejects todo fields before mutation or circuit breaking", async () =
     ["status", "done"],
     ["nextTodoId", "todo_2"],
   ] as const) {
-    const result = await tool.execute(
-      "invalid",
-      { action: "state", [field]: value },
-      undefined,
-      undefined,
-      {},
-    );
-    assert.match(
-      result.content[0].text,
-      new RegExp(`^${field} require action \\"todo\\"`),
-    );
+    const result = await tool.execute("invalid", { action: "state", [field]: value }, undefined, undefined, {});
+    assert.match(result.content[0].text, new RegExp(`^${field} require action \\"todo\\"`));
     assert.equal(result.terminate, undefined);
   }
   for (let attempt = 0; attempt < 3; attempt++) {
     const result = await tool.execute(
       "repeated",
-      {
-        action: "state",
-        todoIds: ["todo_1"],
-        status: "done",
-      },
+      { action: "state", todoIds: ["todo_1"], status: "done" },
       undefined,
       undefined,
       {},
     );
-    assert.match(
-      result.content[0].text,
-      /^todoIds, status require action "todo"/,
-    );
+    assert.match(result.content[0].text, /^todoIds, status require action "todo"/);
     assert.equal(result.details?.circuitBreaker, undefined);
   }
-  const valid = await tool.execute(
-    "valid",
-    { action: "state" },
-    undefined,
-    undefined,
-    {},
-  );
+  const valid = await tool.execute("valid", { action: "state" }, undefined, undefined, {});
   assert.match(valid.content[0].text, /No active work/);
 });
 
 test("failed legacy completion after final prose terminates without a duplicate reply", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-legacy-completion-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-legacy-completion-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -1568,33 +1118,19 @@ test("failed legacy completion after final prose terminates without a duplicate 
     sessionManager: {
       getSessionId: () => "legacy-completion-session",
       getEntries: () => [],
-      getLeafEntry: () => ({
-        type: "message",
-        message: { role: "assistant", content },
-      }),
+      getLeafEntry: () => ({ type: "message", message: { role: "assistant", content } }),
     },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Inspect", todos: ["Answer"] },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
 
     content = [
       { type: "text", text: "Final answer" },
-      {
-        type: "toolCall",
-        id: "complete-with-reply",
-        name: "continuity_update",
-      },
+      { type: "toolCall", id: "complete-with-reply", name: "continuity_update" },
     ];
     const stopped = await tool.execute(
       "complete-with-reply",
@@ -1606,9 +1142,7 @@ test("failed legacy completion after final prose terminates without a duplicate 
     assert.match(stopped.content[0].text, /Cannot complete while todos remain/);
     assert.equal(stopped.terminate, true);
 
-    content = [
-      { type: "toolCall", id: "complete-tool-only", name: "continuity_update" },
-    ];
+    content = [{ type: "toolCall", id: "complete-tool-only", name: "continuity_update" }];
     const recoverable = await tool.execute(
       "complete-tool-only",
       { action: "state", completion: true },
@@ -1616,10 +1150,7 @@ test("failed legacy completion after final prose terminates without a duplicate 
       undefined,
       ctx,
     );
-    assert.match(
-      recoverable.content[0].text,
-      /Cannot complete while todos remain/,
-    );
+    assert.match(recoverable.content[0].text, /Cannot complete while todos remain/);
     assert.equal(recoverable.terminate, undefined);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1629,9 +1160,7 @@ test("failed legacy completion after final prose terminates without a duplicate 
 
 test("text-only final response automatically completes ready work", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-auto-complete-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-auto-complete-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -1639,31 +1168,15 @@ test("text-only final response automatically completes ready work", async () => 
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "auto-complete-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "auto-complete-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Inspect", todos: ["Answer"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     const messageEnd = app.handlers.get("message_end")?.[0];
 
     await messageEnd?.(
@@ -1683,37 +1196,19 @@ test("text-only final response automatically completes ready work", async () => 
     assert.match(context.messages.at(-1).content, /Work: executing/);
 
     await messageEnd?.(
-      {
-        message: {
-          role: "assistant",
-          stopReason: "toolUse",
-          content: [{ type: "text", text: "Not final" }],
-        },
-      },
+      { message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "Not final" }] } },
       ctx,
     );
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
 
     await messageEnd?.(
-      {
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Done" }],
-        },
-      },
+      { message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] } },
       ctx,
     );
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.equal(context, undefined);
-    const repeated = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const repeated = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(repeated.content[0].text, /already completed/i);
     assert.equal(repeated.terminate, true);
   } finally {
@@ -1724,9 +1219,7 @@ test("text-only final response automatically completes ready work", async () => 
 
 test("automatic completion waits for required verification", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-auto-verify-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-auto-verify-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -1734,50 +1227,24 @@ test("automatic completion waits for required verification", async () => {
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "auto-verify-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "auto-verify-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Change", todos: ["Ship"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     for (const handler of app.handlers.get("tool_result") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     const finalMessage = {
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Done" }],
-      },
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] },
     };
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
-    let blocked = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    let blocked = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
 
     app.emit("pi-verify:result", {
@@ -1789,11 +1256,7 @@ test("automatic completion waits for required verification", async () => {
       results: [{ command: "npm test", code: 1 }],
     });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
-    assert.deepEqual(
-      app.sent,
-      [],
-      "failed Verify final must not schedule another turn",
-    );
+    assert.deepEqual(app.sent, [], "failed Verify final must not schedule another turn");
     let context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
     assert.match(context.messages.at(-1).content, /Verification failed/);
@@ -1816,13 +1279,7 @@ test("automatic completion waits for required verification", async () => {
       results: [],
     });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
-    blocked = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    blocked = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /already completed/i);
     assert.equal(blocked.terminate, true);
   } finally {
@@ -1833,9 +1290,7 @@ test("automatic completion waits for required verification", async () => {
 
 test("verification clears only its own blocker state", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-verify-issue-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-issue-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -1843,28 +1298,15 @@ test("verification clears only its own blocker state", async () => {
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verify-issue-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verify-issue-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Change", todos: ["Ship"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    const context = async () =>
-      (
-        await app.handlers.get("context")?.[0]({ messages: [] }, ctx)
-      ).messages.at(-1).content;
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    const context = async () => (await app.handlers.get("context")?.[0]({ messages: [] }, ctx)).messages.at(-1).content;
 
     app.emit("pi-verify:result", {
       version: 1,
@@ -1878,11 +1320,7 @@ test("verification clears only its own blocker state", async () => {
 
     await tool.execute(
       "manual",
-      {
-        action: "state",
-        latestFailure: "Manual blocker",
-        nextAction: "Wait for user",
-      },
+      { action: "state", latestFailure: "Manual blocker", nextAction: "Wait for user" },
       undefined,
       undefined,
       ctx,
@@ -1898,17 +1336,7 @@ test("verification clears only its own blocker state", async () => {
     assert.match(await context(), /Blocked: Manual blocker/);
     assert.match(await context(), /Next: Wait for user/);
 
-    await tool.execute(
-      "clear",
-      {
-        action: "state",
-        latestFailure: "",
-        nextAction: "",
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("clear", { action: "state", latestFailure: "", nextAction: "" }, undefined, undefined, ctx);
     app.emit("pi-verify:result", {
       version: 1,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -1954,9 +1382,7 @@ test("verification clears only its own blocker state", async () => {
 
 test("clean Verify requires a tool-only acknowledgement before automatic completion", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-verify-acknowledgement-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-acknowledgement-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -1964,41 +1390,21 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verify-acknowledgement-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verify-acknowledgement-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Change", todos: ["Ship"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     for (const handler of app.handlers.get("tool_result") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     const finalMessage = {
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Done" }],
-      },
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] },
     };
     app.emit("pi-verify:result", {
       version: 1,
@@ -2015,10 +1421,7 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
       undefined,
       ctx,
     );
-    assert.match(
-      rejected.content[0].text,
-      /requires a current clean or no_checks/,
-    );
+    assert.match(rejected.content[0].text, /requires a current clean or no_checks/);
 
     app.emit("pi-verify:result", {
       version: 1,
@@ -2034,20 +1437,12 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
 
     rejected = await tool.execute(
       "bad-ack",
-      {
-        action: "todo",
-        todoId: "todo_1",
-        status: "done",
-        allowUnverified: true,
-      },
+      { action: "todo", todoId: "todo_1", status: "done", allowUnverified: true },
       undefined,
       undefined,
       ctx,
     );
-    assert.match(
-      rejected.content[0].text,
-      /allowUnverified requires action "state"/,
-    );
+    assert.match(rejected.content[0].text, /allowUnverified requires action "state"/);
 
     const acknowledged = await tool.execute(
       "ack",
@@ -2060,15 +1455,9 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
     assert.equal(acknowledged.terminate, undefined);
 
     for (const handler of app.handlers.get("tool_call") ?? [])
-      await handler(
-        { toolName: "edit", toolCallId: "edit-after-ack", input: {} },
-        ctx,
-      );
+      await handler({ toolName: "edit", toolCallId: "edit-after-ack", input: {} }, ctx);
     for (const handler of app.handlers.get("tool_result") ?? [])
-      await handler(
-        { toolName: "edit", toolCallId: "edit-after-ack", input: {} },
-        ctx,
-      );
+      await handler({ toolName: "edit", toolCallId: "edit-after-ack", input: {} }, ctx);
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
@@ -2081,13 +1470,7 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
       runId: "no-checks",
       results: [],
     });
-    await tool.execute(
-      "ack-again",
-      { action: "state", allowUnverified: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("ack-again", { action: "state", allowUnverified: true }, undefined, undefined, ctx);
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
     context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.equal(context, undefined);
@@ -2099,9 +1482,7 @@ test("clean Verify requires a tool-only acknowledgement before automatic complet
 
 test("completion may acknowledge an unavailable Verify in the same call", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-verify-complete-ack-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-complete-ack-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -2109,51 +1490,25 @@ test("completion may acknowledge an unavailable Verify in the same call", async 
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verify-complete-ack-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verify-complete-ack-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Change", todos: ["Ship"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     for (const handler of app.handlers.get("tool_result") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit", input: {} }, ctx);
     const finalMessage = {
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Done" }],
-      },
+      message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] },
     };
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
 
-    const blocked = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const blocked = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
 
     app.emit("pi-verify:result", {
@@ -2181,9 +1536,7 @@ test("completion may acknowledge an unavailable Verify in the same call", async 
 
 test("passing Verify completes a sole remaining verification todo", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-verification-todo-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verification-todo-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -2191,42 +1544,28 @@ test("passing Verify completes a sole remaining verification todo", async () => 
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verification-todo",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verification-todo", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
     await tool.execute(
       "plan",
-      {
-        action: "set_plan",
-        goal: "Ship",
-        todos: ["Implement change", "Run final verification"],
-      },
+      { action: "set_plan", goal: "Ship", todos: ["Implement change", "Run final verification"] },
       undefined,
       undefined,
       ctx,
     );
     await tool.execute(
       "done",
-      {
-        action: "todo",
-        todoId: "todo_1",
-        status: "done",
-        nextTodoId: "todo_2",
-      },
+      { action: "todo", todoId: "todo_1", status: "done", nextTodoId: "todo_2" },
       undefined,
       undefined,
       ctx,
     );
-    for (const handler of app.handlers.get("tool_call") ?? [])
-      await handler({ toolName: "edit", input: {} }, ctx);
+    for (const handler of app.handlers.get("tool_call") ?? []) await handler({ toolName: "edit", input: {} }, ctx);
 
     app.emit("pi-verify:result", {
       version: 1,
@@ -2236,26 +1575,14 @@ test("passing Verify completes a sole remaining verification todo", async () => 
       runId: "passed",
       results: [],
     });
-    const context = await app.handlers.get("context")?.[0](
-      { messages: [] },
-      ctx,
-    );
+    const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.doesNotMatch(context.messages.at(-1).content, /Todo todo_2/);
 
     await app.handlers.get("message_end")?.[0]?.(
-      {
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Done" }],
-        },
-      },
+      { message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] } },
       ctx,
     );
-    assert.equal(
-      await app.handlers.get("context")?.[0]({ messages: [] }, ctx),
-      undefined,
-    );
+    assert.equal(await app.handlers.get("context")?.[0]({ messages: [] }, ctx), undefined);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -2264,9 +1591,7 @@ test("passing Verify completes a sole remaining verification todo", async () => 
 
 test("settlement waits for the single post-Verify final response", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-verify-response-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-response-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -2274,33 +1599,16 @@ test("settlement waits for the single post-Verify final response", async () => {
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verify-response",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verify-response", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Ship", todos: ["Implement"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    for (const handler of app.handlers.get("tool_call") ?? [])
-      await handler({ toolName: "edit", input: {} }, ctx);
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
+    for (const handler of app.handlers.get("tool_call") ?? []) await handler({ toolName: "edit", input: {} }, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     app.emit("pi-verify:result", {
       version: 1,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -2310,13 +1618,7 @@ test("settlement waits for the single post-Verify final response", async () => {
       results: [],
     });
     await app.handlers.get("agent_settled")?.[0]?.({}, ctx);
-    const completed = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const completed = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(completed.content[0].text, /^Work completed/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2334,13 +1636,7 @@ test("circuit breaker aborts the third identical call within 30 seconds", async 
   };
   const params = { action: "state", completion: true };
   const first = await tool.execute("call-1", params, undefined, undefined, ctx);
-  const second = await tool.execute(
-    "call-2",
-    params,
-    undefined,
-    undefined,
-    ctx,
-  );
+  const second = await tool.execute("call-2", params, undefined, undefined, ctx);
   const third = await tool.execute("call-3", params, undefined, undefined, ctx);
   assert.equal(first.terminate, undefined);
   assert.equal(second.terminate, undefined);
@@ -2362,38 +1658,14 @@ test("circuit breaker ignores distinct or expired calls", async () => {
         aborts++;
       },
     };
-    await tool.execute(
-      "call-1",
-      { action: "state", currentTodoId: "todo_1" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "call-2",
-      { action: "state", currentTodoId: "todo_2" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "call-3",
-      { action: "state", currentTodoId: "todo_3" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("call-1", { action: "state", currentTodoId: "todo_1" }, undefined, undefined, ctx);
+    await tool.execute("call-2", { action: "state", currentTodoId: "todo_2" }, undefined, undefined, ctx);
+    await tool.execute("call-3", { action: "state", currentTodoId: "todo_3" }, undefined, undefined, ctx);
     const repeated = { action: "state", completion: true };
     await tool.execute("call-4", repeated, undefined, undefined, ctx);
     await tool.execute("call-5", repeated, undefined, undefined, ctx);
     now += 30_001;
-    const expired = await tool.execute(
-      "call-6",
-      repeated,
-      undefined,
-      undefined,
-      ctx,
-    );
+    const expired = await tool.execute("call-6", repeated, undefined, undefined, ctx);
     assert.equal(expired.terminate, undefined);
     assert.equal(aborts, 0);
   } finally {
@@ -2416,8 +1688,7 @@ test("set_plan accepts ordinary workingSet paths, canonicalizes invented IDs, an
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     const result = await app.tools.get("continuity_update").execute(
       "call",
       {
@@ -2441,19 +1712,10 @@ test("set_plan accepts ordinary workingSet paths, canonicalizes invented IDs, an
     );
     assert.match(result.content[0].text, /Executing task list stored/);
     assert.equal(result.details, undefined);
-    const context = await app.handlers.get("context")?.[0](
-      { messages: [] },
-      ctx,
-    );
+    const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Work: executing/);
-    assert.match(
-      context.messages.at(-1).content,
-      /Current todo_1 \[in_progress\]: Implement/,
-    );
-    assert.match(
-      context.messages.at(-1).content,
-      /Todo todo_2 \[pending\]: Verify/,
-    );
+    assert.match(context.messages.at(-1).content, /Current todo_1 \[in_progress\]: Implement/);
+    assert.match(context.messages.at(-1).content, /Todo todo_2 \[pending\]: Verify/);
 
     const beforeUnsafe = context.messages.at(-1).content;
     for (const unsafePath of [
@@ -2461,48 +1723,38 @@ test("set_plan accepts ordinary workingSet paths, canonicalizes invented IDs, an
       `packages/${"A".repeat(49)}0/config.ts`,
     ]) {
       await assert.rejects(
-        app.tools.get("continuity_update").execute(
-          "unsafe-path",
-          {
-            action: "set_plan",
-            goal: "Unsafe replacement",
-            workingSet: [unsafePath],
-            planTodos: [{ text: "Replace" }],
-          },
-          undefined,
-          undefined,
-          ctx,
-        ),
+        app.tools
+          .get("continuity_update")
+          .execute(
+            "unsafe-path",
+            {
+              action: "set_plan",
+              goal: "Unsafe replacement",
+              workingSet: [unsafePath],
+              planTodos: [{ text: "Replace" }],
+            },
+            undefined,
+            undefined,
+            ctx,
+          ),
         /candidate rejected: possible credential/,
       );
-      const restored = await app.handlers.get("context")?.[0](
-        { messages: [] },
-        ctx,
-      );
+      const restored = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
       assert.equal(restored.messages.at(-1).content, beforeUnsafe);
     }
 
-    const advanced = await app.tools.get("continuity_update").execute(
-      "advance",
-      {
-        action: "todo",
-        todoId: "todo_1",
-        status: "done",
-        nextTodoId: "todo_2",
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const advanced = await app.tools
+      .get("continuity_update")
+      .execute(
+        "advance",
+        { action: "todo", todoId: "todo_1", status: "done", nextTodoId: "todo_2" },
+        undefined,
+        undefined,
+        ctx,
+      );
     assert.match(advanced.content[0].text, /state updated/i);
-    const advancedContext = await app.handlers.get("context")?.[0](
-      { messages: [] },
-      ctx,
-    );
-    assert.match(
-      advancedContext.messages.at(-1).content,
-      /Current todo_2 \[in_progress\]: Verify/,
-    );
+    const advancedContext = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(advancedContext.messages.at(-1).content, /Current todo_2 \[in_progress\]: Verify/);
     assert.match(advancedContext.messages.at(-1).content, /Done: 1/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2512,9 +1764,7 @@ test("set_plan accepts ordinary workingSet paths, canonicalizes invented IDs, an
 
 test("bulk todo completion is atomic and preserves the single-todo API", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-bulk-todos-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-bulk-todos-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -2522,83 +1772,40 @@ test("bulk todo completion is atomic and preserves the single-todo API", async (
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "bulk-todos-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "bulk-todos-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
     await tool.execute(
       "plan",
-      {
-        action: "set_plan",
-        goal: "Ship",
-        todos: ["Inspect", "Implement", "Verify"],
-      },
+      { action: "set_plan", goal: "Ship", todos: ["Inspect", "Implement", "Verify"] },
       undefined,
       undefined,
       ctx,
     );
 
     const snapshot = async () =>
-      (
-        await app.handlers.get("context")?.[0]({ messages: [] }, ctx)
-      ).messages.at(-1).content;
+      (await app.handlers.get("context")?.[0]({ messages: [] }, ctx)).messages.at(-1).content;
     const before = await snapshot();
     for (const invalid of [
       { action: "todo", todoIds: ["todo_1", "todo_1"], status: "done" },
       { action: "todo", todoIds: ["todo_1", "missing"], status: "done" },
       { action: "todo", todoIds: ["todo_1"], status: "in_progress" },
-      {
-        action: "todo",
-        todoIds: ["todo_2"],
-        status: "done",
-        nextTodoId: "todo_1",
-      },
-      {
-        action: "todo",
-        todoIds: ["todo_1", "todo_2"],
-        status: "done",
-        nextTodoId: "todo_2",
-      },
+      { action: "todo", todoIds: ["todo_2"], status: "done", nextTodoId: "todo_1" },
+      { action: "todo", todoIds: ["todo_1", "todo_2"], status: "done", nextTodoId: "todo_2" },
     ]) {
-      const rejected = await tool.execute(
-        "invalid",
-        invalid,
-        undefined,
-        undefined,
-        ctx,
-      );
-      assert.match(
-        rejected.content[0].text,
-        /Unknown or invalid todo transition/,
-      );
-      assert.equal(
-        await snapshot(),
-        before,
-        "failed bulk validation must not mutate work",
-      );
+      const rejected = await tool.execute("invalid", invalid, undefined, undefined, ctx);
+      assert.match(rejected.content[0].text, /Unknown or invalid todo transition/);
+      assert.equal(await snapshot(), before, "failed bulk validation must not mutate work");
     }
 
     const continuityRoot = join(root, "agent", "pi-continuity");
-    const workspaces = JSON.parse(
-      await readFile(join(continuityRoot, "workspaces.json"), "utf8"),
-    );
-    const workspaceId = workspaces.find(
-      (item: any) => item.canonicalPath === cwd,
-    ).id;
-    const workPath = join(
-      continuityRoot,
-      "workspaces",
-      workspaceId,
-      "sessions",
-      "bulk-todos-session.json",
-    );
+    const workspaces = JSON.parse(await readFile(join(continuityRoot, "workspaces.json"), "utf8"));
+    const workspaceId = workspaces.find((item: any) => item.canonicalPath === cwd).id;
+    const workPath = join(continuityRoot, "workspaces", workspaceId, "sessions", "bulk-todos-session.json");
     const durableBefore = await readFile(workPath, "utf8");
     await assert.rejects(
       tool.execute(
@@ -2616,16 +1823,8 @@ test("bulk todo completion is atomic and preserves the single-todo API", async (
       ),
       /candidate rejected: possible credential/,
     );
-    assert.equal(
-      await snapshot(),
-      before,
-      "failed persistence must restore in-memory work",
-    );
-    assert.equal(
-      await readFile(workPath, "utf8"),
-      durableBefore,
-      "failed persistence must not change durable work",
-    );
+    assert.equal(await snapshot(), before, "failed persistence must restore in-memory work");
+    assert.equal(await readFile(workPath, "utf8"), durableBefore, "failed persistence must not change durable work");
 
     const completed = await tool.execute(
       "bulk",
@@ -2650,11 +1849,7 @@ test("bulk todo completion is atomic and preserves the single-todo API", async (
     // Existing callers retain the single todoId transition shape.
     const single = await tool.execute(
       "single",
-      {
-        action: "todo",
-        todoId: "todo_3",
-        status: "done",
-      },
+      { action: "todo", todoId: "todo_3", status: "done" },
       undefined,
       undefined,
       ctx,
@@ -2687,10 +1882,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     sessionManager: {
       getSessionId: () => "clarify-session",
       getEntries: () => [],
-      getLeafEntry: () => ({
-        type: "message",
-        message: { role: "assistant", content: leafContent },
-      }),
+      getLeafEntry: () => ({ type: "message", message: { role: "assistant", content: leafContent } }),
     },
     ui: {
       notify: () => {},
@@ -2703,20 +1895,9 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
 
     const clarifyCall = {
       type: "toolCall",
@@ -2724,104 +1905,54 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       name: "continuity_update",
       arguments: { action: "clarify" },
     };
-    const editCall = {
-      type: "toolCall",
-      id: "edit",
-      name: "edit",
-      arguments: {},
-    };
+    const editCall = { type: "toolCall", id: "edit", name: "edit", arguments: {} };
     leafContent = [clarifyCall, editCall];
     for (const event of [
-      {
-        toolName: "continuity_update",
-        toolCallId: "clarify",
-        input: { action: "clarify" },
-      },
+      { toolName: "continuity_update", toolCallId: "clarify", input: { action: "clarify" } },
       { toolName: "edit", toolCallId: "edit", input: {} },
     ]) {
       for (const guard of app.handlers.get("tool_call") ?? [])
-        assert.match(
-          (await guard(event, ctx)).reason,
-          /only tool call.*safe checkpoint/i,
-        );
+        assert.match((await guard(event, ctx)).reason, /only tool call.*safe checkpoint/i);
     }
 
     leafContent = [clarifyCall];
     const params = {
       action: "clarify",
       question: "Which implementation?",
-      options: [
-        { label: "Small" },
-        { label: "Full", description: "Broader change" },
-      ],
+      options: [{ label: "Small" }, { label: "Full", description: "Broader change" }],
     };
     for (const guard of app.handlers.get("tool_call") ?? [])
       assert.equal(
-        await guard(
-          {
-            toolName: "continuity_update",
-            toolCallId: "clarify",
-            input: params,
-          },
-          ctx,
-        ),
+        await guard({ toolName: "continuity_update", toolCallId: "clarify", input: params }, ctx),
         undefined,
       );
-    const prose = await tool.execute(
-      "clarify",
-      params,
-      undefined,
-      undefined,
-      ctx,
-    );
+    const prose = await tool.execute("clarify", params, undefined, undefined, ctx);
     assert.match(prose.content[0].text, /Ask user in prose and wait/);
     assert.match(prose.content[0].text, /1\. Small/);
     assert.match(prose.content[0].text, /2\. Full — Broader change/);
     assert.equal(prose.terminate, undefined);
     for (const guard of app.handlers.get("tool_call") ?? [])
       assert.match(
-        (await guard({ toolName: "read", toolCallId: "read", input: {} }, ctx))
-          .reason,
+        (await guard({ toolName: "read", toolCallId: "read", input: {} }, ctx)).reason,
         /Ask the pending clarification in prose and stop/i,
       );
-    await tool.execute(
-      "done",
-      {
-        action: "todo",
-        todoId: "todo_1",
-        status: "done",
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     await app.handlers.get("message_end")?.[0]?.(
       {
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Which implementation?" }],
-        },
+        message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Which implementation?" }] },
       },
       ctx,
     );
-    const pendingContext = await app.handlers.get("context")?.[0](
-      { messages: [] },
-      ctx,
-    );
+    const pendingContext = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
     assert.match(pendingContext.messages.at(-1).content, /Work: executing/);
 
-    for (const handler of app.handlers.get("agent_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
     ctx.hasUI = true;
     ctx.mode = "tui";
     selection = undefined;
     const cancelled = await tool.execute(
       "cancel",
-      {
-        ...params,
-        question: "Continue or stop?",
-      },
+      { ...params, question: "Continue or stop?" },
       undefined,
       undefined,
       ctx,
@@ -2830,34 +1961,18 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     assert.equal(cancelled.terminate, true);
     assert.equal(aborts, 1);
 
-    for (const handler of app.handlers.get("agent_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
     selection = "Small";
-    const answered = await tool.execute(
-      "answer",
-      {
-        ...params,
-        question: "Pick scope?",
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const answered = await tool.execute("answer", { ...params, question: "Pick scope?" }, undefined, undefined, ctx);
     assert.match(
       answered.content[0].text,
       /^Small\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/,
     );
-    assert.deepEqual(answered.details.clarification, {
-      question: "Pick scope?",
-      answer: "Small",
-    });
+    assert.deepEqual(answered.details.clarification, { question: "Pick scope?", answer: "Small" });
     selection = "Full — Broader change";
     const secondAnswer = await tool.execute(
       "second-answer",
-      {
-        ...params,
-        question: "Pick deployment scope?",
-      },
+      { ...params, question: "Pick deployment scope?" },
       undefined,
       undefined,
       ctx,
@@ -2875,10 +1990,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
     customAnswer = "Only API changes";
     const custom = await tool.execute(
       "custom-answer",
-      {
-        ...params,
-        question: "Any constraints?",
-      },
+      { ...params, question: "Any constraints?" },
       undefined,
       undefined,
       ctx,
@@ -2887,10 +1999,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
       custom.content[0].text,
       /^Only API changes\n\nThe user answered the clarification\. Continue the current task now without waiting for another user message\.$/,
     );
-    assert.deepEqual(custom.details.clarification, {
-      question: "Any constraints?",
-      answer: "Only API changes",
-    });
+    assert.deepEqual(custom.details.clarification, { question: "Any constraints?", answer: "Only API changes" });
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -2899,9 +2008,7 @@ test("execution clarification is isolated, blocking, and cancellable", async () 
 
 test("standalone and bulk clarification use the effective timeout without creating work", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-standalone-clarify-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-standalone-clarify-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -2920,14 +2027,7 @@ test("standalone and bulk clarification use the effective timeout without creati
         type: "message",
         message: {
           role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "clarify",
-              name: "continuity_update",
-              arguments: { action: "clarify" },
-            },
-          ],
+          content: [{ type: "toolCall", id: "clarify", name: "continuity_update", arguments: { action: "clarify" } }],
         },
       }),
     },
@@ -2935,39 +2035,24 @@ test("standalone and bulk clarification use the effective timeout without creati
       notify: () => {},
       setStatus: () => {},
       setWidget: () => {},
-      select: async (
-        _title: string,
-        _choices: string[],
-        options?: { timeout?: number },
-      ) => {
+      select: async (_title: string, _choices: string[], options?: { timeout?: number }) => {
         selectionOptions.push(options);
         return "Small";
       },
       input: async () => "Custom",
-      questionnaire: async (
-        questions: unknown[],
-        options?: { timeout?: number },
-      ) => {
+      questionnaire: async (questions: unknown[], options?: { timeout?: number }) => {
         questionnaireOptions.push(options);
         return questions.length === 1 ? ["Small"] : ["Small", "Later"];
       },
     },
   };
   try {
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
-    app.emit("pylon:runtime-policy", {
-      version: 2,
-      dialogTimeouts: { guard: 60, clarify: 120 },
-    });
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    app.emit("pylon:runtime-policy", { version: 2, dialogTimeouts: { guard: 60, clarify: 120 } });
     const tool = app.tools.get("continuity_update");
     const single = await tool.execute(
       "single",
-      {
-        action: "clarify",
-        question: "Scope?",
-        options: [{ label: "Small" }, { label: "Large" }],
-      },
+      { action: "clarify", question: "Scope?", options: [{ label: "Small" }, { label: "Large" }] },
       undefined,
       undefined,
       ctx,
@@ -2983,14 +2068,8 @@ test("standalone and bulk clarification use the effective timeout without creati
       {
         action: "clarify",
         questions: [
-          {
-            question: "Scope?",
-            options: [{ label: "Small" }, { label: "Large" }],
-          },
-          {
-            question: "Deploy?",
-            options: [{ label: "Now" }, { label: "Later" }],
-          },
+          { question: "Scope?", options: [{ label: "Small" }, { label: "Large" }] },
+          { question: "Deploy?", options: [{ label: "Now" }, { label: "Later" }] },
         ],
       },
       undefined,
@@ -3002,12 +2081,9 @@ test("standalone and bulk clarification use the effective timeout without creati
       bulk.content[0].text,
       /The user answered the clarifications\. Continue the current task now without waiting for another user message\.$/,
     );
-    assert.deepEqual(questionnaireOptions, [
-      { timeout: 120_000 },
-      { timeout: 120_000 },
-    ]);
+    assert.deepEqual(questionnaireOptions, [{ timeout: 120_000 }, { timeout: 120_000 }]);
     assert.equal(
-      app.appended.some((entry) => entry.customType.includes("run")),
+      app.appended.some(entry => entry.customType.includes("run")),
       false,
     );
   } finally {
@@ -3026,31 +2102,15 @@ test("read-only execution completion skips Verify", async () => {
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "read-only-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "read-only-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "call",
-      { action: "set_plan", goal: "Inspect", todos: ["Answer"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "call",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("call", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
+    await tool.execute("call", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     app.emit("pi-verify:result", {
       version: 1,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -3059,17 +2119,8 @@ test("read-only execution completion skips Verify", async () => {
       runId: "old-run",
       results: [],
     });
-    const completed = await tool.execute(
-      "call",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.match(
-      completed.content[0].text,
-      /Work completed.*No further continuity updates needed/,
-    );
+    const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
     assert.equal(completed.terminate, true);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3105,8 +2156,7 @@ test("shell tools require Verify only when the Git worktree changes", async () =
     ] as const) {
       const app = runtime(),
         ctx = context(sessionId);
-      for (const handler of app.handlers.get("session_start") ?? [])
-        await handler({}, ctx);
+      for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
       const tool = app.tools.get("continuity_update");
       await tool.execute(
         "plan",
@@ -3116,14 +2166,7 @@ test("shell tools require Verify only when the Git worktree changes", async () =
         ctx,
       );
       for (const handler of app.handlers.get("tool_call") ?? [])
-        await handler(
-          {
-            toolName,
-            toolCallId: `${toolName}-${sessionId}`,
-            input: { command: "test" },
-          },
-          ctx,
-        );
+        await handler({ toolName, toolCallId: `${toolName}-${sessionId}`, input: { command: "test" } }, ctx);
       if (mutate) await writeFile(join(cwd, "tracked.txt"), "changed\n");
       for (const handler of app.handlers.get("tool_result") ?? [])
         await handler(
@@ -3137,24 +2180,9 @@ test("shell tools require Verify only when the Git worktree changes", async () =
           },
           ctx,
         );
-      await tool.execute(
-        "done",
-        { action: "todo", todoId: "todo_1", status: "done" },
-        undefined,
-        undefined,
-        ctx,
-      );
-      const result = await tool.execute(
-        "complete",
-        { action: "state", completion: true },
-        undefined,
-        undefined,
-        ctx,
-      );
-      assert.match(
-        result.content[0].text,
-        mutate ? /Cannot complete until/ : /Work completed/,
-      );
+      await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+      const result = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
+      assert.match(result.content[0].text, mutate ? /Cannot complete until/ : /Work completed/);
       if (mutate) {
         await exec("git", ["checkout", "--", "tracked.txt"], { cwd });
       }
@@ -3167,9 +2195,7 @@ test("shell tools require Verify only when the Git worktree changes", async () =
 
 test("blocked Guard calls stay read-only and Timeline restore messages invalidate Verify", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-integrations-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-integrations-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -3177,67 +2203,25 @@ test("blocked Guard calls stay read-only and Timeline restore messages invalidat
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "integration-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "integration-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "plan",
-      { action: "set_plan", goal: "Ship", todos: ["Finish"] },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan", { action: "set_plan", goal: "Ship", todos: ["Finish"] }, undefined, undefined, ctx);
     for (const handler of app.handlers.get("tool_call") ?? [])
       await handler({ toolName: "edit", toolCallId: "blocked-edit" }, ctx);
-    app.emit("pi-guard:decision", {
-      version: 1,
-      cwd,
-      decision: "blocked",
-      toolCallId: "blocked-edit",
-    });
+    app.emit("pi-guard:decision", { version: 1, cwd, decision: "blocked", toolCallId: "blocked-edit" });
     for (const handler of app.handlers.get("tool_result") ?? [])
-      await handler(
-        { toolName: "edit", toolCallId: "blocked-edit", isError: true },
-        ctx,
-      );
-    await tool.execute(
-      "done",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
-    let result = await tool.execute(
-      "complete",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+      await handler({ toolName: "edit", toolCallId: "blocked-edit", isError: true }, ctx);
+    await tool.execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
+    let result = await tool.execute("complete", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(result.content[0].text, /Work completed/);
 
-    await tool.execute(
-      "plan-2",
-      { action: "set_plan", goal: "Restore", todos: ["Finish"] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    await tool.execute(
-      "done-2",
-      { action: "todo", todoId: "todo_1", status: "done" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("plan-2", { action: "set_plan", goal: "Restore", todos: ["Finish"] }, undefined, undefined, ctx);
+    await tool.execute("done-2", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     const contextHandler = app.handlers.get("context")![0];
     contextHandler(
       {
@@ -3246,25 +2230,13 @@ test("blocked Guard calls stay read-only and Timeline restore messages invalidat
             role: "custom",
             customType: "pi-worktree-mutation",
             content: "restored",
-            details: {
-              version: 1,
-              cwd,
-              changed: true,
-              source: "pi-timeline",
-              mutationId: "restore-1",
-            },
+            details: { version: 1, cwd, changed: true, source: "pi-timeline", mutationId: "restore-1" },
           },
         ],
       },
       ctx,
     );
-    result = await tool.execute(
-      "complete-2",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    result = await tool.execute("complete-2", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(result.content[0].text, /Cannot complete until/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3282,24 +2254,14 @@ test("execution completion requires a qualifying Verify result after mutation", 
     cwd,
     hasUI: false,
     mode: "json",
-    sessionManager: {
-      getSessionId: () => "verify-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "verify-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute(
-      "call",
-      { action: "set_plan", goal: "Ship", todos: ["Implement"] },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("call", { action: "set_plan", goal: "Ship", todos: ["Implement"] }, undefined, undefined, ctx);
     const updated = await tool.execute(
       "call",
       { action: "todo", todoId: "todo_1", status: "done" },
@@ -3312,13 +2274,7 @@ test("execution completion requires a qualifying Verify result after mutation", 
       await handler({ toolName: "edit", toolCallId: "edit" }, ctx);
     for (const handler of app.handlers.get("tool_result") ?? [])
       await handler({ toolName: "edit", toolCallId: "edit" }, ctx);
-    const blocked = await tool.execute(
-      "call",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const blocked = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
     assert.match(blocked.content[0].text, /Cannot complete until/);
     assert.equal(blocked.terminate, undefined);
     app.emit("pi-verify:result", {
@@ -3329,29 +2285,11 @@ test("execution completion requires a qualifying Verify result after mutation", 
       runId: "run",
       results: [],
     });
-    const completed = await tool.execute(
-      "call",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.match(
-      completed.content[0].text,
-      /Work completed.*No further continuity updates needed/,
-    );
+    const completed = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(completed.content[0].text, /Work completed.*No further continuity updates needed/);
     assert.equal(completed.terminate, true);
-    const repeated = await tool.execute(
-      "call",
-      { action: "state", completion: true },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.match(
-      repeated.content[0].text,
-      /already completed.*No further continuity updates needed/,
-    );
+    const repeated = await tool.execute("call", { action: "state", completion: true }, undefined, undefined, ctx);
+    assert.match(repeated.content[0].text, /already completed.*No further continuity updates needed/);
     assert.equal(repeated.terminate, true);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3373,35 +2311,22 @@ test("subsequent plan inherits timeline lineage from a fresh executor session", 
     parentSessionId: "planner-session",
     createdAt: new Date().toISOString(),
   };
-  const entries = [
-    {
-      type: "custom",
-      customType: "pylon-run",
-      data: previousRun,
-    },
-  ];
+  const entries = [{ type: "custom", customType: "pylon-run", data: previousRun }];
   const ctx: any = {
     cwd,
     hasUI: false,
     mode: "json",
     model: { provider: "provider", id: "executor" },
-    sessionManager: {
-      getSessionId: () => "fresh-executor-session",
-      getEntries: () => entries,
-    },
+    sessionManager: { getSessionId: () => "fresh-executor-session", getEntries: () => entries },
     isIdle: () => true,
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     await app.commands.get("plan").handler("Plan another change", ctx);
 
-    const nextRun = app.appended.find(
-      (entry) =>
-        entry.customType === "pylon-run" && entry.data.role === "planner",
-    )?.data;
+    const nextRun = app.appended.find(entry => entry.customType === "pylon-run" && entry.data.role === "planner")?.data;
     assert.ok(nextRun);
     assert.notEqual(nextRun.runId, previousRun.runId);
     assert.equal(nextRun.timelineId, previousRun.runId);
@@ -3458,54 +2383,42 @@ test("explicit plan resets model context without replacing the visible session",
   };
   try {
     app = runtime();
-    app.onSendUserMessage((message) => {
+    app.onSendUserMessage(message => {
       if (!message.startsWith("Plan this task")) return;
       planningRun = (async () => {
         await Promise.resolve();
-        for (const handler of app.handlers.get("agent_start") ?? [])
-          await handler({}, ctx);
-        await app.tools.get("continuity_update").execute(
-          "call",
-          {
-            action: "set_plan",
-            goal: "Ship change",
-            planSummary: "Implement then verify",
-            todos: ["Implement", "Verify"],
-          },
-          undefined,
-          undefined,
-          ctx,
-        );
-        for (const handler of app.handlers.get("agent_settled") ?? [])
-          await handler({}, ctx);
+        for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+        await app.tools
+          .get("continuity_update")
+          .execute(
+            "call",
+            {
+              action: "set_plan",
+              goal: "Ship change",
+              planSummary: "Implement then verify",
+              todos: ["Implement", "Verify"],
+            },
+            undefined,
+            undefined,
+            ctx,
+          );
+        for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
         planningRun = undefined;
       })();
     });
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
-    await app.commands
-      .get("continuity")
-      .handler("planner provider/planner:high", ctx);
-    await app.commands
-      .get("continuity")
-      .handler("executor provider/executor:low", ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+    await app.commands.get("continuity").handler("planner provider/planner:high", ctx);
+    await app.commands.get("continuity").handler("executor provider/executor:low", ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
     await planningRun;
-    await waitFor(() =>
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
+    await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
     assert.equal(newSessions, 0);
     assert.equal(app.selectedModel()?.id, "executor");
     assert.equal(app.thinking(), "low");
-    assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
+    assert.ok(!app.sent.some(message => message.startsWith("/plan ")));
     const executorRun = [...app.appended]
       .reverse()
-      .find(
-        (entry) =>
-          entry.customType === "pylon-run" && entry.data.role === "executor",
-      )?.data;
+      .find(entry => entry.customType === "pylon-run" && entry.data.role === "executor")?.data;
     assert.ok(executorRun);
     assert.equal(executorRun.timelineId, executorRun.runId);
     const boundary = app.customMessages[0]!;
@@ -3513,58 +2426,33 @@ test("explicit plan resets model context without replacing the visible session",
     assert.equal(boundary.message.details.timelineId, executorRun.timelineId);
     assert.equal(boundary.message.display, false);
     assert.equal(boundary.options.triggerTurn, false);
-    assert.match(
-      boundary.message.content,
-      /Earlier messages remain visible but are excluded/,
-    );
+    assert.match(boundary.message.content, /Earlier messages remain visible but are excluded/);
     assert.match(boundary.message.content, /Plan: Implement then verify/);
-    const kickoff = app.customMessages.find(
-      (entry) => entry.message.customType === "pi-continuity-execution",
-    );
+    const kickoff = app.customMessages.find(entry => entry.message.customType === "pi-continuity-execution");
     assert.ok(kickoff);
     assert.equal(kickoff.options.triggerTurn, true);
-    assert.equal(
-      kickoff.message.details.approvalToken,
-      executorRun.approvalToken,
-    );
-    assert.equal(
-      kickoff.message.content,
-      "Execute the approved Continuity plan now.",
-    );
+    assert.equal(kickoff.message.details.approvalToken, executorRun.approvalToken);
+    assert.equal(kickoff.message.content, "Execute the approved Continuity plan now.");
     const context = app.handlers.get("context")![0];
     const filtered = await context({
       messages: [
         { role: "user", content: "old prompt" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "old response" }],
-        },
+        { role: "assistant", content: [{ type: "text", text: "old response" }] },
         { role: "custom", ...boundary.message },
-        {
-          role: "custom",
-          customType: "pi-continuity-memory",
-          content: "stale memory",
-          display: false,
-        },
+        { role: "custom", customType: "pi-continuity-memory", content: "stale memory", display: false },
         { role: "user", content: "executor prompt" },
       ],
     });
     assert.equal(
-      filtered.messages.some(
-        (message: any) => message.content === "old prompt",
-      ),
+      filtered.messages.some((message: any) => message.content === "old prompt"),
       false,
     );
     assert.equal(
-      filtered.messages.some(
-        (message: any) => message.content === "stale memory",
-      ),
+      filtered.messages.some((message: any) => message.content === "stale memory"),
       false,
     );
     assert.equal(
-      filtered.messages.some(
-        (message: any) => message.content === "executor prompt",
-      ),
+      filtered.messages.some((message: any) => message.content === "executor prompt"),
       true,
     );
     assert.equal(filtered.messages[0].customType, "pi-continuity-handoff");
@@ -3583,9 +2471,7 @@ test("explicit plan resets model context without replacing the visible session",
         ],
       });
       assert.equal(
-        unfiltered.messages.some(
-          (message: any) => message.content === "keep old prompt",
-        ),
+        unfiltered.messages.some((message: any) => message.content === "keep old prompt"),
         true,
       );
     }
@@ -3597,9 +2483,7 @@ test("explicit plan resets model context without replacing the visible session",
     ];
     const cancelled = await context({ messages: cancelledMessages });
     assert.equal(
-      (cancelled?.messages ?? cancelledMessages).some(
-        (message: any) => message.content === "keep cancelled prompt",
-      ),
+      (cancelled?.messages ?? cancelledMessages).some((message: any) => message.content === "keep cancelled prompt"),
       true,
     );
   } finally {
@@ -3610,9 +2494,7 @@ test("explicit plan resets model context without replacing the visible session",
 
 test("child reload preserves progress instead of replaying the handoff snapshot", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-child-reload-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-child-reload-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -3624,9 +2506,7 @@ test("child reload preserves progress instead of replaying the handoff snapshot"
     approved: true,
     constraints: ["Keep compatibility"],
     planSummary: "Implement then verify",
-    todos: [
-      { id: "todo_1", text: "Implement", status: "pending", updatedAt: now },
-    ],
+    todos: [{ id: "todo_1", text: "Implement", status: "pending", updatedAt: now }],
     runId: "run-child",
     createdAt: now,
     updatedAt: now,
@@ -3645,14 +2525,10 @@ test("child reload preserves progress instead of replaying the handoff snapshot"
     mode: "json",
     model,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
     },
-    sessionManager: {
-      getSessionId: () => "child-session",
-      getEntries: () => entries,
-    },
+    sessionManager: { getSessionId: () => "child-session", getEntries: () => entries },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
@@ -3660,36 +2536,18 @@ test("child reload preserves progress instead of replaying the handoff snapshot"
     const sessionStart = app.handlers.get("session_start")![0];
     await sessionStart({ reason: "startup" }, ctx);
     assert.equal(app.modelSelections(), 1);
-    const leaseDirectory = join(
-      root,
-      "agent",
-      "pi-continuity",
-      "session-artifacts",
-    );
+    const leaseDirectory = join(root, "agent", "pi-continuity", "session-artifacts");
     const initialLeases = await readdir(leaseDirectory);
     assert.equal(initialLeases.length, 1);
 
     await app.tools
       .get("continuity_update")
-      .execute(
-        "done",
-        { action: "todo", todoId: "todo_1", status: "done" },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("done", { action: "todo", todoId: "todo_1", status: "done" }, undefined, undefined, ctx);
     await sessionStart({ reason: "reload" }, ctx);
 
-    assert.deepEqual(
-      await readdir(leaseDirectory),
-      initialLeases,
-      "reload keeps the same lease continuously",
-    );
+    assert.deepEqual(await readdir(leaseDirectory), initialLeases, "reload keeps the same lease continuously");
     assert.equal(app.modelSelections(), 1);
-    const context = await app.handlers.get("context")![0](
-      { messages: [] },
-      ctx,
-    );
+    const context = await app.handlers.get("context")![0]({ messages: [] }, ctx);
     assert.match(context.messages.at(-1).content, /Done: 1/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3699,9 +2557,7 @@ test("child reload preserves progress instead of replaying the handoff snapshot"
 
 test("task widget resets after settlement but survives mid-turn steering", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-widget-reset-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-widget-reset-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -3710,91 +2566,47 @@ test("task widget resets after settlement but survives mid-turn steering", async
     cwd,
     hasUI: true,
     mode: "tui",
-    sessionManager: {
-      getSessionId: () => "widget-reset-session",
-      getEntries: () => [],
-    },
-    ui: {
-      notify: () => {},
-      setStatus: () => {},
-      setWidget: (_name: string, value: unknown) => widgets.push(value),
-    },
+    sessionManager: { getSessionId: () => "widget-reset-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: (_name: string, value: unknown) => widgets.push(value) },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
     const renderWidget = (widget: any) =>
-      widget(
-        {},
-        {
-          fg: (_color: string, text: string) => text,
-          strikethrough: (text: string) => `~${text}~`,
-        },
-      )
+      widget({}, { fg: (_color: string, text: string) => text, strikethrough: (text: string) => `~${text}~` })
         .render(1_000)
         .map((line: string) => line.trimEnd());
     await tool.execute(
       "call",
-      {
-        action: "set_plan",
-        goal: "First task",
-        todos: ["Implement", "Verify"],
-      },
+      { action: "set_plan", goal: "First task", todos: ["Implement", "Verify"] },
       undefined,
       undefined,
       ctx,
     );
-    assert.deepEqual(renderWidget(widgets.at(-1)), [
-      "Tasks",
-      "● Implement",
-      "○ Verify",
-    ]);
+    assert.deepEqual(renderWidget(widgets.at(-1)), ["Tasks", "● Implement", "○ Verify"]);
 
     await tool.execute(
       "call",
-      {
-        action: "todo",
-        todoId: "todo_1",
-        nextTodoId: "todo_2",
-        status: "done",
-      },
+      { action: "todo", todoId: "todo_1", nextTodoId: "todo_2", status: "done" },
       undefined,
       undefined,
       ctx,
     );
-    assert.deepEqual(renderWidget(widgets.at(-1)), [
-      "Tasks",
-      "● ~Implement~",
-      "● Verify",
-    ]);
+    assert.deepEqual(renderWidget(widgets.at(-1)), ["Tasks", "● ~Implement~", "● Verify"]);
     const shown = widgets.length;
 
     for (const handler of app.handlers.get("input") ?? [])
-      await handler(
-        {
-          text: "Adjust it",
-          source: "interactive",
-          streamingBehavior: "steer",
-        },
-        ctx,
-      );
+      await handler({ text: "Adjust it", source: "interactive", streamingBehavior: "steer" }, ctx);
     assert.equal(widgets.length, shown);
 
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    for (const handler of app.handlers.get("agent_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
     assert.equal(widgets.at(-1), undefined);
 
     await tool.execute(
       "call",
-      {
-        action: "set_plan",
-        goal: "Second task",
-        todos: ["Verify"],
-      },
+      { action: "set_plan", goal: "Second task", todos: ["Verify"] },
       undefined,
       undefined,
       ctx,
@@ -3824,15 +2636,11 @@ test("TUI approval waits for the scheduled planner response before showing choic
     mode: "tui",
     model,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
       getAvailable: () => [model],
     },
-    sessionManager: {
-      getSessionId: () => "selector-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "selector-session", getEntries: () => [] },
     isIdle: () => !planningRun,
     waitForIdle: async () => {
       await planningRun;
@@ -3851,40 +2659,35 @@ test("TUI approval waits for the scheduled planner response before showing choic
   };
   try {
     app = runtime();
-    app.onSendUserMessage((message) => {
+    app.onSendUserMessage(message => {
       if (!message.startsWith("Plan this task")) return;
       planningRun = (async () => {
         await Promise.resolve();
         assert.equal(selections, 0);
-        for (const handler of app.handlers.get("agent_start") ?? [])
-          await handler({}, ctx);
-        const result = await app.tools.get("continuity_update").execute(
-          "call",
-          {
-            action: "set_plan",
-            goal: "Ship change",
-            planSummary: "Implement then verify",
-            todos: ["Implement", "Verify"],
-          },
-          undefined,
-          undefined,
-          ctx,
-        );
+        for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
+        const result = await app.tools
+          .get("continuity_update")
+          .execute(
+            "call",
+            {
+              action: "set_plan",
+              goal: "Ship change",
+              planSummary: "Implement then verify",
+              todos: ["Implement", "Verify"],
+            },
+            undefined,
+            undefined,
+            ctx,
+          );
         structuredPlan = result.details.plan;
-        for (const handler of app.handlers.get("agent_settled") ?? [])
-          await handler({}, ctx);
+        for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
         planningRun = undefined;
       })();
     });
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
     await planningRun;
-    await waitFor(() =>
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
+    await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
     assert.equal(selections, 1);
     assert.equal(approvalTitle, "Plan ready — review structured plan above");
     assert.match(structuredPlan, /^Plan\n\nGoal\nShip change/);
@@ -3893,23 +2696,13 @@ test("TUI approval waits for the scheduled planner response before showing choic
     ]);
     const executorRun = [...app.appended]
       .reverse()
-      .find(
-        (entry) =>
-          entry.customType === "pylon-run" && entry.data.role === "executor",
-      )?.data;
+      .find(entry => entry.customType === "pylon-run" && entry.data.role === "executor")?.data;
     assert.ok(executorRun?.runId);
     assert.ok(executorRun?.timelineId);
-    assert.ok(!app.sent.some((message) => message.startsWith("/plan ")));
-    assert.equal(
-      app.customMessages.filter(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ).length,
-      1,
-    );
+    assert.ok(!app.sent.some(message => message.startsWith("/plan ")));
+    assert.equal(app.customMessages.filter(entry => entry.message.customType === "pi-continuity-execution").length, 1);
     const context = await app.handlers.get("context")?.[0](
-      {
-        messages: [{ role: "user", content: "Keep this context" }],
-      },
+      { messages: [{ role: "user", content: "Keep this context" }] },
       ctx,
     );
     assert.equal(context.messages[0].content, "Keep this context");
@@ -3922,9 +2715,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
 
 test("dismissed TUI approval is offered again on the next settlement", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-dismissed-approval-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-dismissed-approval-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -3936,57 +2727,42 @@ test("dismissed TUI approval is offered again on the next settlement", async () 
     mode: "tui",
     model,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
       getAvailable: () => [model],
     },
-    sessionManager: {
-      getSessionId: () => "dismissed-approval-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "dismissed-approval-session", getEntries: () => [] },
     isIdle: () => true,
     ui: {
       notify: () => {},
       setStatus: () => {},
       setWidget: () => {},
-      select: async () =>
-        ++selections === 1 ? undefined : "Approve — continue current session",
+      select: async () => (++selections === 1 ? undefined : "Approve — continue current session"),
       editor: async () => "",
     },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement then verify",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement then verify", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
 
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     await waitFor(() => selections === 1);
     for (let attempt = 0; attempt < 20 && selections < 2; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      for (const handler of app.handlers.get("agent_settled") ?? [])
-        await handler({}, ctx);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     }
     assert.equal(selections, 2);
-    await waitFor(() =>
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
+    await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -3995,9 +2771,7 @@ test("dismissed TUI approval is offered again on the next settlement", async () 
 
 test("unavailable executor leaves TUI approval pending", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-unavailable-executor-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-unavailable-executor-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -4012,16 +2786,11 @@ test("unavailable executor leaves TUI approval pending", async () => {
     model,
     modelRegistry: {
       find: (provider: string, id: string) =>
-        executorAvailable && provider === model.provider && id === model.id
-          ? model
-          : undefined,
+        executorAvailable && provider === model.provider && id === model.id ? model : undefined,
       hasConfiguredAuth: () => true,
       getAvailable: () => [model],
     },
-    sessionManager: {
-      getSessionId: () => "unavailable-executor-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "unavailable-executor-session", getEntries: () => [] },
     isIdle: () => true,
     ui: {
       notify: (message: string) => notifications.push(message),
@@ -4036,41 +2805,31 @@ test("unavailable executor leaves TUI approval pending", async () => {
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement then verify",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement then verify", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
 
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     await waitFor(() => notifications.includes("Executor model unavailable."));
     assert.equal(selections, 1);
     assert.ok(!app.active().includes("edit"));
 
     executorAvailable = true;
     for (let attempt = 0; attempt < 20 && selections < 2; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      for (const handler of app.handlers.get("agent_settled") ?? [])
-        await handler({}, ctx);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     }
     assert.equal(selections, 2);
     await waitFor(() => app.active().includes("edit"));
-    assert.ok(
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
+    assert.ok(app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -4091,15 +2850,11 @@ test("approval survives a clarification turn and normalizes missing plan summary
     mode: "tui",
     model,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
       getAvailable: () => [model],
     },
-    sessionManager: {
-      getSessionId: () => "replan-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "replan-session", getEntries: () => [] },
     isIdle: () => true,
     ui: {
       notify: () => {},
@@ -4107,94 +2862,58 @@ test("approval survives a clarification turn and normalizes missing plan summary
       setWidget: () => {},
       select: async () => {
         selections++;
-        return selections === 1
-          ? "Request changes"
-          : "Approve — continue current session";
+        return selections === 1 ? "Request changes" : "Approve — continue current session";
       },
       editor: async () => "Keep the same steps but clarify wording",
     },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
 
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     assert.equal(selections, 0);
 
     const rejected = await app.tools
       .get("continuity_update")
-      .execute(
-        "empty",
-        { action: "set_plan", goal: "Ship change", todos: [] },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("empty", { action: "set_plan", goal: "Ship change", todos: [] }, undefined, undefined, ctx);
     assert.match(rejected.content[0].text, /At least one non-empty todo/);
 
     await app.tools
       .get("continuity_update")
       .execute(
         "final",
-        {
-          action: "set_plan",
-          goal: "Ship change",
-          todos: ["Implement", "Verify"],
-        },
+        { action: "set_plan", goal: "Ship change", todos: ["Implement", "Verify"] },
         undefined,
         undefined,
         ctx,
       );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     await waitFor(() => selections === 1);
-    await waitFor(() =>
-      app.sent.some((message) =>
-        message.startsWith("Plan changes requested for revision 1:"),
-      ),
-    );
+    await waitFor(() => app.sent.some(message => message.startsWith("Plan changes requested for revision 1:")));
 
     await app.tools
       .get("continuity_update")
       .execute(
         "revised",
-        {
-          action: "set_plan",
-          goal: "Ship change",
-          todos: ["Implement", "Verify"],
-        },
+        { action: "set_plan", goal: "Ship change", todos: ["Implement", "Verify"] },
         undefined,
         undefined,
         ctx,
       );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     await waitFor(
       () =>
         app.active().includes("edit") &&
-        app.customMessages.some(
-          (entry) => entry.message.customType === "pi-continuity-execution",
-        ),
+        app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"),
     );
 
     assert.equal(selections, 2);
     assert.ok(app.active().includes("edit"));
-    assert.ok(
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
-    const context = await app.handlers.get("context")?.[0](
-      { messages: [] },
-      ctx,
-    );
-    assert.match(
-      context.messages.at(-1).content,
-      /Plan anchor: Implement; Verify/,
-    );
+    assert.ok(app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
+    const context = await app.handlers.get("context")?.[0]({ messages: [] }, ctx);
+    assert.match(context.messages.at(-1).content, /Plan anchor: Implement; Verify/);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -4220,24 +2939,17 @@ test("RPC settlement presents plan review and keeps Plan mode status until appro
     model,
     isIdle: () => true,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
     },
-    sessionManager: {
-      getSessionId: () => "rpc-plan-review-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "rpc-plan-review-session", getEntries: () => [] },
     ui: {
       notify: () => {},
-      setStatus: (_key: string, value: string | undefined) =>
-        statuses.push(value),
+      setStatus: (_key: string, value: string | undefined) => statuses.push(value),
       setWidget: () => {},
       select: async (_title: string, _choices: string[], options: unknown) => {
         selectOptions.push(options);
-        return ++selections === 1
-          ? "Request changes"
-          : "Approve — reset context";
+        return ++selections === 1 ? "Request changes" : "Approve — reset context";
       },
       editor: async (_title: string, _prefill: string, options: unknown) => {
         editorOptions.push(options);
@@ -4248,69 +2960,43 @@ test("RPC settlement presents plan review and keeps Plan mode status until appro
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    await waitFor(() =>
-      app.sent.some((message) =>
-        message.startsWith("Plan changes requested for revision 1:"),
-      ),
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => app.sent.some(message => message.startsWith("Plan changes requested for revision 1:")));
     assert.equal(selections, 1);
     assert.equal(editors, 1);
     assert.deepEqual(selectOptions, [{ timeout: 0 }]);
     assert.deepEqual(editorOptions, [{ timeout: 0 }]);
     assert.equal(statuses.at(-1), "Plan mode");
 
-    await app.tools.get("continuity_update").execute(
-      "revised",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement safely",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    await waitFor(() =>
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "revised",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement safely", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
 
     assert.equal(selections, 2);
     assert.deepEqual(selectOptions, [{ timeout: 0 }, { timeout: 0 }]);
     assert.equal(statuses.at(-1), undefined);
-    const kickoff = app.customMessages.find(
-      (entry) => entry.message.customType === "pi-continuity-execution",
-    );
-    assert.equal(
-      kickoff?.message.content,
-      "Execute the approved Continuity plan now.",
-    );
-    assert.ok(
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-handoff",
-      ),
-    );
+    const kickoff = app.customMessages.find(entry => entry.message.customType === "pi-continuity-execution");
+    assert.equal(kickoff?.message.content, "Execute the approved Continuity plan now.");
+    assert.ok(app.customMessages.some(entry => entry.message.customType === "pi-continuity-handoff"));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -4334,21 +3020,17 @@ test("Inspector feedback makes an open RPC approval dialog stale without requeue
     model,
     isIdle: () => true,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
     },
-    sessionManager: {
-      getSessionId: () => "rpc-plan-race-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "rpc-plan-race-session", getEntries: () => [] },
     ui: {
       notify: () => {},
       setStatus: () => {},
       setWidget: () => {},
       select: async () => {
         selections++;
-        return new Promise<string | undefined>((resolve) => {
+        return new Promise<string | undefined>(resolve => {
           resolveChoice = resolve;
         });
       },
@@ -4357,23 +3039,18 @@ test("Inspector feedback makes an open RPC approval dialog stale without requeue
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     await waitFor(() => selections === 1 && Boolean(resolveChoice));
 
     let action: Promise<unknown> | undefined;
@@ -4390,16 +3067,13 @@ test("Inspector feedback makes an open RPC approval dialog stale without requeue
     });
     await action;
     resolveChoice!("Approve — continue current session");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    await new Promise(resolve => setTimeout(resolve, 20));
 
     assert.equal(selections, 1);
     assert.equal(
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
+      app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"),
       false,
     );
   } finally {
@@ -4423,36 +3097,33 @@ test("RPC plan actions persist feedback, preserve todo IDs, and approve the revi
     model,
     isIdle: () => true,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
     },
-    sessionManager: {
-      getSessionId: () => "rpc-plan-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "rpc-plan-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Update the boundary",
-        workingSet: ["src/index.ts"],
-        assumptions: ["The API remains stable."],
-        acceptanceCriteria: ["Focused tests pass."],
-        todos: ["Implement", "Review"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        {
+          action: "set_plan",
+          goal: "Ship change",
+          planSummary: "Update the boundary",
+          workingSet: ["src/index.ts"],
+          assumptions: ["The API remains stable."],
+          acceptanceCriteria: ["Focused tests pass."],
+          todos: ["Implement", "Review"],
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
 
     const state = () => {
       let snapshot: any;
@@ -4481,23 +3152,10 @@ test("RPC plan actions persist feedback, preserve todo IDs, and approve the revi
     };
     const initial = state().work;
     assert.deepEqual(initial.handoff.workingSet, ["src/index.ts"]);
-    await action({
-      action: "requestChanges",
-      expectedRevision: 1,
-      feedback: "Clarify the implementation step.",
-    });
-    assert.equal(
-      state().work.revisionFeedback.text,
-      "Clarify the implementation step.",
-    );
-    await assert.rejects(
-      action({ action: "approve", resetContext: false, expectedRevision: 1 }),
-      /requested changes/i,
-    );
-    await assert.rejects(
-      action({ action: "approve", resetContext: false, expectedRevision: 2 }),
-      /revision changed/i,
-    );
+    await action({ action: "requestChanges", expectedRevision: 1, feedback: "Clarify the implementation step." });
+    assert.equal(state().work.revisionFeedback.text, "Clarify the implementation step.");
+    await assert.rejects(action({ action: "approve", resetContext: false, expectedRevision: 1 }), /requested changes/i);
+    await assert.rejects(action({ action: "approve", resetContext: false, expectedRevision: 2 }), /revision changed/i);
 
     await app.tools.get("continuity_update").execute(
       "revised",
@@ -4523,22 +3181,13 @@ test("RPC plan actions persist feedback, preserve todo IDs, and approve the revi
       action({ action: "approve", resetContext: false, expectedRevision: 2 }),
       action({ action: "approve", resetContext: false, expectedRevision: 2 }),
     ]);
+    assert.equal(app.customMessages.filter(entry => entry.message.customType === "pi-continuity-execution").length, 1);
     assert.equal(
-      app.customMessages.filter(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ).length,
-      1,
-    );
-    assert.equal(
-      app.appended.filter(
-        (entry) =>
-          entry.customType === "pylon-run" && entry.data.role === "executor",
-      ).length,
+      app.appended.filter(entry => entry.customType === "pylon-run" && entry.data.role === "executor").length,
       1,
     );
     assert.equal(state().work.approvalPending, true);
-    for (const handler of app.handlers.get("agent_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_start") ?? []) await handler({}, ctx);
     assert.equal(state().work.approvalPending, false);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -4562,94 +3211,52 @@ test("interrupted approval reconciles forward once on reload", async () => {
     model,
     isIdle: () => true,
     modelRegistry: {
-      find: (provider: string, id: string) =>
-        provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
       hasConfiguredAuth: () => true,
     },
     sessionManager: {
       getSessionId: () => "approval-recovery-session",
       getEntries: () => [
-        ...(app?.appended ?? []).map((entry) => ({ type: "custom", ...entry })),
-        ...(app?.customMessages ?? []).map((entry) => ({
-          type: "custom_message",
-          ...entry.message,
-        })),
+        ...(app?.appended ?? []).map(entry => ({ type: "custom", ...entry })),
+        ...(app?.customMessages ?? []).map(entry => ({ type: "custom_message", ...entry.message })),
       ],
     },
-    ui: {
-      notify: () => {},
-      setStatus: () => {},
-      setWidget: () => {},
-      select: async () => undefined,
-    },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {}, select: async () => undefined },
   };
   try {
     app = runtime();
     const sessionStart = app.handlers.get("session_start")![0];
     await sessionStart({}, ctx);
     await app.commands.get("plan").handler("Ship change", ctx);
-    await app.tools.get("continuity_update").execute(
-      "plan",
-      {
-        action: "set_plan",
-        goal: "Ship change",
-        planSummary: "Implement",
-        todos: ["Implement"],
-      },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await app.tools
+      .get("continuity_update")
+      .execute(
+        "plan",
+        { action: "set_plan", goal: "Ship change", planSummary: "Implement", todos: ["Implement"] },
+        undefined,
+        undefined,
+        ctx,
+      );
 
     app.failNextAppend();
-    await assert.rejects(
-      app.commands.get("plan").handler("approve-current", ctx),
-      /append failed/,
-    );
+    await assert.rejects(app.commands.get("plan").handler("approve-current", ctx), /append failed/);
     assert.equal(
-      app.appended.filter(
-        (entry) =>
-          entry.customType === "pylon-run" && entry.data.role === "executor",
-      ).length,
+      app.appended.filter(entry => entry.customType === "pylon-run" && entry.data.role === "executor").length,
       0,
     );
 
     await sessionStart({ reason: "reload" }, ctx);
-    await waitFor(() =>
-      app.customMessages.some(
-        (entry) => entry.message.customType === "pi-continuity-execution",
-      ),
-    );
-    const token = app.appended.find(
-      (entry) =>
-        entry.customType === "pylon-run" && entry.data.role === "executor",
-    )?.data.approvalToken;
+    await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
+    const token = app.appended.find(entry => entry.customType === "pylon-run" && entry.data.role === "executor")?.data
+      .approvalToken;
     assert.ok(token);
-    assert.equal(
-      app.appended.filter((entry) => entry.data?.approvalToken === token)
-        .length,
-      1,
-    );
-    assert.equal(
-      app.customMessages.filter(
-        (entry) => entry.message.details?.approvalToken === token,
-      ).length,
-      1,
-    );
+    assert.equal(app.appended.filter(entry => entry.data?.approvalToken === token).length, 1);
+    assert.equal(app.customMessages.filter(entry => entry.message.details?.approvalToken === token).length, 1);
 
     await sessionStart({ reason: "reload" }, ctx);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(
-      app.appended.filter((entry) => entry.data?.approvalToken === token)
-        .length,
-      1,
-    );
-    assert.equal(
-      app.customMessages.filter(
-        (entry) => entry.message.details?.approvalToken === token,
-      ).length,
-      1,
-    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(app.appended.filter(entry => entry.data?.approvalToken === token).length, 1);
+    assert.equal(app.customMessages.filter(entry => entry.message.details?.approvalToken === token).length, 1);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -4659,9 +3266,7 @@ test("interrupted approval reconciles forward once on reload", async () => {
 
 test("plan mode permits memory list but blocks memory mutations", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-extension-memory-plan-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-memory-plan-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -4670,26 +3275,18 @@ test("plan mode permits memory list but blocks memory mutations", async () => {
     hasUI: false,
     mode: "json",
     isIdle: () => true,
-    sessionManager: {
-      getSessionId: () => "memory-plan-session",
-      getEntries: () => [],
-    },
+    sessionManager: { getSessionId: () => "memory-plan-session", getEntries: () => [] },
     ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
   };
   try {
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     await app.commands.get("plan").handler("Inspect memory", ctx);
     assert.ok(app.active().includes("memory"));
     const guard = app.handlers.get("tool_call")![0];
-    assert.equal(
-      await guard({ toolName: "memory", input: { action: "list" } }, ctx),
-      undefined,
-    );
+    assert.equal(await guard({ toolName: "memory", input: { action: "list" } }, ctx), undefined);
     assert.match(
-      (await guard({ toolName: "memory", input: { action: "add" } }, ctx))
-        .reason,
+      (await guard({ toolName: "memory", input: { action: "add" } }, ctx)).reason,
       /Memory mutations are blocked.*list only/i,
     );
   } finally {
@@ -4707,22 +3304,16 @@ test("session startup safely reassociates a moved repository and retains a backu
   try {
     await mkdir(oldPath);
     await exec("git", ["init", "-q"], { cwd: oldPath });
-    await exec("git", ["config", "user.email", "test@example.com"], {
-      cwd: oldPath,
-    });
+    await exec("git", ["config", "user.email", "test@example.com"], { cwd: oldPath });
     await exec("git", ["config", "user.name", "Test"], { cwd: oldPath });
     await writeFile(join(oldPath, "one.txt"), "one\n");
     await exec("git", ["add", "."], { cwd: oldPath });
     await exec("git", ["commit", "-m", "one"], { cwd: oldPath });
-    const first = String(
-      (await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout,
-    ).trim();
+    const first = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
     await writeFile(join(oldPath, "two.txt"), "two\n");
     await exec("git", ["add", "."], { cwd: oldPath });
     await exec("git", ["commit", "-m", "two"], { cwd: oldPath });
-    const second = String(
-      (await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout,
-    ).trim();
+    const second = String((await exec("git", ["rev-parse", "HEAD"], { cwd: oldPath })).stdout).trim();
     const oldOwner = (await projectContext(oldPath, "fallback")).owner,
       id = serverNoteId(),
       continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity"),
@@ -4750,18 +3341,8 @@ test("session startup safely reassociates a moved repository and retains a backu
           authority: "project_contract",
           origin: "agent",
           sourceRefs: [
-            {
-              type: "repository",
-              path: "one.txt",
-              excerptSha256: "a".repeat(64),
-              captureCommit: first,
-            },
-            {
-              type: "repository",
-              path: "two.txt",
-              excerptSha256: "b".repeat(64),
-              captureCommit: second,
-            },
+            { type: "repository", path: "one.txt", excerptSha256: "a".repeat(64), captureCommit: first },
+            { type: "repository", path: "two.txt", excerptSha256: "b".repeat(64), captureCommit: second },
           ],
           disposition: "archival",
           enforcementAuthority: "context_only",
@@ -4776,15 +3357,11 @@ test("session startup safely reassociates a moved repository and retains a backu
       cwd,
       hasUI: false,
       mode: "json",
-      sessionManager: {
-        getSessionId: () => "owner-move-session",
-        getEntries: () => [],
-      },
+      sessionManager: { getSessionId: () => "owner-move-session", getEntries: () => [] },
       ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
     };
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const currentOwner = (await projectContext(cwd, "fallback")).owner,
       state = JSON.parse(await readFile(statePath, "utf8"));
     assert.equal(state.notes[0]?.owner, currentOwner);
@@ -4792,7 +3369,7 @@ test("session startup safely reassociates a moved repository and retains a backu
     assert.equal(state.audits?.at(-1)?.type, "owner_reassociation");
     assert.equal(isMemoryState(state), true);
     const backups = await readdir(join(continuityRoot, "memory-v6", "backups"));
-    assert.ok(backups.some((name) => name.startsWith("owner-reassociation-")));
+    assert.ok(backups.some(name => name.startsWith("owner-reassociation-")));
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -4808,28 +3385,16 @@ test("explicit V4 migration command requires UI confirmation and a reviewer", as
   try {
     await mkdir(cwd);
     await exec("git", ["init", "-q"], { cwd });
-    const continuityRoot = join(
-      process.env.PI_CODING_AGENT_DIR!,
-      "pi-continuity",
-    );
-    await writeJsonAtomic(join(continuityRoot, "memory-v4", "memory.json"), {
-      schemaVersion: 4,
-      facts: [],
-    });
-    await writeJsonAtomic(
-      join(continuityRoot, "memory-v4", "candidates.json"),
-      { schemaVersion: 4, candidates: [] },
-    );
+    const continuityRoot = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity");
+    await writeJsonAtomic(join(continuityRoot, "memory-v4", "memory.json"), { schemaVersion: 4, facts: [] });
+    await writeJsonAtomic(join(continuityRoot, "memory-v4", "candidates.json"), { schemaVersion: 4, candidates: [] });
     const notices: string[] = [];
     let confirmed = false;
     const ctx: any = {
       cwd,
       hasUI: false,
       mode: "json",
-      sessionManager: {
-        getSessionId: () => "migrate-command-session",
-        getEntries: () => [],
-      },
+      sessionManager: { getSessionId: () => "migrate-command-session", getEntries: () => [] },
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
       ui: {
         notify: (message: string) => notices.push(message),
@@ -4839,8 +3404,7 @@ test("explicit V4 migration command requires UI confirmation and a reviewer", as
       },
     };
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     let snapshot: any;
     app.emit("pi-continuity:state-request", {
       version: 4,
@@ -4882,12 +3446,7 @@ test("explicit V4 migration command requires UI confirmation and a reviewer", as
     await command("migrate-v4", ctx);
     assert.match(notices.at(-1) ?? "", /Memory Reviewer is not configured/);
     assert.equal(
-      JSON.parse(
-        await readFile(
-          join(continuityRoot, "memory-v6", "migration.json"),
-          "utf8",
-        ),
-      ).status,
+      JSON.parse(await readFile(join(continuityRoot, "memory-v6", "migration.json"), "utf8")).status,
       "pending",
     );
   } finally {
@@ -4909,17 +3468,8 @@ test("interactive memory edit, forget, project purge, and rollback persist V6 st
     await mkdir(cwd);
     await exec("git", ["init", "-q"], { cwd });
     const owner = (await projectContext(cwd, "fallback")).owner;
-    const statePath = join(
-      process.env.PI_CODING_AGENT_DIR!,
-      "pi-continuity",
-      "memory-v6",
-      "state.json",
-    );
-    const note = (
-      id: string,
-      scope: "user" | "project",
-      noteOwner: string,
-    ) => ({
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "state.json");
+    const note = (id: string, scope: "user" | "project", noteOwner: string) => ({
       id,
       scope,
       owner: noteOwner,
@@ -4951,10 +3501,7 @@ test("interactive memory edit, forget, project purge, and rollback persist V6 st
       cwd,
       hasUI: true,
       mode: "tui",
-      sessionManager: {
-        getSessionId: () => "memory-command-session",
-        getEntries: () => [],
-      },
+      sessionManager: { getSessionId: () => "memory-command-session", getEntries: () => [] },
       ui: {
         notify: (message: string) => notices.push(message),
         setStatus: () => {},
@@ -4969,9 +3516,7 @@ test("interactive memory edit, forget, project purge, and rollback persist V6 st
             const current = JSON.parse(await readFile(statePath, "utf8"));
             current.revision++;
             current.notes = current.notes.map((item: any) =>
-              item.id === userId
-                ? { ...item, revision: item.revision + 1 }
-                : item,
+              item.id === userId ? { ...item, revision: item.revision + 1 } : item,
             );
             await writeJsonAtomic(statePath, current);
           }
@@ -4980,27 +3525,17 @@ test("interactive memory edit, forget, project purge, and rollback persist V6 st
       },
     };
     const app = runtime();
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const command = app.commands.get("memory").handler;
     await command(`edit user ${userId}`, ctx);
     let state = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(
-      state.notes.find((item: any) => item.id === userId)?.guidance,
-      "Use compact answers.",
-    );
-    assert.equal(
-      state.notes.find((item: any) => item.id === userId)?.revision,
-      2,
-    );
+    assert.equal(state.notes.find((item: any) => item.id === userId)?.guidance, "Use compact answers.");
+    assert.equal(state.notes.find((item: any) => item.id === userId)?.revision, 2);
     assert.equal(state.audits?.at(-1)?.type, "direct_edit");
     await command(`edit user ${userId}`, ctx);
     state = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(
-      state.notes.find((item: any) => item.id === userId)?.revision,
-      3,
-    );
-    assert.ok(notices.some((message) => /changed/i.test(message)));
+    assert.equal(state.notes.find((item: any) => item.id === userId)?.revision, 3);
+    assert.ok(notices.some(message => /changed/i.test(message)));
     await command(`forget user ${userId}`, ctx);
     await command("forget project", ctx);
     state = JSON.parse(await readFile(statePath, "utf8"));
@@ -5024,39 +3559,23 @@ test("interactive memory edit, forget, project purge, and rollback persist V6 st
       "pre-migration.json",
     );
     await writeJsonAtomic(backupPath, emptyMemoryState());
-    await writeJsonAtomic(
-      join(
-        process.env.PI_CODING_AGENT_DIR!,
-        "pi-continuity",
-        "memory-v6",
-        "migration.json",
-      ),
-      {
-        version: 1,
-        sourceHashes: {},
-        status: "activated",
-        completedRecordIds: [],
-        reviewerBatchIds: [],
-        activatedStateRevision: state.revision,
-        preMigrationBackup: backupPath,
-        retryCount: 0,
-        diagnostics: [],
-      },
-    );
+    await writeJsonAtomic(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "migration.json"), {
+      version: 1,
+      sourceHashes: {},
+      status: "activated",
+      completedRecordIds: [],
+      reviewerBatchIds: [],
+      activatedStateRevision: state.revision,
+      preMigrationBackup: backupPath,
+      retryCount: 0,
+      diagnostics: [],
+    });
     await command("rollback", ctx);
     state = JSON.parse(await readFile(statePath, "utf8"));
     assert.equal(isMemoryState(state), true);
     assert.deepEqual(state.notes, []);
     const journal = JSON.parse(
-      await readFile(
-        join(
-          process.env.PI_CODING_AGENT_DIR!,
-          "pi-continuity",
-          "memory-v6",
-          "migration.json",
-        ),
-        "utf8",
-      ),
+      await readFile(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "migration.json"), "utf8"),
     );
     assert.equal(journal.status, "rolled_back");
     assert.deepEqual(confirmations, [
@@ -5088,21 +3607,14 @@ test("review settlement rechecks provenance and rejects stale generations", asyn
     await exec("git", ["commit", "-m", "initial"], { cwd });
     await writeFile(join(cwd, "file.txt"), "two\n");
     const branch: any[] = [
-      {
-        id: "tool-result",
-        type: "message",
-        message: { role: "toolResult", toolCallId: "memory-call", content: [] },
-      },
+      { id: "tool-result", type: "message", message: { role: "toolResult", toolCallId: "memory-call", content: [] } },
     ];
     const app = runtime(["memory", "continuity_update"]),
       ctx: any = {
         cwd,
         hasUI: false,
         mode: "json",
-        modelRegistry: {
-          find: () => undefined,
-          hasConfiguredAuth: () => false,
-        },
+        modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
         sessionManager: {
           getSessionId: () => "settlement-session",
           getSessionFile: () => "session.jsonl",
@@ -5112,8 +3624,7 @@ test("review settlement rechecks provenance and rejects stale generations", asyn
         },
         ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
       };
-    for (const handler of app.handlers.get("session_start") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const owner = (await projectContext(cwd, "fallback")).owner,
       created = serverNoteId(),
       activationDraft = archivalActivationDraft();
@@ -5144,38 +3655,19 @@ test("review settlement rechecks provenance and rejects stale generations", asyn
           disposition: "archival",
           enforcementAuthority: "context_only",
           activationDraft,
-          rawProposal: {
-            trigger: "changing the boundary",
-            guidance: "Preserve the documented boundary.",
-          },
+          rawProposal: { trigger: "changing the boundary", guidance: "Preserve the documented boundary." },
           rewriteCharacter: "format_only",
         },
       ],
       rejectionCounts: {},
     };
-    const statePath = join(
-      process.env.PI_CODING_AGENT_DIR!,
-      "pi-continuity",
-      "memory-v6",
-      "state.json",
-    );
-    const pendingState = {
-      ...emptyMemoryState(),
-      revision: 1,
-      reviews: [review],
-      updatedAt: new Date().toISOString(),
-    };
+    const statePath = join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6", "state.json");
+    const pendingState = { ...emptyMemoryState(), revision: 1, reviews: [review], updatedAt: new Date().toISOString() };
     assert.equal(isMemoryState(pendingState), true);
     await writeJsonAtomic(statePath, pendingState);
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
-    const stateEntries = await readdir(
-      join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6"),
-    );
-    assert.ok(
-      stateEntries.includes("state.json"),
-      `state entries: ${stateEntries.join(", ")}`,
-    );
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
+    const stateEntries = await readdir(join(process.env.PI_CODING_AGENT_DIR!, "pi-continuity", "memory-v6"));
+    assert.ok(stateEntries.includes("state.json"), `state entries: ${stateEntries.join(", ")}`);
     const committed = JSON.parse(await readFile(statePath, "utf8"));
     assert.equal(committed.notes[0]?.id, created);
     assert.equal(committed.reviews[0]?.status, "committed");
@@ -5194,26 +3686,13 @@ test("review settlement rechecks provenance and rejects stale generations", asyn
     });
     const staleState = { ...committed, reviews: [...committed.reviews, stale] };
     assert.equal(isReviewRecord(stale), true, JSON.stringify(stale));
-    assert.equal(
-      committed.reviews.every(isReviewRecord),
-      true,
-      JSON.stringify(committed.reviews),
-    );
-    assert.equal(
-      committed.notes.every(isNotebookNote),
-      true,
-      JSON.stringify(committed.notes),
-    );
+    assert.equal(committed.reviews.every(isReviewRecord), true, JSON.stringify(committed.reviews));
+    assert.equal(committed.notes.every(isNotebookNote), true, JSON.stringify(committed.notes));
     assert.equal(isMemoryState(staleState), true, JSON.stringify(staleState));
     await writeJsonAtomic(statePath, staleState);
-    for (const handler of app.handlers.get("agent_settled") ?? [])
-      await handler({}, ctx);
+    for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     const discarded = JSON.parse(await readFile(statePath, "utf8"));
-    assert.equal(
-      discarded.reviews.find((item: any) => item.reviewId === stale.reviewId)
-        ?.status,
-      "discarded",
-    );
+    assert.equal(discarded.reviews.find((item: any) => item.reviewId === stale.reviewId)?.status, "discarded");
     let response: Promise<unknown> | undefined;
     app.emit("pi-continuity:memory-mutation", {
       version: 2,

@@ -15,11 +15,7 @@ export const SEARCH_TIMEOUT_MS = 30_000;
 /** True when `absolute` is neither `root` itself nor a descendant of it. */
 export function escapesRoot(root: string, absolute: string): boolean {
   const within = relative(root, absolute);
-  return (
-    within === ".." ||
-    within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(within)
-  );
+  return within === ".." || within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(within);
 }
 
 /** Compare paths the way the host filesystem does; `realpath` resolves symlinks first. */
@@ -39,8 +35,7 @@ export function workspacePath(cwd: string, input = "."): string {
   const clean = input.replace(/^@/, "") || ".";
   const root = resolve(cwd);
   const absolute = resolve(cwd, clean);
-  if (escapesRoot(root, absolute))
-    throw new Error("Search path must stay within workspace");
+  if (escapesRoot(root, absolute)) throw new Error("Search path must stay within workspace");
   return relative(root, absolute) || ".";
 }
 
@@ -49,10 +44,7 @@ function fit(text: string, maxBytes: number): string {
 }
 
 export function bounded(output: string, maxBytes = DEFAULT_MAX_BYTES): string {
-  const result = truncateHead(output, {
-    maxLines: DEFAULT_MAX_LINES,
-    maxBytes,
-  });
+  const result = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes });
   if (!result.truncated) return result.content;
   const notice = `\n\n[Output truncated; omitted output after ${result.outputLines}/${result.totalLines} lines and ${formatSize(result.outputBytes)}/${formatSize(result.totalBytes)}. Cap: ${formatSize(maxBytes)}.]`;
   return `${fit(result.content, maxBytes - Buffer.byteLength(notice, "utf8"))}${notice}`;
@@ -91,32 +83,19 @@ export async function runSearch(
   args: string[],
   options: SearchRunOptions,
 ): Promise<SearchOutcome> {
-  const {
-    probe,
-    signal,
-    label = command,
-    noMatchCode = 1,
-    verifyNoMatch = false,
-  } = options;
+  const { probe, signal, label = command, noMatchCode = 1, verifyNoMatch = false } = options;
   let result: SearchExecResult;
   try {
-    result = await pi.exec(command, args, {
-      signal,
-      timeout: SEARCH_TIMEOUT_MS,
-    });
+    result = await pi.exec(command, args, { signal, timeout: SEARCH_TIMEOUT_MS });
   } catch (error) {
     if (await probe(command, signal)) throw error;
     return { status: "missing", error: boundedError(error) };
   }
   if (result.code === 0) return { status: "ok", result };
-  if (result.code === noMatchCode && !verifyNoMatch)
-    return { status: "empty", result };
-  if (!(await probe(command, signal)))
-    return { status: "missing", error: boundedError(result.stderr) };
+  if (result.code === noMatchCode && !verifyNoMatch) return { status: "empty", result };
+  if (!(await probe(command, signal))) return { status: "missing", error: boundedError(result.stderr) };
   if (result.code === noMatchCode) return { status: "empty", result };
-  throw new Error(
-    `${label} failed (${result.code}): ${boundedError(result.stderr)}`,
-  );
+  throw new Error(`${label} failed (${result.code}): ${boundedError(result.stderr)}`);
 }
 
 /**
@@ -133,8 +112,7 @@ export function fitJson(
 ): { text: string; count: number } {
   for (let returned = count; returned >= 0; returned--) {
     const text = JSON.stringify(build(returned));
-    if (Buffer.byteLength(text, "utf8") <= maxBytes)
-      return { text, count: returned };
+    if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, count: returned };
   }
   for (const shape of fallbacks) {
     const text = JSON.stringify(shape);

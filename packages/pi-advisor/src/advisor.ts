@@ -4,10 +4,7 @@ export const ADVISOR_MAX_CALLS = 3;
 export const ADVISOR_MAX_OUTPUT_TOKENS = 8_192;
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 
-export function capAdvice(
-  text: string,
-  maxTokens = ADVISOR_MAX_OUTPUT_TOKENS,
-): { text: string; truncated: boolean } {
+export function capAdvice(text: string, maxTokens = ADVISOR_MAX_OUTPUT_TOKENS): { text: string; truncated: boolean } {
   const maxBytes = maxTokens * ESTIMATED_CHARS_PER_TOKEN;
   let output = truncateUtf8(text, maxBytes);
   if (output === text) return { text: output, truncated: false };

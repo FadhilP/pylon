@@ -1,11 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  BrowserSessionManager,
-  cliSessionName,
-  parseTabs,
-  validateCdpEndpoint,
-} from "../src/browser-session.ts";
+import { BrowserSessionManager, cliSessionName, parseTabs, validateCdpEndpoint } from "../src/browser-session.ts";
 import { HeliosCliError, PlaywrightCli } from "../src/playwright-cli.ts";
 
 function fakeCli(log: string[], delay = 0) {
@@ -19,14 +14,9 @@ function fakeCli(log: string[], delay = 0) {
     },
     async run(session: string, action: any) {
       log.push(action.kind);
-      if (delay && action.kind === "snapshot")
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      if (action.kind === "list")
-        return { value: { browsers: [{ name: session, status: "open" }] } };
-      if (action.kind === "tab-list")
-        return {
-          value: { result: "- 0: (current) [Example](https://example.com/)" },
-        };
+      if (delay && action.kind === "snapshot") await new Promise(resolve => setTimeout(resolve, delay));
+      if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+      if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
       return { value: {} };
     },
   } as any;
@@ -35,22 +25,10 @@ function fakeCli(log: string[], delay = 0) {
 const exec = async () => ({ code: 0, stdout: "{}", stderr: "", killed: false });
 
 test("session names are opaque and endpoints are strict loopback origins", () => {
-  assert.match(
-    cliSessionName("pi-session"),
-    /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/,
-  );
-  assert.equal(
-    validateCdpEndpoint("http://127.0.0.1:9222"),
-    "http://127.0.0.1:9222",
-  );
-  assert.throws(
-    () => validateCdpEndpoint("http://example.com:9222"),
-    /loopback/,
-  );
-  assert.throws(
-    () => validateCdpEndpoint("http://127.0.0.1:9222/json"),
-    /origin/,
-  );
+  assert.match(cliSessionName("pi-session"), /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/);
+  assert.equal(validateCdpEndpoint("http://127.0.0.1:9222"), "http://127.0.0.1:9222");
+  assert.throws(() => validateCdpEndpoint("http://example.com:9222"), /loopback/);
+  assert.throws(() => validateCdpEndpoint("http://127.0.0.1:9222/json"), /origin/);
   assert.deepEqual(
     parseTabs(
       "- 0: [One](https://one.test/)\n- 1: (current) [Two](https://two.test/)\n- 1: [Duplicate](https://duplicate.test/)\n- 999999999999999999999: [Unsafe](https://unsafe.test/)",
@@ -69,10 +47,7 @@ test("tab-list bounds fields and returned count while retaining the current tab"
   cli.run = async (_session: string, action: any) => {
     log.push(action.kind);
     if (action.kind !== "tab-list") return { value: {} };
-    if (++tabLists === 1)
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (++tabLists === 1) return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     const result = Array.from({ length: 25 }, (_, index) => {
       const current = index === 24 ? "(current) " : "";
       const title = index === 0 ? "False (current) marker" : "T".repeat(200);
@@ -86,7 +61,7 @@ test("tab-list bounds fields and returned count while retaining the current tab"
   assert.equal(result.tabs?.length, 20);
   assert.equal(result.tabsOmitted, 5);
   assert.deepEqual(
-    result.tabs?.map((tab) => tab.index),
+    result.tabs?.map(tab => tab.index),
     [...Array.from({ length: 19 }, (_, index) => index), 24],
   );
   assert.equal(result.tabs?.at(-1)?.title.length, 160);
@@ -106,12 +81,8 @@ test("start action snapshots expose current references without another snapshot"
   const cli = fakeCli(log);
   cli.run = async (_session: string, action: any) => {
     log.push(action.kind);
-    if (action.kind === "open")
-      return { value: {}, snapshot: "- button [ref=f1e1]" };
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "open") return { value: {}, snapshot: "- button [ref=f1e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
@@ -126,19 +97,12 @@ test("attach action snapshots expose current references without another snapshot
   const cli = fakeCli(log);
   cli.run = async (_session: string, action: any) => {
     log.push(action.kind);
-    if (action.kind === "attach-cdp")
-      return { value: {}, snapshot: "- button [ref=f1e1]" };
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "attach-cdp") return { value: {}, snapshot: "- button [ref=f1e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     return { value: {}, snapshot: action.kind === "click" ? "" : undefined };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
-  const attached = await manager.attachCdp(
-    "attach-refs",
-    "http://127.0.0.1:9222",
-  );
+  const attached = await manager.attachCdp("attach-refs", "http://127.0.0.1:9222");
   assert.match(attached.snapshot!, /ref=f1e1/);
   await manager.operate("attach-refs", { kind: "click", target: "f1e1" });
   await manager.close("attach-refs", "detach");
@@ -146,24 +110,14 @@ test("attach action snapshots expose current references without another snapshot
 
 test("owned lifecycle closes and attached lifecycle only detaches", async () => {
   const ownedLog: string[] = [];
-  const owned = new BrowserSessionManager(exec as any, async () =>
-    fakeCli(ownedLog),
-  );
+  const owned = new BrowserSessionManager(exec as any, async () => fakeCli(ownedLog));
   const started = await owned.start("owned", "https://example.com");
   assert.equal(started.ownership, "owned");
   await owned.close("owned", "close");
-  assert.deepEqual(ownedLog, [
-    "configure",
-    "open",
-    "tab-list",
-    "close",
-    "dispose",
-  ]);
+  assert.deepEqual(ownedLog, ["configure", "open", "tab-list", "close", "dispose"]);
 
   const attachedLog: string[] = [];
-  const attached = new BrowserSessionManager(exec as any, async () =>
-    fakeCli(attachedLog),
-  );
+  const attached = new BrowserSessionManager(exec as any, async () => fakeCli(attachedLog));
   await attached.attachCdp("attached", "http://localhost:9222");
   await assert.rejects(attached.close("attached", "close"), /only be detached/);
   await attached.close("attached", "detach");
@@ -173,22 +127,11 @@ test("owned lifecycle closes and attached lifecycle only detaches", async () => 
 
 test("interactive lease is owned-only, excludes agent actions, and releases held input", async () => {
   const log: string[] = [];
-  const manager = new BrowserSessionManager(exec as any, async () =>
-    fakeCli(log),
-  );
+  const manager = new BrowserSessionManager(exec as any, async () => fakeCli(log));
   await manager.start("interactive");
-  assert.equal(
-    (await manager.acquireInteractive("interactive", "web:tab-one")).controlled,
-    true,
-  );
-  await assert.rejects(
-    manager.acquireInteractive("interactive", "web:tab-two"),
-    /another Pylon tab/,
-  );
-  await assert.rejects(
-    manager.operate("interactive", { kind: "snapshot" }),
-    /direct user control/,
-  );
+  assert.equal((await manager.acquireInteractive("interactive", "web:tab-one")).controlled, true);
+  await assert.rejects(manager.acquireInteractive("interactive", "web:tab-two"), /another Pylon tab/);
+  await assert.rejects(manager.operate("interactive", { kind: "snapshot" }), /direct user control/);
   await manager.operateInteractive(
     "interactive",
     [
@@ -204,63 +147,39 @@ test("interactive lease is owned-only, excludes agent actions, and releases held
   await manager.operate("interactive", { kind: "snapshot" });
   await manager.close("interactive", "close");
 
-  const attached = new BrowserSessionManager(exec as any, async () =>
-    fakeCli([]),
-  );
+  const attached = new BrowserSessionManager(exec as any, async () => fakeCli([]));
   await attached.attachCdp("interactive-attached", "http://127.0.0.1:9222");
-  await assert.rejects(
-    attached.acquireInteractive("interactive-attached", "web:tab-one"),
-    /only for Helios-owned/,
-  );
+  await assert.rejects(attached.acquireInteractive("interactive-attached", "web:tab-one"), /only for Helios-owned/);
   await attached.close("interactive-attached", "detach");
 });
 
 test("passive frames do not acquire control or queue behind agent work", async () => {
   let releaseSnapshot!: () => void;
-  const snapshotGate = new Promise<void>((resolve) => {
+  const snapshotGate = new Promise<void>(resolve => {
     releaseSnapshot = resolve;
   });
   const log: string[] = [];
   const cli = fakeCli(log);
   cli.run = async (_session: string, action: any) => {
     log.push(action.kind);
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "snapshot") await snapshotGate;
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("passive-mirror");
-  const agentOperation = manager.operate("passive-mirror", {
-    kind: "snapshot",
-  });
+  const agentOperation = manager.operate("passive-mirror", { kind: "snapshot" });
   assert.equal(await manager.observeFrame("passive-mirror"), undefined);
   releaseSnapshot();
   await agentOperation;
-  assert.equal(
-    (await manager.observeFrame("passive-mirror"))?.action,
-    "screenshot",
-  );
-  assert.equal(
-    manager.state("passive-mirror", "web:tab-one").controlled,
-    false,
-  );
-  await manager.operate("passive-mirror", {
-    kind: "navigate",
-    url: "https://example.com",
-  });
+  assert.equal((await manager.observeFrame("passive-mirror"))?.action, "screenshot");
+  assert.equal(manager.state("passive-mirror", "web:tab-one").controlled, false);
+  await manager.operate("passive-mirror", { kind: "navigate", url: "https://example.com" });
   await manager.close("passive-mirror", "close");
 
-  const attached = new BrowserSessionManager(exec as any, async () =>
-    fakeCli([]),
-  );
+  const attached = new BrowserSessionManager(exec as any, async () => fakeCli([]));
   await attached.attachCdp("passive-attached", "http://127.0.0.1:9222");
-  await assert.rejects(
-    attached.observeFrame("passive-attached"),
-    /only for Helios-owned/,
-  );
+  await assert.rejects(attached.observeFrame("passive-attached"), /only for Helios-owned/);
   await attached.close("passive-attached", "detach");
 });
 
@@ -270,62 +189,40 @@ test("failed input keeps the lease until reset succeeds and idle expiry releases
   const cli = fakeCli(log);
   cli.run = async (_session: string, action: any) => {
     log.push(action.kind);
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "mouse-down") throw new Error("uncertain down");
-    if (action.kind === "mouse-up" && failMouseUp)
-      throw new Error("uncertain up");
+    if (action.kind === "mouse-up" && failMouseUp) throw new Error("uncertain up");
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli, 15);
   await manager.start("uncertain-input");
   await manager.acquireInteractive("uncertain-input", "web:tab-one");
   await assert.rejects(
-    manager.operateInteractive(
-      "uncertain-input",
-      [{ kind: "mouse-down", button: "left" }],
-      "web:tab-one",
-    ),
+    manager.operateInteractive("uncertain-input", [{ kind: "mouse-down", button: "left" }], "web:tab-one"),
     /uncertain down/,
   );
-  await assert.rejects(
-    manager.releaseInteractive("uncertain-input", "web:tab-one"),
-    /could not release/,
-  );
-  assert.equal(
-    manager.state("uncertain-input", "web:tab-one").controlled,
-    true,
-  );
+  await assert.rejects(manager.releaseInteractive("uncertain-input", "web:tab-one"), /could not release/);
+  assert.equal(manager.state("uncertain-input", "web:tab-one").controlled, true);
   failMouseUp = false;
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.equal(
-    manager.state("uncertain-input", "web:tab-one").controlled,
-    false,
-  );
-  assert.ok(log.filter((action) => action === "mouse-up").length >= 2);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(manager.state("uncertain-input", "web:tab-one").controlled, false);
+  assert.ok(log.filter(action => action === "mouse-up").length >= 2);
   await manager.close("uncertain-input", "close");
 });
 
 test("operations serialize and shutdown is idempotent", async () => {
   const log: string[] = [];
-  const manager = new BrowserSessionManager(exec as any, async () =>
-    fakeCli(log, 15),
-  );
+  const manager = new BrowserSessionManager(exec as any, async () => fakeCli(log, 15));
   await manager.start("serial");
-  await Promise.all([
-    manager.operate("serial", { kind: "snapshot" }),
-    manager.operate("serial", { kind: "snapshot" }),
-  ]);
+  await Promise.all([manager.operate("serial", { kind: "snapshot" }), manager.operate("serial", { kind: "snapshot" })]);
   assert.deepEqual(
-    log.filter((item) => item === "snapshot"),
+    log.filter(item => item === "snapshot"),
     ["snapshot", "snapshot"],
   );
   await manager.shutdown();
   await manager.shutdown();
-  assert.equal(log.filter((item) => item === "close").length, 1);
-  assert.equal(log.filter((item) => item === "dispose").length, 1);
+  assert.equal(log.filter(item => item === "close").length, 1);
+  assert.equal(log.filter(item => item === "dispose").length, 1);
 });
 
 test("missing CLI session fails conservatively without a liveness subprocess", async () => {
@@ -333,12 +230,8 @@ test("missing CLI session fails conservatively without a liveness subprocess", a
   const cli = fakeCli(actions);
   cli.run = async (_session: string, action: any) => {
     actions.push(action.kind);
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
-    if (action.kind === "reload")
-      throw new HeliosCliError("session-missing", "browser is not open");
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "reload") throw new HeliosCliError("session-missing", "browser is not open");
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
@@ -355,12 +248,8 @@ test("failed close remains retryable and successful close reports dispose warnin
   const cli = fakeCli(log);
   cli.run = async (session: string, action: any) => {
     log.push(action.kind);
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "close" && failClose) throw new Error("close failed");
     return { value: {} };
   };
@@ -373,9 +262,7 @@ test("failed close remains retryable and successful close reports dispose warnin
   assert.equal(manager.get("retry-close")?.state, "cleanup-required");
   failClose = false;
   const closed = await manager.close("retry-close", "close");
-  assert.deepEqual(closed.cleanupWarnings, [
-    "Could not delete private browser directory",
-  ]);
+  assert.deepEqual(closed.cleanupWarnings, ["Could not delete private browser directory"]);
   assert.equal(manager.get("retry-close"), undefined);
 });
 
@@ -387,10 +274,7 @@ test("uncertain start failure cleans independently or preserves retry state", as
     if (action.kind === "open") throw new Error("open timed out");
     return { value: {} };
   };
-  const cleaned = new BrowserSessionManager(
-    exec as any,
-    async () => cleanedCli,
-  );
+  const cleaned = new BrowserSessionManager(exec as any, async () => cleanedCli);
   await assert.rejects(cleaned.start("cleaned"), /open timed out/);
   assert.deepEqual(cleanedLog, ["configure", "open", "close", "dispose"]);
   assert.equal(cleaned.get("cleaned"), undefined);
@@ -399,16 +283,11 @@ test("uncertain start failure cleans independently or preserves retry state", as
   const retainedCli = fakeCli([]);
   retainedCli.run = async (session: string, action: any) => {
     if (action.kind === "open") throw new Error("open timed out");
-    if (action.kind === "close" && !cleanupWorks)
-      throw new Error("close failed");
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "close" && !cleanupWorks) throw new Error("close failed");
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
     return { value: {} };
   };
-  const retained = new BrowserSessionManager(
-    exec as any,
-    async () => retainedCli,
-  );
+  const retained = new BrowserSessionManager(exec as any, async () => retainedCli);
   await assert.rejects(retained.start("retained"), /cleanup is uncertain/);
   assert.equal(retained.get("retained")?.state, "cleanup-required");
   cleanupWorks = true;
@@ -422,34 +301,24 @@ test("metadata failure does not hide primary success and hover invalidates refs"
   const cli = fakeCli(actions);
   cli.run = async (session: string, action: any) => {
     actions.push(action.kind);
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
     if (action.kind === "tab-list") {
       tabLists++;
       if (tabLists > 1) throw new Error("metadata failed");
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+      return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     }
-    if (action.kind === "snapshot")
-      return { value: {}, snapshot: "- button [ref=e1]" };
+    if (action.kind === "snapshot") return { value: {}, snapshot: "- button [ref=e1]" };
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("metadata");
   let snapshot = await manager.operate("metadata", { kind: "snapshot" });
-  const clicked = await manager.operate("metadata", {
-    kind: "click",
-    target: "e1",
-  });
+  const clicked = await manager.operate("metadata", { kind: "click", target: "e1" });
   assert.equal(clicked.outcome, "completed");
   assert.equal(clicked.metadataAvailable, false);
   snapshot = await manager.operate("metadata", { kind: "snapshot" });
   await manager.operate("metadata", { kind: "hover", target: "e1" });
-  await assert.rejects(
-    manager.operate("metadata", { kind: "click", target: "e1" }),
-    /stale/,
-  );
+  await assert.rejects(manager.operate("metadata", { kind: "click", target: "e1" }), /stale/);
   await manager.close("metadata", "close");
 });
 
@@ -458,35 +327,21 @@ test("secondary missing-session metadata marks cleanup required", async () => {
   const cli = fakeCli([]);
   cli.run = async (_session: string, action: any) => {
     if (action.kind === "tab-list") {
-      if (++tabLists > 1)
-        throw new HeliosCliError("session-missing", "browser is not open");
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+      if (++tabLists > 1) throw new HeliosCliError("session-missing", "browser is not open");
+      return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     }
-    if (action.kind === "snapshot")
-      return { value: {}, snapshot: "- button [ref=e1]" };
-    if (action.kind === "click")
-      return { value: {}, snapshot: "- button [ref=e2]" };
+    if (action.kind === "snapshot") return { value: {}, snapshot: "- button [ref=e1]" };
+    if (action.kind === "click") return { value: {}, snapshot: "- button [ref=e2]" };
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("metadata-stale-session");
   await manager.operate("metadata-stale-session", { kind: "snapshot" });
-  const clicked = await manager.operate("metadata-stale-session", {
-    kind: "click",
-    target: "e1",
-  });
+  const clicked = await manager.operate("metadata-stale-session", { kind: "click", target: "e1" });
   assert.equal(clicked.metadataAvailable, false);
   assert.equal(clicked.metadataStale, true);
-  assert.equal(
-    manager.get("metadata-stale-session")?.state,
-    "cleanup-required",
-  );
-  await assert.rejects(
-    manager.operate("metadata-stale-session", { kind: "click", target: "e2" }),
-    /cleanup-required/,
-  );
+  assert.equal(manager.get("metadata-stale-session")?.state, "cleanup-required");
+  await assert.rejects(manager.operate("metadata-stale-session", { kind: "click", target: "e2" }), /cleanup-required/);
   await manager.shutdown();
 });
 
@@ -496,141 +351,78 @@ test("action snapshots preserve namespaced reference identity and replace stale 
   const cli = fakeCli(actions);
   cli.run = async (session: string, action: any) => {
     actions.push(action.kind);
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
-    if (action.kind === "navigate")
-      return { value: {}, snapshot: "- link [ref=f1e2]" };
-    if (action.kind === "click")
-      return {
-        value: {},
-        snapshot: clicks++ === 0 ? "- button [ref=f1e3]" : "",
-      };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "navigate") return { value: {}, snapshot: "- link [ref=f1e2]" };
+    if (action.kind === "click") return { value: {}, snapshot: clicks++ === 0 ? "- button [ref=f1e3]" : "" };
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("action-refs");
-  const navigated = await manager.operate("action-refs", {
-    kind: "navigate",
-    url: "https://example.com",
-  });
+  const navigated = await manager.operate("action-refs", { kind: "navigate", url: "https://example.com" });
   assert.match(navigated.snapshot!, /ref=f1e2/);
-  await assert.rejects(
-    manager.operate("action-refs", { kind: "click", target: "e2" }),
-    /stale/,
-  );
-  await assert.rejects(
-    manager.operate("action-refs", { kind: "click", target: "f2e2" }),
-    /stale/,
-  );
-  const clicked = await manager.operate("action-refs", {
-    kind: "click",
-    target: "f1e2",
-  });
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "e2" }), /stale/);
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f2e2" }), /stale/);
+  const clicked = await manager.operate("action-refs", { kind: "click", target: "f1e2" });
   assert.match(clicked.snapshot!, /ref=f1e3/);
-  await assert.rejects(
-    manager.operate("action-refs", { kind: "click", target: "f1e2" }),
-    /stale/,
-  );
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e2" }), /stale/);
   await manager.operate("action-refs", { kind: "click", target: "f1e3" });
-  await assert.rejects(
-    manager.operate("action-refs", { kind: "click", target: "f1e3" }),
-    /stale/,
-  );
+  await assert.rejects(manager.operate("action-refs", { kind: "click", target: "f1e3" }), /stale/);
   assert.equal(actions.includes("list"), false);
   await manager.close("action-refs", "close");
 });
 
 test("compacted continuation authorizes only retained refs from its latest page", async () => {
-  const raw =
-    "- generic [ref=e1]:\n  - button First [ref=e2]\n- generic [ref=e3]:\n  - button Second [ref=e4]";
+  const raw = "- generic [ref=e1]:\n  - button First [ref=e2]\n- generic [ref=e3]:\n  - button Second [ref=e4]";
   const adapterExec = async (_command: string, args: string[]) => {
-    const action = args.find((value) =>
-      ["open", "snapshot", "click", "tab-list", "close"].includes(value),
-    );
-    if (action === "snapshot")
-      return {
-        code: 0,
-        stdout: JSON.stringify({ snapshot: raw }),
-        stderr: "",
-        killed: false,
-      };
+    const action = args.find(value => ["open", "snapshot", "click", "tab-list", "close"].includes(value));
+    if (action === "snapshot") return { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false };
     if (action === "tab-list")
       return {
         code: 0,
-        stdout: JSON.stringify({
-          result: "- 0: (current) [Example](https://example.com/)",
-        }),
+        stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }),
         stderr: "",
         killed: false,
       };
     return { code: 0, stdout: "{}", stderr: "", killed: false };
   };
-  const manager = new BrowserSessionManager(adapterExec as any, (exec) =>
+  const manager = new BrowserSessionManager(adapterExec as any, exec =>
     PlaywrightCli.create(exec, { maxSnapshotLines: 1, maxSnapshotBytes: 1024 }),
   );
   await manager.start("compact-continuation");
-  const first = await manager.operate("compact-continuation", {
-    kind: "snapshot",
-  });
+  const first = await manager.operate("compact-continuation", { kind: "snapshot" });
   assert.equal(first.snapshot, "- button First [ref=e2]");
-  await assert.rejects(
-    manager.operate("compact-continuation", { kind: "click", target: "e1" }),
-    /stale/,
-  );
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e1" }), /stale/);
 
   const second = await manager.operate("compact-continuation", {
     kind: "continue",
     cursor: first.snapshotContinuation!,
   });
   assert.equal(second.snapshot, "- button Second [ref=e4]");
-  await assert.rejects(
-    manager.operate("compact-continuation", { kind: "click", target: "e2" }),
-    /stale/,
-  );
-  await assert.rejects(
-    manager.operate("compact-continuation", { kind: "click", target: "e3" }),
-    /stale/,
-  );
-  await manager.operate("compact-continuation", {
-    kind: "click",
-    target: "e4",
-  });
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e2" }), /stale/);
+  await assert.rejects(manager.operate("compact-continuation", { kind: "click", target: "e3" }), /stale/);
+  await manager.operate("compact-continuation", { kind: "click", target: "e4" });
   await manager.close("compact-continuation", "close");
 });
 
 test("continuation chunks replace usable references", async () => {
   const cli = fakeCli([]);
   cli.run = async (_session: string, action: any) => {
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "snapshot")
       return {
         value: {},
         snapshot: "- button First [ref=e1]",
         snapshotContinuation: "hc_0123456789abcdef0123456789abcdef",
       };
-    if (action.kind === "continue")
-      return { value: {}, snapshot: "- button Second [ref=e2]" };
+    if (action.kind === "continue") return { value: {}, snapshot: "- button Second [ref=e2]" };
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("continuation-refs");
-  const first = await manager.operate("continuation-refs", {
-    kind: "snapshot",
-  });
+  const first = await manager.operate("continuation-refs", { kind: "snapshot" });
   assert.ok(first.snapshotContinuation);
-  await manager.operate("continuation-refs", {
-    kind: "continue",
-    cursor: first.snapshotContinuation!,
-  });
-  await assert.rejects(
-    manager.operate("continuation-refs", { kind: "click", target: "e1" }),
-    /stale/,
-  );
+  await manager.operate("continuation-refs", { kind: "continue", cursor: first.snapshotContinuation! });
+  await assert.rejects(manager.operate("continuation-refs", { kind: "click", target: "e1" }), /stale/);
   await manager.operate("continuation-refs", { kind: "click", target: "e2" });
   await manager.close("continuation-refs", "close");
 });
@@ -639,16 +431,11 @@ test("shutdown reports partial cleanup failure and keeps uncertain session", asy
   const failingCli = fakeCli([]);
   failingCli.run = async (session: string, action: any) => {
     if (action.kind === "close") throw new Error("close failed");
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
-    if (action.kind === "tab-list")
-      return { value: { result: "- 0: (current) [](about:blank)" } };
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [](about:blank)" } };
     return { value: {} };
   };
-  const manager = new BrowserSessionManager(
-    exec as any,
-    async () => failingCli,
-  );
+  const manager = new BrowserSessionManager(exec as any, async () => failingCli);
   await manager.start("shutdown-failure");
   const summary = await manager.shutdown();
   assert.deepEqual(summary.failures, [{ ownership: "owned", action: "close" }]);
@@ -658,8 +445,7 @@ test("shutdown reports partial cleanup failure and keeps uncertain session", asy
 test("malformed cleanup list never discards uncertain state", async () => {
   const cli = fakeCli([]);
   cli.run = async (_session: string, action: any) => {
-    if (action.kind === "open" || action.kind === "close")
-      throw new Error(`${action.kind} failed`);
+    if (action.kind === "open" || action.kind === "close") throw new Error(`${action.kind} failed`);
     if (action.kind === "list") return { value: {} };
     return { value: {} };
   };
@@ -670,31 +456,21 @@ test("malformed cleanup list never discards uncertain state", async () => {
 
 test("close rejects later operations and duplicate cleanup while preserving earlier queued work", async () => {
   let releaseSnapshot!: () => void;
-  const snapshotGate = new Promise<void>((resolve) => {
+  const snapshotGate = new Promise<void>(resolve => {
     releaseSnapshot = resolve;
   });
   const cli = fakeCli([]);
   cli.run = async (session: string, action: any) => {
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
     if (action.kind === "snapshot") await snapshotGate;
-    return {
-      value: {},
-      snapshot: action.kind === "snapshot" ? "- button [ref=e1]" : undefined,
-    };
+    return { value: {}, snapshot: action.kind === "snapshot" ? "- button [ref=e1]" : undefined };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("queue-close");
   const earlier = manager.operate("queue-close", { kind: "snapshot" });
   const closing = manager.close("queue-close", "close");
-  await assert.rejects(
-    manager.operate("queue-close", { kind: "reload" }),
-    /closing/,
-  );
+  await assert.rejects(manager.operate("queue-close", { kind: "reload" }), /closing/);
   await assert.rejects(manager.close("queue-close", "close"), /closing/);
   releaseSnapshot();
   await earlier;
@@ -705,27 +481,15 @@ test("close rejects later operations and duplicate cleanup while preserving earl
 test("uncertain dispatched failures invalidate all element references", async () => {
   const cli = fakeCli([]);
   cli.run = async (session: string, action: any) => {
-    if (action.kind === "list")
-      return { value: { browsers: [{ name: session, status: "open" }] } };
-    if (action.kind === "open")
-      return { value: {}, snapshot: "- button Go [ref=e1]" };
-    if (action.kind === "tab-list")
-      return {
-        value: { result: "- 0: (current) [Example](https://example.com/)" },
-      };
-    if (action.kind === "screenshot")
-      throw new HeliosCliError("timeout", "outcome uncertain", true);
+    if (action.kind === "list") return { value: { browsers: [{ name: session, status: "open" }] } };
+    if (action.kind === "open") return { value: {}, snapshot: "- button Go [ref=e1]" };
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "screenshot") throw new HeliosCliError("timeout", "outcome uncertain", true);
     return { value: {} };
   };
   const manager = new BrowserSessionManager(exec as any, async () => cli);
   await manager.start("uncertain-references");
-  await assert.rejects(
-    manager.operate("uncertain-references", { kind: "screenshot" }),
-    /uncertain/,
-  );
-  await assert.rejects(
-    manager.operate("uncertain-references", { kind: "click", target: "e1" }),
-    /stale or was not/,
-  );
+  await assert.rejects(manager.operate("uncertain-references", { kind: "screenshot" }), /uncertain/);
+  await assert.rejects(manager.operate("uncertain-references", { kind: "click", target: "e1" }), /stale or was not/);
   await manager.close("uncertain-references", "close");
 });

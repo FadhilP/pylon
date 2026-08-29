@@ -21,11 +21,11 @@ Run `/reload` after installation.
 The single tool captures, lists, and updates papercuts. Capture is the default action, keeping the frequent call small:
 
 ```ts
-papercut({ message: "Running setup required an undocumented retry; the prerequisite should be documented." })
-papercut({ action: "list", status: "open" })
-papercut({ action: "resolve", ids: ["a1b2c3d4"], note: "Documented setup and added a regression test." })
-papercut({ action: "dismiss", ids: ["a1b2c3d4"], note: "Intentional platform behavior." })
-papercut({ action: "reopen", ids: ["a1b2c3d4"] })
+papercut({ message: "Running setup required an undocumented retry; the prerequisite should be documented." });
+papercut({ action: "list", status: "open" });
+papercut({ action: "resolve", ids: ["a1b2c3d4"], note: "Documented setup and added a regression test." });
+papercut({ action: "dismiss", ids: ["a1b2c3d4"], note: "Intentional platform behavior." });
+papercut({ action: "reopen", ids: ["a1b2c3d4"] });
 ```
 
 The model captures friction in the moment with one or two sentences describing what it was doing, what got in the way, and optionally a tentative cause or improvement. Capture does not interrupt or expand the current task. Exact normalized duplicates of open records increment their occurrence count instead of creating another record. Closed records do not suppress a new occurrence. Messages are capped at 500 characters and likely credentials are rejected.

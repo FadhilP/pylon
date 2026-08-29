@@ -21,12 +21,7 @@ export type SettlementHooks = {
  * probes the child for its final state and cumulative stats; settlement completes when both answer
  * or the probes time out.
  */
-export function createSettlement({
-  child,
-  nextCommandId,
-  onBegin,
-  onFinish,
-}: SettlementHooks) {
+export function createSettlement({ child, nextCommandId, onBegin, onFinish }: SettlementHooks) {
   let settled = false;
   let finished = false;
   let activeCompactions = 0;
@@ -72,7 +67,7 @@ export function createSettlement({
       { id: statsCommandId, type: "get_session_stats" },
     ]) {
       try {
-        child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
+        child.stdin!.write(`${JSON.stringify(command)}\n`, error => {
           if (error) completeCommand(command.id);
         });
       } catch {

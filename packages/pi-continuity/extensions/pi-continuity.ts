@@ -3,11 +3,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Text } from "@earendil-works/pi-tui";
-import {
-  getAgentDir,
-  SettingsManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import {
   fresh,
@@ -30,11 +26,7 @@ import {
   rm,
   defaultRoot,
 } from "../src/storage.ts";
-import {
-  isWorkspace,
-  registerWorkspace,
-  type Workspace,
-} from "../src/workspace.ts";
+import { isWorkspace, registerWorkspace, type Workspace } from "../src/workspace.ts";
 import { pruneOrphanWorkFiles, startSessionGc } from "../src/session-gc.ts";
 import {
   applyReview,
@@ -116,34 +108,20 @@ import {
   RUN_ENTRY_TYPE,
   type RunEntry,
 } from "../src/run.ts";
-import {
-  CONTINUITY_STATE_VERSION,
-  continuityStateSnapshot,
-} from "../src/state.ts";
+import { CONTINUITY_STATE_VERSION, continuityStateSnapshot } from "../src/state.ts";
 import {
   finalizeContinuityCompaction,
   prepareContinuityCompaction,
   type CompactionSupplement,
 } from "../src/compaction.ts";
-import {
-  buildCompactionReviewPacket,
-  callCompactionReviewer,
-} from "../src/compaction-review.ts";
-import {
-  canUseBroadRecall,
-  recallProjectSessions,
-  recallSession,
-} from "../src/recall.ts";
+import { buildCompactionReviewPacket, callCompactionReviewer } from "../src/compaction-review.ts";
+import { canUseBroadRecall, recallProjectSessions, recallSession } from "../src/recall.ts";
 import { loadProjectRecallSessions } from "../src/project-recall.ts";
-import {
-  findMovedProjectOwner,
-  reassociateOwnerNotes,
-} from "../src/owner-reassociation.ts";
+import { findMovedProjectOwner, reassociateOwnerNotes } from "../src/owner-reassociation.ts";
 const continuityTools = ["continuity_recall", "continuity_update", "memory"];
 const EXECUTION_ENTRY_TYPE = "pi-continuity-execution";
 const COMPACTION_CONTINUATION_CHANNEL = "pi-continuity:compaction-continuation";
-const COMPACTION_INTERRUPTION_DIAGNOSTIC =
-  "pi-continuity-compaction-interruption";
+const COMPACTION_INTERRUPTION_DIAGNOSTIC = "pi-continuity-compaction-interruption";
 const COMPACTION_ABORT_ERROR = /^(?:this operation|request) was aborted\.?$/i;
 type CompactionContinuationRequest = {
   id: string;
@@ -165,9 +143,7 @@ type V5MigrationJournal = {
 const isV5MigrationJournal = (value: any): value is V5MigrationJournal =>
   value?.version === 1 &&
   ["prepared", "activated", "rolled_back"].includes(value.status) &&
-  [value.sourceSha256, value.stateSha256].every(
-    (item) => typeof item === "string" && /^[0-9a-f]{64}$/.test(item),
-  ) &&
+  [value.sourceSha256, value.stateSha256].every(item => typeof item === "string" && /^[0-9a-f]{64}$/.test(item)) &&
   Number.isSafeInteger(value.activatedRevision) &&
   value.activatedRevision >= 0 &&
   typeof value.backupPath === "string" &&
@@ -176,18 +152,12 @@ const isV5MigrationJournal = (value: any): value is V5MigrationJournal =>
   typeof value.preparedAt === "string" &&
   !Number.isNaN(Date.parse(value.preparedAt)) &&
   (value.migratedAt === undefined ||
-    (typeof value.migratedAt === "string" &&
-      !Number.isNaN(Date.parse(value.migratedAt)))) &&
+    (typeof value.migratedAt === "string" && !Number.isNaN(Date.parse(value.migratedAt)))) &&
   (value.rolledBackAt === undefined ||
-    (typeof value.rolledBackAt === "string" &&
-      !Number.isNaN(Date.parse(value.rolledBackAt))));
+    (typeof value.rolledBackAt === "string" && !Number.isNaN(Date.parse(value.rolledBackAt))));
 const isVerificationOnlyTodo = (text: string) =>
-  /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(
-    text,
-  ) &&
-  !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(
-    text,
-  );
+  /\b(?:verify|verification|tests?|testing|lint|typecheck|checks?)\b/i.test(text) &&
+  !/\b(?:implement|fix|add|update|change|refactor|write|remove|migrate)\b/i.test(text);
 const setIssue = (
   active: Work,
   kind: NonNullable<Work["issue"]>["kind"],
@@ -204,11 +174,7 @@ const clearIssue = (active: Work) => {
   delete active.nextAction;
   delete active.issue;
 };
-const applyManualIssueUpdate = (
-  active: Work,
-  failure: string | undefined,
-  nextAction: string | undefined,
-) => {
+const applyManualIssueUpdate = (active: Work, failure: string | undefined, nextAction: string | undefined) => {
   if (failure !== undefined) {
     if (failure) active.latestFailure = failure;
     else delete active.latestFailure;
@@ -218,8 +184,7 @@ const applyManualIssueUpdate = (
     else delete active.nextAction;
   }
   if (failure !== undefined || nextAction !== undefined) {
-    if (active.latestFailure || active.nextAction)
-      active.issue = { kind: "manual" };
+    if (active.latestFailure || active.nextAction) active.issue = { kind: "manual" };
     else delete active.issue;
   }
 };
@@ -235,24 +200,18 @@ const formatPlan = (work: Work) =>
     work.planSummary?.trim() || "Not specified",
     "",
     "Working Set",
-    ...(work.handoff?.workingSet.length
-      ? work.handoff.workingSet.map((value) => `- ${value}`)
-      : ["- Not specified"]),
+    ...(work.handoff?.workingSet.length ? work.handoff.workingSet.map(value => `- ${value}`) : ["- Not specified"]),
     "",
     "Assumptions / Gaps",
-    ...(work.handoff?.assumptions.length
-      ? work.handoff.assumptions.map((value) => `- ${value}`)
-      : ["- None stated"]),
+    ...(work.handoff?.assumptions.length ? work.handoff.assumptions.map(value => `- ${value}`) : ["- None stated"]),
     "",
     "Acceptance Criteria",
     ...(work.handoff?.acceptanceCriteria.length
-      ? work.handoff.acceptanceCriteria.map((value) => `- ${value}`)
+      ? work.handoff.acceptanceCriteria.map(value => `- ${value}`)
       : ["- Not specified"]),
     "",
     "Constraints",
-    ...(work.constraints.length
-      ? work.constraints.map((constraint) => `- ${constraint}`)
-      : ["- None"]),
+    ...(work.constraints.length ? work.constraints.map(constraint => `- ${constraint}`) : ["- None"]),
     "",
     "Steps",
     ...work.todos.map((todo, index) => `${index + 1}. ${todo.text}`),
@@ -271,21 +230,11 @@ const isCurrentHandoffBoundary = (message: any, active: Work | undefined) => {
   );
 };
 
-const Status = StringEnum([
-    "pending",
-    "in_progress",
-    "done",
-    "blocked",
-  ] as const),
+const Status = StringEnum(["pending", "in_progress", "done", "blocked"] as const),
   Action = StringEnum(["clarify", "set_plan", "todo", "state"] as const),
   MemAction = StringEnum(["list", "propose"] as const),
   ScopeName = StringEnum(["user", "project"] as const),
-  RecallScopeName = StringEnum([
-    "execution",
-    "lineage",
-    "all",
-    "project_sessions",
-  ] as const),
+  RecallScopeName = StringEnum(["execution", "lineage", "all", "project_sessions"] as const),
   RecallModeName = StringEnum(["text", "files", "touched", "tools"] as const);
 export default function continuityExtension(pi: ExtensionAPI) {
   let duplicate = false;
@@ -297,12 +246,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   if (duplicate) return;
   const instanceId = randomUUID();
-  const disposeInstanceClaim = pi.events.on(
-    "pi-continuity:instance-claim",
-    (request: any) => {
-      if (request?.version === 1) request.respond?.(instanceId);
-    },
-  );
+  const disposeInstanceClaim = pi.events.on("pi-continuity:instance-claim", (request: any) => {
+    if (request?.version === 1) request.respond?.(instanceId);
+  });
   let root = defaultRoot(),
     dir = "",
     workFile = "",
@@ -348,8 +294,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     ephemeral: false,
     cwd: "",
     context: undefined as any,
-    releaseLease: undefined as
-      ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
+    releaseLease: undefined as ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
   };
 
   // The /plan approval handshake; the last three are installed once the plan action is registered.
@@ -370,7 +315,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const withMemoryLifecycle = async <T>(task: () => Promise<T>): Promise<T> => {
     const previous = memoryLifecycleQueue;
     let release = () => {};
-    memoryLifecycleQueue = new Promise<void>((resolve) => {
+    memoryLifecycleQueue = new Promise<void>(resolve => {
       release = resolve;
     });
     await previous;
@@ -380,42 +325,31 @@ export default function continuityExtension(pi: ExtensionAPI) {
       release();
     }
   };
-  const emitCompactionContinuation = (
-    action: "begin" | "resume" | "abandon",
-    request: CompactionContinuationRequest,
-  ) =>
-    pi.events.emit(COMPACTION_CONTINUATION_CHANNEL, {
-      version: 1,
-      action,
-      requestId: request.id,
-      ...request,
-    });
+  const emitCompactionContinuation = (action: "begin" | "resume" | "abandon", request: CompactionContinuationRequest) =>
+    pi.events.emit(COMPACTION_CONTINUATION_CHANNEL, { version: 1, action, requestId: request.id, ...request });
   const abandonAutomaticCompaction = (request = automaticCompaction) => {
     if (!request || automaticCompaction !== request) return;
     automaticCompaction = undefined;
     emitCompactionContinuation("abandon", request);
   };
-  const disposeCompactionCancel = pi.events.on(
-    COMPACTION_CONTINUATION_CHANNEL,
-    (event: any) => {
-      const request = automaticCompaction;
-      if (
-        event?.version !== 1 ||
-        event.action !== "cancel" ||
-        !request ||
-        event.requestId !== request.id ||
-        event.sessionId !== request.sessionId ||
-        event.sessionGeneration !== request.sessionGeneration ||
-        event.taskGeneration !== request.taskGeneration
-      )
-        return;
-      abandonAutomaticCompaction(request);
-    },
-  );
+  const disposeCompactionCancel = pi.events.on(COMPACTION_CONTINUATION_CHANNEL, (event: any) => {
+    const request = automaticCompaction;
+    if (
+      event?.version !== 1 ||
+      event.action !== "cancel" ||
+      !request ||
+      event.requestId !== request.id ||
+      event.sessionId !== request.sessionId ||
+      event.sessionGeneration !== request.sessionGeneration ||
+      event.taskGeneration !== request.taskGeneration
+    )
+      return;
+    abandonAutomaticCompaction(request);
+  });
   const withPlanMutation = async <T>(task: () => Promise<T>): Promise<T> => {
     const previous = planMutationQueue;
     let release = () => {};
-    planMutationQueue = new Promise<void>((resolve) => {
+    planMutationQueue = new Promise<void>(resolve => {
       release = resolve;
     });
     await previous;
@@ -428,110 +362,65 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.events.emit("pylon:worktree-observer-request", {
     version: 1,
     respond: (value: any) => {
-      if (value?.version === 1 && value.owner === "pylon-core")
-        sharedWorktreeObserver = true;
+      if (value?.version === 1 && value.owner === "pylon-core") sharedWorktreeObserver = true;
     },
   });
   const invalidateVerification = () => {
     verifyState.latest = undefined;
     verifyState.needed = true;
   };
-  const disposeWorktreeChange = pi.events.on(
-    "pylon:worktree-change",
-    (event: any) => {
-      if (
-        !sharedWorktreeObserver ||
-        event?.version !== 1 ||
-        event.cwd !== session.cwd ||
-        event.changed !== true
-      )
-        return;
-      invalidateVerification();
-    },
-  );
-  const disposePackageMutation = pi.events.on(
-    "pi-worktree:mutation",
-    (event: any) => {
-      if (
-        event?.version !== 1 ||
-        event.cwd !== session.cwd ||
-        event.changed !== true
-      )
-        return;
-      invalidateVerification();
-    },
-  );
-  const disposeGuardDecision = pi.events.on(
-    "pi-guard:decision",
-    (event: any) => {
-      if (
-        event?.version === 1 &&
-        event.cwd === session.cwd &&
-        event.decision === "blocked" &&
-        typeof event.toolCallId === "string"
-      )
-        deniedToolCalls.add(event.toolCallId);
-    },
-  );
+  const disposeWorktreeChange = pi.events.on("pylon:worktree-change", (event: any) => {
+    if (!sharedWorktreeObserver || event?.version !== 1 || event.cwd !== session.cwd || event.changed !== true) return;
+    invalidateVerification();
+  });
+  const disposePackageMutation = pi.events.on("pi-worktree:mutation", (event: any) => {
+    if (event?.version !== 1 || event.cwd !== session.cwd || event.changed !== true) return;
+    invalidateVerification();
+  });
+  const disposeGuardDecision = pi.events.on("pi-guard:decision", (event: any) => {
+    if (
+      event?.version === 1 &&
+      event.cwd === session.cwd &&
+      event.decision === "blocked" &&
+      typeof event.toolCallId === "string"
+    )
+      deniedToolCalls.add(event.toolCallId);
+  });
   const modelName = (model: any) => `${model.provider}/${model.id}`;
   const assistantContent = (ctx: any) => {
     const entry = ctx.sessionManager?.getLeafEntry?.();
     const content =
-      entry?.type === "message" && entry.message?.role === "assistant"
-        ? entry.message.content
-        : undefined;
+      entry?.type === "message" && entry.message?.role === "assistant" ? entry.message.content : undefined;
     return Array.isArray(content) ? content : [];
   };
   const hasReplyBeforeCompletion = (event: any, ctx: any) => {
     const content = assistantContent(ctx);
-    const callIndex = content.findIndex(
-      (part: any) => part?.type === "toolCall" && part.id === event.toolCallId,
-    );
-    return (
-      callIndex > 0 &&
-      content
-        .slice(0, callIndex)
-        .some((part: any) => part?.type === "text" && part.text.trim())
-    );
+    const callIndex = content.findIndex((part: any) => part?.type === "toolCall" && part.id === event.toolCallId);
+    return callIndex > 0 && content.slice(0, callIndex).some((part: any) => part?.type === "text" && part.text.trim());
   };
   const hasUnsafeClarificationBatch = (ctx: any) => {
-    const calls = assistantContent(ctx).filter(
-      (part: any) => part?.type === "toolCall",
-    );
+    const calls = assistantContent(ctx).filter((part: any) => part?.type === "toolCall");
     return (
       calls.length > 1 &&
-      calls.some(
-        (part: any) =>
-          part.name === "continuity_update" &&
-          part.arguments?.action === "clarify",
-      )
+      calls.some((part: any) => part.name === "continuity_update" && part.arguments?.action === "clarify")
     );
   };
-  const disposeRuntimePolicy = pi.events.on?.(
-    "pylon:runtime-policy",
-    (event: any) => {
-      if (event?.version !== 2) return;
-      const value = event.dialogTimeouts?.clarify;
-      if (
-        value === null ||
-        (Number.isInteger(value) && value >= 15 && value <= 86_400)
-      ) {
-        clarifyTimeoutSeconds = value;
-      }
-    },
-  );
+  const disposeRuntimePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
+    if (event?.version !== 2) return;
+    const value = event.dialogTimeouts?.clarify;
+    if (value === null || (Number.isInteger(value) && value >= 15 && value <= 86_400)) {
+      clarifyTimeoutSeconds = value;
+    }
+  });
   const clarifyDialogOptions = () =>
     clarifyTimeoutSeconds === undefined
       ? undefined
-      : {
-          timeout:
-            clarifyTimeoutSeconds === null ? 0 : clarifyTimeoutSeconds * 1_000,
-        };
+      : { timeout: clarifyTimeoutSeconds === null ? 0 : clarifyTimeoutSeconds * 1_000 };
   const tripsCircuitBreaker = (params: unknown) => {
     const now = Date.now(),
       cutoff = now - 30_000;
     for (const [key, times] of recentCalls) {
-      const fresh = times.filter((time) => time > cutoff);
+      const fresh = times.filter(time => time > cutoff);
       if (fresh.length) recentCalls.set(key, fresh);
       else recentCalls.delete(key);
     }
@@ -540,7 +429,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       verifyState.latest?.state,
       work?.mode,
       work?.currentTodoId,
-      work?.todos.map((todo) => [todo.id, todo.status]),
+      work?.todos.map(todo => [todo.id, todo.status]),
     ]);
     const times = [...(recentCalls.get(key) ?? []), now];
     recentCalls.set(key, times);
@@ -579,8 +468,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const readV5MigrationJournal = async () => {
     try {
       const value = JSON.parse(await readFile(paths().v6Migration, "utf8"));
-      if (!isV5MigrationJournal(value))
-        throw Error("Memory V5 migration journal is invalid");
+      if (!isV5MigrationJournal(value)) throw Error("Memory V5 migration journal is invalid");
       return value;
     } catch (error: any) {
       if (error?.code === "ENOENT") return undefined;
@@ -590,54 +478,29 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const scopedMemoryNotes = (notes = memory.notes) =>
     project
       ? notesForOwners(notes, project.owner)
-      : notes.filter(
-          (note) => note.scope === "user" && note.owner === "default",
-        );
+      : notes.filter(note => note.scope === "user" && note.owner === "default");
   const pruneMemoryLedger = () => {
-    const compiled = new Set(
-      memory.sidecar.rules.map(
-        (rule) => `${rule.memoryId}\0${rule.noteRevision}`,
-      ),
-    );
+    const compiled = new Set(memory.sidecar.rules.map(rule => `${rule.memoryId}\0${rule.noteRevision}`));
     memory.ledger = {
       ...memory.ledger,
-      active: memory.ledger.active.filter((item) =>
-        compiled.has(`${item.memoryId}\0${item.noteRevision}`),
-      ),
+      active: memory.ledger.active.filter(item => compiled.has(`${item.memoryId}\0${item.noteRevision}`)),
     };
   };
-  const refreshMemoryCompilation = async (
-    state: MemoryStateFile,
-    persist = true,
-  ) => {
+  const refreshMemoryCompilation = async (state: MemoryStateFile, persist = true) => {
     const scoped = scopedMemoryNotes(state.notes),
       compilable: NotebookNote[] = [],
       stale: CompiledMemorySidecar["failures"] = [];
     for (const note of scoped) {
-      if (
-        note.disposition !== "eligible_advisory" ||
-        note.authority !== "project_contract"
-      ) {
+      if (note.disposition !== "eligible_advisory" || note.authority !== "project_contract") {
         compilable.push(note);
         continue;
       }
-      const review = state.reviews.find(
-        (item) => item.reviewId === note.sourceReviewId,
-      );
+      const review = state.reviews.find(item => item.reviewId === note.sourceReviewId);
       const refs = note.sourceRefs.filter(
-        (
-          ref,
-        ): ref is Extract<
-          NotebookNote["sourceRefs"][number],
-          { type: "repository" }
-        > => ref.type === "repository",
+        (ref): ref is Extract<NotebookNote["sourceRefs"][number], { type: "repository" }> => ref.type === "repository",
       );
-      const ranges = (review?.evidenceBatches?.flat() ?? []).filter((range) =>
-        refs.some(
-          (ref) =>
-            ref.path === range.path &&
-            ref.excerptSha256 === range.excerptSha256,
-        ),
+      const ranges = (review?.evidenceBatches?.flat() ?? []).filter(range =>
+        refs.some(ref => ref.path === range.path && ref.excerptSha256 === range.excerptSha256),
       );
       try {
         const captured = ranges.length
@@ -648,52 +511,28 @@ export default function continuityExtension(pi: ExtensionAPI) {
           : [];
         if (
           !refs.length ||
-          !refs.every((ref) =>
-            captured.some(
-              (item) =>
-                item.path === ref.path &&
-                item.excerptSha256 === ref.excerptSha256,
-            ),
-          )
+          !refs.every(ref => captured.some(item => item.path === ref.path && item.excerptSha256 === ref.excerptSha256))
         )
           throw Error("stale");
         compilable.push(note);
       } catch {
-        stale.push({
-          memoryId: note.id,
-          noteRevision: note.revision,
-          reason: "source_stale",
-        });
+        stale.push({ memoryId: note.id, noteRevision: note.revision, reason: "source_stale" });
       }
     }
     memory.sidecar = compileMemorySidecar(compilable, state.revision);
     memory.sidecar.failures.push(...stale);
     memory.ruleIndex = indexMemorySidecar(memory.sidecar);
     pruneMemoryLedger();
-    if (persist)
-      await writeJsonAtomic(paths().compiledMemory, memory.sidecar).catch(
-        () => {},
-      );
+    if (persist) await writeJsonAtomic(paths().compiledMemory, memory.sidecar).catch(() => {});
   };
   const readMemory = async () => {
     try {
       await readFile(paths().memory, "utf8");
-      const state = normalizeMemoryState(
-        await readVersionedJson(
-          paths().memory,
-          emptyMemoryState(),
-          isMemoryState,
-        ),
-      )!;
+      const state = normalizeMemoryState(await readVersionedJson(paths().memory, emptyMemoryState(), isMemoryState))!;
       const journal = await readV5MigrationJournal();
       if (journal?.status === "prepared") {
-        if (
-          journal.activatedRevision !== state.revision ||
-          journal.stateSha256 !== sha256(JSON.stringify(state))
-        )
-          throw Error(
-            "Memory V5 migration is incomplete and does not match V6 state",
-          );
+        if (journal.activatedRevision !== state.revision || journal.stateSha256 !== sha256(JSON.stringify(state)))
+          throw Error("Memory V5 migration is incomplete and does not match V6 state");
         await writeJsonAtomic(paths().v6Migration, {
           ...journal,
           status: "activated",
@@ -707,9 +546,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     const existingJournal = await readV5MigrationJournal();
     if (existingJournal?.status === "rolled_back")
-      throw Error(
-        "Memory V5 migration was rolled back; restore or remove its journal before migrating again",
-      );
+      throw Error("Memory V5 migration was rolled back; restore or remove its journal before migrating again");
     if (existingJournal?.status === "activated")
       throw Error("Memory V6 state is missing after an activated V5 migration");
     let rawV5: string;
@@ -725,15 +562,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     try {
       legacy = JSON.parse(rawV5);
     } catch {
-      throw Error(
-        "Memory V5 state is malformed; migration stopped without modifying it",
-      );
+      throw Error("Memory V5 state is malformed; migration stopped without modifying it");
     }
     const migrated = migrateV5MemoryState(legacy);
-    if (!migrated)
-      throw Error(
-        "Memory V5 state is unsupported; migration stopped without modifying it",
-      );
+    if (!migrated) throw Error("Memory V5 state is unsupported; migration stopped without modifying it");
     const sourceSha256 = sha256(rawV5),
       stateSha256 = sha256(JSON.stringify(migrated));
     if (
@@ -743,11 +575,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         existingJournal.activatedRevision !== migrated.revision)
     )
       throw Error("Memory V5 changed after migration preparation");
-    const backupPath = join(
-        memoryDirectory(),
-        "backups",
-        `state-v5-${sourceSha256}.json`,
-      ),
+    const backupPath = join(memoryDirectory(), "backups", `state-v5-${sourceSha256}.json`),
       preparedAt = new Date().toISOString();
     await writeBytesAtomic(backupPath, rawV5);
     const prepared: V5MigrationJournal = {
@@ -772,29 +600,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
     await writeJsonAtomic(paths().memory, state);
     await refreshMemoryCompilation(state);
   };
-  const ownerFor = (scope: MemoryScope) =>
-    scope === "user" ? "default" : project?.owner;
+  const ownerFor = (scope: MemoryScope) => (scope === "user" ? "default" : project?.owner);
   const resolveProject = async (cwd: string) => {
-    const resolved = await projectContext(
-      cwd,
-      workspace?.projectOwner ?? project?.owner ?? workspace!.id,
-    );
+    const resolved = await projectContext(cwd, workspace?.projectOwner ?? project?.owner ?? workspace!.id);
     project = resolved;
-    if (
-      workspace &&
-      resolved.owner !== workspace.id &&
-      workspace.projectOwner !== resolved.owner
-    ) {
+    if (workspace && resolved.owner !== workspace.id && workspace.projectOwner !== resolved.owner) {
       workspace.projectOwner = resolved.owner;
       all = await updateJson<Workspace[]>(
         join(root, "workspaces.json"),
         [],
-        (items) =>
-          items.map((item) =>
-            item.id === workspace!.id
-              ? { ...item, projectOwner: resolved.owner }
-              : item,
-          ),
+        items => items.map(item => (item.id === workspace!.id ? { ...item, projectOwner: resolved.owner } : item)),
         Array.isArray,
       );
     }
@@ -805,23 +620,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const workspaces = await readJson<Workspace[]>(
       join(root, "workspaces.json"),
       [],
-      (items) => Array.isArray(items) && items.every(isWorkspace),
+      items => Array.isArray(items) && items.every(isWorkspace),
     );
-    const oldOwner = await findMovedProjectOwner(
-      session.cwd,
-      project.owner,
-      workspaces,
-      latest.notes,
-    );
+    const oldOwner = await findMovedProjectOwner(session.cwd, project.owner, workspaces, latest.notes);
     if (!oldOwner) return latest;
     const at = new Date().toISOString(),
       migrationId = randomUUID();
-    const reassociated = reassociateOwnerNotes(
-      oldOwner,
-      project.owner,
-      latest.notes,
-      at,
-    );
+    const reassociated = reassociateOwnerNotes(oldOwner, project.owner, latest.notes, at);
     const affected = [...reassociated.moved, ...reassociated.suppressed];
     if (!affected.length) return latest;
     const backup = {
@@ -831,8 +636,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       currentOwner: project.owner,
       createdAt: at,
       fromRevision: latest.revision,
-      movedNoteIds: reassociated.moved.map((note) => note.id),
-      suppressedNoteIds: reassociated.suppressed.map((note) => note.id),
+      movedNoteIds: reassociated.moved.map(note => note.id),
+      suppressedNoteIds: reassociated.suppressed.map(note => note.id),
       notes: affected,
     };
     const audit = {
@@ -853,33 +658,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
       updatedAt: at,
     };
     enforceMemoryLimits(next);
-    await writeJsonAtomic(
-      join(
-        memoryDirectory(),
-        "backups",
-        `owner-reassociation-${migrationId}.json`,
-      ),
-      backup,
-    );
+    await writeJsonAtomic(join(memoryDirectory(), "backups", `owner-reassociation-${migrationId}.json`), backup);
     return next;
   };
-  const persistMemoryLedger = () =>
-    pi.appendEntry(MEMORY_LEDGER_ENTRY_TYPE, memory.ledger);
+  const persistMemoryLedger = () => pi.appendEntry(MEMORY_LEDGER_ENTRY_TYPE, memory.ledger);
   const interventionText = (interventions: readonly MemoryIntervention[]) => {
-    const byId = new Map(scopedMemoryNotes().map((note) => [note.id, note]));
-    const lines = interventions.flatMap((intervention) => {
+    const byId = new Map(scopedMemoryNotes().map(note => [note.id, note]));
+    const lines = interventions.flatMap(intervention => {
       const note = byId.get(intervention.memoryId);
       return note && note.revision === intervention.noteRevision
-        ? [
-            `Applicable working rule [${note.id}]: When ${note.trigger}, ${note.guidance}`,
-          ]
+        ? [`Applicable working rule [${note.id}]: When ${note.trigger}, ${note.guidance}`]
         : [];
     });
     return lines.join("\n");
   };
-  const queueMemoryInterventions = (
-    interventions: readonly MemoryIntervention[],
-  ) => {
+  const queueMemoryInterventions = (interventions: readonly MemoryIntervention[]) => {
     const text = interventionText(interventions);
     if (!text) return;
     persistMemoryLedger();
@@ -891,7 +684,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         details: {
           version: 2,
           contextEpoch: memory.ledger.contextEpoch,
-          memoryIds: interventions.map((item) => item.memoryId),
+          memoryIds: interventions.map(item => item.memoryId),
         },
       },
       { deliverAs: "steer" },
@@ -899,16 +692,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
     pi.events.emit("pi-continuity:memory-activation", {
       version: 1,
       outcome: "delivered",
-      memoryIds: interventions.map((item) => item.memoryId),
+      memoryIds: interventions.map(item => item.memoryId),
       contextEpoch: memory.ledger.contextEpoch,
     });
   };
   const processProspectiveMemory = (frame: ReturnType<typeof eventFrame>) => {
-    const processed = processMemoryEvent(
-      memory.ruleIndex,
-      frame,
-      memory.ledger,
-    );
+    const processed = processMemoryEvent(memory.ruleIndex, frame, memory.ledger);
     memory.ledger = processed.ledger;
     if (processed.uncertain.length)
       pi.events.emit("pi-continuity:memory-activation", {
@@ -921,15 +710,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return processed.interventions;
   };
   const projectMemory = () =>
-    project
-      ? memory.notes.filter(
-          (note) => note.scope === "project" && note.owner === project!.owner,
-        )
-      : [];
-  const globalMemory = () =>
-    memory.notes.filter(
-      (note) => note.scope === "user" && note.owner === "default",
-    );
+    project ? memory.notes.filter(note => note.scope === "project" && note.owner === project!.owner) : [];
+  const globalMemory = () => memory.notes.filter(note => note.scope === "user" && note.owner === "default");
   const stateSnapshot = (available = true) =>
     continuityStateSnapshot(
       session.id,
@@ -953,165 +735,117 @@ export default function continuityExtension(pi: ExtensionAPI) {
       | "discarded"
       | "migration_failed"
       | "migration_committed",
-  ) =>
-    pi.events.emit("pi-continuity:memory-outcome", {
-      version: 1,
-      outcome,
-      at: new Date().toISOString(),
-    });
-  const disposeStateRequest = pi.events.on(
-    "pi-continuity:state-request",
-    (request: any) => {
-      if (
-        request?.version !== CONTINUITY_STATE_VERSION ||
-        request.sessionId !== session.id ||
-        typeof request.respond !== "function"
-      )
-        return;
-      try {
-        request.respond(stateSnapshot());
-      } catch {
-        /* State observers cannot affect Continuity. */
-      }
-    },
-  );
-  const disposeMemoryMutation = pi.events.on(
-    "pi-continuity:memory-mutation",
-    (request: any) => {
-      if (request?.version !== 2 && typeof request?.respond === "function") {
-        request.respond(
-          Promise.reject(
-            new Error(
-              "Continuity memory mutation version 1 is no longer supported",
-            ),
-          ),
-        );
-        return;
-      }
-      if (request?.version !== 2 || typeof request.respond !== "function")
-        return;
-      if (
-        request.sessionId !== session.id ||
-        request.expectedGeneration !== session.generation
-      ) {
-        request.respond(
-          Promise.reject(
-            new Error(
-              "Continuity memory mutation is stale or belongs to another session",
-            ),
-          ),
-        );
-        return;
-      }
-      const operation = withMemoryLifecycle(async () => {
-        if (!memory.enabled)
-          throw Error("Continuity memory is disabled in package settings");
-        const requestedSession = request.sessionId,
-          requestedGeneration = request.expectedGeneration,
-          requestedCwd = session.cwd;
-        if (request.action === "migrate") {
-          const allowed = new Set([
-            "version",
-            "sessionId",
-            "expectedGeneration",
-            "action",
-            "respond",
-          ]);
-          if (Object.keys(request).some((key) => !allowed.has(key)))
-            throw Error("invalid memory migration fields");
-          if (!session.context || !memory.legacyMigrationAvailable)
-            throw Error(
-              "V4 memory migration is unavailable or already changed",
-            );
-          const migration = await runV4Migration(
-            session.context,
-            requestedSession,
-          );
-          if (
-            session.id !== requestedSession ||
-            session.generation !== requestedGeneration ||
-            session.cwd !== requestedCwd
-          )
-            throw Error("Continuity memory migration became stale");
-          memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
-          if (migration.migrated) emitMemoryOutcome("migration_committed");
-          publishState();
-          return migration;
-        }
-        if (request.action !== "update" && request.action !== "delete")
-          throw Error("invalid memory action");
-        const allowed =
-          request.action === "update"
-            ? new Set([
-                "version",
-                "sessionId",
-                "expectedGeneration",
-                "action",
-                "scope",
-                "id",
-                "trigger",
-                "guidance",
-                "expectedRevision",
-                "respond",
-              ])
-            : new Set([
-                "version",
-                "sessionId",
-                "expectedGeneration",
-                "action",
-                "scope",
-                "id",
-                "expectedRevision",
-                "respond",
-              ]);
-        if (Object.keys(request).some((key) => !allowed.has(key)))
-          throw Error("invalid memory mutation fields");
+  ) => pi.events.emit("pi-continuity:memory-outcome", { version: 1, outcome, at: new Date().toISOString() });
+  const disposeStateRequest = pi.events.on("pi-continuity:state-request", (request: any) => {
+    if (
+      request?.version !== CONTINUITY_STATE_VERSION ||
+      request.sessionId !== session.id ||
+      typeof request.respond !== "function"
+    )
+      return;
+    try {
+      request.respond(stateSnapshot());
+    } catch {
+      /* State observers cannot affect Continuity. */
+    }
+  });
+  const disposeMemoryMutation = pi.events.on("pi-continuity:memory-mutation", (request: any) => {
+    if (request?.version !== 2 && typeof request?.respond === "function") {
+      request.respond(Promise.reject(new Error("Continuity memory mutation version 1 is no longer supported")));
+      return;
+    }
+    if (request?.version !== 2 || typeof request.respond !== "function") return;
+    if (request.sessionId !== session.id || request.expectedGeneration !== session.generation) {
+      request.respond(Promise.reject(new Error("Continuity memory mutation is stale or belongs to another session")));
+      return;
+    }
+    const operation = withMemoryLifecycle(async () => {
+      if (!memory.enabled) throw Error("Continuity memory is disabled in package settings");
+      const requestedSession = request.sessionId,
+        requestedGeneration = request.expectedGeneration,
+        requestedCwd = session.cwd;
+      if (request.action === "migrate") {
+        const allowed = new Set(["version", "sessionId", "expectedGeneration", "action", "respond"]);
+        if (Object.keys(request).some(key => !allowed.has(key))) throw Error("invalid memory migration fields");
+        if (!session.context || !memory.legacyMigrationAvailable)
+          throw Error("V4 memory migration is unavailable or already changed");
+        const migration = await runV4Migration(session.context, requestedSession);
         if (
-          (request.scope !== "user" && request.scope !== "project") ||
-          typeof request.id !== "string" ||
-          !Number.isSafeInteger(request.expectedRevision) ||
-          request.expectedRevision < 1
+          session.id !== requestedSession ||
+          session.generation !== requestedGeneration ||
+          session.cwd !== requestedCwd
         )
-          throw Error("invalid memory target");
-        const resolved = await resolveProject(requestedCwd),
-          owner = request.scope === "user" ? "default" : resolved.owner;
-        await withStateLock(memoryDirectory(), async () => {
-          if (
-            session.id !== requestedSession ||
-            session.generation !== requestedGeneration ||
-            session.cwd !== requestedCwd ||
-            project?.owner !== resolved.owner
-          )
-            throw Error("Continuity memory mutation became stale");
-          const latest = await readMemory();
-          const next =
-            request.action === "delete"
-              ? directDelete(
-                  latest,
-                  request.scope,
-                  owner,
-                  request.id,
-                  request.expectedRevision,
-                )
-              : directEdit(
-                  latest,
-                  request.scope,
-                  owner,
-                  request.id,
-                  request.expectedRevision,
-                  request.trigger,
-                  request.guidance,
-                );
-          await writeMemory(next);
-          memory.state = next;
-          memory.notes = next.notes;
-        });
+          throw Error("Continuity memory migration became stale");
+        memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
+        if (migration.migrated) emitMemoryOutcome("migration_committed");
         publishState();
-        return { updated: true, revision: memory.state.revision };
+        return migration;
+      }
+      if (request.action !== "update" && request.action !== "delete") throw Error("invalid memory action");
+      const allowed =
+        request.action === "update"
+          ? new Set([
+              "version",
+              "sessionId",
+              "expectedGeneration",
+              "action",
+              "scope",
+              "id",
+              "trigger",
+              "guidance",
+              "expectedRevision",
+              "respond",
+            ])
+          : new Set([
+              "version",
+              "sessionId",
+              "expectedGeneration",
+              "action",
+              "scope",
+              "id",
+              "expectedRevision",
+              "respond",
+            ]);
+      if (Object.keys(request).some(key => !allowed.has(key))) throw Error("invalid memory mutation fields");
+      if (
+        (request.scope !== "user" && request.scope !== "project") ||
+        typeof request.id !== "string" ||
+        !Number.isSafeInteger(request.expectedRevision) ||
+        request.expectedRevision < 1
+      )
+        throw Error("invalid memory target");
+      const resolved = await resolveProject(requestedCwd),
+        owner = request.scope === "user" ? "default" : resolved.owner;
+      await withStateLock(memoryDirectory(), async () => {
+        if (
+          session.id !== requestedSession ||
+          session.generation !== requestedGeneration ||
+          session.cwd !== requestedCwd ||
+          project?.owner !== resolved.owner
+        )
+          throw Error("Continuity memory mutation became stale");
+        const latest = await readMemory();
+        const next =
+          request.action === "delete"
+            ? directDelete(latest, request.scope, owner, request.id, request.expectedRevision)
+            : directEdit(
+                latest,
+                request.scope,
+                owner,
+                request.id,
+                request.expectedRevision,
+                request.trigger,
+                request.guidance,
+              );
+        await writeMemory(next);
+        memory.state = next;
+        memory.notes = next.notes;
       });
-      request.respond(operation);
-    },
-  );
+      publishState();
+      return { updated: true, revision: memory.state.revision };
+    });
+    request.respond(operation);
+  });
   const saveWork = async () => {
     const path = paths().work;
     try {
@@ -1126,7 +860,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work.revisionFeedback?.text,
         work.latestFailure,
         work.nextAction,
-        ...work.todos.map((t) => t.text),
+        ...work.todos.map(t => t.text),
       );
       assertSafePath(...(work.handoff?.workingSet ?? []));
       await writeJson(path, work);
@@ -1134,11 +868,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     } catch (error) {
       work = undefined;
       try {
-        work = await readJson<Work | undefined>(
-          path,
-          undefined,
-          (value) => value === undefined || isWork(value),
-        );
+        work = await readJson<Work | undefined>(path, undefined, value => value === undefined || isWork(value));
       } catch {
         /* Preserve the save error and fail closed if durable state cannot be restored. */
       }
@@ -1163,7 +893,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               new Text(
                 [
                   "Tasks",
-                  ...work!.todos.map((t) =>
+                  ...work!.todos.map(t =>
                     t.status === "done"
                       ? `● ${theme.fg("muted", theme.strikethrough(t.text))}`
                       : `${t.status === "in_progress" ? "●" : "○"} ${t.text}`,
@@ -1181,9 +911,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   const activeBranchHasToolResult = (ctx: any, toolCallId: string) =>
     (ctx.sessionManager.getBranch?.() ?? []).some(
       (entry: any) =>
-        entry?.type === "message" &&
-        entry.message?.role === "toolResult" &&
-        entry.message.toolCallId === toolCallId,
+        entry?.type === "message" && entry.message?.role === "toolResult" && entry.message.toolCallId === toolCallId,
     );
   const settleMemoryReviews = async (ctx: any) =>
     withMemoryLifecycle(async () => {
@@ -1208,7 +936,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           changed = true;
         }
         for (const original of latest.reviews.filter(
-          (item) =>
+          item =>
             item.status === "approved_pending" &&
             item.sessionId === expectedSession &&
             item.projectOwner === expectedOwner,
@@ -1219,24 +947,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
               ...latest,
               revision: latest.revision + 1,
               updatedAt: now,
-              reviews: latest.reviews.map((item) =>
+              reviews: latest.reviews.map(item =>
                 item.reviewId === original.reviewId
-                  ? {
-                      ...item,
-                      status: "discarded" as const,
-                      discardReason: reason,
-                      settledAt: now,
-                    }
+                  ? { ...item, status: "discarded" as const, discardReason: reason, settledAt: now }
                   : item,
               ),
             };
             changed = true;
             emitMemoryOutcome("discarded");
           };
-          if (
-            original.generation !== expectedGeneration ||
-            original.taskGeneration !== memory.taskGeneration
-          ) {
+          if (original.generation !== expectedGeneration || original.taskGeneration !== memory.taskGeneration) {
             discard("session or task generation changed");
             continue;
           }
@@ -1247,16 +967,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           const branch = ctx.sessionManager.getBranch?.() ?? [],
             byId = new Map(branch.map((entry: any) => [entry?.id, entry]));
           if (
-            original.quoteRefs?.some((ref) => {
+            original.quoteRefs?.some(ref => {
               const entry = byId.get(ref.entryId);
-              return (
-                !entry || sha256(userMessageText(entry)) !== ref.entrySha256
-              );
+              return !entry || sha256(userMessageText(entry)) !== ref.entrySha256;
             })
           ) {
-            discard(
-              "quoted user instruction changed or left the active branch",
-            );
+            discard("quoted user instruction changed or left the active branch");
             continue;
           }
           let evidenceValid = true;
@@ -1266,21 +982,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
                 expectedCwd,
                 batch.map(({ path, start, end }) => ({ path, start, end })),
               );
-              if (
-                fresh.some(
-                  (range, index) =>
-                    range.excerptSha256 !== batch[index]?.excerptSha256,
-                )
-              )
+              if (fresh.some((range, index) => range.excerptSha256 !== batch[index]?.excerptSha256))
                 evidenceValid = false;
             } catch {
               evidenceValid = false;
             }
           }
           if (!evidenceValid) {
-            discard(
-              "cited evidence changed or is unavailable after memory review",
-            );
+            discard("cited evidence changed or is unavailable after memory review");
             continue;
           }
           try {
@@ -1304,21 +1013,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const resolved = await resolveProject(expectedCwd),
       expectedOwner = resolved.owner,
       expectedWorkspaceId = workspace?.id;
-    if (!expectedWorkspaceId)
-      throw Error("migration workspace identity is unavailable");
+    if (!expectedWorkspaceId) throw Error("migration workspace identity is unavailable");
     const config = await loadConfig(),
       profile = config.memoryReviewer;
     if (!profile) throw Error("Memory Reviewer is not configured");
     const model = await configuredModel(ctx, profile);
-    if (!model)
-      throw Error("Memory Reviewer model or credentials are unavailable");
+    if (!model) throw Error("Memory Reviewer model or credentials are unavailable");
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth?.ok || !auth.apiKey)
-      throw Error("Memory Reviewer model or credentials are unavailable");
+    if (!auth?.ok || !auth.apiKey) throw Error("Memory Reviewer model or credentials are unavailable");
     const ownerRoots = new Map<string, string>();
-    for (const item of all)
-      if (item.projectOwner)
-        ownerRoots.set(item.projectOwner, item.canonicalPath);
+    for (const item of all) if (item.projectOwner) ownerRoots.set(item.projectOwner, item.canonicalPath);
     ownerRoots.set(expectedOwner, expectedCwd);
     return migrateV4({
       root,
@@ -1327,14 +1031,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
       auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
       profile,
       sessionId: expectedSession,
-      onTelemetry: (value) =>
+      onTelemetry: value =>
         pi.events.emit("pi-continuity:memory-migration-telemetry", {
           version: 1,
           model: modelName(model),
           thinking: profile.thinking,
           ...value,
         }),
-      commitAll: async (imported) =>
+      commitAll: async imported =>
         withStateLock(memoryDirectory(), async () => {
           if (
             session.id !== expectedSession ||
@@ -1343,32 +1047,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
             session.cwd !== expectedCwd ||
             workspace?.id !== expectedWorkspaceId ||
             project?.owner !== expectedOwner ||
-            (await projectContext(expectedCwd, expectedWorkspaceId)).owner !==
-              expectedOwner
+            (await projectContext(expectedCwd, expectedWorkspaceId)).owner !== expectedOwner
           )
             throw Error("migration activation became stale");
           const latest = await readMemory(),
-            byId = new Map(latest.notes.map((note) => [note.id, note])),
-            missing = imported.filter((note) => !byId.has(note.id));
+            byId = new Map(latest.notes.map(note => [note.id, note])),
+            missing = imported.filter(note => !byId.has(note.id));
           if (!missing.length) {
             memory.state = latest;
             memory.notes = latest.notes;
             return latest.revision;
           }
           if (missing.length !== imported.length)
-            throw Error(
-              "migration activation is partially present; manual reconciliation required",
-            );
+            throw Error("migration activation is partially present; manual reconciliation required");
           for (const note of imported)
-            if (
-              strongDuplicate(
-                latest.notes,
-                note.scope,
-                note.owner,
-                note.trigger,
-                note.guidance,
-              )
-            )
+            if (strongDuplicate(latest.notes, note.scope, note.owner, note.trigger, note.guidance))
               throw Error(`migration duplicates existing note ${note.id}`);
           let next = {
             ...latest,
@@ -1386,9 +1079,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     });
   };
   const enabledContinuityTools = () =>
-    memory.enabled
-      ? continuityTools
-      : continuityTools.filter((tool) => tool !== "memory");
+    memory.enabled ? continuityTools : continuityTools.filter(tool => tool !== "memory");
   const gate = (on: boolean) => {
     if (on) savedTools ??= pi.getActiveTools();
     let coordinated = false;
@@ -1399,12 +1090,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       managedTools: continuityTools,
       enabledTools: enabledContinuityTools(),
       deferredTools: enabledContinuityTools().filter(
-        (tool) =>
-          tool === "continuity_recall" ||
-          (tool === "memory" && !memory.reviewerConfigured),
+        tool => tool === "continuity_recall" || (tool === "memory" && !memory.reviewerConfigured),
       ),
       toolUsage: Object.fromEntries(
-        enabledContinuityTools().map((tool) => [
+        enabledContinuityTools().map(tool => [
           tool,
           tool === "continuity_recall"
             ? "recall bounded historical evidence omitted from the active context"
@@ -1419,9 +1108,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ? {
             restoreTools: [
               ...new Set([
-                ...savedTools.filter(
-                  (tool) => memory.enabled || tool !== "memory",
-                ),
+                ...savedTools.filter(tool => memory.enabled || tool !== "memory"),
                 ...enabledContinuityTools(),
               ]),
             ],
@@ -1439,30 +1126,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const allowed = new Set(planningTools());
       pi.setActiveTools([
         ...new Set([
-          ...pi
-            .getActiveTools()
-            .filter(
-              (tool) =>
-                allowed.has(tool) && (memory.enabled || tool !== "memory"),
-            ),
+          ...pi.getActiveTools().filter(tool => allowed.has(tool) && (memory.enabled || tool !== "memory")),
           ...enabledContinuityTools(),
         ]),
       ]);
     } else if (savedTools) {
       pi.setActiveTools([
         ...new Set([
-          ...pi
-            .getActiveTools()
-            .filter((tool) => memory.enabled || tool !== "memory"),
-          ...savedTools.filter((tool) => memory.enabled || tool !== "memory"),
+          ...pi.getActiveTools().filter(tool => memory.enabled || tool !== "memory"),
+          ...savedTools.filter(tool => memory.enabled || tool !== "memory"),
           ...enabledContinuityTools(),
         ]),
       ]);
       savedTools = undefined;
     } else if (!memory.enabled) {
-      pi.setActiveTools(
-        pi.getActiveTools().filter((tool) => tool !== "memory"),
-      );
+      pi.setActiveTools(pi.getActiveTools().filter(tool => tool !== "memory"));
     }
   };
   const completeWork = async (ctx: any) => {
@@ -1484,32 +1162,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
     !verifyState.needed &&
     verifyState.latest?.state !== "failed";
   const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
-    if (
-      event?.version !== 1 ||
-      event.cwd !== session.cwd ||
-      event.sessionId !== session.id
-    )
-      return;
+    if (event?.version !== 1 || event.cwd !== session.cwd || event.sessionId !== session.id) return;
     verifyState.latest = event;
     let changed = false;
-    if (
-      ["passed", "clean", "no_checks"].includes(event.state) &&
-      work?.issue?.kind === "verification"
-    ) {
+    if (["passed", "clean", "no_checks"].includes(event.state) && work?.issue?.kind === "verification") {
       clearIssue(work);
       changed = true;
     }
     if (event.state === "passed") {
       verifyState.needed = false;
-      const remaining =
-        work?.mode === "executing"
-          ? work.todos.filter((todo) => todo.status !== "done")
-          : [];
-      if (
-        work &&
-        remaining.length === 1 &&
-        isVerificationOnlyTodo(remaining[0].text)
-      ) {
+      const remaining = work?.mode === "executing" ? work.todos.filter(todo => todo.status !== "done") : [];
+      if (work && remaining.length === 1 && isVerificationOnlyTodo(remaining[0].text)) {
         updateTodo(work, remaining[0].id, "done");
         changed = true;
       }
@@ -1529,21 +1192,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
   });
   const disposeHeartbeat = pi.events.on("pi-heartbeat:job", (event: any) => {
-    if (
-      event?.version !== 1 ||
-      event.cwd !== session.cwd ||
-      event.sessionId !== session.id ||
-      !event.todoId ||
-      !work
-    )
+    if (event?.version !== 1 || event.cwd !== session.cwd || event.sessionId !== session.id || !event.todoId || !work)
       return;
-    const todo = work.todos.find((item) => item.id === event.todoId);
+    const todo = work.todos.find(item => item.id === event.todoId);
     if (!todo) return;
     if (event.state === "running") updateTodo(work, todo.id, "in_progress");
     else if (event.state === "completed") {
       updateTodo(work, todo.id, "done");
-      if (work.issue?.kind === "background" && work.issue.id === event.id)
-        clearIssue(work);
+      if (work.issue?.kind === "background" && work.issue.id === event.id) clearIssue(work);
     } else if (["failed", "cancelled", "timed_out"].includes(event.state)) {
       updateTodo(work, todo.id, "blocked");
       setIssue(
@@ -1563,14 +1219,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       gate(false);
       session.generation++;
       const sessionId = ctx.sessionManager.getSessionId();
-      const reuseSessionLease =
-        !!session.releaseLease && session.id === sessionId;
+      const reuseSessionLease = !!session.releaseLease && session.id === sessionId;
       if (session.releaseLease && !reuseSessionLease) {
         const previousWorkFile = workFile;
         await session.releaseLease(
-          session.ephemeral && previousWorkFile
-            ? () => rm(previousWorkFile, { force: true })
-            : undefined,
+          session.ephemeral && previousWorkFile ? () => rm(previousWorkFile, { force: true }) : undefined,
         );
         session.releaseLease = undefined;
       }
@@ -1602,35 +1255,24 @@ export default function continuityExtension(pi: ExtensionAPI) {
       dir = reg.dir;
       workFile = join(dir, "sessions", sessionWorkFile(sessionId));
       if (!reuseSessionLease) {
-        session.releaseLease = await startSessionGc(root, sessionId, (live) =>
-          pruneOrphanWorkFiles(root, live),
-        );
+        session.releaseLease = await startSessionGc(root, sessionId, live => pruneOrphanWorkFiles(root, live));
         session.id = sessionId;
       }
       session.ephemeral = !ctx.sessionManager.getSessionFile?.();
       const p = paths();
-      work = await readJson<Work | undefined>(
-        p.work,
-        undefined,
-        (value) => value === undefined || isWork(value),
-      );
+      work = await readJson<Work | undefined>(p.work, undefined, value => value === undefined || isWork(value));
       const handoff = [...(ctx.sessionManager.getEntries?.() ?? [])]
         .reverse()
         .find(
           (entry: any) =>
-            entry.type === "custom" &&
-            entry.customType === HANDOFF_ENTRY_TYPE &&
-            isWork(entry.data?.work),
+            entry.type === "custom" && entry.customType === HANDOFF_ENTRY_TYPE && isWork(entry.data?.work),
         ) as any;
       if (!work && handoff) {
         work = handoff.data.work;
         const requested = handoff.data.model;
-        const model =
-          requested && ctx.modelRegistry.find(requested.provider, requested.id);
-        if (model && ctx.modelRegistry.hasConfiguredAuth(model))
-          await pi.setModel(model);
-        if (thinkingLevels.includes(handoff.data.thinking))
-          pi.setThinkingLevel(handoff.data.thinking);
+        const model = requested && ctx.modelRegistry.find(requested.provider, requested.id);
+        if (model && ctx.modelRegistry.hasConfiguredAuth(model)) await pi.setModel(model);
+        if (thinkingLevels.includes(handoff.data.thinking)) pi.setThinkingLevel(handoff.data.thinking);
         await saveWork();
       }
       if (work && !work.issue && (work.latestFailure || work.nextAction)) {
@@ -1638,7 +1280,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         await saveWork();
       }
       if (work?.mode === "executing" && !work.currentTodoId) {
-        const first = work.todos.find((todo) => todo.status !== "done");
+        const first = work.todos.find(todo => todo.status !== "done");
         if (first) {
           updateTodo(work, first.id, "in_progress");
           await saveWork();
@@ -1647,8 +1289,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (work?.mode === "planning" && work.todos.length) {
         let changed = false;
         if (!work.planSummary?.trim()) {
-          work.planSummary =
-            work.todos.map((todo) => todo.text).join("; ") || work.goal;
+          work.planSummary = work.todos.map(todo => todo.text).join("; ") || work.goal;
           changed = true;
         }
         if (!work.planRevision) {
@@ -1656,10 +1297,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           changed = true;
         }
         if ((work.offeredPlanRevision ?? 0) < work.planRevision)
-          planApproval.pending = {
-            runId: work.runId,
-            revision: work.planRevision,
-          };
+          planApproval.pending = { runId: work.runId, revision: work.planRevision };
         if (changed) await saveWork();
       }
       project = await resolveProject(ctx.cwd);
@@ -1674,11 +1312,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         : emptyMemoryState();
       memory.notes = memory.state.notes;
       memory.taskGeneration++;
-      memory.ledger = restoreMemoryLedger(
-        ctx.sessionManager.getBranch?.() ?? [],
-        sessionId,
-        memory.taskGeneration,
-      );
+      memory.ledger = restoreMemoryLedger(ctx.sessionManager.getBranch?.() ?? [], sessionId, memory.taskGeneration);
       pruneMemoryLedger();
       memory.reviewCalledThisTask = false;
       memory.proposalToken = undefined;
@@ -1700,11 +1334,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           emitMemoryOutcome("migration_failed");
           const reason = error?.message ?? "automatic migration unavailable";
           await recordPendingV4Migration(root, reason).catch(() => {});
-          if (!/Memory Reviewer/.test(reason))
-            ctx.ui?.notify?.(
-              `Memory V4 migration deferred: ${reason}`,
-              "warning",
-            );
+          if (!/Memory Reviewer/.test(reason)) ctx.ui?.notify?.(`Memory V4 migration deferred: ${reason}`, "warning");
         }
         memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
       } else memory.legacyMigrationAvailable = false;
@@ -1718,10 +1348,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
             void planApproval
               .resume(ctx)
               .catch((error: any) =>
-                ctx.ui?.notify?.(
-                  `Plan approval recovery is pending: ${error?.message ?? String(error)}`,
-                  "warning",
-                ),
+                ctx.ui?.notify?.(`Plan approval recovery is pending: ${error?.message ?? String(error)}`, "warning"),
               ),
         );
     }),
@@ -1749,16 +1376,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       disposeGuardDecision();
       disposeCompactionCancel();
       disposeRuntimePolicy?.();
-      pi.events.emit("pylon:tool-policy", {
-        version: 1,
-        kind: "unregister",
-        owner: "pi-continuity",
-      });
-      await session.releaseLease?.(
-        session.ephemeral && workFile
-          ? () => rm(workFile, { force: true })
-          : undefined,
-      );
+      pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-continuity" });
+      await session.releaseLease?.(session.ephemeral && workFile ? () => rm(workFile, { force: true }) : undefined);
       session.releaseLease = undefined;
       session.id = "";
     }),
@@ -1800,11 +1419,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
             {
               type: COMPACTION_INTERRUPTION_DIAGNOSTIC,
               timestamp: Date.now(),
-              details: {
-                version: 1,
-                requestId: request.id,
-                sessionId: request.sessionId,
-              },
+              details: { version: 1, requestId: request.id, sessionId: request.sessionId },
             },
           ],
         },
@@ -1816,9 +1431,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       !readyForAutomaticCompletion() ||
       !Array.isArray(message.content) ||
       message.content.some((part: any) => part?.type === "toolCall") ||
-      !message.content.some(
-        (part: any) => part?.type === "text" && part.text.trim(),
-      )
+      !message.content.some((part: any) => part?.type === "text" && part.text.trim())
     )
       return;
     await completeWork(ctx);
@@ -1827,34 +1440,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (awaitingClarificationProse && work?.mode === "executing")
       return {
         block: true,
-        reason:
-          "Ask the pending clarification in prose and stop. Do not call more tools until the user answers.",
+        reason: "Ask the pending clarification in prose and stop. Do not call more tools until the user answers.",
       };
     if (hasUnsafeClarificationBatch(ctx))
-      return {
-        block: true,
-        reason:
-          "Clarification must be the only tool call at a safe checkpoint. Retry it alone.",
-      };
+      return { block: true, reason: "Clarification must be the only tool call at a safe checkpoint. Retry it alone." };
     if (blocked(work?.mode === "planning", event.toolName))
-      return {
-        block: true,
-        reason: "Plan mode is read-only. Approve or cancel plan first.",
-      };
-    const input = (event.input ?? {}) as {
-      action?: string;
-      completion?: boolean;
-    };
-    if (
-      work?.mode === "planning" &&
-      event.toolName === "memory" &&
-      input.action !== "list"
-    )
-      return {
-        block: true,
-        reason:
-          "Plan mode is read-only. Memory mutations are blocked; use memory list only.",
-      };
+      return { block: true, reason: "Plan mode is read-only. Approve or cancel plan first." };
+    const input = (event.input ?? {}) as { action?: string; completion?: boolean };
+    if (work?.mode === "planning" && event.toolName === "memory" && input.action !== "list")
+      return { block: true, reason: "Plan mode is read-only. Memory mutations are blocked; use memory list only." };
     if (memory.enabled && memory.activationEnabled && project) {
       const rawPath =
         typeof (event.input as any)?.path === "string"
@@ -1863,8 +1457,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               .replace(/\\/g, "/")
           : undefined;
       const rawCommand =
-        event.toolName === "bash" &&
-        typeof (event.input as any)?.command === "string"
+        event.toolName === "bash" && typeof (event.input as any)?.command === "string"
           ? sanitizeAndClip((event.input as any).command, 500).slice(0, 500)
           : undefined;
       processProspectiveMemory(
@@ -1883,18 +1476,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
         }),
       );
     }
-    if (
-      (event.toolName === "bash" && !sharedWorktreeObserver) ||
-      event.toolName === "grunt"
-    )
-      pendingMutations.set(
-        event.toolCallId,
-        await worktreeFingerprint(ctx.cwd),
-      );
+    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt")
+      pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });
-  pi.on("tool_execution_end", (event) => {
-    if ((event.result as any)?.terminate === true)
-      terminatingToolCalls.add(event.toolCallId);
+  pi.on("tool_execution_end", event => {
+    if ((event.result as any)?.terminate === true) terminatingToolCalls.add(event.toolCallId);
     else terminatingToolCalls.delete(event.toolCallId);
   });
   pi.on("tool_result", async (event, ctx) => {
@@ -1903,10 +1489,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return;
     }
     let observedMutation = event.toolName === "bash" && sharedWorktreeObserver;
-    if (
-      (event.toolName === "bash" && !sharedWorktreeObserver) ||
-      event.toolName === "grunt"
-    ) {
+    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt") {
       const before = pendingMutations.get(event.toolCallId);
       pendingMutations.delete(event.toolCallId);
       const after = await worktreeFingerprint(ctx.cwd);
@@ -1916,28 +1499,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
       observedMutation = true;
       invalidateVerification();
     }
-    if (
-      memory.enabled &&
-      memory.activationEnabled &&
-      project &&
-      event.isError !== true &&
-      observedMutation
-    )
+    if (memory.enabled && memory.activationEnabled && project && event.isError !== true && observedMutation)
       await refreshMemoryCompilation(memory.state, false);
     if (memory.enabled && memory.activationEnabled && project) {
       const content = Array.isArray(event.content)
         ? event.content
-            .filter(
-              (part: any) =>
-                part?.type === "text" && typeof part.text === "string",
-            )
+            .filter((part: any) => part?.type === "text" && typeof part.text === "string")
             .map((part: any) => part.text)
             .join("\n")
             .slice(0, 8_000)
         : "";
-      const signature = content.match(
-        /\b(?:E[A-Z]{3,}|[A-Z][A-Z0-9_]{4,})\b/,
-      )?.[0];
+      const signature = content.match(/\b(?:E[A-Z]{3,}|[A-Z][A-Z0-9_]{4,})\b/)?.[0];
       const rawPath =
         typeof (event.input as any)?.path === "string"
           ? String((event.input as any).path)
@@ -1945,8 +1517,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               .replace(/\\/g, "/")
           : undefined;
       const rawCommand =
-        event.toolName === "bash" &&
-        typeof (event.input as any)?.command === "string"
+        event.toolName === "bash" && typeof (event.input as any)?.command === "string"
           ? sanitizeAndClip((event.input as any).command, 500).slice(0, 500)
           : undefined;
       processProspectiveMemory(
@@ -1970,15 +1541,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
       );
     }
   });
-  pi.on("input", (event) => {
+  pi.on("input", event => {
     if (event.source !== "extension") {
       abandonAutomaticCompaction();
       lastPrompt = event.text;
       memory.taskGeneration++;
-      memory.ledger = {
-        ...memory.ledger,
-        taskGeneration: memory.taskGeneration,
-      };
+      memory.ledger = { ...memory.ledger, taskGeneration: memory.taskGeneration };
       memory.reviewCalledThisTask = false;
       if (memory.enabled && memory.activationEnabled && project)
         processProspectiveMemory(
@@ -1992,20 +1560,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
   });
   pi.on("turn_end", (event, ctx) => {
-    const toolResults = Array.isArray(event.toolResults)
-      ? event.toolResults
-      : [];
+    const toolResults = Array.isArray(event.toolResults) ? event.toolResults : [];
     const hasToolCalls =
       Array.isArray((event.message as any)?.content) &&
-      (event.message as any).content.some(
-        (part: any) => part?.type === "toolCall",
-      );
+      (event.message as any).content.some((part: any) => part?.type === "toolCall");
     if (!toolResults.length || !hasToolCalls) return;
-    const allTerminating = toolResults.every((result: any) =>
-      terminatingToolCalls.has(result.toolCallId),
-    );
-    for (const result of toolResults as any[])
-      terminatingToolCalls.delete(result.toolCallId);
+    const allTerminating = toolResults.every((result: any) => terminatingToolCalls.has(result.toolCallId));
+    for (const result of toolResults as any[]) terminatingToolCalls.delete(result.toolCallId);
     if (allTerminating || ctx.signal?.aborted || ctx.hasPendingMessages()) {
       abandonAutomaticCompaction();
       return;
@@ -2023,11 +1584,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
       projectTrusted: ctx.isProjectTrusted?.() ?? false,
     }).getCompactionSettings();
-    if (
-      !settings.enabled ||
-      usage.tokens <= usage.contextWindow - settings.reserveTokens
-    )
-      return;
+    if (!settings.enabled || usage.tokens <= usage.contextWindow - settings.reserveTokens) return;
 
     const request: CompactionContinuationRequest = {
       id: randomUUID(),
@@ -2060,11 +1617,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
                 content:
                   "Continue the unfinished task from the compaction checkpoint. Do not repeat completed work or wait for another user prompt.",
                 display: false,
-                details: {
-                  version: 1,
-                  reason: "mid-task-compaction",
-                  requestId: request.id,
-                },
+                details: { version: 1, reason: "mid-task-compaction", requestId: request.id },
               },
               { triggerTurn: true },
             );
@@ -2079,16 +1632,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
       abandonAutomaticCompaction(request);
     }
   });
-  const activeWork = () =>
-    work && !["handed_off", "completed", "cancelled"].includes(work.mode)
-      ? work
-      : undefined;
+  const activeWork = () => (work && !["handed_off", "completed", "cancelled"].includes(work.mode) ? work : undefined);
   pi.on("session_before_compact", async (event, ctx) => {
     try {
       // Manual compaction is already waiting for the run to settle. Cancel Pi's
       // duplicate post-run auto-compaction so the manual callback can resume work.
-      if (automaticCompaction && event.reason !== "manual")
-        return { cancel: true };
+      if (automaticCompaction && event.reason !== "manual") return { cancel: true };
       const active = activeWork();
       if (active) {
         const missingIdentity = !active.runId || !active.timelineId;
@@ -2096,21 +1645,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
         if (!active.timelineId) active.timelineId = active.runId;
         if (missingIdentity) await saveWork();
       }
-      const identity =
-        active && verifyState.latest
-          ? await worktreeFingerprint(session.cwd)
-          : undefined;
-      const verification =
-        identity && verifyState.latest?.worktreeId === identity
-          ? verifyState.latest
-          : undefined;
+      const identity = active && verifyState.latest ? await worktreeFingerprint(session.cwd) : undefined;
+      const verification = identity && verifyState.latest?.worktreeId === identity ? verifyState.latest : undefined;
       const config = await loadConfig();
       const preparation = {
         ...event.preparation,
         settings: {
           ...event.preparation.settings,
-          keepRecentTokens:
-            config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
+          keepRecentTokens: config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
         },
       };
       const draft = prepareContinuityCompaction({
@@ -2122,10 +1664,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
 
       const focus = event.customInstructions?.trim();
       const profile = config.compactionReviewer;
-      if (focus && !profile)
-        throw Error(
-          "Compaction review instructions require a configured Compaction Reviewer.",
-        );
+      if (focus && !profile) throw Error("Compaction review instructions require a configured Compaction Reviewer.");
       let additions: CompactionSupplement[] = [];
       if (profile) {
         try {
@@ -2137,18 +1676,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           });
           if (packet) {
             const model = await configuredModel(ctx, profile);
-            if (!model)
-              throw Error("configured model or credentials are unavailable");
+            if (!model) throw Error("configured model or credentials are unavailable");
             const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-            if (!auth.ok || !auth.apiKey)
-              throw Error("configured model has no credentials");
+            if (!auth.ok || !auth.apiKey) throw Error("configured model has no credentials");
             const reviewed = await callCompactionReviewer({
               model,
-              auth: {
-                apiKey: auth.apiKey,
-                headers: auth.headers,
-                env: auth.env,
-              },
+              auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
               profile,
               packet,
               sessionId: session.id,
@@ -2190,21 +1723,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
       };
     } catch {
       if (!event.signal?.aborted)
-        ctx.ui?.notify?.(
-          "Compaction cancelled because Continuity could not produce deterministic output.",
-          "error",
-        );
+        ctx.ui?.notify?.("Compaction cancelled because Continuity could not produce deterministic output.", "error");
       return { cancel: true };
     }
   });
   pi.on("session_tree", (_event, ctx) => {
     if (!memory.enabled || !memory.activationEnabled) return;
     memory.taskGeneration++;
-    memory.ledger = restoreMemoryLedger(
-      ctx.sessionManager.getBranch?.() ?? [],
-      session.id,
-      memory.taskGeneration,
-    );
+    memory.ledger = restoreMemoryLedger(ctx.sessionManager.getBranch?.() ?? [], session.id, memory.taskGeneration);
     pruneMemoryLedger();
   });
   pi.on("session_compact", () => {
@@ -2215,7 +1741,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       persistMemoryLedger();
       return;
     }
-    const interventions = active.map((item) => ({
+    const interventions = active.map(item => ({
       memoryId: item.memoryId,
       noteRevision: item.noteRevision,
       mode: "inject_once" as const,
@@ -2228,7 +1754,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (!memory.enabled || !memory.activationEnabled) return;
     const active = activeMemoryForDelivery(memory.ledger);
     if (!active.length) return;
-    const interventions = active.map((item) => ({
+    const interventions = active.map(item => ({
       memoryId: item.memoryId,
       noteRevision: item.noteRevision,
       mode: "inject_once" as const,
@@ -2243,30 +1769,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
         customType: "pi-continuity-memory",
         content: text,
         display: false,
-        details: {
-          version: 2,
-          contextEpoch: memory.ledger.contextEpoch,
-          memoryIds: active.map((item) => item.memoryId),
-        },
+        details: { version: 2, contextEpoch: memory.ledger.contextEpoch, memoryIds: active.map(item => item.memoryId) },
       },
     };
   });
-  pi.on("context", (event) => {
+  pi.on("context", event => {
     for (const message of event.messages as any[]) {
-      if (
-        message?.role !== "custom" ||
-        message.customType !== "pi-worktree-mutation" ||
-        message.details?.version !== 1
-      )
+      if (message?.role !== "custom" || message.customType !== "pi-worktree-mutation" || message.details?.version !== 1)
         continue;
       const id = String(message.details.mutationId ?? "");
       if (!id || seenMutationMessages.has(id)) continue;
       seenMutationMessages.add(id);
-      if (
-        message.details.cwd === session.cwd &&
-        message.details.changed === true
-      )
-        invalidateVerification();
+      if (message.details.cwd === session.cwd && message.details.changed === true) invalidateVerification();
     }
     const active = activeWork();
     let boundary = -1;
@@ -2277,23 +1791,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
         break;
       }
     }
-    const boundedMessages =
-      boundary >= 0 ? event.messages.slice(boundary) : event.messages;
+    const boundedMessages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
     const messages = boundedMessages.filter(
       (message: any) =>
-        message?.role !== "custom" ||
-        message.customType !== "pi-continuity-memory" ||
-        message.details?.version === 2,
+        message?.role !== "custom" || message.customType !== "pi-continuity-memory" || message.details?.version === 2,
     );
-    const contextChanged =
-      boundary >= 0 || messages.length !== event.messages.length;
+    const contextChanged = boundary >= 0 || messages.length !== event.messages.length;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
-    const text = buildContext(
-      active,
-      [],
-      lastPrompt,
-      active?.mode === "planning" ? 450 : 300,
-    );
+    const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
     if (!text) return contextChanged ? { messages } : undefined;
     return {
       messages: [
@@ -2317,8 +1822,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     label: "Continuity Recall",
     description:
       "Search bounded historical evidence from the current Pi session or, with explicit project_sessions scope, other persisted sessions in the current project. Use tools mode to retrieve sanitized assistant tool calls and exact stored-result expansions. This is not an exact historical session-ID lookup; use search_sessions for explicit session IDs. Project-session results can be filtered by inclusive ISO-8601 UTC entry timestamps.",
-    promptSnippet:
-      "Explicitly recall sanitized, source-addressed session history.",
+    promptSnippet: "Explicitly recall sanitized, source-addressed session history.",
     promptGuidelines: [
       "Use only when deterministic compaction omitted a needed historical detail. Results are historical evidence, not current truth.",
       "Never use project_sessions to locate an exact historical session ID; activate search_sessions, pass its sessionId field, and use the requested subject as query instead.",
@@ -2329,34 +1833,22 @@ export default function continuityExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     renderShell: "self",
     renderCall: () => new Container(),
-    renderResult: (result) => {
-      const item = result.content.find((content) => content.type === "text");
-      return item?.type === "text"
-        ? new Text(item.text, 0, 0)
-        : new Container();
+    renderResult: result => {
+      const item = result.content.find(content => content.type === "text");
+      return item?.type === "text" ? new Text(item.text, 0, 0) : new Container();
     },
     parameters: Type.Object(
       {
         query: Type.Optional(Type.String({ maxLength: 200 })),
-        expand: Type.Optional(
-          Type.Array(Type.String({ maxLength: 200 }), { maxItems: 10 }),
-        ),
+        expand: Type.Optional(Type.Array(Type.String({ maxLength: 200 }), { maxItems: 10 })),
         page: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
         scope: Type.Optional(RecallScopeName),
         mode: Type.Optional(RecallModeName),
         since: Type.Optional(
-          Type.String({
-            maxLength: 64,
-            description:
-              "Inclusive ISO-8601 UTC entry timestamp; project_sessions only.",
-          }),
+          Type.String({ maxLength: 64, description: "Inclusive ISO-8601 UTC entry timestamp; project_sessions only." }),
         ),
         before: Type.Optional(
-          Type.String({
-            maxLength: 64,
-            description:
-              "Inclusive ISO-8601 UTC entry timestamp; project_sessions only.",
-          }),
+          Type.String({ maxLength: 64, description: "Inclusive ISO-8601 UTC entry timestamp; project_sessions only." }),
         ),
       },
       { additionalProperties: false },
@@ -2367,10 +1859,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         if (!project)
           return {
             content: [
-              {
-                type: "text",
-                text: "Project-session recall unavailable: current project identity is unresolved.",
-              },
+              { type: "text", text: "Project-session recall unavailable: current project identity is unresolved." },
             ],
           };
         const loaded = await loadProjectRecallSessions({
@@ -2403,14 +1892,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       const active = activeWork();
       if (!active)
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Session recall unavailable: no active Continuity work.",
-            },
-          ],
-        };
+        return { content: [{ type: "text", text: "Session recall unavailable: no active Continuity work." }] };
       if (!sessionFile)
         return {
           content: [
@@ -2422,9 +1904,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         };
       const activeBranch = ctx.sessionManager.getBranch?.() ?? [];
       const allEntries =
-        p.scope === "all" && canUseBroadRecall(activeBranch, active)
-          ? ctx.sessionManager.getEntries?.()
-          : undefined;
+        p.scope === "all" && canUseBroadRecall(activeBranch, active) ? ctx.sessionManager.getEntries?.() : undefined;
       const result = recallSession({
         sessionId: ctx.sessionManager.getSessionId(),
         activeBranch,
@@ -2456,10 +1936,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   );
   const BasisSchema = Type.Union([
     Type.Object(
-      {
-        type: Type.Literal("user_instruction"),
-        quote: Type.String({ minLength: 1, maxLength: 2_000 }),
-      },
+      { type: Type.Literal("user_instruction"), quote: Type.String({ minLength: 1, maxLength: 2_000 }) },
       { additionalProperties: false },
     ),
     Type.Object(
@@ -2515,31 +1992,27 @@ export default function continuityExtension(pi: ExtensionAPI) {
     memory.state = await readMemory();
     memory.notes = memory.state.notes;
     const owned = notesForOwners(memory.notes, resolved.owner);
-    const shown = query?.trim()
-      ? shortlistNotes(owned, query, undefined, 100)
-      : owned;
+    const shown = query?.trim() ? shortlistNotes(owned, query, undefined, 100) : owned;
     const pending = memory.state.reviews.filter(
-      (review) =>
-        review.sessionId === session.id && review.status === "approved_pending",
+      review => review.sessionId === session.id && review.status === "approved_pending",
     );
     const text =
       !shown.length && !pending.length
         ? "No current-owner notebook notes or pending reviewed operations."
         : [
             ...shown.map(
-              (note) =>
+              note =>
                 `- ${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}] When ${note.trigger}: ${note.guidance}`,
             ),
             ...pending.map(
-              (review) =>
-                `- pending review ${review.reviewId}: ${review.operations.length} approved operation(s)`,
+              review => `- pending review ${review.reviewId}: ${review.operations.length} approved operation(s)`,
             ),
           ].join("\n");
     return {
       content: [{ type: "text", text }],
       details: {
         memoryList: true,
-        notes: shown.map((note) => ({
+        notes: shown.map(note => ({
           id: note.id,
           revision: note.revision,
           scope: note.scope,
@@ -2552,37 +2025,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
 
   /** Reviewer evidence is re-read after the review: a file that changed mid-review invalidates the whole batch. */
-  const assertEvidenceUnchanged = async (
-    cwd: string,
-    proposals: PreflightProposal[],
-  ) => {
+  const assertEvidenceUnchanged = async (cwd: string, proposals: PreflightProposal[]) => {
     for (const prepared of proposals) {
       if (!prepared.evidence) continue;
       const fresh = await captureEvidenceRanges(
         cwd,
-        prepared.proposal.basis.type === "project_contract"
-          ? prepared.proposal.basis.evidence
-          : [],
+        prepared.proposal.basis.type === "project_contract" ? prepared.proposal.basis.evidence : [],
       );
-      if (
-        fresh.some(
-          (item, index) =>
-            item.excerptSha256 !== prepared.evidence![index]?.excerptSha256,
-        )
-      )
+      if (fresh.some((item, index) => item.excerptSha256 !== prepared.evidence![index]?.excerptSha256))
         throw Error("memory evidence changed during review");
     }
   };
 
   const stageReviewedRecord = async (
     record: ReviewRecord,
-    context: {
-      generation: number;
-      task: number;
-      session: string;
-      cwd: string;
-      owner: string;
-    },
+    context: { generation: number; task: number; session: string; cwd: string; owner: string },
   ) => {
     // The reviewer ran unlocked; a task, session, project, or cwd change since then invalidates its verdicts.
     const stale = () =>
@@ -2593,10 +2050,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       project?.owner !== context.owner;
     await withMemoryLifecycle(() =>
       withStateLock(memoryDirectory(), async () => {
-        if (stale())
-          throw Error(
-            "memory review became stale after a task or session change",
-          );
+        if (stale()) throw Error("memory review became stale after a task or session change");
         const latest = await readMemory();
         assertStageable(latest, record);
         const next = stageReview(latest, record);
@@ -2612,8 +2066,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     label: "Memory",
     description:
       "List or query durable notebook notes, or submit up to two grounded proposals for immediate Memory Reviewer editing.",
-    promptSnippet:
-      "Inspect durable notes or propose bounded reviewer-gated changes.",
+    promptSnippet: "Inspect durable notes or propose bounded reviewer-gated changes.",
     executionMode: "sequential",
     renderShell: "self",
     renderCall: () => new Container(),
@@ -2622,36 +2075,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {
-      const item = result.content.find((content) => content.type === "text"),
+      const item = result.content.find(content => content.type === "text"),
         value = item?.type === "text" ? item.text : "";
-      return new Text(
-        (result.details as any)?.memoryError
-          ? theme.fg("warning", `⚠ ${value}`)
-          : value,
-        0,
-        0,
-      );
+      return new Text((result.details as any)?.memoryError ? theme.fg("warning", `⚠ ${value}`) : value, 0, 0);
     },
     parameters: Type.Object(
       {
         action: MemAction,
         query: Type.Optional(Type.String({ maxLength: 500 })),
-        proposals: Type.Optional(
-          Type.Array(ProposalSchema, { minItems: 1, maxItems: 2 }),
-        ),
+        proposals: Type.Optional(Type.Array(ProposalSchema, { minItems: 1, maxItems: 2 })),
       },
       { additionalProperties: false },
     ),
     async execute(id, p, signal, _onUpdate, ctx): Promise<any> {
-      if (!memory.enabled)
-        return memoryFailure(
-          "Continuity memory is disabled in package settings.",
-        );
+      if (!memory.enabled) return memoryFailure("Continuity memory is disabled in package settings.");
       if (p.action === "list") return listMemoryNotes(p.query, ctx);
       if (memory.reviewCalledThisTask || memory.proposalToken)
-        return memoryFailure(
-          "Only one memory proposal call is allowed per task.",
-        );
+        return memoryFailure("Only one memory proposal call is allowed per task.");
       const reservationToken = randomUUID();
       memory.proposalToken = reservationToken;
       const proposalTask = memory.taskGeneration,
@@ -2664,15 +2104,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
         const resolved = await resolveProject(proposalCwd),
           config = await loadConfig(),
           profile = config.memoryReviewer;
-        if (!profile)
-          return memoryFailure(
-            "Memory Reviewer unavailable: configure a dedicated reviewer model.",
-          );
+        if (!profile) return memoryFailure("Memory Reviewer unavailable: configure a dedicated reviewer model.");
         const model = await configuredModel(ctx, profile);
         if (!model)
-          return memoryFailure(
-            "Memory Reviewer unavailable: configured model or credentials are unavailable.",
-          );
+          return memoryFailure("Memory Reviewer unavailable: configured model or credentials are unavailable.");
         const state = await readMemory();
         const preflight = await preflightMemoryProposals({
           rawProposals: p.proposals,
@@ -2684,26 +2119,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
         });
         const covered = preflight.proposals
           .map((proposal, proposalIndex) =>
-            proposal.coveredBy
-              ? { proposalIndex, note: proposal.coveredBy }
-              : undefined,
+            proposal.coveredBy ? { proposalIndex, note: proposal.coveredBy } : undefined,
           )
-          .filter(
-            (item): item is { proposalIndex: number; note: NotebookNote } =>
-              Boolean(item),
-          );
+          .filter((item): item is { proposalIndex: number; note: NotebookNote } => Boolean(item));
         if (covered.length === preflight.proposals.length) {
           proposalCompleted = memory.reviewCalledThisTask = true;
           return {
             content: [
               {
                 type: "text",
-                text: `Memory review:\n${covered.map((item) => `- already covered by ${item.note.scope}/${item.note.id}: proposal ${item.proposalIndex + 1}`).join("\n")}`,
+                text: `Memory review:\n${covered.map(item => `- already covered by ${item.note.scope}/${item.note.id}: proposal ${item.proposalIndex + 1}`).join("\n")}`,
               },
             ],
             details: {
               memoryReview: true,
-              outcomes: covered.map((item) => ({
+              outcomes: covered.map(item => ({
                 proposalIndex: item.proposalIndex,
                 status: "covered",
                 reasonCodes: ["duplicate"],
@@ -2714,9 +2144,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         }
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (!auth.ok || !auth.apiKey)
-          return memoryFailure(
-            "Memory Reviewer unavailable: configured model has no credentials.",
-          );
+          return memoryFailure("Memory Reviewer unavailable: configured model has no credentials.");
         reviewerInvoked = true;
         const reviewed = await callMemoryReviewer({
           model,
@@ -2749,31 +2177,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
           version: 1,
           ...reviewed.telemetry,
           proposalCount: preflight.proposals.length,
-          verdicts: reviewed.decisions.map((decision) => decision.verdict),
+          verdicts: reviewed.decisions.map(decision => decision.verdict),
         });
-        const { lines, outcomes } = formatReviewOutcome(
-          reviewed.decisions,
-          preflight.proposals,
-          record,
-        );
+        const { lines, outcomes } = formatReviewOutcome(reviewed.decisions, preflight.proposals, record);
         return {
-          content: [
-            { type: "text", text: `Memory review:\n${lines.join("\n")}` },
-          ],
+          content: [{ type: "text", text: `Memory review:\n${lines.join("\n")}` }],
           details: { memoryReview: true, reviewId: record.reviewId, outcomes },
         };
       } catch (error: any) {
-        emitMemoryOutcome(
-          reviewerInvoked ? "reviewer_failed" : "preflight_rejected",
-        );
-        return memoryFailure(
-          error?.message ?? "Memory review failed; nothing was staged.",
-        );
+        emitMemoryOutcome(reviewerInvoked ? "reviewer_failed" : "preflight_rejected");
+        return memoryFailure(error?.message ?? "Memory review failed; nothing was staged.");
       } finally {
-        if (memory.proposalToken === reservationToken)
-          memory.proposalToken = undefined;
-        if (!proposalCompleted && memory.taskGeneration === proposalTask)
-          memory.reviewCalledThisTask = false;
+        if (memory.proposalToken === reservationToken) memory.proposalToken = undefined;
+        if (!proposalCompleted && memory.taskGeneration === proposalTask) memory.reviewCalledThisTask = false;
       }
     },
   });
@@ -2792,8 +2208,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           Type.Object({
             label: Type.String({
               maxLength: 120,
-              description:
-                "Short, distinct answer label. Put the recommended option first.",
+              description: "Short, distinct answer label. Put the recommended option first.",
             }),
             description: Type.Optional(
               Type.String({
@@ -2821,28 +2236,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ),
       ),
       goal: Type.Optional(Type.String({ maxLength: 2000 })),
-      constraints: Type.Optional(
-        Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 }),
-      ),
+      constraints: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 12 })),
       planSummary: Type.Optional(Type.String({ maxLength: 4000 })),
-      workingSet: Type.Optional(
-        Type.Array(Type.String({ minLength: 1, maxLength: 240 }), {
-          maxItems: 20,
-        }),
-      ),
-      assumptions: Type.Optional(
-        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
-          maxItems: 12,
-        }),
-      ),
-      acceptanceCriteria: Type.Optional(
-        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
-          maxItems: 12,
-        }),
-      ),
-      todos: Type.Optional(
-        Type.Array(Type.String({ maxLength: 120 }), { maxItems: 12 }),
-      ),
+      workingSet: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
+      assumptions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 12 })),
+      acceptanceCriteria: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 12 })),
+      todos: Type.Optional(Type.Array(Type.String({ maxLength: 120 }), { maxItems: 12 })),
       planTodos: Type.Optional(
         Type.Array(
           Type.Object(
@@ -2850,8 +2249,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               id: Type.Optional(
                 Type.String({
                   maxLength: 120,
-                  description:
-                    "Omit when creating a plan; on revisions, use only an exact ID from the current plan.",
+                  description: "Omit when creating a plan; on revisions, use only an exact ID from the current plan.",
                 }),
               ),
               text: Type.String({ minLength: 1, maxLength: 120 }),
@@ -2861,25 +2259,16 @@ export default function continuityExtension(pi: ExtensionAPI) {
           { maxItems: 12 },
         ),
       ),
-      todoId: Type.Optional(
-        Type.String({
-          description:
-            "Exact todo ID shown in Continuity context, such as todo_1",
-        }),
-      ),
+      todoId: Type.Optional(Type.String({ description: "Exact todo ID shown in Continuity context, such as todo_1" })),
       todoIds: Type.Optional(
         Type.Array(Type.String(), {
           minItems: 1,
           maxItems: 12,
-          description:
-            "Complete these independent todo IDs together. Bulk updates only support status done.",
+          description: "Complete these independent todo IDs together. Bulk updates only support status done.",
         }),
       ),
       nextTodoId: Type.Optional(
-        Type.String({
-          description:
-            "Pending todo to start atomically when marking current todo done",
-        }),
+        Type.String({ description: "Pending todo to start atomically when marking current todo done" }),
       ),
       status: Type.Optional(Status),
       currentTodoId: Type.Optional(
@@ -2900,9 +2289,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     { additionalProperties: false },
   );
 
-  type ContinuityUpdateParams = Static<typeof continuityUpdateSchema> & {
-    completion?: boolean;
-  };
+  type ContinuityUpdateParams = Static<typeof continuityUpdateSchema> & { completion?: boolean };
   const reply = (text: string, extras: Record<string, unknown> = {}) => ({
     content: [{ type: "text", text }],
     ...extras,
@@ -2910,12 +2297,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
 
   /** Cross-cutting argument checks; returns the refusal text, or undefined when the call is well-formed. */
   const rejectedCall = (p: ContinuityUpdateParams) => {
-    if (p.allowUnverified && p.action !== "state")
-      return 'allowUnverified requires action "state".';
+    if (p.allowUnverified && p.action !== "state") return 'allowUnverified requires action "state".';
     if (p.action !== "state") return undefined;
-    const todoFields = (
-      ["todoId", "todoIds", "status", "nextTodoId"] as const
-    ).filter((field) => p[field] !== undefined);
+    const todoFields = (["todoId", "todoIds", "status", "nextTodoId"] as const).filter(field => p[field] !== undefined);
     return todoFields.length
       ? `${todoFields.join(", ")} require action \"todo\"; complete todos before updating state.`
       : undefined;
@@ -2923,19 +2307,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
 
   const handleClarify = async (p: ContinuityUpdateParams, ctx: any) => {
     const executing = work?.mode === "executing";
-    if (
-      p.questions !== undefined &&
-      (p.question !== undefined || p.options !== undefined)
-    )
+    if (p.questions !== undefined && (p.question !== undefined || p.options !== undefined))
       throw Error("Use either questions or question/options, not both.");
-    const questions = p.questions ?? [
-      { question: p.question || "", options: p.options || [] },
-    ];
+    const questions = p.questions ?? [{ question: p.question || "", options: p.options || [] }];
     validateQuestions(questions);
     if (
       process.env.PI_SPAWN_AUTONOMOUS === "1" &&
-      (process.env.PI_SPAWN_CHILD === "agent" ||
-        process.env.PI_SPAWN_CHILD === "session")
+      (process.env.PI_SPAWN_CHILD === "agent" || process.env.PI_SPAWN_CHILD === "session")
     )
       return reply(
         "No interactive answer is available in this autonomous spawned thread. Reassess every question and all listed options using the available context, choose any justified option, state the assumptions you made, and continue the task.",
@@ -2956,18 +2334,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
         .join("\n\n");
       return reply(`Ask user in prose and wait: ${prose}`);
     }
-    const answers = await askQuestionnaire(
-      ctx.ui,
-      ctx.mode,
-      questions,
-      clarifyDialogOptions(),
-    );
+    const answers = await askQuestionnaire(ctx.ui, ctx.mode, questions, clarifyDialogOptions());
     if (!answers) {
       if (!executing) return reply("No answers submitted.");
       ctx.abort();
-      return reply("No answers submitted. Execution stopped.", {
-        terminate: true,
-      });
+      return reply("No answers submitted. Execution stopped.", { terminate: true });
     }
     if (questions.length === 1) {
       const [answer] = answers;
@@ -2984,12 +2355,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
 
   const handleSetPlan = async (p: ContinuityUpdateParams, ctx: any) => {
     const planning = work?.mode === "planning";
-    if (p.todos !== undefined && p.planTodos !== undefined)
-      throw Error("Use either todos or planTodos, not both.");
-    const planItems = p.planTodos ?? (p.todos || []).map((text) => ({ text }));
-    const todos = planItems
-      .map((todo) => ({ ...todo, text: todo.text.trim() }))
-      .filter((todo) => todo.text);
+    if (p.todos !== undefined && p.planTodos !== undefined) throw Error("Use either todos or planTodos, not both.");
+    const planItems = p.planTodos ?? (p.todos || []).map(text => ({ text }));
+    const todos = planItems.map(todo => ({ ...todo, text: todo.text.trim() })).filter(todo => todo.text);
     if (!todos.length) return reply("At least one non-empty todo is required.");
     if (!work || work.mode === "completed" || work.mode === "cancelled") {
       work = fresh(p.goal?.trim() || lastPrompt);
@@ -2999,35 +2367,28 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const now = new Date().toISOString();
     work.goal = p.goal?.trim() || work.goal;
     work.constraints = (p.constraints || [])
-      .map((constraint) => constraint.trim())
+      .map(constraint => constraint.trim())
       .filter(Boolean)
       .slice(0, 12);
-    work.planSummary =
-      p.planSummary?.trim() ||
-      todos.map((todo) => todo.text).join("; ") ||
-      work.goal;
-    if (
-      p.workingSet !== undefined ||
-      p.assumptions !== undefined ||
-      p.acceptanceCriteria !== undefined
-    )
+    work.planSummary = p.planSummary?.trim() || todos.map(todo => todo.text).join("; ") || work.goal;
+    if (p.workingSet !== undefined || p.assumptions !== undefined || p.acceptanceCriteria !== undefined)
       work.handoff = {
         workingSet: (p.workingSet || [])
-          .map((value) => value.trim())
+          .map(value => value.trim())
           .filter(Boolean)
           .slice(0, 20),
         assumptions: (p.assumptions || [])
-          .map((value) => value.trim())
+          .map(value => value.trim())
           .filter(Boolean)
           .slice(0, 12),
         acceptanceCriteria: (p.acceptanceCriteria || [])
-          .map((value) => value.trim())
+          .map(value => value.trim())
           .filter(Boolean)
           .slice(0, 12),
       };
     setPlan(work, todos, now);
     if (!planning && !work.currentTodoId) {
-      const first = work.todos.find((todo) => todo.status !== "done");
+      const first = work.todos.find(todo => todo.status !== "done");
       if (first) updateTodo(work, first.id, "in_progress", now);
     }
     if (planning) {
@@ -3037,60 +2398,44 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     work.updatedAt = now;
     await saveWork();
-    if (planning)
-      planApproval.pending = {
-        runId: work.runId,
-        revision: work.planRevision!,
-      };
+    if (planning) planApproval.pending = { runId: work.runId, revision: work.planRevision! };
     tasksVisible = true;
     refresh(ctx);
     return reply(
-      planning
-        ? "Plan stored. Await explicit /plan approve."
-        : "Executing task list stored.",
+      planning ? "Plan stored. Await explicit /plan approve." : "Executing task list stored.",
       planning ? { details: { plan: formatPlan(work) } } : {},
     );
   };
 
   /** Applies a single or bulk todo transition; returns the refusal text when the transition is invalid. */
   const applyTodoAction = (p: ContinuityUpdateParams, active: Work) => {
-    const validIds = active.todos.map((todo) => todo.id).join(", ") || "none";
+    const validIds = active.todos.map(todo => todo.id).join(", ") || "none";
     const invalid = `Unknown or invalid todo transition. Valid IDs: ${validIds}.`;
     const now = new Date().toISOString();
     const bulkIds = p.todoIds;
     // Validate every participant before changing work so rejected bulk calls are atomic.
     if (bulkIds) {
       const ids = new Set(bulkIds);
-      const completed = bulkIds.map((id) =>
-        active.todos.find((item) => item.id === id),
-      );
-      const next =
-        p.nextTodoId && active.todos.find((item) => item.id === p.nextTodoId);
+      const completed = bulkIds.map(id => active.todos.find(item => item.id === id));
+      const next = p.nextTodoId && active.todos.find(item => item.id === p.nextTodoId);
       if (
         p.todoId !== undefined ||
         p.status !== "done" ||
         !bulkIds.length ||
         ids.size !== bulkIds.length ||
-        completed.some((todo) => !todo) ||
-        (p.nextTodoId !== undefined &&
-          (!next || ids.has(p.nextTodoId) || next.status !== "pending"))
+        completed.some(todo => !todo) ||
+        (p.nextTodoId !== undefined && (!next || ids.has(p.nextTodoId) || next.status !== "pending"))
       )
         return invalid;
       for (const id of bulkIds) updateTodo(active, id, "done", now);
       if (next) updateTodo(active, next.id, "in_progress", now);
     } else {
-      const todo =
-        p.todoId && active.todos.find((item) => item.id === p.todoId);
-      const next =
-        p.nextTodoId && active.todos.find((item) => item.id === p.nextTodoId);
+      const todo = p.todoId && active.todos.find(item => item.id === p.todoId);
+      const next = p.nextTodoId && active.todos.find(item => item.id === p.nextTodoId);
       if (
         !todo ||
         !p.status ||
-        (p.nextTodoId &&
-          (p.status !== "done" ||
-            !next ||
-            next.id === todo.id ||
-            next.status !== "pending"))
+        (p.nextTodoId && (p.status !== "done" || !next || next.id === todo.id || next.status !== "pending"))
       )
         return invalid;
       updateTodo(active, todo.id, p.status, now);
@@ -3107,24 +2452,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
     ctx: any,
     legacyCompletionWithReply: boolean,
   ) => {
-    const legacyTerminate = legacyCompletionWithReply
-      ? { terminate: true }
-      : {};
+    const legacyTerminate = legacyCompletionWithReply ? { terminate: true } : {};
     if (active.mode === "completed")
-      return reply(
-        "Work already completed. No further continuity updates needed.",
-        { terminate: true },
-      );
-    if (hasRemainingTodos(active))
-      return reply("Cannot complete while todos remain.", legacyTerminate);
-    const acknowledgeable = ["clean", "no_checks"].includes(
-      verifyState.latest?.state,
-    );
-    if (
-      verifyState.needed &&
-      verifyState.latest?.state !== "passed" &&
-      !(p.allowUnverified && acknowledgeable)
-    )
+      return reply("Work already completed. No further continuity updates needed.", { terminate: true });
+    if (hasRemainingTodos(active)) return reply("Cannot complete while todos remain.", legacyTerminate);
+    const acknowledgeable = ["clean", "no_checks"].includes(verifyState.latest?.state);
+    if (verifyState.needed && verifyState.latest?.state !== "passed" && !(p.allowUnverified && acknowledgeable))
       return reply(
         acknowledgeable
           ? "Verification is unavailable for this worktree. Acknowledge allowUnverified in a tool-only state update after reviewing that limitation."
@@ -3132,31 +2465,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
         legacyTerminate,
       );
     await completeWork(ctx);
-    return reply("Work completed. No further continuity updates needed.", {
-      terminate: true,
-    });
+    return reply("Work completed. No further continuity updates needed.", { terminate: true });
   };
 
   /** Returns a settled response, or undefined to fall through to the common save. */
-  const handleState = async (
-    p: ContinuityUpdateParams,
-    active: Work,
-    ctx: any,
-    legacyCompletionWithReply: boolean,
-  ) => {
+  const handleState = async (p: ContinuityUpdateParams, active: Work, ctx: any, legacyCompletionWithReply: boolean) => {
     active.currentTodoId = p.currentTodoId ?? active.currentTodoId;
     applyManualIssueUpdate(active, p.latestFailure, p.nextAction);
-    if (p.completion)
-      return handleCompletion(p, active, ctx, legacyCompletionWithReply);
+    if (p.completion) return handleCompletion(p, active, ctx, legacyCompletionWithReply);
     if (!p.allowUnverified) return undefined;
-    if (hasRemainingTodos(active))
-      return reply("Cannot acknowledge verification while todos remain.");
-    if (!verifyState.needed)
-      return reply("No verification acknowledgement is required.");
+    if (hasRemainingTodos(active)) return reply("Cannot acknowledge verification while todos remain.");
+    if (!verifyState.needed) return reply("No verification acknowledgement is required.");
     if (!["clean", "no_checks"].includes(verifyState.latest?.state))
-      return reply(
-        "allowUnverified requires a current clean or no_checks Verify result.",
-      );
+      return reply("allowUnverified requires a current clean or no_checks Verify result.");
     verifyState.needed = false;
     return undefined;
   };
@@ -3164,8 +2485,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     name: "continuity_update",
     label: "Continuity Update",
     description: "Update plan, todos, state, or clarification.",
-    promptSnippet:
-      "Planning, todo/state tracking, and clarification capability.",
+    promptSnippet: "Planning, todo/state tracking, and clarification capability.",
     executionMode: "sequential",
     promptGuidelines: [
       "Use set_plan for explicit /plan; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. planSummary is the compact executor handoff; add concrete paths/symbols, assumptions or gaps, and acceptance criteria in structured fields. Revise via planTodos IDs. Continuity owns plan presentation; otherwise use internal task list.",
@@ -3177,7 +2497,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     renderShell: "self",
     renderCall: () => new Container(),
     renderResult: (result, _options, theme) => {
-      const item = result.content.find((content) => content.type === "text");
+      const item = result.content.find(content => content.type === "text");
       const text = item?.type === "text" ? item.text : undefined;
       const details = result.details as any;
       const clarification = details?.clarification;
@@ -3191,15 +2511,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (plan) return new Text(plan, 0, 0);
       if (text?.startsWith("Continuity circuit breaker"))
         return new Text(theme.fg("warning", "⚠ Continuity loop stopped"), 0, 0);
-      if (
-        text &&
-        /^(?:Cannot |Verification is unavailable|allowUnverified requires)/.test(
-          text,
-        )
-      )
+      if (text && /^(?:Cannot |Verification is unavailable|allowUnverified requires)/.test(text))
         return new Text(theme.fg("warning", `⚠ ${text}`), 0, 0);
-      return text?.startsWith("Work completed") ||
-        text?.startsWith("Work already completed")
+      return text?.startsWith("Work completed") || text?.startsWith("Work already completed")
         ? new Text(theme.fg("success", "✓ Task completed"), 0, 0)
         : new Container();
     },
@@ -3207,20 +2521,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
     async execute(_i, input, _s, _u, ctx): Promise<any> {
       // Keep direct legacy callers working without advertising explicit completion to models.
       const p = input as ContinuityUpdateParams;
-      const legacyCompletionWithReply =
-        p.completion === true &&
-        hasReplyBeforeCompletion({ toolCallId: _i }, ctx);
+      const legacyCompletionWithReply = p.completion === true && hasReplyBeforeCompletion({ toolCallId: _i }, ctx);
       const rejection = rejectedCall(p);
       if (rejection) return reply(rejection);
       if (tripsCircuitBreaker(p)) {
         ctx.abort();
-        return reply(
-          "Continuity circuit breaker stopped 3 identical calls within 30 seconds.",
-          {
-            details: { circuitBreaker: true },
-            terminate: true,
-          },
-        );
+        return reply("Continuity circuit breaker stopped 3 identical calls within 30 seconds.", {
+          details: { circuitBreaker: true },
+          terminate: true,
+        });
       }
       if (p.action === "clarify") return handleClarify(p, ctx);
       if (p.action === "set_plan") return handleSetPlan(p, ctx);
@@ -3229,12 +2538,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         const refusal = applyTodoAction(p, work);
         if (refusal) return reply(refusal);
       } else if (p.action === "state") {
-        const settled = await handleState(
-          p,
-          work,
-          ctx,
-          legacyCompletionWithReply,
-        );
+        const settled = await handleState(p, work, ctx, legacyCompletionWithReply);
         if (settled) return settled;
       }
       work.updatedAt = new Date().toISOString();
@@ -3247,29 +2551,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
     (ctx.sessionManager.getEntries?.() ?? []).find(
       (entry: any) =>
         entry.customType === customType &&
-        (entry.data?.approvalToken === token ||
-          entry.details?.approvalToken === token),
+        (entry.data?.approvalToken === token || entry.details?.approvalToken === token),
     );
   const executionInstruction = "Execute the approved Continuity plan now.";
   const planDialogOptions = { timeout: 0 };
   planApproval.resume = async (ctx: any) => {
     const transition = work?.approval;
-    if (!work || !transition || !["planning", "executing"].includes(work.mode))
-      return false;
-    if (work.planRevision !== transition.revision)
-      throw Error("Approval revision is stale.");
-    const executor = ctx.modelRegistry.find(
-      transition.executorModel.provider,
-      transition.executorModel.id,
-    );
-    if (!executor || !(await pi.setModel(executor)))
-      throw Error("Executor model unavailable.");
-    if (transition.thinking)
-      pi.setThinkingLevel(transition.thinking as ThinkingLevel);
+    if (!work || !transition || !["planning", "executing"].includes(work.mode)) return false;
+    if (work.planRevision !== transition.revision) throw Error("Approval revision is stale.");
+    const executor = ctx.modelRegistry.find(transition.executorModel.provider, transition.executorModel.id);
+    if (!executor || !(await pi.setModel(executor))) throw Error("Executor model unavailable.");
+    if (transition.thinking) pi.setThinkingLevel(transition.thinking as ThinkingLevel);
     const priorRunEntry = approvalEntry(ctx, RUN_ENTRY_TYPE, transition.token);
-    const priorRun = isRunEntry(priorRunEntry?.data)
-      ? priorRunEntry.data
-      : undefined;
+    const priorRun = isRunEntry(priorRunEntry?.data) ? priorRunEntry.data : undefined;
     const runId = work.runId ?? priorRun?.runId ?? randomUUID();
     const timelineId = work.timelineId ?? priorRun?.timelineId ?? runId;
     if (!priorRunEntry)
@@ -3282,10 +2576,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         approvalToken: transition.token,
         createdAt: transition.createdAt,
       } satisfies RunEntry);
-    if (
-      transition.resetContext &&
-      !approvalEntry(ctx, HANDOFF_ENTRY_TYPE, transition.token)
-    )
+    if (transition.resetContext && !approvalEntry(ctx, HANDOFF_ENTRY_TYPE, transition.token))
       pi.sendMessage(
         {
           customType: HANDOFF_ENTRY_TYPE,
@@ -3323,49 +2614,25 @@ export default function continuityExtension(pi: ExtensionAPI) {
           customType: EXECUTION_ENTRY_TYPE,
           content: executionInstruction,
           display: false,
-          details: {
-            version: 1,
-            approvalToken: transition.token,
-            runId,
-            timelineId,
-          },
+          details: { version: 1, approvalToken: transition.token, runId, timelineId },
         },
         { triggerTurn: true },
       );
     return true;
   };
-  const approvePlan = (
-    ctx: any,
-    resetContext: boolean,
-    expectedRevision?: number,
-  ) =>
+  const approvePlan = (ctx: any, resetContext: boolean, expectedRevision?: number) =>
     withPlanMutation(async () => {
-      if (
-        !work?.planSummary ||
-        work.mode !== "planning" ||
-        !work.todos.length
-      ) {
+      if (!work?.planSummary || work.mode !== "planning" || !work.todos.length) {
         ctx.ui?.notify?.("No pending stored plan.", "error");
         return false;
       }
-      if (
-        expectedRevision !== undefined &&
-        work.planRevision !== expectedRevision
-      )
-        throw Error(
-          "Plan revision changed; refresh and review the latest plan.",
-        );
+      if (expectedRevision !== undefined && work.planRevision !== expectedRevision)
+        throw Error("Plan revision changed; refresh and review the latest plan.");
       if (work.approval) return planApproval.resume(ctx);
       if (work.revisionFeedback?.revision === work.planRevision)
-        throw Error(
-          "Plan has requested changes; review the next revision before approval.",
-        );
+        throw Error("Plan has requested changes; review the next revision before approval.");
       const config = await loadConfig();
-      const executor = await configuredModel(
-        ctx,
-        config.executor,
-        work.baseModel,
-      );
+      const executor = await configuredModel(ctx, config.executor, work.baseModel);
       if (!executor) {
         ctx.ui?.notify?.("Executor model unavailable.", "error");
         return false;
@@ -3390,13 +2657,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const text = feedback.trim();
       if (!work || work.mode !== "planning" || !work.planRevision || !text)
         throw Error("Plan feedback is unavailable or empty.");
-      if (
-        expectedRevision !== undefined &&
-        work.planRevision !== expectedRevision
-      )
-        throw Error(
-          "Plan revision changed; refresh and review the latest plan.",
-        );
+      if (expectedRevision !== undefined && work.planRevision !== expectedRevision)
+        throw Error("Plan revision changed; refresh and review the latest plan.");
       if (work.approval) throw Error("Plan approval is already pending.");
       work.revisionFeedback = {
         revision: work.planRevision,
@@ -3408,50 +2670,28 @@ export default function continuityExtension(pi: ExtensionAPI) {
       planApproval.pending = undefined;
       await saveWork();
       refresh(session.context);
-      pi.sendUserMessage(
-        `Plan changes requested for revision ${work.planRevision}:\n${work.revisionFeedback.text}`,
-      );
+      pi.sendUserMessage(`Plan changes requested for revision ${work.planRevision}:\n${work.revisionFeedback.text}`);
     });
-  planApproval.dispose = pi.events.on(
-    "pi-continuity:plan-action",
-    (request: any) => {
-      if (request?.version !== 1 || typeof request.respond !== "function")
-        return;
-      if (
-        request.sessionId !== session.id ||
-        request.expectedGeneration !== session.generation ||
-        !session.context
-      ) {
-        request.respond(
-          Promise.reject(
-            new Error(
-              "Continuity plan action is stale or belongs to another session",
-            ),
-          ),
-        );
-        return;
-      }
-      const operation =
-        request.action === "approve"
-          ? approvePlan(
-              session.context,
-              request.resetContext === true,
-              request.expectedRevision,
-            )
-          : request.action === "requestChanges" &&
-              typeof request.feedback === "string"
-            ? requestPlanChanges(request.feedback, request.expectedRevision)
-            : Promise.reject(new Error("Invalid Continuity plan action"));
-      request.respond(operation);
-    },
-  );
+  planApproval.dispose = pi.events.on("pi-continuity:plan-action", (request: any) => {
+    if (request?.version !== 1 || typeof request.respond !== "function") return;
+    if (request.sessionId !== session.id || request.expectedGeneration !== session.generation || !session.context) {
+      request.respond(Promise.reject(new Error("Continuity plan action is stale or belongs to another session")));
+      return;
+    }
+    const operation =
+      request.action === "approve"
+        ? approvePlan(session.context, request.resetContext === true, request.expectedRevision)
+        : request.action === "requestChanges" && typeof request.feedback === "string"
+          ? requestPlanChanges(request.feedback, request.expectedRevision)
+          : Promise.reject(new Error("Invalid Continuity plan action"));
+    request.respond(operation);
+  });
   const planCommand = {
     description: "Start, approve, cancel, or inspect plan",
     handler: async (args: string, ctx: any) => {
       const value = args.trim();
       if (value === "review") {
-        if (!work?.runId)
-          return void ctx.ui.notify("No active pylon run.", "error");
+        if (!work?.runId) return void ctx.ui.notify("No active pylon run.", "error");
         pi.appendEntry(RUN_ENTRY_TYPE, {
           version: 1,
           runId: work.runId,
@@ -3486,31 +2726,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       if (value.startsWith("deny")) {
         const feedback = value.slice("deny".length).trim();
-        if (!feedback)
-          return void ctx.ui.notify("Plan feedback required.", "error");
+        if (!feedback) return void ctx.ui.notify("Plan feedback required.", "error");
         await requestPlanChanges(feedback);
         return;
       }
       if (value === "status") {
-        ctx.ui.notify(
-          work ? `${work.mode}: ${work.goal}` : "No active work.",
-          "info",
-        );
+        ctx.ui.notify(work ? `${work.mode}: ${work.goal}` : "No active work.", "info");
         return;
       }
       if (ctx.isIdle?.() === false) {
-        ctx.ui.notify(
-          "Wait for the current response before starting a plan.",
-          "warning",
-        );
+        ctx.ui.notify("Wait for the current response before starting a plan.", "warning");
         return;
       }
       planApproval.context = ctx;
       const config = await loadConfig();
-      const baseModel = ctx.model && {
-        provider: ctx.model.provider,
-        id: ctx.model.id,
-      };
+      const baseModel = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
       const baseThinking = pi.getThinkingLevel();
       if (!(await applyProfile(ctx, config.planner))) {
         ctx.ui.notify("Planner model unavailable.", "error");
@@ -3582,11 +2812,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         await saveWork();
         const choice = await settledCtx.ui.select(
           "Plan ready — review structured plan above",
-          [
-            "Approve — reset context",
-            "Approve — continue current session",
-            "Request changes",
-          ],
+          ["Approve — reset context", "Approve — continue current session", "Request changes"],
           planDialogOptions,
         );
         if (!isCurrentPending()) return;
@@ -3599,11 +2825,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         } else if (choice === "Approve — continue current session") {
           if ((await approvePlan(actionCtx, false)) === false) await requeue();
         } else if (choice === "Request changes") {
-          const feedback = await settledCtx.ui.editor(
-            "Plan feedback",
-            "",
-            planDialogOptions,
-          );
+          const feedback = await settledCtx.ui.editor("Plan feedback", "", planDialogOptions);
           if (!feedback?.trim()) {
             await requeue();
             return;
@@ -3614,8 +2836,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         await requeue().catch(() => {});
         settledCtx.ui.notify(error?.message ?? String(error), "error");
       } finally {
-        if (planApproval.selection === selection)
-          planApproval.selection = undefined;
+        if (planApproval.selection === selection) planApproval.selection = undefined;
       }
     });
   };
@@ -3624,8 +2845,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     description: "Configure Continuity models or show status",
     handler: async (args, ctx) => {
       const [roleRaw, ...rest] = args.trim().split(/\s+/);
-      const role = roleRaw as
-        "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
+      const role = roleRaw as "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
       const value = rest.join(" ");
       const config = await loadConfig();
       if (!roleRaw || roleRaw === "status") {
@@ -3635,16 +2855,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         );
         return;
       }
-      if (
-        !(
-          [
-            "planner",
-            "executor",
-            "memoryReviewer",
-            "compactionReviewer",
-          ] as string[]
-        ).includes(role)
-      ) {
+      if (!(["planner", "executor", "memoryReviewer", "compactionReviewer"] as string[]).includes(role)) {
         ctx.ui.notify(
           "Usage: /continuity [status|planner|executor|memoryReviewer|compactionReviewer] [provider/model[:thinking]|reset]",
           "info",
@@ -3652,7 +2863,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         return;
       }
       if (value === "reset") {
-        await updateConfig((current) => {
+        await updateConfig(current => {
           const next = { ...current };
           delete next[role];
           return next;
@@ -3682,10 +2893,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
             ).map(modelName),
           )) ?? "";
       if (!selected) {
-        ctx.ui.notify(
-          `Usage: /continuity ${role} <provider/model[:thinking]>|reset`,
-          "info",
-        );
+        ctx.ui.notify(`Usage: /continuity ${role} <provider/model[:thinking]>|reset`, "info");
         return;
       }
       const ref = parseModelRef(selected);
@@ -3696,12 +2904,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       let thinking: ThinkingLevel | undefined = ref.thinking;
       if (!value && ctx.mode === "tui") {
-        thinking = (await ctx.ui.select(`${role} thinking level`, [
-          ...thinkingLevels,
-        ])) as ThinkingLevel | undefined;
+        thinking = (await ctx.ui.select(`${role} thinking level`, [...thinkingLevels])) as ThinkingLevel | undefined;
         if (!thinking) return;
       }
-      await updateConfig((current) => ({
+      await updateConfig(current => ({
         ...current,
         [role]: { model: modelName(model), ...(thinking ? { thinking } : {}) },
       }));
@@ -3709,44 +2915,26 @@ export default function continuityExtension(pi: ExtensionAPI) {
         memory.reviewerConfigured = true;
         gate(work?.mode === "planning");
       }
-      ctx.ui.notify(
-        `${role}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`,
-        "info",
-      );
+      ctx.ui.notify(`${role}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`, "info");
     },
   });
   pi.registerCommand("todos", {
     description: "Show continuity todos",
     handler: async (_a, ctx) =>
-      ctx.ui.notify(
-        work?.todos.map((t) => `${t.id} ${t.status} ${t.text}`).join("\n") ||
-          "No todos.",
-        "info",
-      ),
+      ctx.ui.notify(work?.todos.map(t => `${t.id} ${t.status} ${t.text}`).join("\n") || "No todos.", "info"),
   });
   /** Rollback may only restore from inside the protected backup directory; anything else is refused. */
   const assertInsideBackupRoot = (backup: string, label: string) => {
     const backupRoot = resolve(memoryDirectory(), "backups"),
       backupPath = resolve(backup);
     const rel = relative(backupRoot, backupPath);
-    if (
-      !rel ||
-      rel === ".." ||
-      rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-      isAbsolute(rel)
-    )
-      throw Error(
-        `${label} backup path is outside the protected backup directory.`,
-      );
+    if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel))
+      throw Error(`${label} backup path is outside the protected backup directory.`);
     return backupPath;
   };
 
   const runMigrateV4 = async (ctx: any) => {
-    if (!ctx.hasUI)
-      return void ctx.ui.notify(
-        "Interactive UI required for V4 memory migration.",
-        "error",
-      );
+    if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for V4 memory migration.", "error");
     if (
       !(await ctx.ui.confirm(
         "Migrate Memory V4 to V6?",
@@ -3755,9 +2943,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     )
       return;
     try {
-      const migration = await withMemoryLifecycle(() =>
-        runV4Migration(ctx, session.id),
-      );
+      const migration = await withMemoryLifecycle(() => runV4Migration(ctx, session.id));
       memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
       publishState();
       if (!migration.migrated)
@@ -3774,10 +2960,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       emitMemoryOutcome("migration_failed");
       memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
       publishState();
-      return void ctx.ui.notify(
-        `Memory V4 migration failed: ${error?.message ?? error}`,
-        "error",
-      );
+      return void ctx.ui.notify(`Memory V4 migration failed: ${error?.message ?? error}`, "error");
     }
   };
 
@@ -3785,9 +2968,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const directories = [memoryDirectory(), join(root, "memory-v4")],
       backups: string[] = [];
     for (const directory of directories)
-      for (const name of await readdir(directory, { recursive: true }).catch(
-        () => [] as string[],
-      ))
+      for (const name of await readdir(directory, { recursive: true }).catch(() => [] as string[]))
         if (
           name.includes("backup") ||
           name.includes("reset-unsupported") ||
@@ -3798,22 +2979,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
           name.startsWith("candidates-v4")
         )
           backups.push(join(directory, name));
-    return void ctx.ui.notify(
-      backups.join("\n") || "No memory backups.",
-      "info",
-    );
+    return void ctx.ui.notify(backups.join("\n") || "No memory backups.", "info");
   };
 
   /** Discards the generated V6 notebook; the byte-exact V5 source and its backup stay on disk. */
-  const rollbackV5Migration = async (
-    ctx: any,
-    v5Journal: V5MigrationJournal,
-  ) => {
-    if (!ctx.hasUI)
-      return void ctx.ui.notify(
-        "Interactive UI required for memory rollback.",
-        "error",
-      );
+  const rollbackV5Migration = async (ctx: any, v5Journal: V5MigrationJournal) => {
+    if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory rollback.", "error");
     if (
       !(await ctx.ui.confirm(
         "Rollback Memory V5 migration?",
@@ -3825,22 +2996,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       withStateLock(memoryDirectory(), async () => {
         const latest = await readMemory();
         if (latest.revision !== v5Journal.activatedRevision)
-          throw Error(
-            "Memory changed after V5 migration; rollback requires manual reconciliation.",
-          );
-        const raw = await readFile(
-          assertInsideBackupRoot(v5Journal.backupPath, "V5 migration"),
-          "utf8",
-        );
+          throw Error("Memory changed after V5 migration; rollback requires manual reconciliation.");
+        const raw = await readFile(assertInsideBackupRoot(v5Journal.backupPath, "V5 migration"), "utf8");
         if (sha256(raw) !== v5Journal.sourceSha256)
-          throw Error(
-            "V5 migration backup is stale or corrupt; rollback aborted.",
-          );
-        const next = {
-          ...emptyMemoryState(),
-          revision: latest.revision + 1,
-          updatedAt: new Date().toISOString(),
-        };
+          throw Error("V5 migration backup is stale or corrupt; rollback aborted.");
+        const next = { ...emptyMemoryState(), revision: latest.revision + 1, updatedAt: new Date().toISOString() };
         await writeMemory(next);
         memory.state = next;
         memory.notes = [];
@@ -3852,22 +3012,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }),
     );
     publishState();
-    return void ctx.ui.notify(
-      "Memory V5 migration rolled back; the original V5 state remains recoverable.",
-      "info",
-    );
+    return void ctx.ui.notify("Memory V5 migration rolled back; the original V5 state remains recoverable.", "info");
   };
 
   /** Restores the notebook captured immediately before the V6 migration ran. */
-  const rollbackV6Migration = async (
-    ctx: any,
-    journal: MigrationJournal & { preMigrationBackup: string },
-  ) => {
-    if (!ctx.hasUI)
-      return void ctx.ui.notify(
-        "Interactive UI required for memory rollback.",
-        "error",
-      );
+  const rollbackV6Migration = async (ctx: any, journal: MigrationJournal & { preMigrationBackup: string }) => {
+    if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory rollback.", "error");
     if (
       !(await ctx.ui.confirm(
         "Rollback Memory V6 migration?",
@@ -3881,29 +3031,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
         await withStateLock(memoryDirectory(), async () => {
           const latest = await readMemory();
           if (latest.revision !== journal.activatedStateRevision)
-            throw Error(
-              "Memory changed after migration; rollback requires manual reconciliation.",
-            );
+            throw Error("Memory changed after migration; rollback requires manual reconciliation.");
           let restored: MemoryStateFile;
           if (backup === "empty") restored = emptyMemoryState();
           else {
-            const parsed = JSON.parse(
-              await readFile(
-                assertInsideBackupRoot(backup, "Migration"),
-                "utf8",
-              ),
-            );
-            if (!isMemoryState(parsed))
-              throw Error(
-                "Migration backup is missing or invalid; rollback aborted.",
-              );
+            const parsed = JSON.parse(await readFile(assertInsideBackupRoot(backup, "Migration"), "utf8"));
+            if (!isMemoryState(parsed)) throw Error("Migration backup is missing or invalid; rollback aborted.");
             restored = parsed;
           }
-          const next = {
-            ...restored,
-            revision: latest.revision + 1,
-            updatedAt: new Date().toISOString(),
-          };
+          const next = { ...restored, revision: latest.revision + 1, updatedAt: new Date().toISOString() };
           enforceMemoryLimits(next);
           await writeMemory(next);
           memory.state = next;
@@ -3924,7 +3060,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const journal = await readJson<MigrationJournal | undefined>(
       paths().migration,
       undefined,
-      (value) => value === undefined || isMigrationJournal(value),
+      value => value === undefined || isMigrationJournal(value),
     );
     const v6Restorable = Boolean(
       journal &&
@@ -3933,27 +3069,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
       journal.preMigrationBackup,
     );
     const v5Journal = await readV5MigrationJournal();
-    if (
-      !v6Restorable &&
-      v5Journal?.status === "activated" &&
-      v5Journal.activatedRevision === memory.state.revision
-    )
+    if (!v6Restorable && v5Journal?.status === "activated" && v5Journal.activatedRevision === memory.state.revision)
       return rollbackV5Migration(ctx, v5Journal);
     if (!v6Restorable)
       return void ctx.ui.notify(
         "Migration rollback is unavailable after new V6 writes or without an activated migration.",
         "error",
       );
-    return rollbackV6Migration(
-      ctx,
-      journal as MigrationJournal & { preMigrationBackup: string },
-    );
+    return rollbackV6Migration(ctx, journal as MigrationJournal & { preMigrationBackup: string });
   };
 
   const showMemoryOwners = async (ctx: any) => {
     const counts = new Map<string, number>();
-    for (const note of memory.notes)
-      counts.set(note.owner, (counts.get(note.owner) ?? 0) + 1);
+    for (const note of memory.notes) counts.set(note.owner, (counts.get(note.owner) ?? 0) + 1);
     return void ctx.ui.notify(
       [...counts]
         .map(
@@ -3970,7 +3098,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return void ctx.ui.notify(
       owned
         .map(
-          (note) =>
+          note =>
             `${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}]\nWhen ${note.trigger}\n${note.guidance}`,
         )
         .join("\n\n") || "No notes.",
@@ -3979,31 +3107,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
 
   const forgetProjectMemory = async (ctx: any) => {
-    if (!ctx.hasUI)
-      return void ctx.ui.notify(
-        "Interactive UI required for memory deletion.",
-        "error",
-      );
-    if (
-      !(await ctx.ui.confirm(
-        "Forget all project memory?",
-        "These rules will be removed from this project.",
-      ))
-    )
-      return;
+    if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory deletion.", "error");
+    if (!(await ctx.ui.confirm("Forget all project memory?", "These rules will be removed from this project."))) return;
     await withMemoryLifecycle(() =>
       withStateLock(memoryDirectory(), async () => {
         let latest = await readMemory();
-        for (const note of latest.notes.filter(
-          (item) => item.scope === "project" && item.owner === project!.owner,
-        ))
-          latest = directDelete(
-            latest,
-            "project",
-            project!.owner,
-            note.id,
-            note.revision,
-          );
+        for (const note of latest.notes.filter(item => item.scope === "project" && item.owner === project!.owner))
+          latest = directDelete(latest, "project", project!.owner, note.id, note.revision);
         await writeMemory(latest);
         memory.state = latest;
         memory.notes = latest.notes;
@@ -4025,19 +3135,14 @@ export default function continuityExtension(pi: ExtensionAPI) {
   /** Resolves the note a scoped `edit`/`forget <id>` subcommand names, or notifies and returns undefined. */
   const scopedNote = (ctx: any, scope: MemoryScope, id: string) => {
     const owner = scope === "user" ? "default" : project!.owner;
-    const note = memory.notes.find(
-      (item) => item.id === id && item.scope === scope && item.owner === owner,
-    );
+    const note = memory.notes.find(item => item.id === id && item.scope === scope && item.owner === owner);
     if (!note) ctx.ui.notify("Memory note not found.", "error");
     return note && { note, owner };
   };
 
   const editMemoryNote = async (ctx: any, scope: MemoryScope, id: string) => {
     if (!ctx.hasUI || ctx.mode !== "tui")
-      return void ctx.ui.notify(
-        "Interactive UI required for memory edit.",
-        "error",
-      );
+      return void ctx.ui.notify("Interactive UI required for memory edit.", "error");
     const found = scopedNote(ctx, scope, id);
     if (!found) return;
     const { note, owner } = found;
@@ -4045,33 +3150,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
       `Edit ${scope} memory`,
       `Trigger:\n${note.trigger}\n\nGuidance:\n${note.guidance}`,
     );
-    const parsed =
-      /^Trigger:\s*\n([\s\S]*?)\n\s*Guidance:\s*\n([\s\S]+)$/i.exec(
-        value ?? "",
-      );
-    if (!parsed)
-      return void ctx.ui.notify("Keep Trigger and Guidance headings.", "error");
+    const parsed = /^Trigger:\s*\n([\s\S]*?)\n\s*Guidance:\s*\n([\s\S]+)$/i.exec(value ?? "");
+    if (!parsed) return void ctx.ui.notify("Keep Trigger and Guidance headings.", "error");
     if (
       !(await ctx.ui.confirm(
         `Save ${scope} memory?`,
-        scope === "user"
-          ? "This rule applies across every project."
-          : "This rule applies to this project.",
+        scope === "user" ? "This rule applies across every project." : "This rule applies to this project.",
       ))
     )
       return;
     try {
       await withMemoryLifecycle(() =>
         withStateLock(memoryDirectory(), async () => {
-          const next = directEdit(
-            await readMemory(),
-            scope,
-            owner,
-            note.id,
-            note.revision,
-            parsed[1]!,
-            parsed[2]!,
-          );
+          const next = directEdit(await readMemory(), scope, owner, note.id, note.revision, parsed[1]!, parsed[2]!);
           await writeMemory(next);
           memory.state = next;
           memory.notes = next.notes;
@@ -4088,11 +3179,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const found = scopedNote(ctx, scope, id);
     if (!found) return;
     const { note, owner } = found;
-    if (!ctx.hasUI)
-      return void ctx.ui.notify(
-        "Interactive UI required for memory deletion.",
-        "error",
-      );
+    if (!ctx.hasUI) return void ctx.ui.notify("Interactive UI required for memory deletion.", "error");
     if (
       !(await ctx.ui.confirm(
         `Forget ${scope} memory?`,
@@ -4105,13 +3192,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     try {
       await withMemoryLifecycle(() =>
         withStateLock(memoryDirectory(), async () => {
-          const next = directDelete(
-            await readMemory(),
-            scope,
-            owner,
-            note.id,
-            note.revision,
-          );
+          const next = directDelete(await readMemory(), scope, owner, note.id, note.revision);
           await writeMemory(next);
           memory.state = next;
           memory.notes = next.notes;
@@ -4127,37 +3208,21 @@ export default function continuityExtension(pi: ExtensionAPI) {
   pi.registerCommand("memory", {
     description: "Show, edit, or forget user and project notebook notes",
     handler: async (args, ctx) => {
-      if (!memory.enabled)
-        return void ctx.ui.notify(
-          "Continuity memory is disabled in package settings.",
-          "info",
-        );
+      if (!memory.enabled) return void ctx.ui.notify("Continuity memory is disabled in package settings.", "info");
       const sub = args.trim();
       if (sub === "off" || sub === "on") {
         memory.activationEnabled = sub === "on";
-        return void ctx.ui.notify(
-          `Prospective memory activation ${sub} for this session.`,
-          "info",
-        );
+        return void ctx.ui.notify(`Prospective memory activation ${sub} for this session.`, "info");
       }
       project = await resolveProject(ctx.cwd);
       memory.state = await readMemory();
       memory.notes = memory.state.notes;
       const subcommand = memorySubcommands[sub];
       if (subcommand) return subcommand(ctx);
-      const scoped = /^(edit|forget)\s+(user|project)\s+([0-9a-f-]+)$/i.exec(
-        sub,
-      );
+      const scoped = /^(edit|forget)\s+(user|project)\s+([0-9a-f-]+)$/i.exec(sub);
       if (scoped) {
-        const [, verb, scope, id] = scoped as unknown as [
-          string,
-          string,
-          MemoryScope,
-          string,
-        ];
-        return verb.toLowerCase() === "edit"
-          ? editMemoryNote(ctx, scope, id)
-          : forgetMemoryNote(ctx, scope, id);
+        const [, verb, scope, id] = scoped as unknown as [string, string, MemoryScope, string];
+        return verb.toLowerCase() === "edit" ? editMemoryNote(ctx, scope, id) : forgetMemoryNote(ctx, scope, id);
       }
       ctx.ui.notify(
         `Activation ${memory.activationEnabled ? "on" : "off"}; ${notesForOwners(memory.notes, project.owner).length} current-owner notes. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`,

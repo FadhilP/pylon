@@ -1,14 +1,7 @@
-import {
-  DEFAULT_MAX_BYTES,
-  formatSize,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, formatSize, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { resolve } from "node:path";
-import {
-  executableAvailable,
-  type ExecutableProbe,
-} from "pylon-core/executable";
+import { executableAvailable, type ExecutableProbe } from "pylon-core/executable";
 import { Type } from "typebox";
 import { bounded, runSearch, type SearchRunOptions } from "./search-common.ts";
 
@@ -16,19 +9,10 @@ const MAX_MATCHES_PER_FILE = 20;
 const MAX_MATCHING_FILES = 100;
 const MAX_SEARCH_FILE_BYTES = 512 * 1024;
 
-type SearchParams = {
-  pattern: string;
-  glob?: string;
-  mode?: "lines" | "files";
-};
+type SearchParams = { pattern: string; glob?: string; mode?: "lines" | "files" };
 
 const UNAVAILABLE = {
-  content: [
-    {
-      type: "text" as const,
-      text: "ripgrep and grep unavailable; no search was run.",
-    },
-  ],
+  content: [{ type: "text" as const, text: "ripgrep and grep unavailable; no search was run." }],
   details: { unavailable: true },
 };
 
@@ -48,14 +32,8 @@ function limitedGrepLines(output: string) {
     }
     lines.push(line);
   }
-  const notice = truncatedFiles
-    ? `\n[Search limited to first ${MAX_MATCHING_FILES} matching files.]`
-    : "";
-  return {
-    text: `${lines.join("\n")}${notice}`,
-    matchingFiles: selected.size,
-    truncatedFiles,
-  };
+  const notice = truncatedFiles ? `\n[Search limited to first ${MAX_MATCHING_FILES} matching files.]` : "";
+  return { text: `${lines.join("\n")}${notice}`, matchingFiles: selected.size, truncatedFiles };
 }
 
 async function grepFallback(
@@ -68,14 +46,7 @@ async function grepFallback(
   const args =
     params.mode === "files"
       ? ["-r", "-l", "--binary-files=without-match"]
-      : [
-          "-r",
-          "-n",
-          "-H",
-          "--binary-files=without-match",
-          "-m",
-          String(MAX_MATCHES_PER_FILE),
-        ];
+      : ["-r", "-n", "-H", "--binary-files=without-match", "-m", String(MAX_MATCHES_PER_FILE)];
   if (params.glob) args.push(`--include=${params.glob}`);
   args.push("--", params.pattern, path);
   // ponytail: grep is a degraded fallback; stream it if fallback memory becomes material.
@@ -95,12 +66,7 @@ async function grepFallback(
         : "";
     return {
       content: [
-        {
-          type: "text" as const,
-          text:
-            bounded(`${selected.join("\n")}${notice}`, maxBytes) ||
-            "No matches found",
-        },
+        { type: "text" as const, text: bounded(`${selected.join("\n")}${notice}`, maxBytes) || "No matches found" },
       ],
       details: {
         code: 0,
@@ -113,12 +79,7 @@ async function grepFallback(
   }
   const limited = limitedGrepLines(outcome.result.stdout);
   return {
-    content: [
-      {
-        type: "text" as const,
-        text: bounded(limited.text, maxBytes) || "No matches found",
-      },
-    ],
+    content: [{ type: "text" as const, text: bounded(limited.text, maxBytes) || "No matches found" }],
     details: {
       code: 0,
       command: "grep",
@@ -142,22 +103,16 @@ function parseRgLines(output: string) {
     } catch {
       continue;
     }
-    if (event?.type !== "match" || typeof event.data?.path?.text !== "string")
-      continue;
+    if (event?.type !== "match" || typeof event.data?.path?.text !== "string") continue;
     const file = event.data.path.text;
     matchingFiles.add(file);
-    if (!selectedFiles.has(file) && selectedFiles.size < MAX_MATCHING_FILES)
-      selectedFiles.add(file);
+    if (!selectedFiles.has(file) && selectedFiles.size < MAX_MATCHING_FILES) selectedFiles.add(file);
     if (!selectedFiles.has(file)) continue;
     const lineNumber = Number(event.data.line_number) || 0;
     const text = String(event.data.lines?.text ?? "").replace(/\r?\n$/, "");
     lines.push(`${file}:${lineNumber}:${text}`);
   }
-  return {
-    lines,
-    matchingFiles: matchingFiles.size,
-    searchedFiles: selectedFiles.size,
-  };
+  return { lines, matchingFiles: matchingFiles.size, searchedFiles: selectedFiles.size };
 }
 
 export function registerRg(
@@ -182,13 +137,10 @@ export function registerRg(
             "File or directory; relative paths resolve from the working directory, and outside-workspace paths are allowed; default .",
         }),
       ),
-      glob: Type.Optional(
-        Type.String({ description: "Optional file glob, such as *.ts" }),
-      ),
+      glob: Type.Optional(Type.String({ description: "Optional file glob, such as *.ts" })),
       mode: Type.Optional(
         StringEnum(["lines", "files"] as const, {
-          description:
-            "Return line-numbered matches (default) or only matching file paths",
+          description: "Return line-numbered matches (default) or only matching file paths",
         }),
       ),
     }),
@@ -199,49 +151,18 @@ export function registerRg(
         args.push("--", params.pattern, path);
         return args;
       };
-      const base = [
-        "--no-config",
-        "--color=never",
-        "--max-filesize",
-        String(MAX_SEARCH_FILE_BYTES),
-      ];
+      const base = ["--no-config", "--color=never", "--max-filesize", String(MAX_SEARCH_FILE_BYTES)];
       // ripgrep exits 1 with no output when absent from PATH too, so no-match needs confirming.
-      const run: SearchRunOptions = {
-        probe,
-        signal,
-        label: "ripgrep",
-        verifyNoMatch: true,
-      };
-      const fallback = () =>
-        grepFallback(
-          pi,
-          params,
-          path,
-          { probe, signal, verifyNoMatch: true },
-          maxBytes,
-        );
+      const run: SearchRunOptions = { probe, signal, label: "ripgrep", verifyNoMatch: true };
+      const fallback = () => grepFallback(pi, params, path, { probe, signal, verifyNoMatch: true }, maxBytes);
 
       if (params.mode === "files") {
-        const outcome = await runSearch(
-          pi,
-          "rg",
-          withQuery([...base, "--files-with-matches"]),
-          run,
-        );
+        const outcome = await runSearch(pi, "rg", withQuery([...base, "--files-with-matches"]), run);
         if (outcome.status === "missing") return fallback();
         if (outcome.status === "empty")
-          return {
-            content: [{ type: "text" as const, text: "No matches found" }],
-            details: { code: 1 },
-          };
+          return { content: [{ type: "text" as const, text: "No matches found" }], details: { code: 1 } };
         return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                bounded(outcome.result.stdout, maxBytes) || "No matches found",
-            },
-          ],
+          content: [{ type: "text" as const, text: bounded(outcome.result.stdout, maxBytes) || "No matches found" }],
           details: { code: 0 },
         };
       }
@@ -263,20 +184,11 @@ export function registerRg(
       );
       if (outcome.status === "missing") return fallback();
       const { result } = outcome;
-      const { lines, matchingFiles, searchedFiles } = parseRgLines(
-        result.stdout,
-      );
+      const { lines, matchingFiles, searchedFiles } = parseRgLines(result.stdout);
       if (!matchingFiles && result.stdout.trim()) {
         return {
-          content: [
-            { type: "text" as const, text: bounded(result.stdout, maxBytes) },
-          ],
-          details: {
-            code: result.code,
-            matchingFiles: 0,
-            searchedFiles: 0,
-            truncatedFiles: false,
-          },
+          content: [{ type: "text" as const, text: bounded(result.stdout, maxBytes) }],
+          details: { code: result.code, matchingFiles: 0, searchedFiles: 0, truncatedFiles: false },
         };
       }
       const truncatedFiles = matchingFiles > MAX_MATCHING_FILES;
@@ -285,19 +197,9 @@ export function registerRg(
         : "";
       return {
         content: [
-          {
-            type: "text" as const,
-            text:
-              bounded(`${lines.join("\n")}${fileNotice}`, maxBytes) ||
-              "No matches found",
-          },
+          { type: "text" as const, text: bounded(`${lines.join("\n")}${fileNotice}`, maxBytes) || "No matches found" },
         ],
-        details: {
-          code: result.code,
-          matchingFiles,
-          searchedFiles,
-          truncatedFiles,
-        },
+        details: { code: result.code, matchingFiles, searchedFiles, truncatedFiles },
       };
     },
   });

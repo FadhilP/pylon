@@ -10,12 +10,10 @@ test("proposal validation rejects secrets and path traversal", () => {
           operation: "add",
           scope: "user",
           trigger: "using auth",
-          guidance:
-            "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+          guidance: "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
           basis: {
             type: "user_instruction",
-            quote:
-              "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+            quote: "Use token=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
           },
         },
       ]),
@@ -29,10 +27,7 @@ test("proposal validation rejects secrets and path traversal", () => {
           scope: "project",
           trigger: "changing config",
           guidance: "Keep the boundary.",
-          basis: {
-            type: "project_contract",
-            evidence: [{ path: "../secret", start: 1, end: 1 }],
-          },
+          basis: { type: "project_contract", evidence: [{ path: "../secret", start: 1, end: 1 }] },
         },
       ]),
     /invalid/,

@@ -3,9 +3,7 @@ import type { ModelOptionReadModel } from "../shared/protocol/events";
 
 const STORAGE_KEY = "pylon-hidden-models";
 
-export function modelKey(
-  model: Pick<ModelOptionReadModel, "provider" | "id">,
-): string {
+export function modelKey(model: Pick<ModelOptionReadModel, "provider" | "id">): string {
   return `${model.provider}/${model.id}`;
 }
 
@@ -31,7 +29,7 @@ export function setHiddenModelVisible(key: string, visible: boolean): void {
   } catch {
     /* storage unavailable */
   }
-  listeners.forEach((listener) => listener());
+  listeners.forEach(listener => listener());
 }
 
 function subscribe(listener: () => void): () => void {
@@ -45,9 +43,6 @@ export function useHiddenModels(): Set<string> {
   return useSyncExternalStore(subscribe, () => hiddenModelKeys);
 }
 
-export function visibleModels(
-  models: ModelOptionReadModel[],
-  hidden: Set<string>,
-): ModelOptionReadModel[] {
-  return models.filter((model) => !hidden.has(modelKey(model)));
+export function visibleModels(models: ModelOptionReadModel[], hidden: Set<string>): ModelOptionReadModel[] {
+  return models.filter(model => !hidden.has(modelKey(model)));
 }

@@ -1,21 +1,11 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import {
-  CustomEditor,
-  type ExtensionAPI,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import {
-  composeStatuses,
-  footerRows,
-  plainText,
-  shortWorkspace,
-  type Density,
-} from "../src/layout.ts";
+import { composeStatuses, footerRows, plainText, shortWorkspace, type Density } from "../src/layout.ts";
 
 export function ringCompletionBell(
   mode: string,
-  write: (text: string) => unknown = (text) => process.stdout.write(text),
+  write: (text: string) => unknown = text => process.stdout.write(text),
 ) {
   if (mode === "tui") write("\x07");
 }
@@ -23,12 +13,7 @@ export function ringCompletionBell(
 class FocusEditor extends CustomEditor {
   private readonly label: () => string;
 
-  constructor(
-    tui: any,
-    editorTheme: any,
-    keybindings: any,
-    label: () => string,
-  ) {
+  constructor(tui: any, editorTheme: any, keybindings: any, label: () => string) {
     super(tui, editorTheme, keybindings);
     this.label = label;
   }
@@ -38,11 +23,7 @@ class FocusEditor extends CustomEditor {
     if (!lines.length) return lines;
     const label = truncateToWidth(` ${this.label()} `, width, ""),
       last = lines.length - 1,
-      base = truncateToWidth(
-        lines[last]!,
-        Math.max(0, width - visibleWidth(label)),
-        "",
-      );
+      base = truncateToWidth(lines[last]!, Math.max(0, width - visibleWidth(label)), "");
     lines[last] = truncateToWidth(base + label, width, "");
     return lines;
   }
@@ -63,10 +44,7 @@ function usageTotals(ctx: any): UsageTotals {
       input += message.usage.input;
       output += message.usage.output;
       cost += message.usage.cost.total;
-    } else if (
-      entry.message.role === "toolResult" &&
-      childTools.has(entry.message.toolName)
-    ) {
+    } else if (entry.message.role === "toolResult" && childTools.has(entry.message.toolName)) {
       const childCost = entry.message.details?.usage?.cost;
       if (typeof childCost === "number") cost += childCost;
     }
@@ -75,8 +53,7 @@ function usageTotals(ctx: any): UsageTotals {
 }
 
 function formatUsage(ctx: any, { input, output, cost }: UsageTotals): string {
-  const compact = (value: number) =>
-    value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`;
+  const compact = (value: number) => (value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`);
   const context = ctx.getContextUsage();
   const pressure = context ? ` · ctx ${Math.round(context.percent)}%` : "";
   return `in ${compact(input)} · out ${compact(output)} · $${cost.toFixed(3)}${pressure}`;
@@ -111,10 +88,7 @@ export default function focusExtension(pi: ExtensionAPI) {
       (_tui: any, theme: Theme) =>
         new Text(
           theme.fg("customMessageLabel", theme.bold(label)) +
-            theme.fg(
-              "muted",
-              " · child model active · expand tool row for activity",
-            ),
+            theme.fg("muted", " · child model active · expand tool row for activity"),
           0,
           0,
         ),
@@ -134,18 +108,9 @@ export default function focusExtension(pi: ExtensionAPI) {
         const title = theme.fg("accent", theme.bold("PI"));
         const location = theme.fg("muted", shortWorkspace(ctx.cwd));
         const session = pi.getSessionName() ?? "unnamed session";
-        const first = truncateToWidth(
-          `${title}  ${location}  ${theme.fg("dim", session)}`,
-          width,
-        );
+        const first = truncateToWidth(`${title}  ${location}  ${theme.fg("dim", session)}`, width);
         if (density === "compact") return [first];
-        return [
-          first,
-          truncateToWidth(
-            theme.fg("dim", "focused coding · /ui status"),
-            width,
-          ),
-        ];
+        return [first, truncateToWidth(theme.fg("dim", "focused coding · /ui status"), width)];
       },
     }));
 
@@ -159,11 +124,8 @@ export default function focusExtension(pi: ExtensionAPI) {
         dispose: unsubscribe,
         invalidate() {},
         render(width: number) {
-          const statuses = [...footerData.getExtensionStatuses().values()]
-            .filter(Boolean)
-            .map(plainText);
-          const currentState =
-            activeChildLabel() ?? composeStatuses(statuses, state);
+          const statuses = [...footerData.getExtensionStatuses().values()].filter(Boolean).map(plainText);
+          const currentState = activeChildLabel() ?? composeStatuses(statuses, state);
           return footerRows(
             width,
             density,
@@ -172,24 +134,17 @@ export default function focusExtension(pi: ExtensionAPI) {
             pi.getSessionName() ?? "unnamed session",
             currentState,
             formatUsage(ctx, totals),
-          ).map((line) => theme.fg("dim", line));
+          ).map(line => theme.fg("dim", line));
         },
       };
     });
 
     ctx.ui.setEditorComponent(
       (tui: any, theme: Theme, keybindings: any) =>
-        new FocusEditor(
-          tui,
-          theme,
-          keybindings,
-          () => `${ctx.model?.id ?? "no model"} · ${pi.getThinkingLevel()}`,
-        ),
+        new FocusEditor(tui, theme, keybindings, () => `${ctx.model?.id ?? "no model"} · ${pi.getThinkingLevel()}`),
     );
     ctx.ui.setWorkingIndicator({
-      frames: ["·", "•", "●", "•"].map((frame) =>
-        ctx.ui.theme.fg("accent", frame),
-      ),
+      frames: ["·", "•", "●", "•"].map(frame => ctx.ui.theme.fg("accent", frame)),
       intervalMs: 140,
     });
   };
@@ -234,8 +189,7 @@ export default function focusExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("ui", {
-    description:
-      "Configure focused TUI: enable, disable, compact, comfortable, bell, theme, status",
+    description: "Configure focused TUI: enable, disable, compact, comfortable, bell, theme, status",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "disable") {
@@ -259,18 +213,13 @@ export default function focusExtension(pi: ExtensionAPI) {
       }
       if (action === "bell on" || action === "bell off") {
         completionBell = action === "bell on";
-        ctx.ui.notify(
-          `Completion bell: ${completionBell ? "enabled" : "disabled"}`,
-          "info",
-        );
+        ctx.ui.notify(`Completion bell: ${completionBell ? "enabled" : "disabled"}`, "info");
         return;
       }
       if (action === "theme") {
         const result = ctx.ui.setTheme("focus-dark");
         ctx.ui.notify(
-          result.success
-            ? "Theme: focus-dark"
-            : (result.error ?? "Unable to apply focus-dark"),
+          result.success ? "Theme: focus-dark" : (result.error ?? "Unable to apply focus-dark"),
           result.success ? "info" : "error",
         );
         return;
@@ -282,10 +231,7 @@ export default function focusExtension(pi: ExtensionAPI) {
         );
         return;
       }
-      ctx.ui.notify(
-        "Usage: /ui enable|disable|compact|comfortable|bell on|bell off|theme|status",
-        "info",
-      );
+      ctx.ui.notify("Usage: /ui enable|disable|compact|comfortable|bell on|bell off|theme|status", "info");
     },
   });
 }

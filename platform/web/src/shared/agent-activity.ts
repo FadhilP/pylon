@@ -11,9 +11,7 @@ export type PairedAgentActivity = {
   durationMs?: number;
 };
 
-export function pairAgentActivity(
-  activity: DelegatedAgentActivityReadModel[],
-): PairedAgentActivity[] {
+export function pairAgentActivity(activity: DelegatedAgentActivityReadModel[]): PairedAgentActivity[] {
   const tools: PairedAgentActivity[] = [];
   for (const item of activity) {
     if (item.kind === "call") {
@@ -26,15 +24,8 @@ export function pairAgentActivity(
       continue;
     }
     const target = item.id
-      ? [...tools]
-          .reverse()
-          .find((tool) => tool.id === item.id && tool.output === undefined)
-      : [...tools]
-          .reverse()
-          .find(
-            (tool) =>
-              !tool.id && tool.tool === item.tool && tool.output === undefined,
-          );
+      ? [...tools].reverse().find(tool => tool.id === item.id && tool.output === undefined)
+      : [...tools].reverse().find(tool => !tool.id && tool.tool === item.tool && tool.output === undefined);
     if (target) {
       target.output = item.text;
       target.completed = true;
@@ -49,9 +40,7 @@ export function pairAgentActivity(
         completed: true,
         failed: item.isError,
         ...(item.startedAt ? { startedAt: item.startedAt } : {}),
-        ...(item.durationMs === undefined
-          ? {}
-          : { durationMs: item.durationMs }),
+        ...(item.durationMs === undefined ? {} : { durationMs: item.durationMs }),
       });
     }
   }
@@ -60,10 +49,7 @@ export function pairAgentActivity(
 
 export type AgentToolStatus = "running" | "completed" | "failed";
 
-export function pairedAgentToolStatus(
-  tool: PairedAgentActivity,
-  runRunning: boolean,
-): AgentToolStatus {
+export function pairedAgentToolStatus(tool: PairedAgentActivity, runRunning: boolean): AgentToolStatus {
   if (tool.failed) return "failed";
   return tool.completed || !runRunning ? "completed" : "running";
 }
@@ -73,12 +59,9 @@ export function pairedAgentToolDuration(
   runRunning: boolean,
   now = Date.now(),
 ): number | undefined {
-  if (pairedAgentToolStatus(tool, runRunning) !== "running")
-    return tool.durationMs;
+  if (pairedAgentToolStatus(tool, runRunning) !== "running") return tool.durationMs;
   const startedAt = tool.startedAt ? Date.parse(tool.startedAt) : Number.NaN;
-  return Number.isNaN(startedAt)
-    ? tool.durationMs
-    : Math.max(0, now - startedAt);
+  return Number.isNaN(startedAt) ? tool.durationMs : Math.max(0, now - startedAt);
 }
 
 export function aggregatePairedAgentTiming(
@@ -86,22 +69,16 @@ export function aggregatePairedAgentTiming(
   runRunning: boolean,
   now = Date.now(),
 ): { durationMs: number; status: AgentToolStatus } | undefined {
-  const running = tools.flatMap((tool) => {
+  const running = tools.flatMap(tool => {
     if (pairedAgentToolStatus(tool, runRunning) !== "running") return [];
     const durationMs = pairedAgentToolDuration(tool, runRunning, now);
-    return durationMs === undefined
-      ? []
-      : [{ durationMs, status: "running" as const }];
+    return durationMs === undefined ? [] : [{ durationMs, status: "running" as const }];
   });
-  if (running.length)
-    return running.reduce((longest, item) =>
-      item.durationMs > longest.durationMs ? item : longest,
-    );
+  if (running.length) return running.reduce((longest, item) => (item.durationMs > longest.durationMs ? item : longest));
   for (let index = tools.length - 1; index >= 0; index--) {
     const tool = tools[index]!;
     const durationMs = pairedAgentToolDuration(tool, runRunning, now);
-    if (durationMs !== undefined)
-      return { durationMs, status: pairedAgentToolStatus(tool, runRunning) };
+    if (durationMs !== undefined) return { durationMs, status: pairedAgentToolStatus(tool, runRunning) };
   }
   return undefined;
 }

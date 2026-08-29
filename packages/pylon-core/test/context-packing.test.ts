@@ -21,11 +21,7 @@ test("an oversized record is skipped so older records that still fit survive", (
 
 test("the separator counts against the budget", () => {
   assert.equal(pack(["aaa", "bbb"], 8), "aaa\n\nbbb");
-  assert.equal(
-    pack(["aaa", "bbb"], 7),
-    "bbb",
-    "one separator short leaves only the newest",
-  );
+  assert.equal(pack(["aaa", "bbb"], 7), "bbb", "one separator short leaves only the newest");
 });
 
 test("empty identities and non-positive budgets yield nothing", () => {

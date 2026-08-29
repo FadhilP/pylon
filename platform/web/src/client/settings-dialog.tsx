@@ -45,22 +45,10 @@ import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
-import {
-  modelKey,
-  setHiddenModelVisible,
-  useHiddenModels,
-  visibleModels,
-} from "./model-visibility";
+import { modelKey, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
 
 export type SettingsTab =
-  | "providers"
-  | "models"
-  | "packages"
-  | "extensions"
-  | "hooks"
-  | "policy"
-  | "notifications"
-  | "appearance";
+  "providers" | "models" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
 const SETTINGS_TABS: SettingsTab[] = [
   "providers",
@@ -72,15 +60,7 @@ const SETTINGS_TABS: SettingsTab[] = [
   "notifications",
   "appearance",
 ];
-const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
   initialProviderQuery?: string;
@@ -113,25 +93,13 @@ interface SettingsDialogProps {
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
-  onToggleExtension: (
-    extension: NativeExtensionReadModel,
-    enabled: boolean,
-  ) => Promise<void>;
-  onInstallExtensionPackage: (
-    source: string,
-    scope: "user" | "project",
-  ) => Promise<void>;
-  onRemoveExtensionPackage: (
-    source: string,
-    scope: "user" | "project",
-  ) => Promise<void>;
+  onToggleExtension: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
+  onInstallExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
+  onRemoveExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
   onSetProjectTrust: (trusted: boolean) => Promise<void>;
   onReloadExtensions: () => Promise<void>;
   onUpdateHooks: (settings: HookSettingsReadModel) => Promise<void>;
-  onUpdateGlobalPolicy: (
-    settings: RuntimePolicyReadModel["global"],
-    expectedRevision: number,
-  ) => Promise<void>;
+  onUpdateGlobalPolicy: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
   onUpdateGlobalToolPolicy: (
     tool: string,
     mode: ToolExposureMode | "inherit",
@@ -187,39 +155,20 @@ export function SettingsDialog({
   const [modelQuery, setModelQuery] = useState("");
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
   const [toolPolicyBusy, setToolPolicyBusy] = useState("");
-  const filteredPackages = packages.filter((item) =>
-    `${item.name} ${item.description}`
-      .toLowerCase()
-      .includes(packageQuery.trim().toLowerCase()),
+  const filteredPackages = packages.filter(item =>
+    `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()),
   );
   const providers = providerAuth?.providers ?? [];
   const filteredProviders = providers
-    .filter((provider) =>
-      `${provider.name} ${provider.id}`
-        .toLowerCase()
-        .includes(providerQuery.trim().toLowerCase()),
-    )
-    .sort(
-      (left, right) =>
-        left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
-    );
+    .filter(provider => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
   const providerGroups = [
-    {
-      id: "connected",
-      label: "Connected",
-      providers: filteredProviders.filter((provider) => provider.configured),
-    },
-    {
-      id: "available",
-      label: "Available",
-      providers: filteredProviders.filter((provider) => !provider.configured),
-    },
+    { id: "connected", label: "Connected", providers: filteredProviders.filter(provider => provider.configured) },
+    { id: "available", label: "Available", providers: filteredProviders.filter(provider => !provider.configured) },
   ];
   const hiddenModelKeys = useHiddenModels();
-  const filteredModels = models.filter((item) =>
-    `${item.provider} ${item.id} ${item.name}`
-      .toLowerCase()
-      .includes(modelQuery.trim().toLowerCase()),
+  const filteredModels = models.filter(item =>
+    `${item.provider} ${item.id} ${item.name}`.toLowerCase().includes(modelQuery.trim().toLowerCase()),
   );
   const modelGroups: { provider: string; items: ModelOptionReadModel[] }[] = [];
   for (const item of filteredModels) {
@@ -227,39 +176,26 @@ export function SettingsDialog({
     if (last && last.provider === item.provider) last.items.push(item);
     else modelGroups.push({ provider: item.provider, items: [item] });
   }
-  const setProviderVisible = (
-    items: ModelOptionReadModel[],
-    visible: boolean,
-  ) => {
-    for (const item of items)
-      setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
+  const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
+    for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
   };
   const authFlow = providerAuth?.flow;
   const authRunning = authFlow?.status === "running";
-  const providerPrompt =
-    pendingUi?.payload.context === "provider-auth" ? pendingUi : undefined;
+  const providerPrompt = pendingUi?.payload.context === "provider-auth" ? pendingUi : undefined;
   const primaryAuthLink = authFlow?.deviceCode
-    ? {
-        url: authFlow.deviceCode.verificationUri,
-        label: "Open verification page",
-      }
+    ? { url: authFlow.deviceCode.verificationUri, label: "Open verification page" }
     : authFlow?.authUrl
       ? { url: authFlow.authUrl, label: "Open sign-in page" }
       : authFlow?.links?.[0];
   const secondaryAuthLinks =
     authFlow?.links?.filter(
       (link, index, links) =>
-        link.url !== primaryAuthLink?.url &&
-        links.findIndex((candidate) => candidate.url === link.url) === index,
+        link.url !== primaryAuthLink?.url && links.findIndex(candidate => candidate.url === link.url) === index,
     ) ?? [];
-  const authRetryable =
-    authFlow?.status === "failed" || authFlow?.status === "cancelled";
+  const authRetryable = authFlow?.status === "failed" || authFlow?.status === "cancelled";
 
   useEffect(() => {
-    const previous =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => {
       if (previous?.isConnected) previous.focus();
@@ -282,7 +218,7 @@ export function SettingsDialog({
       ...(dialogRef.current?.querySelectorAll<HTMLElement>(
         "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
       ) ?? []),
-    ].filter((element) => !element.closest("[hidden]"));
+    ].filter(element => !element.closest("[hidden]"));
     if (!focusable.length) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -295,13 +231,9 @@ export function SettingsDialog({
     }
   };
 
-  const onTabKeyDown = (
-    event: ReactKeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ) => {
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
     let next = index;
-    if (event.key === "ArrowDown" || event.key === "ArrowRight")
-      next = (index + 1) % SETTINGS_TABS.length;
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") next = (index + 1) % SETTINGS_TABS.length;
     else if (event.key === "ArrowUp" || event.key === "ArrowLeft")
       next = (index - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length;
     else if (event.key === "Home") next = 0;
@@ -309,16 +241,12 @@ export function SettingsDialog({
     else return;
     event.preventDefault();
     setActiveTab(SETTINGS_TABS[next]!);
-    dialogRef.current
-      ?.querySelectorAll<HTMLButtonElement>("[role='tab']")
-      [next]?.focus();
+    dialogRef.current?.querySelectorAll<HTMLButtonElement>("[role='tab']")[next]?.focus();
   };
 
-  const selectedPackage =
-    filteredPackages.find((item) => item.id === selectedPackageId) ??
-    filteredPackages[0];
+  const selectedPackage = filteredPackages.find(item => item.id === selectedPackageId) ?? filteredPackages[0];
   const selectedToolPolicy = selectedPackage
-    ? toolPolicies.find((policy) => policy.owner === selectedPackage.id)
+    ? toolPolicies.find(policy => policy.owner === selectedPackage.id)
     : undefined;
   const selectedTools = selectedToolPolicy?.managedTools ?? [];
 
@@ -327,29 +255,21 @@ export function SettingsDialog({
       className="settings-backdrop"
       onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
         if (event.target === event.currentTarget) onClose();
-      }}
-    >
+      }}>
       <div
         ref={dialogRef}
         className="settings-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
-        onKeyDown={onKeyDown}
-      >
+        onKeyDown={onKeyDown}>
         <header>
           <div>
             <IconSettings size={18} />
             <strong id="settings-dialog-title">Settings</strong>
             <span>Manage Pylon defaults and integrations</span>
           </div>
-          <button
-            data-autofocus
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-            aria-label="Close settings"
-          >
+          <button data-autofocus className="icon-button" type="button" onClick={onClose} aria-label="Close settings">
             <IconX size={17} />
           </button>
         </header>
@@ -366,36 +286,29 @@ export function SettingsDialog({
                   aria-controls={`settings-panel-${tab}`}
                   tabIndex={activeTab === tab ? 0 : -1}
                   onClick={() => setActiveTab(tab)}
-                  onKeyDown={(event) => onTabKeyDown(event, index)}
-                >
+                  onKeyDown={event => onTabKeyDown(event, index)}>
                   {tab}
                 </button>
               ))}
             </div>
           </nav>
 
-          <div
-            className={`settings-content${activeTab === "packages" ? " is-packages" : ""}`}
-          >
+          <div className={`settings-content${activeTab === "packages" ? " is-packages" : ""}`}>
             <section
               id="settings-panel-providers"
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-providers"
-              hidden={activeTab !== "providers"}
-            >
+              hidden={activeTab !== "providers"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Providers</h2>
-                  <p>
-                    Connect accounts and API keys used by Pi. Credentials stay
-                    on this machine.
-                  </p>
+                  <p>Connect accounts and API keys used by Pi. Credentials stay on this machine.</p>
                 </div>
                 <input
                   type="search"
                   value={providerQuery}
-                  onChange={(event) => setProviderQuery(event.target.value)}
+                  onChange={event => setProviderQuery(event.target.value)}
                   placeholder="Filter providers"
                   aria-label="Filter providers"
                 />
@@ -403,25 +316,15 @@ export function SettingsDialog({
               {(authFlow || providerPrompt) && (
                 <section
                   className={`provider-auth-task is-${authFlow?.status ?? "running"}`}
-                  aria-labelledby="provider-auth-title"
-                >
+                  aria-labelledby="provider-auth-title">
                   <header>
-                    <h3 id="provider-auth-title">
-                      {authFlow?.providerName ?? "Provider authentication"}
-                    </h3>
-                    <p
-                      className="provider-auth-status"
-                      role={authFlow?.status === "failed" ? "alert" : "status"}
-                    >
-                      {authFlow?.message ??
-                        "Authentication requires a response."}
+                    <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
+                    <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>
+                      {authFlow?.message ?? "Authentication requires a response."}
                     </p>
-                    {authFlow?.instructions &&
-                      authFlow.instructions !== authFlow.message && (
-                        <p className="provider-auth-instructions">
-                          {authFlow.instructions}
-                        </p>
-                      )}
+                    {authFlow?.instructions && authFlow.instructions !== authFlow.message && (
+                      <p className="provider-auth-instructions">{authFlow.instructions}</p>
+                    )}
                   </header>
                   <div className="provider-auth-actions">
                     {primaryAuthLink && (
@@ -429,10 +332,8 @@ export function SettingsDialog({
                         className="provider-auth-primary"
                         href={primaryAuthLink.url}
                         target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {primaryAuthLink.label ?? "Open provider page"}{" "}
-                        <IconExternalLink size={15} />
+                        rel="noopener noreferrer">
+                        {primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} />
                         <span className="sr-only"> (opens in a new tab)</span>
                       </a>
                     )}
@@ -440,22 +341,12 @@ export function SettingsDialog({
                       <button
                         type="button"
                         className="provider-auth-retry"
-                        onClick={() =>
-                          onProviderLogin(
-                            authFlow.providerId,
-                            authFlow.authType,
-                          )
-                        }
-                      >
+                        onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>
                         Try again
                       </button>
                     )}
                     {authRunning && (
-                      <button
-                        type="button"
-                        className="provider-auth-cancel"
-                        onClick={onProviderCancel}
-                      >
+                      <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>
                         Cancel
                       </button>
                     )}
@@ -468,15 +359,9 @@ export function SettingsDialog({
                   )}
                   {secondaryAuthLinks.length > 0 && (
                     <div className="provider-auth-links">
-                      {secondaryAuthLinks.map((link) => (
-                        <a
-                          key={link.url}
-                          href={link.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {link.label ?? "Open provider page"}{" "}
-                          <IconExternalLink size={14} />
+                      {secondaryAuthLinks.map(link => (
+                        <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">
+                          {link.label ?? "Open provider page"} <IconExternalLink size={14} />
                           <span className="sr-only"> (opens in a new tab)</span>
                         </a>
                       ))}
@@ -504,65 +389,41 @@ export function SettingsDialog({
               {filteredProviders.length > 0 && (
                 <div className="settings-provider-groups">
                   {providerGroups.map(
-                    (group) =>
+                    group =>
                       group.providers.length > 0 && (
                         <section
                           className="settings-provider-group"
                           key={group.id}
-                          aria-labelledby={`provider-group-${group.id}`}
-                        >
+                          aria-labelledby={`provider-group-${group.id}`}>
                           <header>
-                            <h3 id={`provider-group-${group.id}`}>
-                              {group.label}
-                            </h3>
+                            <h3 id={`provider-group-${group.id}`}>{group.label}</h3>
                             <span>{group.providers.length}</span>
                           </header>
                           <div className="settings-provider-list">
-                            {group.providers.map((provider) => (
-                              <section
-                                className="settings-provider"
-                                key={provider.id}
-                              >
+                            {group.providers.map(provider => (
+                              <section className="settings-provider" key={provider.id}>
                                 <div className="settings-provider-copy">
                                   <span>
                                     <strong>{provider.name}</strong>
                                     <small>{provider.id}</small>
                                   </span>
                                 </div>
-                                <span
-                                  className={`provider-state${provider.configured ? " is-connected" : ""}`}
-                                >
-                                  {provider.configured
-                                    ? provider.stored
-                                      ? "Connected"
-                                      : "External"
-                                    : "Not connected"}
+                                <span className={`provider-state${provider.configured ? " is-connected" : ""}`}>
+                                  {provider.configured ? (provider.stored ? "Connected" : "External") : "Not connected"}
                                 </span>
                                 <div className="provider-actions">
                                   {!provider.configured &&
-                                    provider.methods.map((method) =>
+                                    provider.methods.map(method =>
                                       method.interactive ? (
                                         <button
                                           key={method.type}
                                           type="button"
                                           disabled={authRunning}
-                                          onClick={() =>
-                                            onProviderLogin(
-                                              provider.id,
-                                              method.type,
-                                            )
-                                          }
-                                        >
-                                          {method.type === "oauth"
-                                            ? "Sign in"
-                                            : "Add key"}
+                                          onClick={() => onProviderLogin(provider.id, method.type)}>
+                                          {method.type === "oauth" ? "Sign in" : "Add key"}
                                         </button>
                                       ) : (
-                                        <span
-                                          className="provider-action-note"
-                                          key={method.type}
-                                          title={method.name}
-                                        >
+                                        <span className="provider-action-note" key={method.type} title={method.name}>
                                           Configured outside Pylon
                                         </span>
                                       ),
@@ -571,13 +432,8 @@ export function SettingsDialog({
                                     <button
                                       className="provider-disconnect"
                                       type="button"
-                                      disabled={
-                                        providerLogoutDisabled || authRunning
-                                      }
-                                      onClick={() =>
-                                        onProviderLogout(provider.id)
-                                      }
-                                    >
+                                      disabled={providerLogoutDisabled || authRunning}
+                                      onClick={() => onProviderLogout(provider.id)}>
                                       <IconLogout size={14} /> Disconnect
                                     </button>
                                   )}
@@ -602,48 +458,37 @@ export function SettingsDialog({
               className="settings-pane packages-workbench-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-packages"
-              hidden={activeTab !== "packages"}
-            >
+              hidden={activeTab !== "packages"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Packages</h2>
-                  <p>
-                    Configure package defaults and global tool exposure from one
-                    workbench.
-                  </p>
+                  <p>Configure package defaults and global tool exposure from one workbench.</p>
                 </div>
                 <input
                   type="search"
                   value={packageQuery}
-                  onChange={(event) => setPackageQuery(event.target.value)}
+                  onChange={event => setPackageQuery(event.target.value)}
                   placeholder="Filter packages"
                   aria-label="Filter packages"
                 />
               </div>
-              {loading && packages.length === 0 && (
-                <div className="settings-empty">Detecting packages…</div>
-              )}
+              {loading && packages.length === 0 && <div className="settings-empty">Detecting packages…</div>}
               {!loading && packages.length === 0 && (
                 <div className="settings-empty">
                   <IconStack2 size={22} />
                   <strong>No local Pi packages</strong>
                 </div>
               )}
-              {!loading &&
-                packages.length > 0 &&
-                filteredPackages.length === 0 && (
-                  <div className="settings-empty">
-                    <strong>No matching packages</strong>
-                    <span>Try a different filter.</span>
-                  </div>
-                )}
+              {!loading && packages.length > 0 && filteredPackages.length === 0 && (
+                <div className="settings-empty">
+                  <strong>No matching packages</strong>
+                  <span>Try a different filter.</span>
+                </div>
+              )}
               {selectedPackage && (
                 <div className="package-workbench">
-                  <aside
-                    className="package-workbench-index"
-                    aria-label="Packages"
-                  >
-                    {filteredPackages.map((item) => {
+                  <aside className="package-workbench-index" aria-label="Packages">
+                    {filteredPackages.map(item => {
                       const state = item.error
                         ? "failed"
                         : item.active
@@ -654,19 +499,13 @@ export function SettingsDialog({
                       return (
                         <button
                           type="button"
-                          className={
-                            item.id === selectedPackage.id ? "is-selected" : ""
-                          }
+                          className={item.id === selectedPackage.id ? "is-selected" : ""}
                           onClick={() => setSelectedPackageId(item.id)}
-                          key={item.id}
-                        >
+                          key={item.id}>
                           <span>
                             <strong>{item.name}</strong>
                             <small>
-                              {toolPolicies.find(
-                                (policy) => policy.owner === item.id,
-                              )?.managedTools.length ?? 0}{" "}
-                              tools
+                              {toolPolicies.find(policy => policy.owner === item.id)?.managedTools.length ?? 0} tools
                             </small>
                           </span>
                           <b className={`package-state is-${state}`}>{state}</b>
@@ -687,27 +526,18 @@ export function SettingsDialog({
                         <span className="package-required">Required</span>
                       ) : (
                         <label className="package-switch">
-                          <span className="sr-only">
-                            Toggle {selectedPackage.name}
-                          </span>
+                          <span className="sr-only">Toggle {selectedPackage.name}</span>
                           <input
                             type="checkbox"
                             role="switch"
                             checked={selectedPackage.enabled}
                             disabled={Boolean(busy)}
-                            onChange={(event) =>
-                              onSetEnabled(
-                                selectedPackage,
-                                event.target.checked,
-                              )
-                            }
+                            onChange={event => onSetEnabled(selectedPackage, event.target.checked)}
                           />
                         </label>
                       )}
                     </header>
-                    {selectedPackage.error && (
-                      <p className="package-error">{selectedPackage.error}</p>
-                    )}
+                    {selectedPackage.error && <p className="package-error">{selectedPackage.error}</p>}
                     <section className="workbench-section">
                       <header>
                         <div>
@@ -716,21 +546,16 @@ export function SettingsDialog({
                         </div>
                         <span>Global</span>
                       </header>
-                      {hasPackageFields(selectedPackage.settings) &&
-                      selectedPackage.settings ? (
+                      {hasPackageFields(selectedPackage.settings) && selectedPackage.settings ? (
                         <PackageFields
                           settings={selectedPackage.settings}
                           models={models}
                           sessionThinkingLevels={sessionThinkingLevels}
                           disabled={Boolean(busy)}
-                          onUpdate={(settings) =>
-                            onUpdate(selectedPackage, settings)
-                          }
+                          onUpdate={settings => onUpdate(selectedPackage, settings)}
                         />
                       ) : (
-                        <p className="workbench-empty">
-                          This package has no configurable defaults.
-                        </p>
+                        <p className="workbench-empty">This package has no configurable defaults.</p>
                       )}
                     </section>
                     {selectedPackage.id === "pi-helios" && (
@@ -744,68 +569,44 @@ export function SettingsDialog({
                       <header>
                         <div>
                           <h4>Tool exposure</h4>
-                          <p>
-                            Defaults used when a project or session does not
-                            override them.
-                          </p>
+                          <p>Defaults used when a project or session does not override them.</p>
                         </div>
                         <span>Global</span>
                       </header>
                       {selectedTools.length ? (
                         <div className="workbench-tool-list">
-                          {selectedTools.map((tool) => {
-                            const capable =
-                              selectedToolPolicy?.enabledTools.includes(
-                                tool,
-                              ) === true;
-                            const packageDefault =
-                              selectedToolPolicy?.deferredTools.includes(tool)
-                                ? "deferred"
-                                : capable
-                                  ? "active"
-                                  : "disabled";
-                            const override =
-                              runtimePolicy?.global.toolOverrides?.[tool];
-                            const effective = capable
-                              ? (override ?? packageDefault)
-                              : "disabled";
+                          {selectedTools.map(tool => {
+                            const capable = selectedToolPolicy?.enabledTools.includes(tool) === true;
+                            const packageDefault = selectedToolPolicy?.deferredTools.includes(tool)
+                              ? "deferred"
+                              : capable
+                                ? "active"
+                                : "disabled";
+                            const override = runtimePolicy?.global.toolOverrides?.[tool];
+                            const effective = capable ? (override ?? packageDefault) : "disabled";
                             const locked = tool === "search_tools";
                             return (
-                              <label
-                                className="workbench-tool-row"
-                                data-effective={effective}
-                                key={tool}
-                              >
+                              <label className="workbench-tool-row" data-effective={effective} key={tool}>
                                 <span>
                                   <strong>{tool}</strong>
                                 </span>
-                                <span
-                                  className="workbench-tool-effective"
-                                  aria-label={`Current setting: ${effective}`}
-                                >
+                                <span className="workbench-tool-effective" aria-label={`Current setting: ${effective}`}>
                                   <i aria-hidden="true" />
                                   <strong>{effective}</strong>
                                 </span>
                                 <select
                                   value={override ?? "inherit"}
                                   disabled={
-                                    locked ||
-                                    policyDisabled ||
-                                    toolPolicyBusy === tool ||
-                                    (!capable && !override)
+                                    locked || policyDisabled || toolPolicyBusy === tool || (!capable && !override)
                                   }
-                                  onChange={(event) => {
+                                  onChange={event => {
                                     if (!runtimePolicy) return;
-                                    const mode = event.target.value as
-                                      ToolExposureMode | "inherit";
+                                    const mode = event.target.value as ToolExposureMode | "inherit";
                                     setToolPolicyBusy(tool);
-                                    void onUpdateGlobalToolPolicy(
-                                      tool,
-                                      mode,
-                                      runtimePolicy.revision,
-                                    ).finally(() => setToolPolicyBusy(""));
-                                  }}
-                                >
+                                    void onUpdateGlobalToolPolicy(tool, mode, runtimePolicy.revision).finally(() =>
+                                      setToolPolicyBusy(""),
+                                    );
+                                  }}>
                                   <option value="inherit">Default</option>
                                   <option value="active" disabled={!capable}>
                                     Active
@@ -822,9 +623,7 @@ export function SettingsDialog({
                           })}
                         </div>
                       ) : (
-                        <p className="workbench-empty">
-                          This package does not publish tool policy.
-                        </p>
+                        <p className="workbench-empty">This package does not publish tool policy.</p>
                       )}
                     </section>
                   </article>
@@ -837,15 +636,11 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-extensions"
-              hidden={activeTab !== "extensions"}
-            >
+              hidden={activeTab !== "extensions"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Extensions</h2>
-                  <p>
-                    Manage Pi-native extensions and packages in Pylon’s isolated
-                    agent directory.
-                  </p>
+                  <p>Manage Pi-native extensions and packages in Pylon’s isolated agent directory.</p>
                 </div>
               </div>
               <ExtensionSettingsFields
@@ -865,15 +660,13 @@ export function SettingsDialog({
               className="settings-pane hooks-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-hooks"
-              hidden={activeTab !== "hooks"}
-            >
+              hidden={activeTab !== "hooks"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Hooks</h2>
                   <p>
-                    Add workspace instructions at two predictable points in the
-                    agent lifecycle. Import Markdown or text snapshots, or write
-                    instructions directly.
+                    Add workspace instructions at two predictable points in the agent lifecycle. Import Markdown or text
+                    snapshots, or write instructions directly.
                   </p>
                 </div>
               </div>
@@ -890,13 +683,8 @@ export function SettingsDialog({
               className="settings-pane global-policy-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-policy"
-              hidden={activeTab !== "policy"}
-            >
-              <GlobalPolicySettings
-                policy={runtimePolicy}
-                disabled={policyDisabled}
-                onUpdate={onUpdateGlobalPolicy}
-              />
+              hidden={activeTab !== "policy"}>
+              <GlobalPolicySettings policy={runtimePolicy} disabled={policyDisabled} onUpdate={onUpdateGlobalPolicy} />
             </section>
 
             <section
@@ -904,15 +692,11 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-notifications"
-              hidden={activeTab !== "notifications"}
-            >
+              hidden={activeTab !== "notifications"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Notifications</h2>
-                  <p>
-                    Preview the cues Pylon uses when work finishes or needs your
-                    attention.
-                  </p>
+                  <p>Preview the cues Pylon uses when work finishes or needs your attention.</p>
                 </div>
               </div>
               <h3>Sound cues</h3>
@@ -922,19 +706,14 @@ export function SettingsDialog({
                     <strong>Turn complete</strong>
                     <small>Played after the assistant finishes a turn.</small>
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => playSound("turn-complete")}
-                  >
+                  <button type="button" onClick={() => playSound("turn-complete")}>
                     Play preview
                   </button>
                 </div>
                 <div>
                   <span>
                     <strong>Attention required</strong>
-                    <small>
-                      Played when Pylon needs approval or clarification.
-                    </small>
+                    <small>Played when Pylon needs approval or clarification.</small>
                   </span>
                   <button type="button" onClick={() => playSound("attention")}>
                     Play preview
@@ -948,20 +727,18 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-models"
-              hidden={activeTab !== "models"}
-            >
+              hidden={activeTab !== "models"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Models</h2>
                   <p>
-                    Choose which models appear in the model selector. The active
-                    session model always stays visible.
+                    Choose which models appear in the model selector. The active session model always stays visible.
                   </p>
                 </div>
                 <input
                   type="search"
                   value={modelQuery}
-                  onChange={(event) => setModelQuery(event.target.value)}
+                  onChange={event => setModelQuery(event.target.value)}
                   placeholder="Filter models"
                   aria-label="Filter models"
                 />
@@ -980,49 +757,33 @@ export function SettingsDialog({
               )}
               {filteredModels.length > 0 && (
                 <div className="settings-provider-groups">
-                  {modelGroups.map((group) => {
-                    const allVisible = group.items.every(
-                      (item) =>
-                        !hiddenModelKeys.has(`${item.provider}/${item.id}`),
-                    );
+                  {modelGroups.map(group => {
+                    const allVisible = group.items.every(item => !hiddenModelKeys.has(`${item.provider}/${item.id}`));
                     return (
                       <section
                         className="settings-provider-group"
                         key={group.provider}
-                        aria-labelledby={`model-group-${group.provider}`}
-                      >
+                        aria-labelledby={`model-group-${group.provider}`}>
                         <header>
-                          <h3 id={`model-group-${group.provider}`}>
-                            {group.provider}
-                          </h3>
+                          <h3 id={`model-group-${group.provider}`}>{group.provider}</h3>
                           <label className="settings-model-all">
                             <input
                               type="checkbox"
                               checked={allVisible}
-                              onChange={(event) =>
-                                setProviderVisible(
-                                  group.items,
-                                  event.target.checked,
-                                )
-                              }
+                              onChange={event => setProviderVisible(group.items, event.target.checked)}
                             />
                             Show all
                           </label>
                         </header>
                         <div className="settings-provider-list">
-                          {group.items.map((item) => {
+                          {group.items.map(item => {
                             const key = `${item.provider}/${item.id}`;
                             return (
                               <label className="settings-model-row" key={key}>
                                 <input
                                   type="checkbox"
                                   checked={!hiddenModelKeys.has(key)}
-                                  onChange={(event) =>
-                                    setHiddenModelVisible(
-                                      key,
-                                      event.target.checked,
-                                    )
-                                  }
+                                  onChange={event => setHiddenModelVisible(key, event.target.checked)}
                                 />
                                 <span>
                                   <strong>{item.name}</strong>
@@ -1044,8 +805,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-appearance"
-              hidden={activeTab !== "appearance"}
-            >
+              hidden={activeTab !== "appearance"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Appearance</h2>
@@ -1054,7 +814,7 @@ export function SettingsDialog({
               </div>
               <h3>Color theme</h3>
               <div className="settings-theme-options">
-                {(["dark", "light"] as const).map((option) => (
+                {(["dark", "light"] as const).map(option => (
                   <label key={option}>
                     <input
                       type="radio"
@@ -1063,10 +823,7 @@ export function SettingsDialog({
                       checked={theme === option}
                       onChange={() => onThemeChange(option)}
                     />
-                    <span
-                      className={`theme-preview is-${option}`}
-                      aria-hidden="true"
-                    >
+                    <span className={`theme-preview is-${option}`} aria-hidden="true">
                       <i />
                       <i />
                     </span>
@@ -1106,39 +863,20 @@ function AndroidToolingSettings({
       await onAction(action);
       setConfirmation(undefined);
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Android tooling operation failed",
-      );
+      setError(cause instanceof Error ? cause.message : "Android tooling operation failed");
     }
   };
-  const setupLabel =
-    status?.state === "ready" || status?.state === "invalid"
-      ? "Repair"
-      : "Install";
+  const setupLabel = status?.state === "ready" || status?.state === "invalid" ? "Repair" : "Install";
   const versionLabel = (value: string | undefined, fallback: string) =>
-    status?.state === "ready"
-      ? (value ?? fallback)
-      : `target ${value ?? fallback}`;
+    status?.state === "ready" ? (value ?? fallback) : `target ${value ?? fallback}`;
   return (
-    <section
-      className="workbench-section android-tooling-settings"
-      aria-labelledby="android-tooling-title"
-    >
+    <section className="workbench-section android-tooling-settings" aria-labelledby="android-tooling-title">
       <header>
         <div>
           <h4 id="android-tooling-title">Android tooling</h4>
-          <p>
-            Managed Appium and UiAutomator2 for Helios. Android SDK, Java, and
-            an AVD are still required.
-          </p>
+          <p>Managed Appium and UiAutomator2 for Helios. Android SDK, Java, and an AVD are still required.</p>
         </div>
-        <span
-          className={`android-tooling-state is-${status?.state ?? "unknown"}`}
-        >
-          {status?.state ?? "checking"}
-        </span>
+        <span className={`android-tooling-state is-${status?.state ?? "unknown"}`}>{status?.state ?? "checking"}</span>
       </header>
       <div className="android-tooling-summary">
         <span>
@@ -1150,31 +888,16 @@ function AndroidToolingSettings({
           <small>{versionLabel(status?.driverVersion, "8.2.2")}</small>
         </span>
       </div>
-      {status?.message && (
-        <p className="android-tooling-message">{status.message}</p>
-      )}
+      {status?.message && <p className="android-tooling-message">{status.message}</p>}
       <div className="android-tooling-actions">
-        <button
-          type="button"
-          disabled={working}
-          onClick={() => void apply("status")}
-        >
+        <button type="button" disabled={working} onClick={() => void apply("status")}>
           Refresh
         </button>
-        <button
-          type="button"
-          disabled={working}
-          onClick={() => setConfirmation("install")}
-        >
+        <button type="button" disabled={working} onClick={() => setConfirmation("install")}>
           {busy === "install" ? "Setting up…" : setupLabel}
         </button>
         {(status?.state === "ready" || status?.state === "invalid") && (
-          <button
-            className="is-danger"
-            type="button"
-            disabled={working}
-            onClick={() => setConfirmation("remove")}
-          >
+          <button className="is-danger" type="button" disabled={working} onClick={() => setConfirmation("remove")}>
             {busy === "remove" ? "Removing…" : "Remove"}
           </button>
         )}
@@ -1185,12 +908,9 @@ function AndroidToolingSettings({
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="android-tooling-confirm-title"
-          aria-describedby="android-tooling-confirm-description"
-        >
+          aria-describedby="android-tooling-confirm-description">
           <strong id="android-tooling-confirm-title">
-            {confirmation === "install"
-              ? `${setupLabel} Android tooling?`
-              : "Remove managed Android tooling?"}
+            {confirmation === "install" ? `${setupLabel} Android tooling?` : "Remove managed Android tooling?"}
           </strong>
           <p id="android-tooling-confirm-description">
             {confirmation === "install"
@@ -1198,11 +918,7 @@ function AndroidToolingSettings({
               : "Pylon will delete only its managed Appium installation. Active Android sessions must be closed first."}
           </p>
           <div>
-            <button
-              type="button"
-              disabled={Boolean(busy)}
-              onClick={() => setConfirmation(undefined)}
-            >
+            <button type="button" disabled={Boolean(busy)} onClick={() => setConfirmation(undefined)}>
               Cancel
             </button>
             <button
@@ -1210,8 +926,7 @@ function AndroidToolingSettings({
               type="button"
               disabled={Boolean(busy)}
               className={confirmation === "remove" ? "is-danger" : ""}
-              onClick={() => void apply(confirmation)}
-            >
+              onClick={() => void apply(confirmation)}>
               Confirm
             </button>
           </div>
@@ -1242,14 +957,9 @@ function GlobalPolicySettings({
 }: {
   policy?: RuntimePolicyReadModel;
   disabled: boolean;
-  onUpdate: (
-    settings: RuntimePolicyReadModel["global"],
-    expectedRevision: number,
-  ) => Promise<void>;
+  onUpdate: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<RuntimePolicyReadModel["global"]>(
-    policy?.global ?? defaultGlobalPolicy,
-  );
+  const [draft, setDraft] = useState<RuntimePolicyReadModel["global"]>(policy?.global ?? defaultGlobalPolicy);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const latestPolicy = useRef(policy);
@@ -1283,11 +993,7 @@ function GlobalPolicySettings({
       if (request !== saveRequest.current) return;
       setDraft(latestPolicy.current?.global ?? policy.global);
       setBusy(false);
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Global policy could not be saved",
-      );
+      setError(cause instanceof Error ? cause.message : "Global policy could not be saved");
     }
   };
   const controlsDisabled = disabled || busy;
@@ -1298,9 +1004,8 @@ function GlobalPolicySettings({
         <div>
           <h2>Global policy defaults</h2>
           <p>
-            Set the starting behavior for every project and session. Existing
-            project and session overrides stay unchanged. Verify is configured
-            per project in Inspector.
+            Set the starting behavior for every project and session. Existing project and session overrides stay
+            unchanged. Verify is configured per project in Inspector.
           </p>
         </div>
       </div>
@@ -1313,16 +1018,10 @@ function GlobalPolicySettings({
           <i aria-hidden="true">›</i>
           <b>Session</b>
         </span>
-        <small>
-          The nearest override wins. Inherited values update when their source
-          changes.
-        </small>
+        <small>The nearest override wins. Inherited values update when their source changes.</small>
       </div>
 
-      <section
-        className="settings-policy-group"
-        aria-labelledby="global-policy-safety-title"
-      >
+      <section className="settings-policy-group" aria-labelledby="global-policy-safety-title">
         <header>
           <h3 id="global-policy-safety-title">Activity and safety</h3>
           <p>Defaults for checkpoints, approvals, and response windows.</p>
@@ -1339,9 +1038,7 @@ function GlobalPolicySettings({
                 role="switch"
                 checked={draft.timelineEnabled}
                 disabled={controlsDisabled}
-                onChange={(event) =>
-                  void save({ ...draft, timelineEnabled: event.target.checked })
-                }
+                onChange={event => void save({ ...draft, timelineEnabled: event.target.checked })}
               />
               <span aria-hidden="true" />
               <small>{draft.timelineEnabled ? "Enabled" : "Disabled"}</small>
@@ -1358,15 +1055,13 @@ function GlobalPolicySettings({
                 role="switch"
                 checked={draft.guardEnabled}
                 disabled={controlsDisabled}
-                onChange={(event) =>
-                  void save({ ...draft, guardEnabled: event.target.checked })
-                }
+                onChange={event => void save({ ...draft, guardEnabled: event.target.checked })}
               />
               <span aria-hidden="true" />
               <small>{draft.guardEnabled ? "Enabled" : "Disabled"}</small>
             </label>
           </div>
-          {GUARD_RISK_CATEGORIES.map((category) => (
+          {GUARD_RISK_CATEGORIES.map(category => (
             <label className="settings-policy-row" key={category}>
               <span>
                 <strong>{GUARD_RULE_LABELS[category]}</strong>
@@ -1375,24 +1070,18 @@ function GlobalPolicySettings({
               <select
                 value={(draft.guardRules ?? DEFAULT_GUARD_RULES)[category]}
                 disabled={controlsDisabled || !draft.guardEnabled}
-                onChange={(event) =>
+                onChange={event =>
                   void save({
                     ...draft,
                     guardRules: {
                       ...(draft.guardRules ?? DEFAULT_GUARD_RULES),
-                      [category]: event.target
-                        .value as (typeof GUARD_ACTIONS)[number],
+                      [category]: event.target.value as (typeof GUARD_ACTIONS)[number],
                     },
                   })
-                }
-              >
-                {GUARD_ACTIONS.map((action) => (
+                }>
+                {GUARD_ACTIONS.map(action => (
                   <option value={action} key={action}>
-                    {action === "allow"
-                      ? "Allow"
-                      : action === "confirm"
-                        ? "Confirm"
-                        : "Block"}
+                    {action === "allow" ? "Allow" : action === "confirm" ? "Confirm" : "Block"}
                   </option>
                 ))}
               </select>
@@ -1403,31 +1092,22 @@ function GlobalPolicySettings({
             description="How long a confirmation request stays open."
             value={draft.guardTimeoutSeconds}
             disabled={controlsDisabled}
-            onChange={(guardTimeoutSeconds) =>
-              void save({ ...draft, guardTimeoutSeconds })
-            }
+            onChange={guardTimeoutSeconds => void save({ ...draft, guardTimeoutSeconds })}
           />
           <RuntimePolicyTimeoutControl
             label="Clarify timeout"
             description="How long Pylon waits for a clarification answer."
             value={draft.clarifyTimeoutSeconds}
             disabled={controlsDisabled}
-            onChange={(clarifyTimeoutSeconds) =>
-              void save({ ...draft, clarifyTimeoutSeconds })
-            }
+            onChange={clarifyTimeoutSeconds => void save({ ...draft, clarifyTimeoutSeconds })}
           />
         </div>
       </section>
 
-      <section
-        className="settings-policy-group"
-        aria-labelledby="global-policy-workspace-title"
-      >
+      <section className="settings-policy-group" aria-labelledby="global-policy-workspace-title">
         <header>
           <h3 id="global-policy-workspace-title">Workspace defaults</h3>
-          <p>
-            Choose where sessions begin work when no closer override exists.
-          </p>
+          <p>Choose where sessions begin work when no closer override exists.</p>
         </header>
         <div className="settings-policy-list">
           <label className="settings-policy-row">
@@ -1438,14 +1118,9 @@ function GlobalPolicySettings({
             <select
               value={draft.workspace}
               disabled={controlsDisabled}
-              onChange={(event) =>
-                void save({
-                  ...draft,
-                  workspace: event.target
-                    .value as RuntimePolicyReadModel["global"]["workspace"],
-                })
-              }
-            >
+              onChange={event =>
+                void save({ ...draft, workspace: event.target.value as RuntimePolicyReadModel["global"]["workspace"] })
+              }>
               <option value="local">Local</option>
               <option value="checkout">Project folder</option>
               <option value="worktree">Session worktree</option>
@@ -1455,14 +1130,9 @@ function GlobalPolicySettings({
       </section>
 
       <p className="settings-policy-note">
-        <strong>Project and session overrides are not reset.</strong> Only
-        inherited fields follow a new global default.
+        <strong>Project and session overrides are not reset.</strong> Only inherited fields follow a new global default.
       </p>
-      {disabled && (
-        <p className="settings-policy-note">
-          Global policy can change when every active session is idle.
-        </p>
-      )}
+      {disabled && <p className="settings-policy-note">Global policy can change when every active session is idle.</p>}
       {error && (
         <p className="settings-policy-error" role="alert">
           {error}
@@ -1477,9 +1147,7 @@ function GlobalPolicySettings({
   );
 }
 
-function hasPackageFields(
-  settings: PackageSettingsReadModel | undefined,
-): boolean {
+function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
   return Boolean(settings && settings.kind !== "timeline");
 }
 
@@ -1504,16 +1172,13 @@ function PackageFields({
             type="checkbox"
             checked={settings.lineEditEnabled}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({ ...settings, lineEditEnabled: event.target.checked })
-            }
+            onChange={event => onUpdate({ ...settings, lineEditEnabled: event.target.checked })}
           />
           Revision-guarded numbered edits
         </label>
         <p className="settings-policy-note">
-          Uses revision-guarded numbered ranges when any advertised output price
-          is at least 3× its input price. Lower-ratio models automatically keep
-          Pi's native read and edit for that session; missing pricing keeps
+          Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price.
+          Lower-ratio models automatically keep Pi's native read and edit for that session; missing pricing keeps
           numbered edits. Disable to always use the native tools.
         </p>
       </div>
@@ -1531,21 +1196,16 @@ function PackageFields({
           value={settings.mode === "model" ? settings.model! : settings.mode}
           models={models}
           disabled={disabled}
-          onChange={(value) => {
-            const mode =
-              value === "disabled" || value === "session" ? value : "model";
-            onUpdate({
-              ...settings,
-              mode,
-              ...(mode === "model" ? { model: value } : { model: undefined }),
-            });
+          onChange={value => {
+            const mode = value === "disabled" || value === "session" ? value : "model";
+            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
           }}
         />
         <ThinkingField
           value={settings.thinking}
           levels={levels}
           disabled={disabled || settings.mode === "disabled"}
-          onChange={(thinking) => onUpdate({ ...settings, thinking })}
+          onChange={thinking => onUpdate({ ...settings, thinking })}
         />
       </div>
     );
@@ -1562,37 +1222,29 @@ function PackageFields({
           value={settings.mode === "model" ? settings.model! : settings.mode}
           models={models}
           disabled={disabled}
-          onChange={(value) => {
-            const mode =
-              value === "disabled" || value === "session" ? value : "model";
-            onUpdate({
-              ...settings,
-              mode,
-              ...(mode === "model" ? { model: value } : { model: undefined }),
-            });
+          onChange={value => {
+            const mode = value === "disabled" || value === "session" ? value : "model";
+            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
           }}
         />
         <ThinkingField
           value={settings.thinking}
           levels={levels}
           disabled={disabled || settings.mode === "disabled"}
-          onChange={(thinking) => onUpdate({ ...settings, thinking })}
+          onChange={thinking => onUpdate({ ...settings, thinking })}
         />
         <label className="checkbox-field">
           <input
             type="checkbox"
             checked={settings.webSearch === true}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({ ...settings, webSearch: event.target.checked })
-            }
+            onChange={event => onUpdate({ ...settings, webSearch: event.target.checked })}
           />
           OpenAI / Exa search for Web Scout
         </label>
         <p className="settings-policy-note">
-          Optional. Search uses an existing OpenAI/Codex subscription or API key
-          when available, otherwise Exa; result pages still open through the
-          isolated Helios browser.
+          Optional. Search uses an existing OpenAI/Codex subscription or API key when available, otherwise Exa; result
+          pages still open through the isolated Helios browser.
         </p>
       </div>
     );
@@ -1604,14 +1256,9 @@ function PackageFields({
           value={settings.mode === "model" ? settings.model! : settings.mode}
           models={models}
           disabled={disabled}
-          onChange={(value) => {
-            const mode =
-              value === "disabled" || value === "session" ? value : "model";
-            onUpdate({
-              ...settings,
-              mode,
-              ...(mode === "model" ? { model: value } : { model: undefined }),
-            });
+          onChange={value => {
+            const mode = value === "disabled" || value === "session" ? value : "model";
+            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
           }}
         />
         <label>
@@ -1619,14 +1266,9 @@ function PackageFields({
           <select
             value={settings.executionMode}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({
-                ...settings,
-                executionMode: event.target
-                  .value as typeof settings.executionMode,
-              })
-            }
-          >
+            onChange={event =>
+              onUpdate({ ...settings, executionMode: event.target.value as typeof settings.executionMode })
+            }>
             <option value="isolated">Isolated</option>
             <option value="direct">Direct</option>
             <option value="dynamic">Dynamic</option>
@@ -1641,11 +1283,10 @@ function PackageFields({
             step={1}
             defaultValue={settings.maxTurns}
             disabled={disabled}
-            onBlur={(event) => {
+            onBlur={event => {
               const maxTurns = Number(event.target.value);
               if (Number.isSafeInteger(maxTurns) && maxTurns >= 1) {
-                if (maxTurns !== settings.maxTurns)
-                  onUpdate({ ...settings, maxTurns });
+                if (maxTurns !== settings.maxTurns) onUpdate({ ...settings, maxTurns });
               } else event.currentTarget.value = String(settings.maxTurns);
             }}
           />
@@ -1654,9 +1295,7 @@ function PackageFields({
           label="Eligible thinking levels"
           value={settings.thinkingLevels}
           disabled={disabled}
-          onChange={(thinkingLevels) =>
-            onUpdate({ ...settings, thinkingLevels })
-          }
+          onChange={thinkingLevels => onUpdate({ ...settings, thinkingLevels })}
         />
       </div>
     );
@@ -1669,9 +1308,7 @@ function PackageFields({
             type="checkbox"
             checked={settings.memoryEnabled}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({ ...settings, memoryEnabled: event.target.checked })
-            }
+            onChange={event => onUpdate({ ...settings, memoryEnabled: event.target.checked })}
           />
           Durable memory
         </label>
@@ -1685,22 +1322,17 @@ function PackageFields({
             step={1_000}
             defaultValue={settings.reserveTokens}
             disabled={disabled}
-            onBlur={(event) => {
+            onBlur={event => {
               const reserveTokens = Number(event.target.value);
-              if (
-                Number.isSafeInteger(reserveTokens) &&
-                reserveTokens >= 1_000 &&
-                reserveTokens <= 1_000_000
-              ) {
-                if (reserveTokens !== settings.reserveTokens)
-                  onUpdate({ ...settings, reserveTokens });
+              if (Number.isSafeInteger(reserveTokens) && reserveTokens >= 1_000 && reserveTokens <= 1_000_000) {
+                if (reserveTokens !== settings.reserveTokens) onUpdate({ ...settings, reserveTokens });
               } else event.currentTarget.value = String(settings.reserveTokens);
             }}
           />
         </label>
         <p className="settings-policy-note">
-          Saved as the global default. Compaction begins when approximately this
-          many context tokens remain; project .pi settings can override it.
+          Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi
+          settings can override it.
         </p>
         <label>
           Continuity retained tokens
@@ -1712,55 +1344,45 @@ function PackageFields({
             step={1_000}
             defaultValue={settings.keepRecentTokens}
             disabled={disabled}
-            onBlur={(event) => {
+            onBlur={event => {
               const keepRecentTokens = Number(event.target.value);
-              if (
-                Number.isSafeInteger(keepRecentTokens) &&
-                keepRecentTokens >= 1_000 &&
-                keepRecentTokens <= 50_000
-              ) {
-                if (keepRecentTokens !== settings.keepRecentTokens)
-                  onUpdate({ ...settings, keepRecentTokens });
-              } else
-                event.currentTarget.value = String(settings.keepRecentTokens);
+              if (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 1_000 && keepRecentTokens <= 50_000) {
+                if (keepRecentTokens !== settings.keepRecentTokens) onUpdate({ ...settings, keepRecentTokens });
+              } else event.currentTarget.value = String(settings.keepRecentTokens);
             }}
           />
         </label>
         <p className="settings-policy-note">
-          Recent raw history kept by Continuity compaction. This overrides
-          Pi&apos;s retained-token value only for Continuity-owned compactions.
+          Recent raw history kept by Continuity compaction. This overrides Pi&apos;s retained-token value only for
+          Continuity-owned compactions.
         </p>
         <ProfileFields
           label="Planner"
           profile={settings.planner}
           models={models}
           disabled={disabled}
-          onChange={(planner) => onUpdate({ ...settings, planner })}
+          onChange={planner => onUpdate({ ...settings, planner })}
         />
         <ProfileFields
           label="Executor"
           profile={settings.executor}
           models={models}
           disabled={disabled}
-          onChange={(executor) => onUpdate({ ...settings, executor })}
+          onChange={executor => onUpdate({ ...settings, executor })}
         />
         <ProfileFields
           label="Memory reviewer"
           profile={settings.memoryReviewer}
           models={models}
           disabled={disabled}
-          onChange={(memoryReviewer) =>
-            onUpdate({ ...settings, memoryReviewer })
-          }
+          onChange={memoryReviewer => onUpdate({ ...settings, memoryReviewer })}
         />
         <ProfileFields
           label="Compaction reviewer"
           profile={settings.compactionReviewer}
           models={models}
           disabled={disabled}
-          onChange={(compactionReviewer) =>
-            onUpdate({ ...settings, compactionReviewer })
-          }
+          onChange={compactionReviewer => onUpdate({ ...settings, compactionReviewer })}
         />
       </div>
     );
@@ -1773,9 +1395,7 @@ function PackageFields({
             type="checkbox"
             checked={settings.activePruning}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({ ...settings, activePruning: event.target.checked })
-            }
+            onChange={event => onUpdate({ ...settings, activePruning: event.target.checked })}
           />
           Active pruning
         </label>
@@ -1784,14 +1404,9 @@ function PackageFields({
           <select
             value={settings.projectionMode}
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({
-                ...settings,
-                projectionMode: event.target
-                  .value as typeof settings.projectionMode,
-              })
-            }
-          >
+            onChange={event =>
+              onUpdate({ ...settings, projectionMode: event.target.value as typeof settings.projectionMode })
+            }>
             <option value="standard-v2">Standard (default)</option>
             <option value="legacy">Standard V1 (legacy)</option>
             <option value="stable">Stable (experimental)</option>
@@ -1807,7 +1422,7 @@ function PackageFields({
             step={1_000}
             defaultValue={settings.threshold}
             disabled={disabled}
-            onBlur={(event) => {
+            onBlur={event => {
               const threshold = Number(event.target.value);
               if (
                 Number.isSafeInteger(threshold) &&
@@ -1832,7 +1447,7 @@ function PackageFields({
                 step={1}
                 defaultValue={settings.rolloverHighMultiplier}
                 disabled={disabled}
-                onBlur={(event) => {
+                onBlur={event => {
                   const high = Number(event.target.value);
                   if (
                     Number.isSafeInteger(high) &&
@@ -1855,7 +1470,7 @@ function PackageFields({
                 step={1}
                 defaultValue={settings.rolloverLowMultiplier}
                 disabled={disabled}
-                onBlur={(event) => {
+                onBlur={event => {
                   const low = Number(event.target.value);
                   if (
                     Number.isSafeInteger(low) &&
@@ -1880,15 +1495,13 @@ function PackageFields({
           value={settings.models}
           models={models}
           disabled={disabled}
-          onChange={(eligible) => onUpdate({ ...settings, models: eligible })}
+          onChange={eligible => onUpdate({ ...settings, models: eligible })}
         />
         <ThinkingChoices
           label="Private-agent thinking"
           value={settings.agentThinkingLevels}
           disabled={disabled}
-          onChange={(agentThinkingLevels) =>
-            onUpdate({ ...settings, agentThinkingLevels })
-          }
+          onChange={agentThinkingLevels => onUpdate({ ...settings, agentThinkingLevels })}
         />
       </div>
     );
@@ -1902,10 +1515,7 @@ function PackageFields({
         <select
           value={settings.headed ? "shown" : "headless"}
           disabled={disabled}
-          onChange={(event) =>
-            onUpdate({ ...settings, headed: event.target.value === "shown" })
-          }
-        >
+          onChange={event => onUpdate({ ...settings, headed: event.target.value === "shown" })}>
           <option value="shown">Shown</option>
           <option value="headless">Headless</option>
         </select>
@@ -1928,18 +1538,14 @@ function ThinkingChoices({
   return (
     <fieldset>
       <legend>{label}</legend>
-      {PACKAGE_THINKING_LEVELS.map((level) => (
+      {PACKAGE_THINKING_LEVELS.map(level => (
         <label className="checkbox-field" key={level}>
           <input
             type="checkbox"
             checked={value.includes(level)}
             disabled={disabled || (value.length === 1 && value[0] === level)}
-            onChange={(event) =>
-              onChange(
-                event.target.checked
-                  ? [...value, level]
-                  : value.filter((item) => item !== level),
-              )
+            onChange={event =>
+              onChange(event.target.checked ? [...value, level] : value.filter(item => item !== level))
             }
           />
           {thinkingLabel(level)}
@@ -1960,15 +1566,10 @@ function ModelChoices({
   disabled: boolean;
   onChange: (value?: string[]) => void;
 }) {
-  const available = models.map((model) => ({
-    ref: `${model.provider}/${model.id}`,
-    name: model.name,
-  }));
+  const available = models.map(model => ({ ref: `${model.provider}/${model.id}`, name: model.name }));
   const choices = [
     ...available,
-    ...(value ?? [])
-      .filter((ref) => !available.some((model) => model.ref === ref))
-      .map((ref) => ({ ref, name: ref })),
+    ...(value ?? []).filter(ref => !available.some(model => model.ref === ref)).map(ref => ({ ref, name: ref })),
   ];
   return (
     <fieldset>
@@ -1978,32 +1579,18 @@ function ModelChoices({
           type="checkbox"
           checked={value === undefined}
           disabled={disabled || !available.length}
-          onChange={(event) =>
-            onChange(
-              event.target.checked
-                ? undefined
-                : available.map((model) => model.ref),
-            )
-          }
+          onChange={event => onChange(event.target.checked ? undefined : available.map(model => model.ref))}
         />
         All available models
       </label>
-      {choices.map((model) => (
+      {choices.map(model => (
         <label className="checkbox-field" key={model.ref}>
           <input
             type="checkbox"
             checked={value?.includes(model.ref) ?? false}
-            disabled={
-              disabled ||
-              value === undefined ||
-              (value.length === 1 && value[0] === model.ref)
-            }
-            onChange={(event) =>
-              onChange(
-                event.target.checked
-                  ? [...(value ?? []), model.ref]
-                  : value?.filter((item) => item !== model.ref),
-              )
+            disabled={disabled || value === undefined || (value.length === 1 && value[0] === model.ref)}
+            onChange={event =>
+              onChange(event.target.checked ? [...(value ?? []), model.ref] : value?.filter(item => item !== model.ref))
             }
           />
           {model.name}
@@ -2026,20 +1613,15 @@ function ModelModeField({
 }) {
   const hiddenModels = useHiddenModels();
   const options = visibleModels(models, hiddenModels);
-  const selected = models.find((model) => modelKey(model) === value);
-  if (selected && !options.some((model) => modelKey(model) === value))
-    options.push(selected);
+  const selected = models.find(model => modelKey(model) === value);
+  if (selected && !options.some(model => modelKey(model) === value)) options.push(selected);
   return (
     <label>
       Model
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      >
+      <select value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
         <option value="disabled">Disabled</option>
         <option value="session">Use session model</option>
-        {options.map((model) => (
+        {options.map(model => (
           <option value={modelKey(model)} key={modelKey(model)}>
             {model.name}
           </option>
@@ -2060,9 +1642,7 @@ function ProfileFields({
   profile?: { model: string; thinking?: ThinkingLevelReadModel };
   models: ModelOptionReadModel[];
   disabled: boolean;
-  onChange: (
-    profile: { model: string; thinking?: ThinkingLevelReadModel } | undefined,
-  ) => void;
+  onChange: (profile: { model: string; thinking?: ThinkingLevelReadModel } | undefined) => void;
 }) {
   const levels = thinkingLevels(profile?.model, models, []);
   return (
@@ -2073,18 +1653,10 @@ function ProfileFields({
         <select
           value={profile?.model ?? ""}
           disabled={disabled}
-          onChange={(event) =>
-            onChange(
-              event.target.value ? { model: event.target.value } : undefined,
-            )
-          }
-        >
+          onChange={event => onChange(event.target.value ? { model: event.target.value } : undefined)}>
           <option value="">Not configured</option>
-          {models.map((model) => (
-            <option
-              value={`${model.provider}/${model.id}`}
-              key={`${model.provider}/${model.id}`}
-            >
+          {models.map(model => (
+            <option value={`${model.provider}/${model.id}`} key={`${model.provider}/${model.id}`}>
               {model.name}
             </option>
           ))}
@@ -2094,7 +1666,7 @@ function ProfileFields({
         value={profile?.thinking}
         levels={levels}
         disabled={disabled || !profile}
-        onChange={(thinking) => profile && onChange({ ...profile, thinking })}
+        onChange={thinking => profile && onChange({ ...profile, thinking })}
       />
     </fieldset>
   );
@@ -2117,16 +1689,9 @@ function ThinkingField({
       <select
         value={value ?? ""}
         disabled={disabled}
-        onChange={(event) =>
-          onChange(
-            event.target.value
-              ? (event.target.value as ThinkingLevelReadModel)
-              : undefined,
-          )
-        }
-      >
+        onChange={event => onChange(event.target.value ? (event.target.value as ThinkingLevelReadModel) : undefined)}>
         <option value="">Inherit session thinking</option>
-        {levels.map((level) => (
+        {levels.map(level => (
           <option value={level} key={level}>
             {thinkingLabel(level)}
           </option>
@@ -2142,7 +1707,6 @@ function thinkingLevels(
   fallback: ThinkingLevelReadModel[],
 ): ThinkingLevelReadModel[] {
   return modelRef
-    ? (models.find((model) => `${model.provider}/${model.id}` === modelRef)
-        ?.thinkingLevels ?? [])
+    ? (models.find(model => `${model.provider}/${model.id}` === modelRef)?.thinkingLevels ?? [])
     : fallback;
 }

@@ -3,17 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  captureWorktree,
-  compareWorktrees,
-  parsePorcelainZ,
-} from "../src/worktree.ts";
+import { captureWorktree, compareWorktrees, parsePorcelainZ } from "../src/worktree.ts";
 
 test("porcelain parser handles ordinary and renamed paths", () => {
-  assert.deepEqual(
-    parsePorcelainZ(" M a file.ts\0R  new.ts\0old.ts\0?? fresh.ts\0"),
-    ["a file.ts", "fresh.ts", "new.ts", "old.ts"],
-  );
+  assert.deepEqual(parsePorcelainZ(" M a file.ts\0R  new.ts\0old.ts\0?? fresh.ts\0"), [
+    "a file.ts",
+    "fresh.ts",
+    "new.ts",
+    "old.ts",
+  ]);
 });
 
 test("worktree comparison detects new files and touched pre-existing dirty files", async () => {
@@ -21,10 +19,8 @@ test("worktree comparison detects new files and touched pre-existing dirty files
   await writeFile(join(cwd, "dirty.txt"), "before");
   let status = " M dirty.txt\0";
   const exec = async (_command: string, args: string[]) => {
-    if (args.includes("--show-toplevel"))
-      return { code: 0, stdout: `${cwd}\n`, stderr: "" };
-    if (args.at(-1) === "HEAD")
-      return { code: 0, stdout: "deadbeef\n", stderr: "" };
+    if (args.includes("--show-toplevel")) return { code: 0, stdout: `${cwd}\n`, stderr: "" };
+    if (args.at(-1) === "HEAD") return { code: 0, stdout: "deadbeef\n", stderr: "" };
     return { code: 0, stdout: status, stderr: "" };
   };
   const before = await captureWorktree(exec, cwd);

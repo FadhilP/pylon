@@ -1,24 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  applyOperationalEvent,
-  initialOperational,
-} from "../src/server/pi/operational-projections.ts";
+import { applyOperationalEvent, initialOperational } from "../src/server/pi/operational-projections.ts";
 
 test("Verify running lifecycle exposes timer metadata before checks finish", () => {
   const startedAt = new Date(1_000).toISOString();
-  const state = applyOperationalEvent(
-    initialOperational(["verify"], []),
-    "pi-verify:lifecycle",
-    {
-      version: 1,
-      state: "running",
-      runId: "run-1",
-      scope: "changed",
-      startedAt,
-      results: [],
-    },
-  );
+  const state = applyOperationalEvent(initialOperational(["verify"], []), "pi-verify:lifecycle", {
+    version: 1,
+    state: "running",
+    runId: "run-1",
+    scope: "changed",
+    startedAt,
+    results: [],
+  });
 
   assert.equal(state.verification.availability, "available");
   assert.equal(state.verification.state, "running");
@@ -28,10 +21,7 @@ test("Verify running lifecycle exposes timer metadata before checks finish", () 
 });
 
 test("operational projections structurally share unchanged branches and ignore stale snapshots", () => {
-  const initial = initialOperational(
-    ["heartbeat_start", "continuity_update"],
-    [],
-  );
+  const initial = initialOperational(["heartbeat_start", "continuity_update"], []);
   const withJob = applyOperationalEvent(initial, "pi-heartbeat:job", {
     version: 1,
     id: "job-1",
@@ -64,14 +54,7 @@ test("operational projections structurally share unchanged branches and ignore s
     applyOperationalEvent(
       continuity,
       "pi-continuity:state-change",
-      {
-        version: 4,
-        revision: 1,
-        sessionId: "session",
-        available: false,
-        memory: [],
-        globalMemory: [],
-      },
+      { version: 4, revision: 1, sessionId: "session", available: false, memory: [], globalMemory: [] },
       [],
       "session",
     ),
@@ -95,12 +78,7 @@ test("papercut summaries are session scoped and reject stale revisions", () => {
     "session",
   );
   assert.equal(current.papercuts.availability, "available");
-  assert.deepEqual(current.papercuts.counts, {
-    open: 2,
-    resolved: 1,
-    dismissed: 0,
-    total: 3,
-  });
+  assert.deepEqual(current.papercuts.counts, { open: 2, resolved: 1, dismissed: 0, total: 3 });
   assert.strictEqual(
     applyOperationalEvent(
       current,
@@ -225,13 +203,7 @@ test("operational projections bound package payloads and isolate malformed versi
   });
   assert.equal(state.verification.availability, "available");
   assert.equal(state.verification.checks.length, 20);
-  assert.ok(
-    state.verification.checks.reduce(
-      (bytes, item) => bytes + (item.output?.length ?? 0),
-      0,
-    ) <=
-      16 * 1024,
-  );
+  assert.ok(state.verification.checks.reduce((bytes, item) => bytes + (item.output?.length ?? 0), 0) <= 16 * 1024);
 
   state = applyOperationalEvent(state, "pi-heartbeat:job", { version: 99 });
   assert.equal(state.jobs.availability, "unavailable");
@@ -287,21 +259,10 @@ test("state snapshots reject stale revisions and policy unregister removes owner
           assumptions: ["API remains stable"],
           acceptanceCriteria: ["Tests pass"],
         },
-        revisionFeedback: {
-          revision: 1,
-          text: "Clarify it",
-          createdAt: new Date(0).toISOString(),
-        },
+        revisionFeedback: { revision: 1, text: "Clarify it", createdAt: new Date(0).toISOString() },
         createdAt: "now",
         updatedAt: "now",
-        todos: [
-          {
-            id: "todo_1",
-            text: "Build",
-            status: "in_progress",
-            updatedAt: "now",
-          },
-        ],
+        todos: [{ id: "todo_1", text: "Build", status: "in_progress", updatedAt: "now" }],
       },
     },
     [],
@@ -310,28 +271,14 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   state = applyOperationalEvent(
     state,
     "pi-continuity:state-change",
-    {
-      version: 4,
-      revision: 2,
-      sessionId: "session",
-      available: false,
-      memory: [],
-      globalMemory: [],
-    },
+    { version: 4, revision: 2, sessionId: "session", available: false, memory: [], globalMemory: [] },
     [],
     "session",
   );
   state = applyOperationalEvent(
     state,
     "pi-continuity:state-change",
-    {
-      version: 4,
-      revision: 3,
-      sessionId: "old-session",
-      available: false,
-      memory: [],
-      globalMemory: [],
-    },
+    { version: 4, revision: 3, sessionId: "old-session", available: false, memory: [], globalMemory: [] },
     [],
     "session",
   );
@@ -339,22 +286,14 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.continuity.work?.goal, "Ship");
   assert.equal(state.continuity.work?.approvalPending, true);
   assert.equal(state.continuity.work?.planRevision, 2);
-  assert.deepEqual(state.continuity.work?.handoff?.workingSet, [
-    "src/index.ts",
-  ]);
+  assert.deepEqual(state.continuity.work?.handoff?.workingSet, ["src/index.ts"]);
   assert.equal(state.continuity.work?.revisionFeedback?.text, "Clarify it");
   assert.equal(state.continuity.memory[0]?.trigger, "Architecture");
   assert.equal(state.continuity.globalMemory[0]?.trigger, "Preference");
   state = applyOperationalEvent(
     state,
     "pi-continuity:state-change",
-    {
-      version: 3,
-      revision: 3,
-      sessionId: "session",
-      available: true,
-      memory: [],
-    },
+    { version: 3, revision: 3, sessionId: "session", available: true, memory: [] },
     [],
     "session",
   );
@@ -393,11 +332,7 @@ test("state snapshots reject stale revisions and policy unregister removes owner
     enabledTools: ["test"],
   });
   assert.equal(state.tools.policies.length, 1);
-  state = applyOperationalEvent(state, "pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-test",
-  });
+  state = applyOperationalEvent(state, "pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-test" });
   assert.equal(state.tools.policies.length, 0);
 });
 
@@ -416,15 +351,7 @@ test("Sieve projections retain bounded per-tool telemetry", () => {
       errorCap: 0,
       mixedText: 0,
     },
-    byTool: {
-      read: {
-        scanned: 2,
-        transformed: 1,
-        sourceChars: 2_000,
-        retainedChars: 1_100,
-        netCharsSaved: 900,
-      },
-    },
+    byTool: { read: { scanned: 2, transformed: 1, sourceChars: 2_000, retainedChars: 1_100, netCharsSaved: 900 } },
   };
   const payload = {
     version: 1,
@@ -463,18 +390,11 @@ test("Sieve projections retain bounded per-tool telemetry", () => {
     contextUsagePercent: 42.5,
     updatedAt: new Date(0).toISOString(),
   };
-  const state = applyOperationalEvent(
-    initialOperational([], ["pi-sieve.ts"]),
-    "pi-sieve:state-change",
-    payload,
-  );
+  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", payload);
 
   assert.equal(state.sieve.availability, "available");
   assert.equal(state.sieve.cumulativeActual?.byTool.read?.netCharsSaved, 900);
-  assert.deepEqual(state.sieve.recallsByTool?.read, {
-    recalls: 1,
-    recalledChars: 1_000,
-  });
+  assert.deepEqual(state.sieve.recallsByTool?.read, { recalls: 1, recalledChars: 1_000 });
   assert.equal(state.sieve.projectionMode, "stable");
   assert.equal(state.sieve.epoch?.frozenRetainedChars, 1_100);
   assert.equal(state.sieve.epoch?.rolloverEligibleRetainedChars, 900);
@@ -543,27 +463,17 @@ test("Sieve standard-v2 projections expose bounded churn telemetry", () => {
       standardChangesByKind: changes,
     },
   };
-  const state = applyOperationalEvent(
-    initialOperational([], ["pi-sieve.ts"]),
-    "pi-sieve:state-change",
-    payload,
-  );
+  const state = applyOperationalEvent(initialOperational([], ["pi-sieve.ts"]), "pi-sieve:state-change", payload);
   assert.equal(state.sieve.projectionMode, "standard-v2");
   assert.equal(state.sieve.stability?.standardComparisons, 12);
   assert.equal(state.sieve.stability?.standardPrefixChurn, 3);
-  assert.equal(
-    state.sieve.stability?.standardEarliestChangedPriorMessageIndex,
-    4,
-  );
+  assert.equal(state.sieve.stability?.standardEarliestChangedPriorMessageIndex, 4);
   assert.equal(state.sieve.stability?.standardEstimatedInvalidatedChars, 9_000);
   assert.deepEqual(state.sieve.stability?.standardChangesByKind, changes);
   assert.equal(
     applyOperationalEvent(state, "pi-sieve:state-change", {
       ...payload,
-      stability: {
-        ...payload.stability,
-        standardChangesByKind: { ...changes, history: -1 },
-      },
+      stability: { ...payload.stability, standardChangesByKind: { ...changes, history: -1 } },
     }).sieve.availability,
     "unavailable",
   );
@@ -595,11 +505,12 @@ test("Heartbeat accepts numeric timestamps and cancelling jobs", () => {
 });
 
 test("operational projections reject out-of-range timestamps without throwing", () => {
-  const state = applyOperationalEvent(
-    initialOperational([], ["pi-heartbeat.ts"]),
-    "pi-heartbeat:job",
-    { version: 1, id: "job-1", state: "running", startedAt: 1e100 },
-  );
+  const state = applyOperationalEvent(initialOperational([], ["pi-heartbeat.ts"]), "pi-heartbeat:job", {
+    version: 1,
+    id: "job-1",
+    state: "running",
+    startedAt: 1e100,
+  });
 
   assert.deepEqual(state.jobs, { availability: "unavailable", items: [] });
 });

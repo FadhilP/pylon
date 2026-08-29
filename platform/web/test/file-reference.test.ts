@@ -3,27 +3,11 @@ import test from "node:test";
 import { parseFileReference } from "../src/shared/file-reference.ts";
 
 test("parses workspace file references and source locations", () => {
-  assert.deepEqual(parseFileReference("platform/web/src/client/App.tsx"), {
-    path: "platform/web/src/client/App.tsx",
-  });
-  assert.deepEqual(parseFileReference("./src/main.ts:42"), {
-    path: "src/main.ts",
-    line: 42,
-  });
-  assert.deepEqual(parseFileReference("src/main.ts:42:7"), {
-    path: "src/main.ts",
-    line: 42,
-    column: 7,
-  });
-  assert.deepEqual(parseFileReference("src/main.ts#L42C7"), {
-    path: "src/main.ts",
-    line: 42,
-    column: 7,
-  });
-  assert.deepEqual(parseFileReference("src%2Fwith%20space.ts%23L3"), {
-    path: "src/with space.ts",
-    line: 3,
-  });
+  assert.deepEqual(parseFileReference("platform/web/src/client/App.tsx"), { path: "platform/web/src/client/App.tsx" });
+  assert.deepEqual(parseFileReference("./src/main.ts:42"), { path: "src/main.ts", line: 42 });
+  assert.deepEqual(parseFileReference("src/main.ts:42:7"), { path: "src/main.ts", line: 42, column: 7 });
+  assert.deepEqual(parseFileReference("src/main.ts#L42C7"), { path: "src/main.ts", line: 42, column: 7 });
+  assert.deepEqual(parseFileReference("src%2Fwith%20space.ts%23L3"), { path: "src/with space.ts", line: 3 });
 });
 
 test("leaves external and unsafe links to normal browser handling", () => {

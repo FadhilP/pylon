@@ -1,12 +1,5 @@
-import type {
-  AcceptedCommand,
-  QueuedPromptPayload,
-  WebCommand,
-} from "../../shared/protocol/commands";
-import type {
-  HeliosBrowserCommand,
-  HeliosBrowserResult,
-} from "../../shared/protocol/helios";
+import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
+import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type {
   HeliosAndroidToolingCommand,
   HeliosAndroidToolingResult,
@@ -42,16 +35,10 @@ const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
 
 function randomId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
-    return crypto.randomUUID();
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto.getRandomValues === "function"
-  ) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
     const bytes = crypto.getRandomValues(new Uint8Array(16));
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-      "",
-    );
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
   }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
@@ -83,9 +70,7 @@ async function json<T>(response: Response): Promise<T> {
   if (!response.ok)
     throw new ApiHttpError(
       response.status,
-      typeof body.error === "string"
-        ? body.error
-        : `Request failed (${response.status})`,
+      typeof body.error === "string" ? body.error : `Request failed (${response.status})`,
     );
   return body as T;
 }
@@ -97,10 +82,7 @@ export class ApiClient {
 
   async bootstrap(): Promise<BootstrapSnapshot> {
     const snapshot = await json<BootstrapSnapshot>(
-      await fetch("/api/v1/bootstrap", {
-        headers: { "x-pylon-tab-id": this.tabId },
-        credentials: "same-origin",
-      }),
+      await fetch("/api/v1/bootstrap", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
     );
     this.csrfToken = snapshot.csrfToken;
     return snapshot;
@@ -108,14 +90,11 @@ export class ApiClient {
 
   events(cursor: string): EventSource {
     const query = new URLSearchParams({ tabId: this.tabId, cursor });
-    return new EventSource(`/api/v1/events?${query.toString()}`, {
-      withCredentials: true,
-    });
+    return new EventSource(`/api/v1/events?${query.toString()}`, { withCredentials: true });
   }
 
   terminalUrl(generation: number): string {
-    if (!this.csrfToken)
-      throw new Error("Runtime has not finished bootstrapping");
+    if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
     const url = new URL("/api/v1/terminal", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.search = new URLSearchParams({
@@ -126,10 +105,7 @@ export class ApiClient {
     return url.toString();
   }
 
-  async sessions(
-    input: SessionListQuery = {},
-    signal?: AbortSignal,
-  ): Promise<SessionListSnapshot> {
+  async sessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
     const query = new URLSearchParams();
     if (input.projectId) query.set("projectId", input.projectId);
     if (input.cursor) query.set("cursor", input.cursor);
@@ -150,12 +126,7 @@ export class ApiClient {
     limit = 100,
     direction: "before" | "after" | "around" = "before",
   ): Promise<ConversationHistoryPage> {
-    const query = new URLSearchParams({
-      cursor,
-      generation: String(generation),
-      limit: String(limit),
-      direction,
-    });
+    const query = new URLSearchParams({ cursor, generation: String(generation), limit: String(limit), direction });
     return json<ConversationHistoryPage>(
       await fetch(`/api/v1/conversation-history?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -170,11 +141,7 @@ export class ApiClient {
     generation: number,
     signal?: AbortSignal,
   ): Promise<ConversationAttachmentContent> {
-    const query = new URLSearchParams({
-      entry: sourceEntryId,
-      index: String(index),
-      generation: String(generation),
-    });
+    const query = new URLSearchParams({ entry: sourceEntryId, index: String(index), generation: String(generation) });
     return json<ConversationAttachmentContent>(
       await fetch(`/api/v1/conversation-attachment?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -188,10 +155,7 @@ export class ApiClient {
     input: ConversationTurnIndexQuery,
     generation: number,
   ): Promise<ConversationTurnIndexPage> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      limit: String(input.limit ?? 250),
-    });
+    const query = new URLSearchParams({ generation: String(generation), limit: String(input.limit ?? 250) });
     if (input.cursor) query.set("cursor", input.cursor);
     if (input.direction) query.set("direction", input.direction);
     return json<ConversationTurnIndexPage>(
@@ -202,16 +166,8 @@ export class ApiClient {
     );
   }
 
-  async fileSuggestions(
-    queryValue: string,
-    generation: number,
-    limit = 15,
-  ): Promise<FileSuggestionList> {
-    const query = new URLSearchParams({
-      q: queryValue,
-      generation: String(generation),
-      limit: String(limit),
-    });
+  async fileSuggestions(queryValue: string, generation: number, limit = 15): Promise<FileSuggestionList> {
+    const query = new URLSearchParams({ q: queryValue, generation: String(generation), limit: String(limit) });
     return json<FileSuggestionList>(
       await fetch(`/api/v1/file-suggestions?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -227,10 +183,7 @@ export class ApiClient {
     signal?: AbortSignal,
     refresh = false,
   ): Promise<WorkspaceFilePage> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      limit: "200",
-    });
+    const query = new URLSearchParams({ generation: String(generation), limit: "200" });
     if (queryValue) query.set("q", queryValue);
     if (cursor) query.set("cursor", cursor);
     if (refresh) query.set("refresh", "1");
@@ -248,11 +201,7 @@ export class ApiClient {
     path: string,
     view: "current" | "base" = "current",
   ): Promise<WorkspaceFileContent> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      path,
-      view,
-    });
+    const query = new URLSearchParams({ generation: String(generation), path, view });
     return json<WorkspaceFileContent>(
       await fetch(`/api/v1/workspace/file?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -261,10 +210,7 @@ export class ApiClient {
     );
   }
 
-  async workspaceDiff(
-    generation: number,
-    path: string,
-  ): Promise<WorkspaceFileDiff> {
+  async workspaceDiff(generation: number, path: string): Promise<WorkspaceFileDiff> {
     const query = new URLSearchParams({ generation: String(generation), path });
     return json<WorkspaceFileDiff>(
       await fetch(`/api/v1/workspace/diff?${query}`, {
@@ -275,10 +221,7 @@ export class ApiClient {
   }
 
   async turnDiff(generation: number, entryId: string): Promise<TurnDiffResult> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      entry: entryId,
-    });
+    const query = new URLSearchParams({ generation: String(generation), entry: entryId });
     return json<TurnDiffResult>(
       await fetch(`/api/v1/turn-diff?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -287,14 +230,8 @@ export class ApiClient {
     );
   }
 
-  async timelineCheckpointFiles(
-    generation: number,
-    checkpointId: string,
-  ): Promise<TimelineCheckpointFiles> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      checkpointId,
-    });
+  async timelineCheckpointFiles(generation: number, checkpointId: string): Promise<TimelineCheckpointFiles> {
+    const query = new URLSearchParams({ generation: String(generation), checkpointId });
     return json<TimelineCheckpointFiles>(
       await fetch(`/api/v1/timeline/files?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -308,11 +245,7 @@ export class ApiClient {
     checkpointId: string,
     path: string,
   ): Promise<TimelineCheckpointDiff> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      checkpointId,
-      path,
-    });
+    const query = new URLSearchParams({ generation: String(generation), checkpointId, path });
     return json<TimelineCheckpointDiff>(
       await fetch(`/api/v1/timeline/diff?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -321,14 +254,8 @@ export class ApiClient {
     );
   }
 
-  async queuedPrompt(
-    queueId: string,
-    generation: number,
-  ): Promise<QueuedPromptPayload> {
-    const query = new URLSearchParams({
-      queueId,
-      generation: String(generation),
-    });
+  async queuedPrompt(queueId: string, generation: number): Promise<QueuedPromptPayload> {
+    const query = new URLSearchParams({ queueId, generation: String(generation) });
     return json<QueuedPromptPayload>(
       await fetch(`/api/v1/queued-prompt?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -339,40 +266,24 @@ export class ApiClient {
 
   async packages(): Promise<PackageListSnapshot> {
     return json<PackageListSnapshot>(
-      await fetch("/api/v1/packages", {
-        headers: { "x-pylon-tab-id": this.tabId },
-        credentials: "same-origin",
-      }),
+      await fetch("/api/v1/packages", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
     );
   }
 
   async extensions(): Promise<ExtensionListSnapshot> {
     return json<ExtensionListSnapshot>(
-      await fetch("/api/v1/extensions", {
-        headers: { "x-pylon-tab-id": this.tabId },
-        credentials: "same-origin",
-      }),
+      await fetch("/api/v1/extensions", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
     );
   }
 
   async hooks(): Promise<HookSettingsSnapshot> {
     return json<HookSettingsSnapshot>(
-      await fetch("/api/v1/hooks", {
-        headers: { "x-pylon-tab-id": this.tabId },
-        credentials: "same-origin",
-      }),
+      await fetch("/api/v1/hooks", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
     );
   }
 
-  async stateqlSnapshot(
-    generation: number,
-    historyLimit = 50,
-    signal?: AbortSignal,
-  ): Promise<StateQLSnapshot> {
-    const query = new URLSearchParams({
-      generation: String(generation),
-      historyLimit: String(historyLimit),
-    });
+  async stateqlSnapshot(generation: number, historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
+    const query = new URLSearchParams({ generation: String(generation), historyLimit: String(historyLimit) });
     return json<StateQLSnapshot>(
       await fetch(`/api/v1/stateql?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -421,12 +332,7 @@ export class ApiClient {
 
   async mutatePapercut(
     generation: number,
-    input: {
-      action: "edit" | "delete";
-      id: string;
-      expectedUpdatedAt: string;
-      message?: string;
-    },
+    input: { action: "edit" | "delete"; id: string; expectedUpdatedAt: string; message?: string },
   ): Promise<PapercutMutationResult> {
     return json<PapercutMutationResult>(
       await fetch("/api/v1/papercuts/mutate", {
@@ -451,10 +357,7 @@ export class ApiClient {
     );
   }
 
-  async heliosBrowser(
-    command: HeliosBrowserCommand,
-    signal?: AbortSignal,
-  ): Promise<HeliosBrowserResult> {
+  async heliosBrowser(command: HeliosBrowserCommand, signal?: AbortSignal): Promise<HeliosBrowserResult> {
     return json<HeliosBrowserResult>(
       await fetch("/api/v1/helios-browser", {
         method: "POST",
@@ -492,10 +395,7 @@ export class ApiClient {
     );
   }
 
-  async uiResponse(
-    requestId: string,
-    response: Record<string, unknown>,
-  ): Promise<void> {
+  async uiResponse(requestId: string, response: Record<string, unknown>): Promise<void> {
     await json(
       await fetch(`/api/v1/ui-responses/${encodeURIComponent(requestId)}`, {
         method: "POST",
@@ -506,11 +406,7 @@ export class ApiClient {
     );
   }
 
-  async uiOwnership(
-    requestId: string,
-    sessionGeneration: number,
-    action: "claim" | "release",
-  ): Promise<void> {
+  async uiOwnership(requestId: string, sessionGeneration: number, action: "claim" | "release"): Promise<void> {
     await json(
       await fetch(`/api/v1/ui-ownership/${encodeURIComponent(requestId)}`, {
         method: "POST",
@@ -521,10 +417,7 @@ export class ApiClient {
     );
   }
 
-  async uiKeepAlive(
-    requestId: string,
-    sessionGeneration: number,
-  ): Promise<{ expiresAt?: string }> {
+  async uiKeepAlive(requestId: string, sessionGeneration: number): Promise<{ expiresAt?: string }> {
     return json(
       await fetch(`/api/v1/ui-keepalive/${encodeURIComponent(requestId)}`, {
         method: "POST",
@@ -536,12 +429,7 @@ export class ApiClient {
   }
 
   private headers(): HeadersInit {
-    if (!this.csrfToken)
-      throw new Error("Runtime has not finished bootstrapping");
-    return {
-      "content-type": "application/json",
-      "x-pylon-csrf": this.csrfToken,
-      "x-pylon-tab-id": this.tabId,
-    };
+    if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
+    return { "content-type": "application/json", "x-pylon-csrf": this.csrfToken, "x-pylon-tab-id": this.tabId };
   }
 }

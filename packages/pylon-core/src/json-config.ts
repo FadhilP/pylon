@@ -36,20 +36,14 @@ export async function loadJsonConfig<T>(
   return fallback();
 }
 
-const quarantine = (path: string) =>
-  rename(path, `${path}.corrupt-${randomUUID()}`).catch(() => {});
+const quarantine = (path: string) => rename(path, `${path}.corrupt-${randomUUID()}`).catch(() => {});
 
 /** Writes a config atomically and owner-readable only, leaving no temporary file behind on failure. */
-export async function saveJsonConfig(
-  config: unknown,
-  path: string,
-): Promise<void> {
+export async function saveJsonConfig(config: unknown, path: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});

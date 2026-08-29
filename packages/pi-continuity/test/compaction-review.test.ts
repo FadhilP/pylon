@@ -7,8 +7,7 @@ import {
   validateCompactionReview,
 } from "../src/compaction-review.ts";
 
-const hash = (value: string) =>
-  createHash("sha256").update(value).digest("hex");
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const sources = [
   {
     sourceEntryId: "user-1",
@@ -30,13 +29,8 @@ const sources = [
     isError: true,
   },
 ];
-const packet = () =>
-  buildCompactionReviewPacket({
-    canonicalSummary: "Canonical deterministic state",
-    sources,
-  })!;
-const output = (candidates: unknown[]) =>
-  JSON.stringify({ version: 1, candidates });
+const packet = () => buildCompactionReviewPacket({ canonicalSummary: "Canonical deterministic state", sources })!;
+const output = (candidates: unknown[]) => JSON.stringify({ version: 1, candidates });
 const candidate = (overrides: Record<string, unknown> = {}) => ({
   sourceEntryId: "user-1",
   role: "user",
@@ -44,17 +38,10 @@ const candidate = (overrides: Record<string, unknown> = {}) => ({
   exactQuote: "Keep compatibility",
   ...overrides,
 });
-const response = (text: string, stopReason = "stop") => ({
-  stopReason,
-  content: [{ type: "text", text }],
-  usage: {},
-});
+const response = (text: string, stopReason = "stop") => ({ stopReason, content: [{ type: "text", text }], usage: {} });
 
 test("review validation accepts only exact source-grounded excerpts", () => {
-  const result = validateCompactionReview(
-    output([candidate(), candidate()]),
-    packet(),
-  );
+  const result = validateCompactionReview(output([candidate(), candidate()]), packet());
   assert.equal(result.candidateCount, 2);
   assert.deepEqual(result.supplements, [
     {
@@ -67,15 +54,8 @@ test("review validation accepts only exact source-grounded excerpts", () => {
     },
   ]);
 
-  const alreadyCanonical = buildCompactionReviewPacket({
-    canonicalSummary: "Keep compatibility",
-    sources,
-  })!;
-  assert.deepEqual(
-    validateCompactionReview(output([candidate()]), alreadyCanonical)
-      .supplements,
-    [],
-  );
+  const alreadyCanonical = buildCompactionReviewPacket({ canonicalSummary: "Keep compatibility", sources })!;
+  assert.deepEqual(validateCompactionReview(output([candidate()]), alreadyCanonical).supplements, []);
 });
 
 test("review validation rejects malformed, ungrounded, mismatched, and over-broad output", () => {
@@ -89,10 +69,7 @@ test("review validation rejects malformed, ungrounded, mismatched, and over-broa
     output([candidate({ category: "decision" })]),
     output([{ ...candidate(), extra: true }]),
   ])
-    assert.throws(
-      () => validateCompactionReview(raw, packet()),
-      /malformed|invalid|grounded/,
-    );
+    assert.throws(() => validateCompactionReview(raw, packet()), /malformed|invalid|grounded/);
 });
 
 test("review packet redacts credentials before model access and remains bounded", () => {
@@ -103,11 +80,7 @@ test("review packet redacts credentials before model access and remains bounded"
     content: `Use ${secret}`,
     sourceHash: hash(`Use ${secret}`),
   };
-  const built = buildCompactionReviewPacket({
-    canonicalSummary: "safe",
-    sources: [source],
-    focus: `focus ${secret}`,
-  })!;
+  const built = buildCompactionReviewPacket({ canonicalSummary: "safe", sources: [source], focus: `focus ${secret}` })!;
   assert.doesNotMatch(JSON.stringify(built), new RegExp(secret));
   assert.match(JSON.stringify(built), /REDACTED CREDENTIAL/);
 
@@ -117,17 +90,11 @@ test("review packet redacts credentials before model access and remains bounded"
     safePaths: [path],
     sources: [source],
   })!;
-  assert.match(
-    withPath.canonicalSummary,
-    new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
+  assert.match(withPath.canonicalSummary, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(withPath.canonicalSummary, /REDACTED CREDENTIAL/);
 
   const opaque = `${"A".repeat(30)}/${"B".repeat(24)}0`;
-  const strict = buildCompactionReviewPacket({
-    canonicalSummary: `User prose: ${opaque}`,
-    sources: [source],
-  })!;
+  const strict = buildCompactionReviewPacket({ canonicalSummary: `User prose: ${opaque}`, sources: [source] })!;
   assert.doesNotMatch(strict.canonicalSummary, new RegExp(opaque));
   assert.match(strict.canonicalSummary, /REDACTED CREDENTIAL/);
   const untrustedAllowlist = buildCompactionReviewPacket({
@@ -143,10 +110,7 @@ test("review packet redacts credentials before model access and remains bounded"
     content: "word ".repeat(800),
     sourceHash: hash("word ".repeat(800)),
   }));
-  const bounded = buildCompactionReviewPacket({
-    canonicalSummary: "safe",
-    sources: many,
-  })!;
+  const bounded = buildCompactionReviewPacket({ canonicalSummary: "safe", sources: many })!;
   assert.ok(JSON.stringify(bounded).length <= 48_000);
   assert.ok(bounded.sources.length < many.length);
 });

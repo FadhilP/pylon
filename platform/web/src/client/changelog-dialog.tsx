@@ -13,10 +13,7 @@ export function ChangelogDialog({ onClose }: { onClose: () => void }) {
   const [release, setRelease] = useState(RELEASES[0]!);
 
   useEffect(() => {
-    const previous =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => {
       if (previous?.isConnected) previous.focus();
@@ -30,9 +27,7 @@ export function ChangelogDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not([disabled])",
-    );
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])");
     if (!focusable?.length) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -57,20 +52,13 @@ export function ChangelogDialog({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="changelog-dialog-title"
-        onKeyDown={onKeyDown}
-      >
+        onKeyDown={onKeyDown}>
         <header>
           <div>
             <IconLibrary size={18} />
             <strong id="changelog-dialog-title">Changelog</strong>
           </div>
-          <button
-            data-autofocus
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-            aria-label="Close changelog"
-          >
+          <button data-autofocus className="icon-button" type="button" onClick={onClose} aria-label="Close changelog">
             <IconX size={17} />
           </button>
         </header>
@@ -80,25 +68,16 @@ export function ChangelogDialog({ onClose }: { onClose: () => void }) {
             {RELEASES.map((item, index) => (
               <button
                 key={item.version}
-                className={
-                  item.version === release.version ? "is-active" : undefined
-                }
+                className={item.version === release.version ? "is-active" : undefined}
                 type="button"
-                aria-current={
-                  item.version === release.version ? "true" : undefined
-                }
-                onClick={() => setRelease(item)}
-              >
+                aria-current={item.version === release.version ? "true" : undefined}
+                onClick={() => setRelease(item)}>
                 <strong>v{item.version}</strong>
                 <small>{index === 0 ? "Latest" : item.date}</small>
               </button>
             ))}
           </nav>
-          <article
-            className="changelog-release"
-            aria-live="polite"
-            aria-labelledby="changelog-release-title"
-          >
+          <article className="changelog-release" aria-live="polite" aria-labelledby="changelog-release-title">
             <div className="changelog-meta">
               <span>v{release.version}</span>
               <span>{release.date}</span>
@@ -108,7 +87,7 @@ export function ChangelogDialog({ onClose }: { onClose: () => void }) {
             <section>
               <h3>Updated</h3>
               <ul>
-                {release.notes.map((note) => (
+                {release.notes.map(note => (
                   <li key={note}>{note}</li>
                 ))}
               </ul>

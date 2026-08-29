@@ -43,13 +43,7 @@ function fileCitationHref(text: string): string | undefined {
   if (!range) return;
   const start = parseFileReference(`${range[1]}:${range[2]}`);
   const end = parseFileReference(`${range[1]}:${range[3]}`);
-  if (
-    start?.line === undefined ||
-    end?.line === undefined ||
-    start.path !== end.path ||
-    end.line < start.line
-  )
-    return;
+  if (start?.line === undefined || end?.line === undefined || start.path !== end.path || end.line < start.line) return;
   return fileReferenceHref(start);
 }
 
@@ -87,12 +81,7 @@ class MarkdownRenderer extends Renderer {
 const renderer = new MarkdownRenderer();
 
 export function renderMarkdown(text: string): string {
-  return marked.parse(text, {
-    async: false,
-    breaks: true,
-    gfm: true,
-    renderer,
-  });
+  return marked.parse(text, { async: false, breaks: true, gfm: true, renderer });
 }
 
 const sourceLanguages: Record<string, string> = {
@@ -123,16 +112,10 @@ const sourceLanguages: Record<string, string> = {
   zsh: "bash",
 };
 
-export function highlightSource(
-  text: string,
-  path: string,
-  diffView = false,
-): string {
+export function highlightSource(text: string, path: string, diffView = false): string {
   const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
   const language = diffView ? "diff" : sourceLanguages[extension];
-  return language
-    ? hljs.highlight(text, { language, ignoreIllegals: true }).value
-    : escapeHtml(text);
+  return language ? hljs.highlight(text, { language, ignoreIllegals: true }).value : escapeHtml(text);
 }
 
 export function escapeHtml(value: string): string {

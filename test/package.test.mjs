@@ -11,12 +11,7 @@ const npmCli = process.env.npm_execpath;
 
 function npm(args, options = {}) {
   assert.ok(npmCli, "run this check through npm run test:package");
-  return spawnSync(process.execPath, [npmCli, ...args], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 180_000,
-    ...options,
-  });
+  return spawnSync(process.execPath, [npmCli, ...args], { cwd: root, encoding: "utf8", timeout: 180_000, ...options });
 }
 
 function readyUrl(child) {
@@ -24,7 +19,7 @@ function readyUrl(child) {
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => reject(new Error(`pylon did not start\n${stdout}\n${stderr}`)), 30_000);
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", chunk => {
       stdout += chunk;
       const match = stdout.match(/Pylon web: (http:\/\/127\.0\.0\.1:\d+)/);
       if (match) {
@@ -32,8 +27,10 @@ function readyUrl(child) {
         resolveReady(match[1]);
       }
     });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("exit", (code) => {
+    child.stderr.on("data", chunk => {
+      stderr += chunk;
+    });
+    child.once("exit", code => {
       clearTimeout(timer);
       reject(new Error(`pylon exited before startup (${code})\n${stdout}\n${stderr}`));
     });
@@ -42,7 +39,7 @@ function readyUrl(child) {
 
 function exited(child) {
   if (child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolveExit) => child.once("exit", resolveExit));
+  return new Promise(resolveExit => child.once("exit", resolveExit));
 }
 
 test("packed package installs and launches its production web app", { timeout: 240_000 }, async () => {
@@ -56,7 +53,7 @@ test("packed package installs and launches its production web app", { timeout: 2
   try {
     const pack = npm(["pack", "--silent", "--pack-destination", packed]);
     assert.equal(pack.status, 0, pack.stderr || pack.stdout);
-    const tarball = join(packed, (await readdir(packed)).find((name) => name.endsWith(".tgz")) ?? "");
+    const tarball = join(packed, (await readdir(packed)).find(name => name.endsWith(".tgz")) ?? "");
     assert.ok(tarball.endsWith(".tgz") && existsSync(tarball), "npm pack did not create a tarball");
 
     const install = npm(["install", "--prefix", prefix, "--omit=dev", "--no-audit", "--no-fund", tarball]);
@@ -70,10 +67,12 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
 
-    const adapterCheck = spawnSync(process.execPath, [
-      "--input-type=module",
-      "--eval",
-      `import { createRequire } from "node:module";
+    const adapterCheck = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createRequire } from "node:module";
        import { join } from "node:path";
        import { pathToFileURL } from "node:url";
        const packageRoot = process.argv[1];
@@ -85,18 +84,15 @@ test("packed package installs and launches its production web app", { timeout: 2
        installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
        installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
        if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function") process.exit(1);`,
-      packageRoot,
-    ], { encoding: "utf8", timeout: 30_000 });
+        packageRoot,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
 
     launch = spawn(process.execPath, [join(packageRoot, "bin", "pylon.mjs")], {
       cwd: project,
-      env: {
-        ...process.env,
-        PI_CODING_AGENT_DIR: join(temp, "agent"),
-        PYLON_NO_UPDATE_CHECK: "1",
-        PYLON_PORT: "0",
-      },
+      env: { ...process.env, PI_CODING_AGENT_DIR: join(temp, "agent"), PYLON_NO_UPDATE_CHECK: "1", PYLON_PORT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const origin = await readyUrl(launch);

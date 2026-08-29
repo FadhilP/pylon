@@ -26,14 +26,7 @@ function initialComposerDrafts(): Map<string, ComposerDraft> {
  */
 export function useComposerDrafts() {
   const drafts = useRef(initialComposerDrafts());
-  const projects = useRef(
-    new Map(
-      [...drafts.current.values()].map((draft) => [
-        draft.sessionId,
-        draft.projectId,
-      ]),
-    ),
-  );
+  const projects = useRef(new Map([...drafts.current.values()].map(draft => [draft.sessionId, draft.projectId])));
 
   const persist = () => {
     try {
@@ -43,24 +36,11 @@ export function useComposerDrafts() {
     }
   };
 
-  const save = (
-    sessionId: string,
-    projectId: string | undefined,
-    text: string,
-  ) => {
-    const resolved =
-      projectId ??
-      projects.current.get(sessionId) ??
-      drafts.current.get(sessionId)?.projectId ??
-      "";
+  const save = (sessionId: string, projectId: string | undefined, text: string) => {
+    const resolved = projectId ?? projects.current.get(sessionId) ?? drafts.current.get(sessionId)?.projectId ?? "";
     if (text) {
       if (resolved) projects.current.set(sessionId, resolved);
-      drafts.current.set(sessionId, {
-        sessionId,
-        projectId: resolved,
-        text,
-        updatedAt: Date.now(),
-      });
+      drafts.current.set(sessionId, { sessionId, projectId: resolved, text, updatedAt: Date.now() });
     } else {
       drafts.current.delete(sessionId);
     }
@@ -71,21 +51,10 @@ export function useComposerDrafts() {
    * Moves a draft written against a pending session onto the session the runtime
    * actually created, dropping the placeholder it was recovered from.
    */
-  const adopt = (
-    sessionId: string,
-    projectId: string,
-    text: string,
-    recoveredSessionId?: string,
-  ) => {
+  const adopt = (sessionId: string, projectId: string, text: string, recoveredSessionId?: string) => {
     projects.current.set(sessionId, projectId);
     if (recoveredSessionId) drafts.current.delete(recoveredSessionId);
-    if (text)
-      drafts.current.set(sessionId, {
-        sessionId,
-        projectId,
-        text,
-        updatedAt: Date.now(),
-      });
+    if (text) drafts.current.set(sessionId, { sessionId, projectId, text, updatedAt: Date.now() });
     persist();
   };
 
@@ -115,8 +84,7 @@ export function useComposerDrafts() {
 
   return {
     textFor: (sessionId: string) => drafts.current.get(sessionId)?.text,
-    latestForProject: (projectId: string) =>
-      latestProjectDraft(drafts.current, projectId),
+    latestForProject: (projectId: string) => latestProjectDraft(drafts.current, projectId),
     save,
     adopt,
     rememberProject,

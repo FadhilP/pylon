@@ -15,12 +15,12 @@ const validModels = (value: unknown): value is string[] =>
   (Array.isArray(value) &&
     value.length > 0 &&
     new Set(value).size === value.length &&
-    value.every((model) => typeof model === "string" && Boolean(model.trim())));
+    value.every(model => typeof model === "string" && Boolean(model.trim())));
 const validThinking = (value: unknown): value is ThinkingLevel[] =>
   Array.isArray(value) &&
   value.length > 0 &&
   new Set(value).size === value.length &&
-  value.every((level) => thinkingLevels.includes(level as ThinkingLevel));
+  value.every(level => thinkingLevels.includes(level as ThinkingLevel));
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
@@ -33,10 +33,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   };
 }
 
-export async function updateSettings(
-  value: any,
-  { agentDir }: { agentDir: string },
-): Promise<void> {
+export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (
     value?.kind !== "spawn" ||
     !validAvailability(value.agentAvailability) ||
@@ -51,9 +48,7 @@ export async function updateSettings(
       version: 1,
       agentAvailability: value.agentAvailability,
       sessionAvailability: value.sessionAvailability,
-      ...(value.models
-        ? { models: value.models.map((model: string) => model.trim()) }
-        : {}),
+      ...(value.models ? { models: value.models.map((model: string) => model.trim()) } : {}),
       agentThinkingLevels: value.agentThinkingLevels,
     },
     configPath(agentDir),

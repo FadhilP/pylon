@@ -1,22 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmod,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, parse, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  emptyState,
-  isPapercutState,
-  type PapercutState,
-} from "./papercuts.ts";
+import { emptyState, isPapercutState, type PapercutState } from "./papercuts.ts";
 
 export const MAX_STATE_BYTES = 2 * 1024 * 1024;
 const LOCK_ATTEMPTS = 200;
@@ -24,14 +10,9 @@ const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 30_000;
 type LockOwner = { version: 1; token: string; pid: number; createdAt: string };
 
-export function normalizeProjectIdentity(
-  path: string,
-  platform = process.platform,
-) {
+export function normalizeProjectIdentity(path: string, platform = process.platform) {
   const normalized = path.replace(/\\/g, "/").replace(/\/$/, "");
-  return platform === "win32"
-    ? normalized.toLocaleLowerCase("en-US")
-    : normalized;
+  return platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }
 
 async function hasGitMarker(directory: string) {
@@ -55,10 +36,7 @@ export async function projectRoot(cwd: string) {
 }
 
 export function statePath(agentDir: string, root: string) {
-  const id = createHash("sha256")
-    .update(normalizeProjectIdentity(root))
-    .digest("hex")
-    .slice(0, 32);
+  const id = createHash("sha256").update(normalizeProjectIdentity(root)).digest("hex").slice(0, 32);
   return join(agentDir, "pi-papercut", "projects", `${id}.json`);
 }
 
@@ -87,11 +65,8 @@ async function readLockOwner(lockPath: string): Promise<LockOwner | undefined> {
 }
 async function removeStaleLock(lockPath: string) {
   const before = await readLockOwner(lockPath);
-  const age =
-    Date.now() -
-    (await stat(lockPath).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
-  if (age <= LOCK_STALE_MS || (before && processAlive(before.pid)))
-    return false;
+  const age = Date.now() - (await stat(lockPath).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
+  if (age <= LOCK_STALE_MS || (before && processAlive(before.pid))) return false;
   const after = await readLockOwner(lockPath);
   if ((before?.token ?? "") !== (after?.token ?? "")) return false;
   await rm(lockPath, { recursive: true, force: true });
@@ -101,12 +76,7 @@ async function removeStaleLock(lockPath: string) {
 async function writeLockOwner(lockPath: string, token: string) {
   await writeFile(
     ownerPath(lockPath),
-    JSON.stringify({
-      version: 1,
-      token,
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-    } satisfies LockOwner),
+    JSON.stringify({ version: 1, token, pid: process.pid, createdAt: new Date().toISOString() } satisfies LockOwner),
     { mode: 0o600, flag: "wx" },
   );
 }
@@ -124,9 +94,7 @@ async function tryAcquireLock(path: string, lockPath: string, token: string) {
     return true;
   } catch (error) {
     await rm(lockPath, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`unable to initialize papercut state lock: ${path}`, {
-      cause: error,
-    });
+    throw new Error(`unable to initialize papercut state lock: ${path}`, { cause: error });
   }
 }
 
@@ -148,33 +116,21 @@ async function withLock<T>(path: string, task: () => Promise<T>): Promise<T> {
   try {
     return await task();
   } finally {
-    if ((await readLockOwner(lockPath))?.token === token)
-      await rm(lockPath, { recursive: true, force: true });
+    if ((await readLockOwner(lockPath))?.token === token) await rm(lockPath, { recursive: true, force: true });
   }
 }
 
 async function readState(path: string, root: string): Promise<PapercutState> {
   try {
     const info = await stat(path);
-    if (info.size > MAX_STATE_BYTES)
-      throw new Error("papercut state exceeds 2 MiB limit");
+    if (info.size > MAX_STATE_BYTES) throw new Error("papercut state exceeds 2 MiB limit");
     const value = JSON.parse(await readFile(path, "utf8"));
-    if (
-      !isPapercutState(value) ||
-      normalizeProjectIdentity(value.projectRoot) !==
-        normalizeProjectIdentity(root)
-    )
-      throw Object.assign(new Error("unsupported papercut state"), {
-        code: "PAPERCUT_INVALID_STATE",
-      });
+    if (!isPapercutState(value) || normalizeProjectIdentity(value.projectRoot) !== normalizeProjectIdentity(root))
+      throw Object.assign(new Error("unsupported papercut state"), { code: "PAPERCUT_INVALID_STATE" });
     return value;
   } catch (error: any) {
     if (error?.code === "ENOENT") return emptyState(root);
-    if (
-      !(error instanceof SyntaxError) &&
-      error?.code !== "PAPERCUT_INVALID_STATE"
-    )
-      throw error;
+    if (!(error instanceof SyntaxError) && error?.code !== "PAPERCUT_INVALID_STATE") throw error;
     await rename(path, `${path}.corrupt-${randomUUID()}`);
     return emptyState(root);
   }
@@ -182,8 +138,7 @@ async function readState(path: string, root: string): Promise<PapercutState> {
 
 async function writeState(path: string, state: PapercutState) {
   const bytes = JSON.stringify(state, null, 2) + "\n";
-  if (Buffer.byteLength(bytes) > MAX_STATE_BYTES)
-    throw new Error("papercut state exceeds 2 MiB limit");
+  if (Buffer.byteLength(bytes) > MAX_STATE_BYTES) throw new Error("papercut state exceeds 2 MiB limit");
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
@@ -211,11 +166,7 @@ async function writeState(path: string, state: PapercutState) {
 export async function loadProjectState(agentDir: string, cwd: string) {
   const root = await projectRoot(cwd),
     path = statePath(agentDir, root);
-  return withLock(path, async () => ({
-    root,
-    path,
-    state: await readState(path, root),
-  }));
+  return withLock(path, async () => ({ root, path, state: await readState(path, root) }));
 }
 
 export async function updateProjectState<T>(
@@ -228,8 +179,7 @@ export async function updateProjectState<T>(
   return withLock(path, async () => {
     const current = await readState(path, root);
     const { state, result } = update(current);
-    if (!isPapercutState(state))
-      throw new Error("refusing to write invalid papercut state");
+    if (!isPapercutState(state)) throw new Error("refusing to write invalid papercut state");
     await writeState(path, state);
     return { root, path, state, result };
   });

@@ -16,11 +16,7 @@
  */
 export function packRecentRecords(
   records: readonly string[],
-  options: {
-    maxChars: number;
-    maxItems: number;
-    identity: (record: string) => string;
-  },
+  options: { maxChars: number; maxItems: number; identity: (record: string) => string },
 ): string {
   const { maxChars, maxItems, identity } = options;
   if (maxChars <= 0 || maxItems <= 0) return "";
@@ -28,11 +24,7 @@ export function packRecentRecords(
   const selected: string[] = [];
   const seen = new Set<string>();
   let used = 0;
-  for (
-    let index = records.length - 1;
-    index >= 0 && selected.length < maxItems;
-    index--
-  ) {
+  for (let index = records.length - 1; index >= 0 && selected.length < maxItems; index--) {
     const record = records[index];
     const key = identity(record);
     if (!key || seen.has(key)) continue;

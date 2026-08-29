@@ -8,14 +8,10 @@ export interface PersistedWorkDuration {
   durationMs: number;
 }
 
-export function parseWorkDuration(
-  value: unknown,
-): PersistedWorkDuration | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+export function parseWorkDuration(value: unknown): PersistedWorkDuration | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   try {
-    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES)
-      return undefined;
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES) return undefined;
   } catch {
     return undefined;
   }
@@ -29,11 +25,7 @@ export function parseWorkDuration(
     Number(raw.durationMs) > MAX_WORK_DURATION_MS
   )
     return undefined;
-  return {
-    version: 1,
-    assistantEntryId: raw.assistantEntryId,
-    durationMs: Number(raw.durationMs),
-  };
+  return { version: 1, assistantEntryId: raw.assistantEntryId, durationMs: Number(raw.durationMs) };
 }
 
 export function appendWorkDuration(
@@ -41,11 +33,7 @@ export function appendWorkDuration(
   assistantEntryId: string,
   durationMs: number,
 ): boolean {
-  const duration = parseWorkDuration({
-    version: 1,
-    assistantEntryId,
-    durationMs,
-  });
+  const duration = parseWorkDuration({ version: 1, assistantEntryId, durationMs });
   if (!duration) return false;
   session.appendCustomEntry(WORK_DURATION_ENTRY_TYPE, duration);
   return true;
@@ -53,14 +41,11 @@ export function appendWorkDuration(
 
 export function activeAssistantEntryIds(branch: unknown[]): Set<string> {
   return new Set(
-    branch.flatMap((value) => {
-      if (!value || typeof value !== "object" || Array.isArray(value))
-        return [];
+    branch.flatMap(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
       const entry = value as Record<string, unknown>;
       const message = entry.message as Record<string, unknown> | undefined;
-      return entry.type === "message" &&
-        message?.role === "assistant" &&
-        typeof entry.id === "string"
+      return entry.type === "message" && message?.role === "assistant" && typeof entry.id === "string"
         ? [entry.id]
         : [];
     }),
@@ -76,11 +61,7 @@ export function readPersistedWorkDurations(session: {
   for (const value of session.getEntries()) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
-    if (
-      entry.type !== "custom" ||
-      entry.customType !== WORK_DURATION_ENTRY_TYPE
-    )
-      continue;
+    if (entry.type !== "custom" || entry.customType !== WORK_DURATION_ENTRY_TYPE) continue;
     const duration = parseWorkDuration(entry.data);
     if (!duration || !activeAssistants.has(duration.assistantEntryId)) continue;
     durations.set(duration.assistantEntryId, duration.durationMs);
@@ -96,14 +77,10 @@ export interface PersistedTurnGitBranch {
   gitBranch: string;
 }
 
-export function parseTurnGitBranch(
-  value: unknown,
-): PersistedTurnGitBranch | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+export function parseTurnGitBranch(value: unknown): PersistedTurnGitBranch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   try {
-    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES)
-      return undefined;
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES) return undefined;
   } catch {
     return undefined;
   }
@@ -118,11 +95,7 @@ export function parseTurnGitBranch(
     /[\u0000-\u001f\u007f]/.test(raw.gitBranch)
   )
     return undefined;
-  return {
-    version: 1,
-    assistantEntryId: raw.assistantEntryId,
-    gitBranch: raw.gitBranch,
-  };
+  return { version: 1, assistantEntryId: raw.assistantEntryId, gitBranch: raw.gitBranch };
 }
 
 export function appendTurnGitBranch(
@@ -130,11 +103,7 @@ export function appendTurnGitBranch(
   assistantEntryId: string,
   gitBranch: string,
 ): boolean {
-  const branch = parseTurnGitBranch({
-    version: 1,
-    assistantEntryId,
-    gitBranch,
-  });
+  const branch = parseTurnGitBranch({ version: 1, assistantEntryId, gitBranch });
   if (!branch) return false;
   session.appendCustomEntry(TURN_GIT_BRANCH_ENTRY_TYPE, branch);
   return true;
@@ -149,11 +118,7 @@ export function readPersistedTurnGitBranches(session: {
   for (const value of session.getEntries()) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
-    if (
-      entry.type !== "custom" ||
-      entry.customType !== TURN_GIT_BRANCH_ENTRY_TYPE
-    )
-      continue;
+    if (entry.type !== "custom" || entry.customType !== TURN_GIT_BRANCH_ENTRY_TYPE) continue;
     const branch = parseTurnGitBranch(entry.data);
     if (!branch || !activeAssistants.has(branch.assistantEntryId)) continue;
     branches.set(branch.assistantEntryId, branch.gitBranch);
@@ -168,14 +133,10 @@ export interface PersistedToolDuration {
   durationMs: number;
 }
 
-export function parseToolDuration(
-  value: unknown,
-): PersistedToolDuration | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+export function parseToolDuration(value: unknown): PersistedToolDuration | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   try {
-    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES)
-      return undefined;
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ENTRY_BYTES) return undefined;
   } catch {
     return undefined;
   }
@@ -191,11 +152,7 @@ export function parseToolDuration(
     Number(raw.durationMs) > MAX_WORK_DURATION_MS
   )
     return undefined;
-  return {
-    version: 1,
-    toolCallId: raw.toolCallId,
-    durationMs: Number(raw.durationMs),
-  };
+  return { version: 1, toolCallId: raw.toolCallId, durationMs: Number(raw.durationMs) };
 }
 
 export function appendToolDuration(
@@ -211,24 +168,15 @@ export function appendToolDuration(
 
 export function activeToolCallIds(branch: unknown[]): Set<string> {
   return new Set(
-    branch.flatMap((value) => {
-      if (!value || typeof value !== "object" || Array.isArray(value))
-        return [];
+    branch.flatMap(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
       const entry = value as Record<string, unknown>;
       const message = entry.message as Record<string, unknown> | undefined;
-      if (
-        entry.type !== "message" ||
-        message?.role !== "assistant" ||
-        !Array.isArray(message.content)
-      )
-        return [];
-      return message.content.flatMap((value) => {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          return [];
+      if (entry.type !== "message" || message?.role !== "assistant" || !Array.isArray(message.content)) return [];
+      return message.content.flatMap(value => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return [];
         const part = value as Record<string, unknown>;
-        return part.type === "toolCall" && typeof part.id === "string"
-          ? [part.id]
-          : [];
+        return part.type === "toolCall" && typeof part.id === "string" ? [part.id] : [];
       });
     }),
   );
@@ -243,11 +191,7 @@ export function readPersistedToolDurations(session: {
   for (const value of session.getEntries()) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
-    if (
-      entry.type !== "custom" ||
-      entry.customType !== TOOL_DURATION_ENTRY_TYPE
-    )
-      continue;
+    if (entry.type !== "custom" || entry.customType !== TOOL_DURATION_ENTRY_TYPE) continue;
     const duration = parseToolDuration(entry.data);
     if (!duration || !activeTools.has(duration.toolCallId)) continue;
     durations.set(duration.toolCallId, duration.durationMs);

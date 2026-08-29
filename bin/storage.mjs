@@ -6,10 +6,7 @@ import { join, resolve } from "node:path";
 const AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 
 function paths(home) {
-  return {
-    agentDir: join(home, ".pylon", "agent"),
-    legacyDir: join(home, ".pi", "agent"),
-  };
+  return { agentDir: join(home, ".pylon", "agent"), legacyDir: join(home, ".pi", "agent") };
 }
 
 async function directoryState(path, inspect = stat) {
@@ -21,7 +18,7 @@ async function directoryState(path, inspect = stat) {
   }
 }
 
-const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
+const wait = milliseconds => new Promise(resolveWait => setTimeout(resolveWait, milliseconds));
 
 async function acquireMigrationLock(path, agentDir, inspect, openFile = open) {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -29,7 +26,7 @@ async function acquireMigrationLock(path, agentDir, inspect, openFile = open) {
       return await openFile(path, "wx", 0o600);
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      if (await directoryState(agentDir, inspect) === "directory") return;
+      if ((await directoryState(agentDir, inspect)) === "directory") return;
       await wait(100);
     }
   }
@@ -74,16 +71,19 @@ export async function migratePylonStorage(options = {}) {
       preserveTimestamps: true,
       dereference: false,
     });
-    if (await directoryState(temporary, inspect) !== "directory") throw new Error("migration copy is not a directory");
+    if ((await directoryState(temporary, inspect)) !== "directory")
+      throw new Error("migration copy is not a directory");
     await chmod(temporary, 0o700);
     lock = await acquireMigrationLock(lockPath, agentDir, inspect, options.open);
-    if (!lock || await directoryState(agentDir, inspect) === "directory") return { status: "already-present", agentDir, legacyDir };
-    if (await directoryState(agentDir, inspect) === "invalid") throw new Error(`${agentDir} exists but is not a directory`);
+    if (!lock || (await directoryState(agentDir, inspect)) === "directory")
+      return { status: "already-present", agentDir, legacyDir };
+    if ((await directoryState(agentDir, inspect)) === "invalid")
+      throw new Error(`${agentDir} exists but is not a directory`);
     try {
       await move(temporary, agentDir);
     } catch (error) {
       // A non-cooperating process may still have created the target after our final check.
-      if (await directoryState(agentDir, inspect) !== "directory") throw error;
+      if ((await directoryState(agentDir, inspect)) !== "directory") throw error;
       return { status: "already-present", agentDir, legacyDir };
     }
     return { status: "migrated", agentDir, legacyDir };
@@ -105,15 +105,19 @@ export async function preparePylonStorage(options = {}) {
     const result = await migratePylonStorage({ ...options, homeDir: home });
     env[AGENT_DIR_ENV] = result.agentDir;
     if (result.status === "migrated") {
-      (options.log ?? console.log)(`Migrated Pylon data to ${result.agentDir}. The original remains at ${result.legacyDir}.`);
+      (options.log ?? console.log)(
+        `Migrated Pylon data to ${result.agentDir}. The original remains at ${result.legacyDir}.`,
+      );
     }
     return result;
   } catch (error) {
     const { agentDir, legacyDir } = paths(home);
-    if (await directoryState(legacyDir, options.stat ?? stat) !== "directory") throw error;
+    if ((await directoryState(legacyDir, options.stat ?? stat)) !== "directory") throw error;
     env[AGENT_DIR_ENV] = legacyDir;
     const message = error instanceof Error ? error.message : String(error);
-    (options.warn ?? console.warn)(`Pylon storage migration failed: ${message}. Using ${legacyDir}; run \`pylon migrate\` to retry.`);
+    (options.warn ?? console.warn)(
+      `Pylon storage migration failed: ${message}. Using ${legacyDir}; run \`pylon migrate\` to retry.`,
+    );
     return { status: "legacy-fallback", agentDir: legacyDir, legacyDir, migrationError: error };
   }
 }

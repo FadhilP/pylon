@@ -8,9 +8,7 @@ import {
 } from "../src/memory-evaluation.ts";
 
 const safeCounts = () =>
-  Object.fromEntries(
-    REQUIRED_ZERO_COUNTS.map((key) => [key, false]),
-  ) as MemoryEvaluationCase["zeroCounts"];
+  Object.fromEntries(REQUIRED_ZERO_COUNTS.map(key => [key, false])) as MemoryEvaluationCase["zeroCounts"];
 const corpus = (count = 500): MemoryEvaluationCase[] =>
   Array.from({ length: count }, (_, index) => ({
     id: `case-${index}`,
@@ -28,26 +26,14 @@ test("offline evaluator reports only operation classes meeting every safety and 
   assert.equal(report.results.project_contract_write.passed, false);
   const unsafe = corpus();
   unsafe[1]!.zeroCounts.secretWrites = true;
-  assert.equal(
-    scoreMemoryEvaluation(unsafe).results.user_instruction_add.passed,
-    false,
-  );
+  assert.equal(scoreMemoryEvaluation(unsafe).results.user_instruction_add.passed, false);
   const useless = corpus();
   useless[1]!.useful = false;
-  assert.equal(
-    scoreMemoryEvaluation(useless).results.user_instruction_add.passed,
-    false,
-  );
+  assert.equal(scoreMemoryEvaluation(useless).results.user_instruction_add.passed, false);
 });
 
 test("offline evaluator rejects malformed and duplicate labeled cases", () => {
   assert.throws(() => parseMemoryEvaluationCorpus({}), /JSON array/);
-  assert.throws(
-    () => parseMemoryEvaluationCorpus([{ ...corpus(1)[0], extra: true }]),
-    /invalid/,
-  );
-  assert.throws(
-    () => parseMemoryEvaluationCorpus([corpus(1)[0], corpus(1)[0]]),
-    /duplicate/,
-  );
+  assert.throws(() => parseMemoryEvaluationCorpus([{ ...corpus(1)[0], extra: true }]), /invalid/);
+  assert.throws(() => parseMemoryEvaluationCorpus([corpus(1)[0], corpus(1)[0]]), /duplicate/);
 });

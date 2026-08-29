@@ -5,15 +5,10 @@ import { AndroidSessionManager } from "../src/android-session.ts";
 
 const avd = process.env.PI_HELIOS_ANDROID_AVD;
 const packageName = process.env.PI_HELIOS_ANDROID_PACKAGE;
-const live =
-  process.env.PI_HELIOS_ANDROID_LIVE === "1" && Boolean(avd && packageName);
+const live = process.env.PI_HELIOS_ANDROID_LIVE === "1" && Boolean(avd && packageName);
 const attachSerial = process.env.PI_HELIOS_ANDROID_ATTACH_SERIAL;
-const exec = (
-  command: string,
-  args: string[],
-  options?: { signal?: AbortSignal; timeout?: number; cwd?: string },
-) =>
-  new Promise<any>((resolve) => {
+const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) =>
+  new Promise<any>(resolve => {
     execFile(
       command,
       args,
@@ -26,12 +21,7 @@ const exec = (
       },
       (error, stdout, stderr) =>
         resolve({
-          code:
-            typeof (error as any)?.code === "number"
-              ? (error as any).code
-              : error
-                ? 1
-                : 0,
+          code: typeof (error as any)?.code === "number" ? (error as any).code : error ? 1 : 0,
           stdout,
           stderr,
           killed: Boolean((error as any)?.killed),
@@ -39,35 +29,24 @@ const exec = (
     );
   });
 
-test(
-  "live owned Android emulator and Appium workflow",
-  { skip: !live, timeout: 360_000 },
-  async () => {
-    const manager = new AndroidSessionManager(exec);
-    try {
-      const started = await manager.start(
-        "android-live",
-        avd!,
-        packageName!,
-        process.env.PI_HELIOS_ANDROID_ACTIVITY,
-        true,
-      );
-      assert.equal(started.ownership, "owned");
-      assert.equal(
-        (await manager.operate("android-live", { kind: "snapshot" }))
-          .packageName,
-        packageName,
-      );
-      assert.ok(
-        (await manager.operate("android-live", { kind: "screenshot" }))
-          .artifactPath,
-      );
-      await manager.close("android-live", "close");
-    } finally {
-      await manager.shutdown();
-    }
-  },
-);
+test("live owned Android emulator and Appium workflow", { skip: !live, timeout: 360_000 }, async () => {
+  const manager = new AndroidSessionManager(exec);
+  try {
+    const started = await manager.start(
+      "android-live",
+      avd!,
+      packageName!,
+      process.env.PI_HELIOS_ANDROID_ACTIVITY,
+      true,
+    );
+    assert.equal(started.ownership, "owned");
+    assert.equal((await manager.operate("android-live", { kind: "snapshot" })).packageName, packageName);
+    assert.ok((await manager.operate("android-live", { kind: "screenshot" })).artifactPath);
+    await manager.close("android-live", "close");
+  } finally {
+    await manager.shutdown();
+  }
+});
 
 test(
   "live attached Android emulator and Appium workflow",
@@ -82,15 +61,8 @@ test(
         process.env.PI_HELIOS_ANDROID_ACTIVITY,
       );
       assert.equal(attached.ownership, "attached");
-      assert.equal(
-        (await manager.operate("android-live-attach", { kind: "snapshot" }))
-          .packageName,
-        packageName,
-      );
-      assert.ok(
-        (await manager.operate("android-live-attach", { kind: "screenshot" }))
-          .artifactPath,
-      );
+      assert.equal((await manager.operate("android-live-attach", { kind: "snapshot" })).packageName, packageName);
+      assert.ok((await manager.operate("android-live-attach", { kind: "screenshot" })).artifactPath);
       await manager.close("android-live-attach", "detach");
     } finally {
       await manager.shutdown();

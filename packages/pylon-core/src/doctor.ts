@@ -1,10 +1,7 @@
 import { constants } from "node:fs";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  getAgentDir,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "./tools.ts";
 import type { ToolRegistry } from "./tool-registry.ts";
 
@@ -13,15 +10,7 @@ export type Probe = { lines: string[]; warning: boolean };
 const HEALTH_TIMEOUT_MS = 3_000;
 const MAX_HEALTH_REPORTERS = 20;
 const LOCK_AGE_MS = 30_000;
-const THINKING_SUFFIXES = new Set([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+const THINKING_SUFFIXES = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 const TOOL_SURFACES = [
   ["Advisor", ["advisor"]],
@@ -48,12 +37,7 @@ const CHILD_CONFIGS = [
   ],
 ] as const;
 
-const QUARANTINE_PACKAGES = [
-  "pi-advisor",
-  "pi-grunt",
-  "pi-scout",
-  "pi-continuity",
-];
+const QUARANTINE_PACKAGES = ["pi-advisor", "pi-grunt", "pi-scout", "pi-continuity"];
 const QUARANTINE_MARKERS = [".corrupt-", ".reset-unsupported-"];
 
 type JsonFile = { value: any } | { missing: true } | { invalid: true };
@@ -73,17 +57,11 @@ async function readJsonFile(path: string): Promise<JsonFile> {
   }
 }
 
-const listDir = (path: string) =>
-  readdir(path, { recursive: true }).catch(() => [] as string[]);
+const listDir = (path: string) => readdir(path, { recursive: true }).catch(() => [] as string[]);
 
 function probeRuntime(pi: ExtensionAPI): Probe {
-  const apiNames = [
-    "getActiveTools",
-    "setActiveTools",
-    "on",
-    "registerCommand",
-  ] as const;
-  const missingApi = apiNames.filter((name) => typeof pi[name] !== "function");
+  const apiNames = ["getActiveTools", "setActiveTools", "on", "registerCommand"] as const;
+  const missingApi = apiNames.filter(name => typeof pi[name] !== "function");
   const [major, minor] = process.versions.node.split(".").map(Number);
   const nodeCompatible = major > 22 || (major === 22 && minor >= 19);
   return {
@@ -105,9 +83,7 @@ async function probeExecutables(pi: ExtensionAPI): Promise<Probe> {
       ] as const
     ).map(async ([label, command, required]) => {
       try {
-        const result = await pi.exec(command, ["--version"], {
-          timeout: HEALTH_TIMEOUT_MS,
-        });
+        const result = await pi.exec(command, ["--version"], { timeout: HEALTH_TIMEOUT_MS });
         return { label, required, available: result.code === 0 };
       } catch {
         return { label, required, available: false };
@@ -122,7 +98,7 @@ async function probeExecutables(pi: ExtensionAPI): Promise<Probe> {
           `${label}: ${available ? "available" : `missing${required ? "" : " (optional)"}`}`,
       ),
     ],
-    warning: results.some((item) => item.required && !item.available),
+    warning: results.some(item => item.required && !item.available),
   };
 }
 
@@ -137,11 +113,9 @@ async function probeStateRoot(agentDir: string): Promise<Probe> {
     const now = Date.now();
     const locks = await Promise.all(
       (await listDir(continuityDir))
-        .filter((name) => name.endsWith(".lock"))
-        .map(async (name) => {
-          const info = await stat(join(continuityDir, name)).catch(
-            () => undefined,
-          );
+        .filter(name => name.endsWith(".lock"))
+        .map(async name => {
+          const info = await stat(join(continuityDir, name)).catch(() => undefined);
           return info && now - info.mtimeMs > LOCK_AGE_MS ? name : undefined;
         }),
     );
@@ -165,44 +139,24 @@ async function probeQuarantine(agentDir: string): Promise<Probe> {
   const quarantined: string[] = [];
   for (const name of QUARANTINE_PACKAGES) {
     for (const entry of await listDir(join(agentDir, name)))
-      if (
-        QUARANTINE_MARKERS.some((marker) => entry.includes(marker)) &&
-        quarantined.length < 8
-      )
+      if (QUARANTINE_MARKERS.some(marker => entry.includes(marker)) && quarantined.length < 8)
         quarantined.push(join(name, entry));
   }
-  return {
-    lines: [`Quarantined state: ${quarantined.join(", ") || "none"}`],
-    warning: quarantined.length > 0,
-  };
+  return { lines: [`Quarantined state: ${quarantined.join(", ") || "none"}`], warning: quarantined.length > 0 };
 }
 
 /** Resolves "provider/model[:thinking]" against the registry to report whether it can actually run. */
-function describeModelReference(
-  label: string,
-  reference: string,
-  ctx: any,
-): { line: string; warning: boolean } {
-  if (reference === "<invalid config>")
-    return { line: `${label}: invalid config JSON`, warning: true };
+function describeModelReference(label: string, reference: string, ctx: any): { line: string; warning: boolean } {
+  if (reference === "<invalid config>") return { line: `${label}: invalid config JSON`, warning: true };
   if (reference === "<not configured>")
-    return {
-      line: `${label}: not configured (memory proposals unavailable)`,
-      warning: true,
-    };
+    return { line: `${label}: not configured (memory proposals unavailable)`, warning: true };
   const slash = reference.indexOf("/");
   const colon = reference.lastIndexOf(":");
-  const idEnd =
-    colon > slash && THINKING_SUFFIXES.has(reference.slice(colon + 1))
-      ? colon
-      : undefined;
+  const idEnd = colon > slash && THINKING_SUFFIXES.has(reference.slice(colon + 1)) ? colon : undefined;
   const provider = slash > 0 ? reference.slice(0, slash) : "";
   const id = slash > 0 ? reference.slice(slash + 1, idEnd) : "";
-  const model =
-    provider && id ? ctx.modelRegistry?.find?.(provider, id) : undefined;
-  const available = Boolean(
-    model && ctx.modelRegistry?.hasConfiguredAuth?.(model),
-  );
+  const model = provider && id ? ctx.modelRegistry?.find?.(provider, id) : undefined;
+  const available = Boolean(model && ctx.modelRegistry?.hasConfiguredAuth?.(model));
   const state =
     !provider || !id
       ? "invalid reference"
@@ -211,10 +165,7 @@ function describeModelReference(
         : available
           ? "available"
           : "credentials unavailable";
-  return {
-    line: `${label}: ${reference} (${state})`,
-    warning: !provider || !id || !available,
-  };
+  return { line: `${label}: ${reference} (${state})`, warning: !provider || !id || !available };
 }
 
 async function probeChildModels(agentDir: string, ctx: any): Promise<Probe> {
@@ -231,42 +182,25 @@ async function probeChildModels(agentDir: string, ctx: any): Promise<Probe> {
     }
     if (name === "Continuity") continuityConfig = file.value;
     for (const [label, model] of select(file.value))
-      if (typeof model === "string" && model.trim())
-        configured.push([label, model]);
+      if (typeof model === "string" && model.trim()) configured.push([label, model]);
   }
-  if (
-    continuityConfig?.memoryEnabled !== false &&
-    !continuityConfig?.memoryReviewer?.model
-  ) {
+  if (continuityConfig?.memoryEnabled !== false && !continuityConfig?.memoryReviewer?.model) {
     configured.push(["Memory Reviewer", "<not configured>"]);
     warning = true;
   }
-  const described = configured.map(([label, reference]) =>
-    describeModelReference(label, reference, ctx),
-  );
+  const described = configured.map(([label, reference]) => describeModelReference(label, reference, ctx));
   return {
-    lines: [
-      "Configured child models:",
-      ...(described.length
-        ? described.map((item) => item.line)
-        : ["none configured"]),
-    ],
-    warning: warning || described.some((item) => item.warning),
+    lines: ["Configured child models:", ...(described.length ? described.map(item => item.line) : ["none configured"])],
+    warning: warning || described.some(item => item.warning),
   };
 }
 
 async function probeMemoryMigration(agentDir: string): Promise<Probe> {
-  const file = await readJsonFile(
-    join(agentDir, "pi-continuity", "memory-v5", "migration.json"),
-  );
-  if ("missing" in file)
-    return { lines: ["Memory migration: not started"], warning: false };
-  if ("invalid" in file)
-    return { lines: ["Memory migration: invalid journal"], warning: true };
+  const file = await readJsonFile(join(agentDir, "pi-continuity", "memory-v5", "migration.json"));
+  if ("missing" in file) return { lines: ["Memory migration: not started"], warning: false };
+  if ("invalid" in file) return { lines: ["Memory migration: invalid journal"], warning: true };
   const { status, failureReason } = file.value;
-  const reason = failureReason
-    ? ` (${String(failureReason).slice(0, 200)})`
-    : "";
+  const reason = failureReason ? ` (${String(failureReason).slice(0, 200)})` : "";
   return {
     lines: [`Memory migration: ${String(status ?? "unknown")}${reason}`],
     warning: ["failed", "preparing", "prepared"].includes(status),
@@ -274,18 +208,13 @@ async function probeMemoryMigration(agentDir: string): Promise<Probe> {
 }
 
 function probeToolSurfaces(registry: ToolRegistry, pi: ExtensionAPI): Probe {
-  const activeTools =
-    typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
-  const known = new Set([
-    ...registry.baseline,
-    ...registry.managedTools(),
-    ...activeTools,
-  ]);
+  const activeTools = typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
+  const known = new Set([...registry.baseline, ...registry.managedTools(), ...activeTools]);
   return {
     lines: [
       "Tool surfaces:",
       ...TOOL_SURFACES.map(([name, tools]) => {
-        const found = tools.filter((tool) => known.has(tool));
+        const found = tools.filter(tool => known.has(tool));
         return `${name}: ${found.length === tools.length ? "registered" : found.length ? `partial (${found.join(", ")})` : "not observed"}`;
       }),
     ],
@@ -299,14 +228,13 @@ async function probePackageHealth(pi: ExtensionAPI): Promise<Probe> {
   pi.events.emit("pylon:health-request", {
     version: 1,
     respond(value: unknown | Promise<unknown>) {
-      if (pending.length < MAX_HEALTH_REPORTERS)
-        pending.push(Promise.resolve(value));
+      if (pending.length < MAX_HEALTH_REPORTERS) pending.push(Promise.resolve(value));
     },
   });
   const values = await Promise.all(
     pending.map(
-      (report) =>
-        new Promise<unknown>((resolve) => {
+      report =>
+        new Promise<unknown>(resolve => {
           const timer = setTimeout(() => resolve(undefined), HEALTH_TIMEOUT_MS);
           const settle = (value: unknown) => {
             clearTimeout(timer);
@@ -317,21 +245,11 @@ async function probePackageHealth(pi: ExtensionAPI): Promise<Probe> {
     ),
   );
 
-  const reports: Array<{
-    owner: string;
-    label: string;
-    lines: string[];
-    warning: boolean;
-  }> = [];
+  const reports: Array<{ owner: string; label: string; lines: string[]; warning: boolean }> = [];
   let warning = false;
   const reject = (reason: string) => {
     warning = true;
-    reports.push({
-      owner: `invalid-${reports.length}`,
-      label: "Unknown",
-      lines: [reason],
-      warning: true,
-    });
+    reports.push({ owner: `invalid-${reports.length}`, label: "Unknown", lines: [reason], warning: true });
   };
   for (const value of values) {
     const report = value as any;
@@ -353,29 +271,26 @@ async function probePackageHealth(pi: ExtensionAPI): Promise<Probe> {
     reports.push({
       owner: report.owner,
       label: report.label.slice(0, 80),
-      lines: report.lines
-        .slice(0, 20)
-        .map((line: string) => line.replace(/[\r\n]+/g, " ").slice(0, 500)),
+      lines: report.lines.slice(0, 20).map((line: string) => line.replace(/[\r\n]+/g, " ").slice(0, 500)),
       warning: report.warning === true,
     });
   }
 
   const counts = new Map<string, number>();
-  for (const report of reports)
-    counts.set(report.owner, (counts.get(report.owner) ?? 0) + 1);
-  if ([...counts.values()].some((value) => value > 1)) warning = true;
+  for (const report of reports) counts.set(report.owner, (counts.get(report.owner) ?? 0) + 1);
+  if ([...counts.values()].some(value => value > 1)) warning = true;
   reports.sort((a, b) => a.owner.localeCompare(b.owner));
   return {
     lines: [
       "Package health:",
       ...(reports.length
-        ? reports.flatMap((report) => [
+        ? reports.flatMap(report => [
             `${report.label}${(counts.get(report.owner) ?? 0) > 1 ? " (duplicate responder)" : ""}:`,
-            ...report.lines.map((line) => `  ${line}`),
+            ...report.lines.map(line => `  ${line}`),
           ])
         : ["none reported"]),
     ],
-    warning: warning || reports.some((report) => report.warning),
+    warning: warning || reports.some(report => report.warning),
   };
 }
 
@@ -388,13 +303,7 @@ export type DoctorInput = {
 };
 
 /** Reports everything Pylon can observe about the current runtime through the extension API. */
-export async function runDoctor({
-  pi,
-  ctx,
-  registry,
-  lineEditMode,
-  lineEditConfigError,
-}: DoctorInput): Promise<Probe> {
+export async function runDoctor({ pi, ctx, registry, lineEditMode, lineEditConfigError }: DoctorInput): Promise<Probe> {
   const agentDir = getAgentDir();
   const probes = [
     probeRuntime(pi),
@@ -420,9 +329,9 @@ export async function runDoctor({
   ];
   return {
     lines: [
-      ...probes.flatMap((probe) => probe.lines),
+      ...probes.flatMap(probe => probe.lines),
       "Command-only surfaces (Focus, Guard, Timeline): not observable through ExtensionAPI",
     ],
-    warning: probes.some((probe) => probe.warning),
+    warning: probes.some(probe => probe.warning),
   };
 }

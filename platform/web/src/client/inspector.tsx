@@ -22,22 +22,8 @@ import {
   IconThinkingMedium,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-} from "react";
-import {
-  formatCacheHitRate,
-  formatCompactNumber,
-  formatWorkDuration,
-} from "../shared/format";
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
 import {
   DEFAULT_GUARD_RULES,
   GUARD_ACTIONS,
@@ -83,11 +69,7 @@ import {
 
 export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
-type IconComponent = ComponentType<{
-  size?: number;
-  stroke?: number;
-  className?: string;
-}>;
+type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
 const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
@@ -135,13 +117,9 @@ export function Inspector({
   onOpenGlobalPolicy,
   onOpenMemoryReviewerSettings,
 }: InspectorProps) {
-  const items = navigation.filter((item) => availableViews.has(item.id));
+  const items = navigation.filter(item => availableViews.has(item.id));
   return (
-    <aside
-      id="session-inspector"
-      className="inspector"
-      aria-label="Session inspector"
-    >
+    <aside id="session-inspector" className="inspector" aria-label="Session inspector">
       <header className="inspector-header">
         <div>
           <span className="section-kicker">Inspector</span>
@@ -150,17 +128,12 @@ export function Inspector({
           className="icon-button"
           type="button"
           onClick={onClose}
-          aria-label={overlay ? "Close inspector" : "Collapse inspector"}
-        >
+          aria-label={overlay ? "Close inspector" : "Collapse inspector"}>
           <IconX size={17} />
         </button>
       </header>
-      <div
-        className="inspector-tabs"
-        role="tablist"
-        aria-label="Session details"
-      >
-        {items.map((item) => {
+      <div className="inspector-tabs" role="tablist" aria-label="Session details">
+        {items.map(item => {
           const Icon = item.icon;
           return (
             <button
@@ -171,8 +144,7 @@ export function Inspector({
               className={current === item.id ? "is-active" : ""}
               data-view={item.id}
               key={item.id}
-              onClick={() => onNavigate(item.id)}
-            >
+              onClick={() => onNavigate(item.id)}>
               <Icon size={14} />
               <span>{item.label}</span>
             </button>
@@ -182,12 +154,8 @@ export function Inspector({
       <p className="inspector-description">{viewDescriptions[current]}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
-        {current === "policy" && live.runtime && (
-          <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />
-        )}
-        {current === "timeline" && (
-          <Timeline live={live} enabled={timelineEnabled} />
-        )}
+        {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
+        {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
         {current === "memory" && (
           <Memory
             live={live}
@@ -207,11 +175,8 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime;
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
-  const completedTodos =
-    work?.todos.filter((todo) => todo.status === "done").length ?? 0;
-  const progress = work?.todos.length
-    ? (completedTodos / work.todos.length) * 100
-    : 0;
+  const completedTodos = work?.todos.filter(todo => todo.status === "done").length ?? 0;
+  const progress = work?.todos.length ? (completedTodos / work.todos.length) * 100 : 0;
   const workState: OverviewState =
     work?.mode === "executing"
       ? "running"
@@ -224,17 +189,13 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
             : "neutral";
   return (
     <div className="page-grid">
-      <SessionUsage
-        key={runtime?.sessionId ?? "empty"}
-        metrics={runtime?.metrics}
-      />
+      <SessionUsage key={runtime?.sessionId ?? "empty"} metrics={runtime?.metrics} />
       <div className="overview-columns">
         {operational?.continuity.availability === "available" && (
           <InspectorSection
             title="Task list"
             meta={work ? `updated ${displayTime(work.updatedAt)}` : undefined}
-            className="run-panel"
-          >
+            className="run-panel">
             {work ? (
               <>
                 <div className="overview-run-goal">
@@ -242,9 +203,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
                   <p className="mono">{work.runId || "Current turn"}</p>
                 </div>
                 <div className="overview-run-status">
-                  <OverviewStateLabel state={workState}>
-                    {work.mode}
-                  </OverviewStateLabel>
+                  <OverviewStateLabel state={workState}>{work.mode}</OverviewStateLabel>
                   {/* <LedBar a={progress} responsive tone={workState} running={workState === "running"} label={`${completedTodos} of ${work.todos.length} tasks complete`} /> */}
                   <small>
                     {completedTodos} of {work.todos.length}
@@ -284,41 +243,23 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
         {operational && (
           <InspectorSection
             title="Verification"
-            meta={
-              operational.verification.scope
-                ? `${operational.verification.scope} scope`
-                : "No run"
-            }
-            className="verification-panel"
-          >
+            meta={operational.verification.scope ? `${operational.verification.scope} scope` : "No run"}
+            className="verification-panel">
             <Verification verification={operational.verification} />
           </InspectorSection>
         )}
-        {operational?.jobs.availability === "available" && (
-          <HeartbeatJobs jobs={operational.jobs.items} />
-        )}
+        {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
       </div>
     </div>
   );
 }
 
-function Verification({
-  verification,
-}: {
-  verification: VerificationReadModel;
-}) {
+function Verification({ verification }: { verification: VerificationReadModel }) {
   const running = verification.state === "running";
-  const startedAt = verification.startedAt
-    ? Date.parse(verification.startedAt)
-    : Number.NaN;
+  const startedAt = verification.startedAt ? Date.parse(verification.startedAt) : Number.NaN;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (
-      verification.availability !== "available" ||
-      !running ||
-      Number.isNaN(startedAt)
-    )
-      return;
+    if (verification.availability !== "available" || !running || Number.isNaN(startedAt)) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
@@ -334,9 +275,7 @@ function Verification({
     );
   }
 
-  const elapsed = Number.isNaN(startedAt)
-    ? (verification.durationMs ?? 0)
-    : Math.max(0, now - startedAt);
+  const elapsed = Number.isNaN(startedAt) ? (verification.durationMs ?? 0) : Math.max(0, now - startedAt);
   return (
     <div className="overview-list">
       {running && (
@@ -344,19 +283,14 @@ function Verification({
           <OverviewOrb state="running" label="Running" />
           <div role="status">
             <strong>Verification</strong>
-            <small className="mono">
-              {verification.scope
-                ? `${verification.scope} scope`
-                : "Checking project"}
-            </small>
+            <small className="mono">{verification.scope ? `${verification.scope} scope` : "Checking project"}</small>
           </div>
           <OverviewStateLabel state="running">Running</OverviewStateLabel>
           <time className="mono">{formatWorkDuration(elapsed)}</time>
         </div>
       )}
-      {verification.checks.map((check) => {
-        const state: OverviewState =
-          check.status === "passed" ? "done" : "failed";
+      {verification.checks.map(check => {
+        const state: OverviewState = check.status === "passed" ? "done" : "failed";
         return (
           <div className="overview-list-row" key={check.id}>
             <OverviewOrb state={state} label={check.status} />
@@ -364,9 +298,7 @@ function Verification({
               <strong>{check.label}</strong>
               <small className="mono">{check.command || check.status}</small>
             </div>
-            <OverviewStateLabel state={state}>
-              {check.status}
-            </OverviewStateLabel>
+            <OverviewStateLabel state={state}>{check.status}</OverviewStateLabel>
             <time className="mono">{formatDuration(check.durationMs)}</time>
           </div>
         );
@@ -403,47 +335,27 @@ function togglePolicyLabel(value: boolean): string {
 }
 
 function guardActionLabel(value: GuardAction): string {
-  return value === "allow"
-    ? "Allow"
-    : value === "confirm"
-      ? "Confirm"
-      : "Block";
+  return value === "allow" ? "Allow" : value === "confirm" ? "Confirm" : "Block";
 }
 
-function RuntimePolicy({
-  live,
-  onOpenGlobalPolicy,
-}: {
-  live: RuntimeStoreSnapshot;
-  onOpenGlobalPolicy: () => void;
-}) {
+function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapshot; onOpenGlobalPolicy: () => void }) {
   const runtime = live.runtime!;
   const policy = runtime.runtimePolicy;
   const [scope, setScope] = useState<EditablePolicyScope>("project");
-  const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({
-    mode: "auto",
-  });
+  const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
   const [timeline, setTimeline] = useState<TogglePolicyDraft>("inherit");
   const [guard, setGuard] = useState<TogglePolicyDraft>("inherit");
   const [guardRules, setGuardRules] = useState<GuardRuleOverrides>({});
-  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">(
-    "inherit",
-  );
-  const [guardTimeout, setGuardTimeout] =
-    useState<TimeoutPolicyDraft>("inherit");
-  const [clarifyTimeout, setClarifyTimeout] =
-    useState<TimeoutPolicyDraft>("inherit");
+  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("inherit");
+  const [guardTimeout, setGuardTimeout] = useState<TimeoutPolicyDraft>("inherit");
+  const [clarifyTimeout, setClarifyTimeout] = useState<TimeoutPolicyDraft>("inherit");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const saveInFlight = useRef(false);
   const saveRequest = useRef(0);
 
   const resetDraft = () => {
-    setVerify(
-      scope === "project"
-        ? policy.project.verify
-        : (policy.session.verify ?? "inherit"),
-    );
+    setVerify(scope === "project" ? policy.project.verify : (policy.session.verify ?? "inherit"));
     setTimeline(
       scope === "project"
         ? policy.project.timelineEnabled === undefined
@@ -470,15 +382,9 @@ function RuntimePolicy({
             ? "enabled"
             : "disabled",
     );
-    setGuardRules({
-      ...(scope === "project"
-        ? policy.project.guardRules
-        : policy.session.guardRules),
-    });
+    setGuardRules({ ...(scope === "project" ? policy.project.guardRules : policy.session.guardRules) });
     setWorkspace(
-      scope === "project"
-        ? (policy.project.workspace ?? "inherit")
-        : (policy.session.workspace ?? "inherit"),
+      scope === "project" ? (policy.project.workspace ?? "inherit") : (policy.session.workspace ?? "inherit"),
     );
     setGuardTimeout(
       scope === "project"
@@ -505,44 +411,32 @@ function RuntimePolicy({
     resetDraft();
   }, [policy.revision, scope]);
 
-  const idle =
-    live.connection === "connected" &&
-    runtime.ready &&
-    !live.pendingUi &&
-    !busy;
+  const idle = live.connection === "connected" && runtime.ready && !live.pendingUi && !busy;
   const inheritedFrom = scope === "project" ? "Global" : "Project";
   const inheritedTimeline =
     scope === "project"
       ? policy.global.timelineEnabled
       : (policy.project.timelineEnabled ?? policy.global.timelineEnabled);
   const inheritedGuard =
-    scope === "project"
-      ? policy.global.guardEnabled
-      : (policy.project.guardEnabled ?? policy.global.guardEnabled);
-  const draftGuardEnabled =
-    guard === "inherit" ? inheritedGuard : guard === "enabled";
+    scope === "project" ? policy.global.guardEnabled : (policy.project.guardEnabled ?? policy.global.guardEnabled);
+  const draftGuardEnabled = guard === "inherit" ? inheritedGuard : guard === "enabled";
   const globalGuardRules = policy.global.guardRules ?? DEFAULT_GUARD_RULES;
   const inheritedGuardRules =
     scope === "project"
       ? mergeGuardRules(globalGuardRules)
       : mergeGuardRules(globalGuardRules, policy.project.guardRules ?? {});
   const inheritedWorkspace =
-    scope === "project"
-      ? policy.global.workspace
-      : (policy.project.workspace ?? policy.global.workspace);
+    scope === "project" ? policy.global.workspace : (policy.project.workspace ?? policy.global.workspace);
   const inheritedGuardTimeout =
     scope === "project"
       ? policy.global.guardTimeoutSeconds
-      : (policy.project.guardTimeoutSeconds ??
-        policy.global.guardTimeoutSeconds);
+      : (policy.project.guardTimeoutSeconds ?? policy.global.guardTimeoutSeconds);
   const inheritedClarifyTimeout =
     scope === "project"
       ? policy.global.clarifyTimeoutSeconds
-      : (policy.project.clarifyTimeoutSeconds ??
-        policy.global.clarifyTimeoutSeconds);
+      : (policy.project.clarifyTimeoutSeconds ?? policy.global.clarifyTimeoutSeconds);
   const displayedVerify = verify === "inherit" ? policy.project.verify : verify;
-  const checks =
-    displayedVerify.mode === "selected" ? displayedVerify.checks : [];
+  const checks = displayedVerify.mode === "selected" ? displayedVerify.checks : [];
 
   const save = async (
     nextVerify: VerifyPolicyReadModel | "inherit",
@@ -580,9 +474,7 @@ function RuntimePolicy({
     } catch (cause) {
       if (request === saveRequest.current) {
         resetDraft();
-        setError(
-          cause instanceof Error ? cause.message : "Policy could not be saved",
-        );
+        setError(cause instanceof Error ? cause.message : "Policy could not be saved");
       }
       throw cause;
     } finally {
@@ -604,28 +496,21 @@ function RuntimePolicy({
               checks:
                 displayedVerify.mode === "selected"
                   ? displayedVerify.checks
-                  : policy.availableVerifyChecks
-                      .slice(0, 6)
-                      .map((check) => check.id),
+                  : policy.availableVerifyChecks.slice(0, 6).map(check => check.id),
             } as const);
     void save(next, timeline, workspace).catch(() => undefined);
   };
 
   const toggleCheck = (id: string) => {
     const next = checks.includes(id)
-      ? checks.filter((item) => item !== id)
+      ? checks.filter(item => item !== id)
       : checks.length < 6
         ? [...checks, id]
         : checks;
     if (next === checks) return;
-    void save({ mode: "selected", checks: next }, timeline, workspace).catch(
-      () => undefined,
-    );
+    void save({ mode: "selected", checks: next }, timeline, workspace).catch(() => undefined);
   };
-  const verifySetHere =
-    scope === "project"
-      ? verify !== "inherit" && verify.mode === "selected"
-      : verify !== "inherit";
+  const verifySetHere = scope === "project" ? verify !== "inherit" && verify.mode === "selected" : verify !== "inherit";
   const setHereCount = [
     verifySetHere,
     guard !== "inherit",
@@ -645,8 +530,7 @@ function RuntimePolicy({
             disabled={busy}
             aria-selected={scope === "project"}
             className={scope === "project" ? "is-active" : ""}
-            onClick={() => setScope("project")}
-          >
+            onClick={() => setScope("project")}>
             Project
           </button>
           <button
@@ -655,18 +539,12 @@ function RuntimePolicy({
             disabled={busy}
             aria-selected={scope === "session"}
             className={scope === "session" ? "is-active" : ""}
-            onClick={() => setScope("session")}
-          >
+            onClick={() => setScope("session")}>
             This session
           </button>
         </div>
         <span className="policy-set-count">{setHereCount} of 6 set here</span>
-        <button
-          className="policy-global-link"
-          type="button"
-          disabled={busy}
-          onClick={onOpenGlobalPolicy}
-        >
+        <button className="policy-global-link" type="button" disabled={busy} onClick={onOpenGlobalPolicy}>
           Global defaults <span aria-hidden="true">›</span>
         </button>
       </div>
@@ -678,26 +556,21 @@ function RuntimePolicy({
             ? `${checks.length} of ${policy.availableVerifyChecks.length} checks`
             : "automatic detection"
         }
-        className="policy-section"
-      >
+        className="policy-section">
         <PolicySelectField
           label="Verify checks"
           description="Choose automatic detection or up to six declared checks."
           value={verify === "inherit" ? "inherit" : verify.mode}
           isOverride={verifySetHere}
           inheritedLabel={
-            scope === "session"
-              ? `Inherit from Project (${verifyPolicyLabel(policy.project.verify)})`
-              : ""
+            scope === "session" ? `Inherit from Project (${verifyPolicyLabel(policy.project.verify)})` : ""
           }
           disabled={!idle}
           options={[
             { value: "auto", label: "Automatic detection" },
             { value: "selected", label: "Selected checks" },
           ]}
-          onChange={(value) =>
-            changeVerifyMode(value as "inherit" | "auto" | "selected")
-          }
+          onChange={value => changeVerifyMode(value as "inherit" | "auto" | "selected")}
         />
         {verify !== "inherit" && verify.mode === "selected" && (
           <details className="policy-disclosure">
@@ -712,43 +585,27 @@ function RuntimePolicy({
               <IconChevronDown size={15} />
             </summary>
             <div className="policy-disclosure-body policy-checks">
-              {policy.availableVerifyChecks.map((check) => (
+              {policy.availableVerifyChecks.map(check => (
                 <label key={check.id} title={check.command}>
                   <input
                     type="checkbox"
                     checked={checks.includes(check.id)}
-                    disabled={
-                      !idle ||
-                      (!checks.includes(check.id) && checks.length >= 6)
-                    }
+                    disabled={!idle || (!checks.includes(check.id) && checks.length >= 6)}
                     onChange={() => toggleCheck(check.id)}
                   />
                   <span className="mono">{check.label}</span>
                 </label>
               ))}
               {checks
-                .filter(
-                  (id) =>
-                    !policy.availableVerifyChecks.some(
-                      (check) => check.id === id,
-                    ),
-                )
-                .map((id) => (
+                .filter(id => !policy.availableVerifyChecks.some(check => check.id === id))
+                .map(id => (
                   <label className="is-missing" key={id}>
-                    <input
-                      type="checkbox"
-                      checked
-                      disabled={!idle}
-                      onChange={() => toggleCheck(id)}
-                    />
+                    <input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} />
                     <span>Unknown: {id}</span>
                   </label>
                 ))}
               {policy.availableVerifyChecks.length === 0 && (
-                <small>
-                  No declared checks detected. Changed-set hygiene will still
-                  run.
-                </small>
+                <small>No declared checks detected. Changed-set hygiene will still run.</small>
               )}
             </div>
           </details>
@@ -758,8 +615,7 @@ function RuntimePolicy({
       <InspectorSection
         title="Safety and interaction"
         meta={`${Object.keys(guardRules).length} category override${Object.keys(guardRules).length === 1 ? "" : "s"}`}
-        className="policy-section"
-      >
+        className="policy-section">
         <PolicySelectField
           label="Guard"
           description="Confirm guarded commands and paths."
@@ -770,24 +626,17 @@ function RuntimePolicy({
             { value: "enabled", label: "Enabled" },
             { value: "disabled", label: "Disabled" },
           ]}
-          onChange={(value) =>
-            void save(
-              verify,
-              timeline,
-              workspace,
-              guardTimeout,
-              clarifyTimeout,
-              value as TogglePolicyDraft,
-            ).catch(() => undefined)
+          onChange={value =>
+            void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(
+              () => undefined,
+            )
           }
         />
         <details className="policy-disclosure">
           <summary>
             <span>
               <strong>Guard categories</strong>
-              <small>
-                Choose which risks inherit, allow, confirm, or block.
-              </small>
+              <small>Choose which risks inherit, allow, confirm, or block.</small>
             </span>
             <small className={Object.keys(guardRules).length ? "is-here" : ""}>
               {Object.keys(guardRules).length} set here
@@ -797,12 +646,11 @@ function RuntimePolicy({
           <div className="policy-disclosure-body">
             {!draftGuardEnabled && (
               <p className="policy-guard-disabled" role="status">
-                Guard is disabled by{" "}
-                {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}
-                . Saved category rules apply when Guard is enabled.
+                Guard is disabled by {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}. Saved category
+                rules apply when Guard is enabled.
               </p>
             )}
-            {GUARD_RISK_CATEGORIES.map((category) => (
+            {GUARD_RISK_CATEGORIES.map(category => (
               <PolicySelectField
                 key={category}
                 label={GUARD_RULE_LABELS[category]}
@@ -810,23 +658,14 @@ function RuntimePolicy({
                 value={guardRules[category] ?? "inherit"}
                 inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`}
                 disabled={!idle || !draftGuardEnabled}
-                options={GUARD_ACTIONS.map((action) => ({
-                  value: action,
-                  label: guardActionLabel(action),
-                }))}
-                onChange={(value) => {
+                options={GUARD_ACTIONS.map(action => ({ value: action, label: guardActionLabel(action) }))}
+                onChange={value => {
                   const next = { ...guardRules };
                   if (value === "inherit") delete next[category];
                   else next[category] = value as GuardAction;
-                  void save(
-                    verify,
-                    timeline,
-                    workspace,
-                    guardTimeout,
-                    clarifyTimeout,
-                    guard,
-                    next,
-                  ).catch(() => undefined);
+                  void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, guard, next).catch(
+                    () => undefined,
+                  );
                 }}
               />
             ))}
@@ -835,56 +674,28 @@ function RuntimePolicy({
         <RuntimePolicyTimeoutControl
           label="Guard timeout"
           description="How long a guarded prompt waits for you."
-          value={
-            guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout
-          }
+          value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout}
           inherited={guardTimeout === "inherit"}
           inheritedFrom={inheritedFrom}
           disabled={!idle || !draftGuardEnabled}
-          onChange={(value) =>
-            void save(verify, timeline, workspace, value, clarifyTimeout).catch(
-              () => undefined,
-            )
-          }
+          onChange={value => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)}
           onReset={
             guardTimeout !== "inherit"
-              ? () =>
-                  void save(
-                    verify,
-                    timeline,
-                    workspace,
-                    "inherit",
-                    clarifyTimeout,
-                  ).catch(() => undefined)
+              ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined)
               : undefined
           }
         />
         <RuntimePolicyTimeoutControl
           label="Clarify timeout"
           description="How long a clarifying question waits."
-          value={
-            clarifyTimeout === "inherit"
-              ? inheritedClarifyTimeout
-              : clarifyTimeout
-          }
+          value={clarifyTimeout === "inherit" ? inheritedClarifyTimeout : clarifyTimeout}
           inherited={clarifyTimeout === "inherit"}
           inheritedFrom={inheritedFrom}
           disabled={!idle}
-          onChange={(value) =>
-            void save(verify, timeline, workspace, guardTimeout, value).catch(
-              () => undefined,
-            )
-          }
+          onChange={value => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)}
           onReset={
             clarifyTimeout !== "inherit"
-              ? () =>
-                  void save(
-                    verify,
-                    timeline,
-                    workspace,
-                    guardTimeout,
-                    "inherit",
-                  ).catch(() => undefined)
+              ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined)
               : undefined
           }
         />
@@ -898,44 +709,27 @@ function RuntimePolicy({
             { value: "enabled", label: "Enabled" },
             { value: "disabled", label: "Disabled" },
           ]}
-          onChange={(value) =>
-            void save(verify, value as TogglePolicyDraft, workspace).catch(
-              () => undefined,
-            )
-          }
+          onChange={value => void save(verify, value as TogglePolicyDraft, workspace).catch(() => undefined)}
         />
       </InspectorSection>
 
       <InspectorSection
         title="Environment"
-        meta={
-          workspace === "inherit"
-            ? workspaceLabels[inheritedWorkspace]
-            : workspaceLabels[workspace]
-        }
-        className="policy-section"
-      >
+        meta={workspace === "inherit" ? workspaceLabels[inheritedWorkspace] : workspaceLabels[workspace]}
+        className="policy-section">
         <PolicySelectField
           label="Workspace"
           description="Choose where this scope works by default."
           value={workspace}
           inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`}
           disabled={!idle}
-          options={Object.entries(workspaceLabels).map(([value, label]) => ({
-            value,
-            label,
-          }))}
-          onChange={(value) =>
-            void save(
-              verify,
-              timeline,
-              value as WorkspacePolicyMode | "inherit",
-            ).catch(() => undefined)
+          options={Object.entries(workspaceLabels).map(([value, label]) => ({ value, label }))}
+          onChange={value =>
+            void save(verify, timeline, value as WorkspacePolicyMode | "inherit").catch(() => undefined)
           }
         />
         <p className="policy-note">
-          Session changes apply immediately when possible. Package capability
-          and safety gates remain authoritative.
+          Session changes apply immediately when possible. Package capability and safety gates remain authoritative.
         </p>
       </InspectorSection>
       {error && (
@@ -977,21 +771,12 @@ function PolicySelectField({
   const stateId = useId();
   return (
     <div className="policy-field" data-override={isOverride}>
-      <OverviewOrb
-        state={isOverride ? "done" : "neutral"}
-        label={isOverride ? "Set here" : "Inherited or default"}
-      />
+      <OverviewOrb state={isOverride ? "done" : "neutral"} label={isOverride ? "Set here" : "Inherited or default"} />
       <div className="policy-field-copy">
         <span>
           <strong>{label}</strong>
-          <small
-            className={isOverride ? "policy-source is-here" : "policy-source"}
-          >
-            {isOverride
-              ? "set here"
-              : inheritedLabel
-                ? inheritedLabel.replace(/^.*from /, "from ")
-                : "default"}
+          <small className={isOverride ? "policy-source is-here" : "policy-source"}>
+            {isOverride ? "set here" : inheritedLabel ? inheritedLabel.replace(/^.*from /, "from ") : "default"}
           </small>
         </span>
         <p id={descriptionId}>{description}</p>
@@ -1001,10 +786,9 @@ function PolicySelectField({
         disabled={disabled}
         aria-label={`${label} policy`}
         aria-describedby={descriptionId}
-        onChange={(event) => onChange(event.target.value)}
-      >
+        onChange={event => onChange(event.target.value)}>
         {inheritedLabel && <option value="inherit">{inheritedLabel}</option>}
-        {options.map((option) => (
+        {options.map(option => (
           <option value={option.value} key={option.value}>
             {option.label}
           </option>
@@ -1032,37 +816,23 @@ function Memory({
   reviewerConfigured?: boolean;
   onOpenReviewerSettings: () => void;
 }) {
-  const [view, setView] = useState<"memory" | "papercuts">(
-    memoryEnabled ? "memory" : "papercuts",
-  );
+  const [view, setView] = useState<"memory" | "papercuts">(memoryEnabled ? "memory" : "papercuts");
   const continuity = live.runtime?.operational.continuity;
-  const memoryCount = continuity
-    ? continuity.memory.length + continuity.globalMemory.length
-    : undefined;
+  const memoryCount = continuity ? continuity.memory.length + continuity.globalMemory.length : undefined;
   const papercutCount = live.runtime?.operational.papercuts.counts.total;
   useEffect(() => {
-    if (view === "memory" && !memoryEnabled && papercutEnabled)
-      setView("papercuts");
-    if (view === "papercuts" && !papercutEnabled && memoryEnabled)
-      setView("memory");
+    if (view === "memory" && !memoryEnabled && papercutEnabled) setView("papercuts");
+    if (view === "papercuts" && !papercutEnabled && memoryEnabled) setView("memory");
   }, [memoryEnabled, papercutEnabled, view]);
   return (
     <div className="memory-page">
       {memoryEnabled && papercutEnabled && (
         <div className="memory-view-bar">
           <nav className="memory-archive-nav" aria-label="Memory view">
-            <button
-              type="button"
-              aria-pressed={view === "memory"}
-              onClick={() => setView("memory")}
-            >
+            <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>
               Memory <span className="mono">{memoryCount ?? "–"}</span>
             </button>
-            <button
-              type="button"
-              aria-pressed={view === "papercuts"}
-              onClick={() => setView("papercuts")}
-            >
+            <button type="button" aria-pressed={view === "papercuts"} onClick={() => setView("papercuts")}>
               Papercuts <span className="mono">{papercutCount ?? "–"}</span>
             </button>
           </nav>
@@ -1116,64 +886,35 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
     setError("");
     void runtimeStore
       .papercuts(status, query, 0, 25, controller.signal)
-      .then((result) => {
+      .then(result => {
         if (requestVersion.current === request) setPage(result);
       })
-      .catch((cause) => {
+      .catch(cause => {
         if (!controller.signal.aborted && requestVersion.current === request)
-          setError(
-            cause instanceof Error ? cause.message : "Unable to load papercuts",
-          );
+          setError(cause instanceof Error ? cause.message : "Unable to load papercuts");
       })
       .finally(() => {
-        if (!controller.signal.aborted && requestVersion.current === request)
-          setLoading(false);
+        if (!controller.signal.aborted && requestVersion.current === request) setLoading(false);
       });
     return () => controller.abort();
-  }, [
-    generation,
-    live.connection,
-    live.runtime?.ready,
-    query,
-    refresh,
-    status,
-    summary?.revision,
-  ]);
+  }, [generation, live.connection, live.runtime?.ready, query, refresh, status, summary?.revision]);
 
   const loadMore = async () => {
-    if (
-      page?.nextOffset === null ||
-      page?.nextOffset === undefined ||
-      loadingMore
-    )
-      return;
+    if (page?.nextOffset === null || page?.nextOffset === undefined || loadingMore) return;
     setLoadingMore(true);
     setError("");
     const request = requestVersion.current;
     try {
-      const next = await runtimeStore.papercuts(
-        status,
-        query,
-        page.nextOffset,
-        page.limit,
-      );
+      const next = await runtimeStore.papercuts(status, query, page.nextOffset, page.limit);
       if (requestVersion.current !== request) return;
       if (next.revision !== page.revision) {
-        setRefresh((value) => value + 1);
+        setRefresh(value => value + 1);
         return;
       }
-      setPage({
-        ...next,
-        offset: 0,
-        records: [...page.records, ...next.records],
-      });
+      setPage({ ...next, offset: 0, records: [...page.records, ...next.records] });
     } catch (cause) {
       if (requestVersion.current === request)
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Unable to load more papercuts",
-        );
+        setError(cause instanceof Error ? cause.message : "Unable to load more papercuts");
     } finally {
       setLoadingMore(false);
     }
@@ -1181,13 +922,8 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
   const count = (value: PapercutStatusReadModel | "all") =>
     value === "all" ? summary?.counts.total : summary?.counts[value];
   const outcome = (record: PapercutRecordReadModel) =>
-    record.status === "resolved"
-      ? record.resolution
-      : record.status === "dismissed"
-        ? record.dismissal
-        : undefined;
-  const canMutate =
-    live.connection === "connected" && live.runtime?.ready === true && !busy;
+    record.status === "resolved" ? record.resolution : record.status === "dismissed" ? record.dismissal : undefined;
+  const canMutate = live.connection === "connected" && live.runtime?.ready === true && !busy;
   const beginEdit = (record: PapercutRecordReadModel) => {
     setEditing(record.id);
     setDraft(record.message);
@@ -1200,13 +936,11 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
     try {
       await runtimeStore.updatePapercut(record, draft.trim());
       setEditing("");
-      setRefresh((value) => value + 1);
+      setRefresh(value => value + 1);
     } catch (cause) {
-      const message =
-        cause instanceof Error ? cause.message : "Unable to update papercut";
+      const message = cause instanceof Error ? cause.message : "Unable to update papercut";
       setMutationError(message);
-      if (/changed or was removed/i.test(message))
-        setRefresh((value) => value + 1);
+      if (/changed or was removed/i.test(message)) setRefresh(value => value + 1);
     } finally {
       setBusy("");
     }
@@ -1219,14 +953,12 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
       await runtimeStore.deletePapercut(record);
       setEditing("");
       setDeleting(undefined);
-      setRefresh((value) => value + 1);
+      setRefresh(value => value + 1);
     } catch (cause) {
-      const message =
-        cause instanceof Error ? cause.message : "Unable to delete papercut";
+      const message = cause instanceof Error ? cause.message : "Unable to delete papercut";
       setMutationError(message);
       setDeleting(undefined);
-      if (/changed or was removed/i.test(message))
-        setRefresh((value) => value + 1);
+      if (/changed or was removed/i.test(message)) setRefresh(value => value + 1);
     } finally {
       setBusy("");
     }
@@ -1236,33 +968,25 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
     <div className="memory-ledger papercut-ledger">
       <div className="memory-ledger-head">
         <div className="papercut-toolbar">
-          <div
-            className="papercut-status"
-            role="group"
-            aria-label="Papercut status"
-          >
-            {(["open", "resolved", "dismissed", "all"] as const).map(
-              (value) => (
-                <button
-                  type="button"
-                  aria-pressed={status === value}
-                  className={status === value ? "is-active" : ""}
-                  key={value}
-                  onClick={() => setStatus(value)}
-                >
-                  {value}
-                  <span className="mono">{count(value) ?? "–"}</span>
-                </button>
-              ),
-            )}
+          <div className="papercut-status" role="group" aria-label="Papercut status">
+            {(["open", "resolved", "dismissed", "all"] as const).map(value => (
+              <button
+                type="button"
+                aria-pressed={status === value}
+                className={status === value ? "is-active" : ""}
+                key={value}
+                onClick={() => setStatus(value)}>
+                {value}
+                <span className="mono">{count(value) ?? "–"}</span>
+              </button>
+            ))}
           </div>
           <button
             className="icon-button"
             type="button"
             aria-label="Refresh papercuts"
             disabled={loading}
-            onClick={() => setRefresh((value) => value + 1)}
-          >
+            onClick={() => setRefresh(value => value + 1)}>
             <IconRefresh size={14} />
           </button>
         </div>
@@ -1274,7 +998,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
             value={search}
             maxLength={200}
             placeholder="Search papercuts"
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={event => setSearch(event.target.value)}
           />
           <span className="mono">{page?.total ?? 0}</span>
         </label>
@@ -1294,37 +1018,19 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
       )}
       {!loading && !error && page?.records.length === 0 && (
         <div className="memory-ledger-empty">
-          <strong>
-            {query
-              ? "No matching papercuts"
-              : `No ${status === "all" ? "stored" : status} papercuts`}
-          </strong>
-          <span>
-            {query
-              ? "Try a different search."
-              : "Captured workflow friction will appear here."}
-          </span>
+          <strong>{query ? "No matching papercuts" : `No ${status === "all" ? "stored" : status} papercuts`}</strong>
+          <span>{query ? "Try a different search." : "Captured workflow friction will appear here."}</span>
         </div>
       )}
       {page && page.records.length > 0 && (
         <div className="memory-ledger-list">
-          {page.records.map((record) => {
+          {page.records.map(record => {
             const isEditing = editing === record.id;
             return (
-              <details
-                className="memory-ledger-row papercut-row"
-                key={record.id}
-                open={isEditing || undefined}
-              >
+              <details className="memory-ledger-row papercut-row" key={record.id} open={isEditing || undefined}>
                 <summary>
                   <OverviewOrb
-                    state={
-                      record.status === "open"
-                        ? "attention"
-                        : record.status === "resolved"
-                          ? "done"
-                          : "neutral"
-                    }
+                    state={record.status === "open" ? "attention" : record.status === "resolved" ? "done" : "neutral"}
                     label={record.status}
                   />
                   <div className="memory-archive-copy">
@@ -1337,10 +1043,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                         `${record.occurrences} occurrence${record.occurrences === 1 ? "" : "s"} · last seen ${displayTime(record.lastSeenAt)}`}
                     </p>
                   </div>
-                  <IconChevronDown
-                    className="memory-ledger-chevron"
-                    size={13}
-                  />
+                  <IconChevronDown className="memory-ledger-chevron" size={13} />
                 </summary>
                 <div className="memory-ledger-detail">
                   {isEditing ? (
@@ -1352,7 +1055,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                           maxLength={500}
                           rows={4}
                           disabled={Boolean(busy)}
-                          onChange={(event) => setDraft(event.target.value)}
+                          onChange={event => setDraft(event.target.value)}
                         />
                       </label>
                       <div>
@@ -1360,16 +1063,14 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                           className="primary-button"
                           type="button"
                           disabled={!canMutate || !draft.trim()}
-                          onClick={() => void save(record)}
-                        >
+                          onClick={() => void save(record)}>
                           {busy === record.id ? "Saving…" : "Save"}
                         </button>
                         <button
                           className="secondary-button"
                           type="button"
                           disabled={Boolean(busy)}
-                          onClick={() => setEditing("")}
-                        >
+                          onClick={() => setEditing("")}>
                           Cancel
                         </button>
                       </div>
@@ -1384,17 +1085,13 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                         <div>
                           <dt>Created</dt>
                           <dd>
-                            <time dateTime={record.createdAt}>
-                              {displayTime(record.createdAt)}
-                            </time>
+                            <time dateTime={record.createdAt}>{displayTime(record.createdAt)}</time>
                           </dd>
                         </div>
                         <div>
                           <dt>Last seen</dt>
                           <dd>
-                            <time dateTime={record.lastSeenAt}>
-                              {displayTime(record.lastSeenAt)}
-                            </time>
+                            <time dateTime={record.lastSeenAt}>{displayTime(record.lastSeenAt)}</time>
                           </dd>
                         </div>
                         <div>
@@ -1403,11 +1100,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                         </div>
                         {outcome(record) && (
                           <div>
-                            <dt>
-                              {record.status === "resolved"
-                                ? "Resolution"
-                                : "Dismissal"}
-                            </dt>
+                            <dt>{record.status === "resolved" ? "Resolution" : "Dismissal"}</dt>
                             <dd title={outcome(record)}>{outcome(record)}</dd>
                           </div>
                         )}
@@ -1417,8 +1110,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                           className="text-button"
                           type="button"
                           disabled={!canMutate}
-                          onClick={() => beginEdit(record)}
-                        >
+                          onClick={() => beginEdit(record)}>
                           Edit
                         </button>
                         <button
@@ -1428,8 +1120,7 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
                           onClick={() => {
                             setMutationError("");
                             setDeleting(record);
-                          }}
-                        >
+                          }}>
                           <IconTrash size={13} />
                           Delete
                         </button>
@@ -1443,15 +1134,8 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
         </div>
       )}
       {page?.nextOffset !== null && page?.nextOffset !== undefined && (
-        <button
-          className="session-usage-expand"
-          type="button"
-          disabled={loadingMore}
-          onClick={() => void loadMore()}
-        >
-          {loadingMore
-            ? "Loading…"
-            : `Load more · ${page.records.length}/${page.total}`}
+        <button className="session-usage-expand" type="button" disabled={loadingMore} onClick={() => void loadMore()}>
+          {loadingMore ? "Loading…" : `Load more · ${page.records.length}/${page.total}`}
         </button>
       )}
       {error && page && (
@@ -1500,18 +1184,13 @@ function ContinuityMemory({
   const [confirmingMigration, setConfirmingMigration] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const noteKey = (note: ContinuityMemoryNoteReadModel) =>
-    `${note.scope}:${note.id}`;
+  const noteKey = (note: ContinuityMemoryNoteReadModel) => `${note.scope}:${note.id}`;
   const query = search.trim().toLowerCase();
   const matches = (note: ContinuityMemoryNoteReadModel) =>
     !query ||
-    [
-      note.trigger,
-      note.guidance,
-      note.authority,
-      note.origin,
-      ...(note.relatedPaths ?? []),
-    ].some((value) => value.toLowerCase().includes(query));
+    [note.trigger, note.guidance, note.authority, note.origin, ...(note.relatedPaths ?? [])].some(value =>
+      value.toLowerCase().includes(query),
+    );
   const visibleGlobalMemory = globalMemory.filter(matches);
   const visibleMemory = memory.filter(matches);
   const total = globalMemory.length + memory.length;
@@ -1533,21 +1212,11 @@ function ContinuityMemory({
     setBusy(noteKey(note));
     setError("");
     try {
-      await runtimeStore.updateContinuityMemory(
-        note,
-        trigger.trim(),
-        guidance.trim(),
-      );
+      await runtimeStore.updateContinuityMemory(note, trigger.trim(), guidance.trim());
       setEditing("");
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Unable to update memory",
-      );
-      if (
-        cause instanceof Error &&
-        /\b(?:stale|changed|revision)\b/i.test(cause.message)
-      )
-        setEditing("");
+      setError(cause instanceof Error ? cause.message : "Unable to update memory");
+      if (cause instanceof Error && /\b(?:stale|changed|revision)\b/i.test(cause.message)) setEditing("");
     } finally {
       setBusy("");
     }
@@ -1560,9 +1229,7 @@ function ContinuityMemory({
       await runtimeStore.deleteContinuityMemory(note);
       setEditing("");
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Unable to delete memory",
-      );
+      setError(cause instanceof Error ? cause.message : "Unable to delete memory");
     } finally {
       setBusy("");
       setDeleting(undefined);
@@ -1575,31 +1242,23 @@ function ContinuityMemory({
     try {
       await runtimeStore.migrateContinuityMemory();
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Unable to migrate V4 memory",
-      );
+      setError(cause instanceof Error ? cause.message : "Unable to migrate V4 memory");
     } finally {
       setBusy("");
       setConfirmingMigration(false);
     }
   };
   const rows = (notes: ContinuityMemoryNoteReadModel[]) =>
-    notes.map((note) => {
+    notes.map(note => {
       const key = noteKey(note);
       const isEditing = editing === key;
       return (
-        <details
-          className="memory-ledger-row"
-          key={key}
-          open={isEditing || undefined}
-        >
+        <details className="memory-ledger-row" key={key} open={isEditing || undefined}>
           <summary>
             <div className="memory-archive-copy">
               <span>
                 <strong>{note.trigger}</strong>
-                <small
-                  className={`policy-source${note.scope === "project" ? " is-here" : ""}`}
-                >
+                <small className={`policy-source${note.scope === "project" ? " is-here" : ""}`}>
                   {note.scope === "user" ? "global" : "project"}
                 </small>
               </span>
@@ -1616,7 +1275,7 @@ function ContinuityMemory({
                     value={trigger}
                     maxLength={240}
                     disabled={Boolean(busy)}
-                    onChange={(event) => setTrigger(event.target.value)}
+                    onChange={event => setTrigger(event.target.value)}
                   />
                 </label>
                 <label>
@@ -1626,7 +1285,7 @@ function ContinuityMemory({
                     maxLength={800}
                     rows={5}
                     disabled={Boolean(busy)}
-                    onChange={(event) => setGuidance(event.target.value)}
+                    onChange={event => setGuidance(event.target.value)}
                   />
                 </label>
                 <div>
@@ -1639,16 +1298,14 @@ function ContinuityMemory({
                       !guidance.trim() ||
                       trigger.trim().length + guidance.trim().length > 1_000
                     }
-                    onClick={() => void save(note)}
-                  >
+                    onClick={() => void save(note)}>
                     {busy === key ? "Saving…" : "Save"}
                   </button>
                   <button
                     className="secondary-button"
                     type="button"
                     disabled={Boolean(busy)}
-                    onClick={() => setEditing("")}
-                  >
+                    onClick={() => setEditing("")}>
                     Cancel
                   </button>
                 </div>
@@ -1667,9 +1324,7 @@ function ContinuityMemory({
                   <div>
                     <dt>Updated</dt>
                     <dd>
-                      <time dateTime={note.updatedAt}>
-                        {displayTime(note.updatedAt)}
-                      </time>
+                      <time dateTime={note.updatedAt}>{displayTime(note.updatedAt)}</time>
                     </dd>
                   </div>
                   <div>
@@ -1679,19 +1334,12 @@ function ContinuityMemory({
                   <div>
                     <dt>Related paths</dt>
                     <dd title={(note.relatedPaths ?? []).join("\n")}>
-                      {note.relatedPaths?.length
-                        ? note.relatedPaths.join(", ")
-                        : "None"}
+                      {note.relatedPaths?.length ? note.relatedPaths.join(", ") : "None"}
                     </dd>
                   </div>
                 </dl>
                 <footer>
-                  <button
-                    className="text-button"
-                    type="button"
-                    disabled={!idle}
-                    onClick={() => edit(note)}
-                  >
+                  <button className="text-button" type="button" disabled={!idle} onClick={() => edit(note)}>
                     Edit
                   </button>
                   <button
@@ -1701,8 +1349,7 @@ function ContinuityMemory({
                     onClick={() => {
                       setError("");
                       setDeleting(note);
-                    }}
-                  >
+                    }}>
                     <IconTrash size={13} />
                     Delete
                   </button>
@@ -1723,14 +1370,8 @@ function ContinuityMemory({
             <OverviewOrb state="attention" label="Attention" />
             <div>
               <strong>Memory Reviewer is not configured</strong>
-              <span>
-                New memories proposed by the model will not be stored.
-              </span>
-              <button
-                className="text-button"
-                type="button"
-                onClick={onOpenReviewerSettings}
-              >
+              <span>New memories proposed by the model will not be stored.</span>
+              <button className="text-button" type="button" onClick={onOpenReviewerSettings}>
                 Select a reviewer ›
               </button>
             </div>
@@ -1742,21 +1383,14 @@ function ContinuityMemory({
               <IconRestore size={16} />
               <span>
                 <strong>Previous memory found</strong>
-                <small>
-                  Review and migrate preserved V4 notes into the V5 notebook.
-                </small>
+                <small>Review and migrate preserved V4 notes into the V5 notebook.</small>
               </span>
             </div>
             <button
               className="secondary-button"
               type="button"
               disabled={!idle || reviewerConfigured === undefined}
-              onClick={() =>
-                reviewerConfigured === false
-                  ? onOpenReviewerSettings()
-                  : setConfirmingMigration(true)
-              }
-            >
+              onClick={() => (reviewerConfigured === false ? onOpenReviewerSettings() : setConfirmingMigration(true))}>
               {reviewerConfigured === false
                 ? "Select Memory Reviewer"
                 : reviewerConfigured === undefined
@@ -1772,7 +1406,7 @@ function ContinuityMemory({
             type="search"
             value={search}
             placeholder={`Search ${total} note${total === 1 ? "" : "s"}`}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={event => setSearch(event.target.value)}
           />
           <span className="mono">{query ? `${shown}/${total}` : total}</span>
         </label>
@@ -1785,18 +1419,14 @@ function ContinuityMemory({
       {!query && total === 0 && (
         <div className="memory-ledger-empty">
           <strong>No saved memory</strong>
-          <span>
-            Continuity has not saved durable guidance for this project or user.
-          </span>
+          <span>Continuity has not saved durable guidance for this project or user.</span>
         </div>
       )}
       {query && shown === 0 && (
         <div className="memory-ledger-no-results">
           <IconSearch size={18} />
           <strong>No matching memory</strong>
-          <span>
-            Try a trigger, guidance, authority, origin, or related path.
-          </span>
+          <span>Try a trigger, guidance, authority, origin, or related path.</span>
         </div>
       )}
       {!idle && total > 0 && (
@@ -1840,33 +1470,20 @@ function ContinuityMemory({
   );
 }
 
-export function StateQLWorkspace({
-  live,
-  onClose,
-}: {
-  live: RuntimeStoreSnapshot;
-  onClose: () => void;
-}) {
+export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
   const snapshotScope = `${live.connection}:${live.runtime?.ready ?? false}:${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
-  const [snapshotState, setSnapshotState] = useState<{
-    scope: string;
-    value: StateQLSnapshot;
-  }>();
-  const snapshot =
-    snapshotState?.scope === snapshotScope ? snapshotState.value : undefined;
+  const [snapshotState, setSnapshotState] = useState<{ scope: string; value: StateQLSnapshot }>();
+  const snapshot = snapshotState?.scope === snapshotScope ? snapshotState.value : undefined;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
-  const [activityFilter, setActivityFilter] =
-    useState<StateQLActivityFilter>("all");
-  const [expandedActivity, setExpandedActivity] = useState<Set<string>>(
-    new Set(),
-  );
+  const [activityFilter, setActivityFilter] = useState<StateQLActivityFilter>("all");
+  const [expandedActivity, setExpandedActivity] = useState<Set<string>>(new Set());
   const toolRevision = useMemo(
     () =>
       (live.runtime?.conversation.tools ?? [])
-        .filter((tool) => tool.name === "stateql" && tool.status !== "running")
-        .map((tool) => `${tool.id}:${tool.status}`)
+        .filter(tool => tool.name === "stateql" && tool.status !== "running")
+        .map(tool => `${tool.id}:${tool.status}`)
         .join("|"),
     [live.runtime?.conversation.tools],
   );
@@ -1882,19 +1499,15 @@ export function StateQLWorkspace({
     let active = true;
     void runtimeStore
       .stateqlSnapshot(50, controller.signal)
-      .then((value) => {
+      .then(value => {
         if (!active) return;
         setSnapshotState({ scope: snapshotScope, value });
         const first = buildStateQLActivity(value)[0];
         setExpandedActivity(first ? new Set([first.id]) : new Set());
       })
-      .catch((cause) => {
+      .catch(cause => {
         if (active && !controller.signal.aborted)
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "StateQL status failed to load",
-          );
+          setError(cause instanceof Error ? cause.message : "StateQL status failed to load");
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1912,27 +1525,13 @@ export function StateQLWorkspace({
     toolRevision,
   ]);
 
-  const activity = useMemo(
-    () => (snapshot ? buildStateQLActivity(snapshot) : []),
-    [snapshot],
-  );
-  const visibleActivity = useMemo(
-    () => filterStateQLActivity(activity, activityFilter),
-    [activity, activityFilter],
-  );
-  const visibleHistory = visibleActivity.filter(
-    (item) => item.source === "history",
-  );
-  const visibleMetadata = visibleActivity.filter(
-    (item) => item.source === "metadata",
-  );
-  const historyCount = activity.filter(
-    (item) => item.source === "history",
-  ).length;
+  const activity = useMemo(() => (snapshot ? buildStateQLActivity(snapshot) : []), [snapshot]);
+  const visibleActivity = useMemo(() => filterStateQLActivity(activity, activityFilter), [activity, activityFilter]);
+  const visibleHistory = visibleActivity.filter(item => item.source === "history");
+  const visibleMetadata = visibleActivity.filter(item => item.source === "metadata");
+  const historyCount = activity.filter(item => item.source === "history").length;
   const metadataCount = activity.length - historyCount;
-  const allVisibleExpanded =
-    visibleActivity.length > 0 &&
-    visibleActivity.every((item) => expandedActivity.has(item.id));
+  const allVisibleExpanded = visibleActivity.length > 0 && visibleActivity.every(item => expandedActivity.has(item.id));
   const rowsScope = `${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
   const header = (
     <header className="stateql-ledger-header">
@@ -1946,21 +1545,11 @@ export function StateQLWorkspace({
         type="button"
         disabled={loading || !snapshot}
         aria-live="polite"
-        onClick={() => setRefresh((value) => value + 1)}
-      >
-        {loading ? (
-          <IconLoader2 className="spin" size={14} />
-        ) : (
-          <IconRefresh size={14} />
-        )}
+        onClick={() => setRefresh(value => value + 1)}>
+        {loading ? <IconLoader2 className="spin" size={14} /> : <IconRefresh size={14} />}
         {loading ? "Refreshing" : "Refresh"}
       </button>
-      <button
-        className="icon-button"
-        type="button"
-        onClick={onClose}
-        aria-label="Close database"
-      >
+      <button className="icon-button" type="button" onClick={onClose} aria-label="Close database">
         <IconX size={17} />
       </button>
     </header>
@@ -1971,11 +1560,7 @@ export function StateQLWorkspace({
       <div className="stateql-workspace">
         {header}
         <div className="stateql-ledger-empty">
-          {loading ? (
-            <IconLoader2 className="spin" size={20} />
-          ) : (
-            <IconDatabase size={20} />
-          )}
+          {loading ? <IconLoader2 className="spin" size={20} /> : <IconDatabase size={20} />}
           <strong>{loading ? "Loading StateQL" : "StateQL unavailable"}</strong>
           <span>
             {loading
@@ -1991,17 +1576,12 @@ export function StateQLWorkspace({
     ? `${connection.driver} / ${connection.read_only ? "read-only" : "read-write"}`
     : "disconnected";
   const toggleAll = () =>
-    setExpandedActivity((current) => {
-      if (allVisibleExpanded)
-        return new Set(
-          [...current].filter(
-            (id) => !visibleActivity.some((item) => item.id === id),
-          ),
-        );
-      return new Set([...current, ...visibleActivity.map((item) => item.id)]);
+    setExpandedActivity(current => {
+      if (allVisibleExpanded) return new Set([...current].filter(id => !visibleActivity.some(item => item.id === id)));
+      return new Set([...current, ...visibleActivity.map(item => item.id)]);
     });
   const setExpanded = (item: StateQLActivityItem, open: boolean) =>
-    setExpandedActivity((current) => {
+    setExpandedActivity(current => {
       const next = new Set(current);
       if (open) next.add(item.id);
       else next.delete(item.id);
@@ -2011,10 +1591,7 @@ export function StateQLWorkspace({
   return (
     <div className="stateql-workspace">
       {header}
-      <section
-        className="stateql-connection-strip"
-        aria-label="Database context"
-      >
+      <section className="stateql-connection-strip" aria-label="Database context">
         <div className="stateql-connection-primary">
           <strong className="mono" title={connection?.name}>
             {connection?.name ?? "No active connection"}
@@ -2050,36 +1627,22 @@ export function StateQLWorkspace({
           Refresh failed. Showing the last available snapshot. {error}
         </p>
       )}
-      <section
-        className="stateql-ledger-body"
-        aria-labelledby="stateql-activity-title"
-      >
+      <section className="stateql-ledger-body" aria-labelledby="stateql-activity-title">
         <header className="stateql-ledger-toolbar">
           <h2 id="stateql-activity-title">Session activity</h2>
           <span className="mono">
             {historyCount} / {metadataCount} history / retained
           </span>
-          <div
-            className="stateql-ledger-filters"
-            role="group"
-            aria-label="Filter database activity"
-          >
-            {(["all", "read", "write", "error"] as const).map((filter) => {
+          <div className="stateql-ledger-filters" role="group" aria-label="Filter database activity">
+            {(["all", "read", "write", "error"] as const).map(filter => {
               const count = filterStateQLActivity(activity, filter).length;
               return (
                 <button
                   type="button"
                   aria-pressed={activityFilter === filter}
                   key={filter}
-                  onClick={() => setActivityFilter(filter)}
-                >
-                  {filter === "all"
-                    ? "All"
-                    : filter === "read"
-                      ? "Reads"
-                      : filter === "write"
-                        ? "Writes"
-                        : "Errors"}
+                  onClick={() => setActivityFilter(filter)}>
+                  {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}
                   <span>{count}</span>
                 </button>
               );
@@ -2089,8 +1652,7 @@ export function StateQLWorkspace({
             className="text-button stateql-expand-all"
             type="button"
             disabled={visibleActivity.length === 0}
-            onClick={toggleAll}
-          >
+            onClick={toggleAll}>
             {allVisibleExpanded ? "Collapse all" : "Expand all"}
           </button>
         </header>
@@ -2099,12 +1661,9 @@ export function StateQLWorkspace({
             className="stateql-ledger-scroll"
             role="region"
             aria-label="Scrollable database activity ledger"
-            tabIndex={0}
-          >
+            tabIndex={0}>
             <table className="stateql-ledger-table">
-              <caption className="sr-only">
-                Bounded StateQL session history and retained metadata
-              </caption>
+              <caption className="sr-only">Bounded StateQL session history and retained metadata</caption>
               <colgroup>
                 <col className="toggle" />
                 <col className="command" />
@@ -2124,13 +1683,13 @@ export function StateQLWorkspace({
                 </tr>
               </thead>
               <tbody>
-                {visibleHistory.map((item) => (
+                {visibleHistory.map(item => (
                   <StateQLLedgerItem
                     item={item}
                     expanded={expandedActivity.has(item.id)}
                     key={item.id}
                     rowsScope={rowsScope}
-                    onExpandedChange={(open) => setExpanded(item, open)}
+                    onExpandedChange={open => setExpanded(item, open)}
                   />
                 ))}
                 {visibleMetadata.length > 0 && (
@@ -2138,13 +1697,13 @@ export function StateQLWorkspace({
                     <td colSpan={6}>Recent metadata without timestamp</td>
                   </tr>
                 )}
-                {visibleMetadata.map((item) => (
+                {visibleMetadata.map(item => (
                   <StateQLLedgerItem
                     item={item}
                     expanded={expandedActivity.has(item.id)}
                     key={item.id}
                     rowsScope={rowsScope}
-                    onExpandedChange={(open) => setExpanded(item, open)}
+                    onExpandedChange={open => setExpanded(item, open)}
                   />
                 ))}
               </tbody>
@@ -2197,32 +1756,23 @@ function StateQLLedgerItem({
       : item.tags.includes("read")
         ? "read"
         : "other";
-  const marker =
-    kind === "error"
-      ? "!"
-      : kind === "write"
-        ? "W"
-        : kind === "read"
-          ? "Q"
-          : "M";
+  const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "M";
   const detailId = `stateql-detail-${encodeURIComponent(item.id)}`;
   return (
     <>
       <tr
         className={`stateql-ledger-row is-${kind} ${expanded ? "is-expanded" : ""}`}
-        onClick={() => onExpandedChange(!expanded)}
-      >
+        onClick={() => onExpandedChange(!expanded)}>
         <td>
           <button
             type="button"
             aria-expanded={expanded}
             aria-controls={detailId}
             aria-label={`${expanded ? "Collapse" : "Expand"} ${item.command}`}
-            onClick={(event) => {
+            onClick={event => {
               event.stopPropagation();
               onExpandedChange(!expanded);
-            }}
-          >
+            }}>
             <IconChevronDown size={15} />
           </button>
         </td>
@@ -2244,11 +1794,7 @@ function StateQLLedgerItem({
           <Status tone={status.tone}>{status.label}</Status>
         </td>
         <td className="mono">
-          {item.timestamp ? (
-            <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time>
-          ) : (
-            "No time"
-          )}
+          {item.timestamp ? <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time> : "No time"}
         </td>
       </tr>
       {expanded && (
@@ -2262,13 +1808,7 @@ function StateQLLedgerItem({
   );
 }
 
-function StateQLLedgerDetail({
-  item,
-  rowsScope,
-}: {
-  item: StateQLActivityItem;
-  rowsScope: string;
-}) {
+function StateQLLedgerDetail({ item, rowsScope }: { item: StateQLActivityItem; rowsScope: string }) {
   return (
     <div className="stateql-ledger-detail-grid">
       <section className="stateql-ledger-sql" aria-label="SQL statement">
@@ -2276,37 +1816,19 @@ function StateQLLedgerDetail({
           <strong>SQL statement</strong>
           <span>{stateqlExecution(item)}</span>
         </header>
-        <p>
-          SQL may contain inline literals or comments. Parameters are not
-          included in activity history.
-        </p>
+        <p>SQL may contain inline literals or comments. Parameters are not included in activity history.</p>
         {item.sql !== undefined ? (
           <pre dir="ltr">
             <code>{item.sql}</code>
           </pre>
         ) : (
-          <span className="stateql-ledger-unavailable">
-            SQL was not retained for this activity.
-          </span>
+          <span className="stateql-ledger-unavailable">SQL was not retained for this activity.</span>
         )}
       </section>
-      <section
-        className="stateql-ledger-receipts"
-        aria-label="Database receipt"
-      >
+      <section className="stateql-ledger-receipts" aria-label="Database receipt">
         <header>
-          <strong>
-            {item.result
-              ? "Result receipt"
-              : item.operation
-                ? "Operation receipt"
-                : "Activity receipt"}
-          </strong>
-          <span>
-            {item.source === "metadata"
-              ? "retained metadata"
-              : "session history"}
-          </span>
+          <strong>{item.result ? "Result receipt" : item.operation ? "Operation receipt" : "Activity receipt"}</strong>
+          <span>{item.source === "metadata" ? "retained metadata" : "session history"}</span>
         </header>
         {item.result && (
           <div className="stateql-ledger-receipt">
@@ -2337,9 +1859,7 @@ function StateQLLedgerDetail({
             <div>
               <small>Affected</small>
               <strong>
-                {item.operation.affected_rows === null
-                  ? "Unavailable"
-                  : `${item.operation.affected_rows} rows`}
+                {item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}
               </strong>
             </div>
             <div>
@@ -2349,9 +1869,7 @@ function StateQLLedgerDetail({
           </div>
         )}
         {!item.result && !item.operation && (
-          <span className="stateql-ledger-unavailable">
-            No retained receipt is available.
-          </span>
+          <span className="stateql-ledger-unavailable">No retained receipt is available.</span>
         )}
         {item.handle && (
           <p className="mono" title={item.handle}>
@@ -2359,9 +1877,7 @@ function StateQLLedgerDetail({
           </p>
         )}
         {item.result && item.operation && (
-          <p className="stateql-ledger-warning">
-            This handle matches both result and operation metadata.
-          </p>
+          <p className="stateql-ledger-warning">This handle matches both result and operation metadata.</p>
         )}
       </section>
       {item.result && (
@@ -2381,27 +1897,17 @@ const STATEQL_ROWS_PAGE_SIZE = 25;
 function stateqlCellText(value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
 }
 
 function stateqlColumns(page: StateQLRowsPage | undefined): string[] {
   const columns = new Set<string>();
-  for (const row of page?.rows ?? [])
-    for (const key of Object.keys(row)) columns.add(key);
+  for (const row of page?.rows ?? []) for (const key of Object.keys(row)) columns.add(key);
   return [...columns];
 }
 
-function StateQLMaterializedRows({
-  active,
-  handle,
-  total,
-}: {
-  active: boolean;
-  handle: string;
-  total: number;
-}) {
+function StateQLMaterializedRows({ active, handle, total }: { active: boolean; handle: string; total: number }) {
   const [open, setOpen] = useState(false);
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<StateQLRowsPage>();
@@ -2418,16 +1924,12 @@ function StateQLMaterializedRows({
     setError("");
     void runtimeStore
       .stateqlRows(handle, offset, STATEQL_ROWS_PAGE_SIZE, controller.signal)
-      .then((value) => {
+      .then(value => {
         if (current) setPage(value);
       })
-      .catch((cause) => {
+      .catch(cause => {
         if (current && !controller.signal.aborted)
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Materialized rows failed to load",
-          );
+          setError(cause instanceof Error ? cause.message : "Materialized rows failed to load");
       })
       .finally(() => {
         if (current) setLoading(false);
@@ -2447,10 +1949,7 @@ function StateQLMaterializedRows({
   const end = page && page.returned > 0 ? page.offset + page.returned : 0;
 
   return (
-    <details
-      className="stateql-rows"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
+    <details className="stateql-rows" onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>
         <span>
           <strong>Materialized rows</strong>
@@ -2461,8 +1960,7 @@ function StateQLMaterializedRows({
       </summary>
       <div className="stateql-rows-content">
         <p className="stateql-rows-note">
-          Rows can contain sensitive database content. Only this bounded page is
-          loaded.
+          Rows can contain sensitive database content. Only this bounded page is loaded.
         </p>
         {loading && !page && (
           <div className="stateql-rows-state" role="status">
@@ -2473,11 +1971,7 @@ function StateQLMaterializedRows({
         {error && (
           <div className="stateql-rows-state is-error" role="alert">
             <span>{error}</span>
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => setRetry((value) => value + 1)}
-            >
+            <button className="text-button" type="button" onClick={() => setRetry(value => value + 1)}>
               Retry
             </button>
           </div>
@@ -2488,16 +1982,11 @@ function StateQLMaterializedRows({
           </div>
         )}
         {page && page.rows.length > 0 && (
-          <div
-            className="stateql-rows-scroll"
-            role="region"
-            aria-label={`Rows for ${handle}`}
-            tabIndex={0}
-          >
+          <div className="stateql-rows-scroll" role="region" aria-label={`Rows for ${handle}`} tabIndex={0}>
             <table>
               <thead>
                 <tr>
-                  {columns.map((column) => (
+                  {columns.map(column => (
                     <th scope="col" key={column}>
                       {column}
                     </th>
@@ -2507,10 +1996,8 @@ function StateQLMaterializedRows({
               <tbody>
                 {page.rows.map((row, rowIndex) => (
                   <tr key={`${page.offset}:${rowIndex}`}>
-                    {columns.map((column) => {
-                      const text = Object.hasOwn(row, column)
-                        ? stateqlCellText(row[column])
-                        : "N/A";
+                    {columns.map(column => {
+                      const text = Object.hasOwn(row, column) ? stateqlCellText(row[column]) : "N/A";
                       return (
                         <td className="mono" title={text} key={column}>
                           {text}
@@ -2533,18 +2020,14 @@ function StateQLMaterializedRows({
                 className="text-button"
                 type="button"
                 disabled={loading || page.offset === 0}
-                onClick={() => move(Math.max(0, page.offset - page.limit))}
-              >
+                onClick={() => move(Math.max(0, page.offset - page.limit))}>
                 Previous
               </button>
               <button
                 className="text-button"
                 type="button"
                 disabled={loading || page.next_offset === null}
-                onClick={() =>
-                  page.next_offset !== null && move(page.next_offset)
-                }
-              >
+                onClick={() => page.next_offset !== null && move(page.next_offset)}>
                 Next
               </button>
             </div>
@@ -2555,13 +2038,7 @@ function StateQLMaterializedRows({
   );
 }
 
-function Timeline({
-  live,
-  enabled: packageEnabled,
-}: {
-  live: RuntimeStoreSnapshot;
-  enabled: boolean;
-}) {
+function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapshot; enabled: boolean }) {
   const timeline = live.runtime?.operational.timeline;
   const checkpoints = timeline?.checkpoints ?? [];
   const [selected, setSelected] = useState<string>();
@@ -2570,13 +2047,9 @@ function Timeline({
   const [files, setFiles] = useState<TimelineCheckpointFiles>();
   const [selectedPath, setSelectedPath] = useState<string>();
   const [diff, setDiff] = useState<TimelineCheckpointDiff>();
-  const active = checkpoints.find((checkpoint) => checkpoint.id === selected);
-  const enabled =
-    live.connection === "connected" && live.runtime?.ready === true && !busy;
-  const act = async (
-    action: "restore" | "fork" | "clear",
-    checkpointId?: string,
-  ) => {
+  const active = checkpoints.find(checkpoint => checkpoint.id === selected);
+  const enabled = live.connection === "connected" && live.runtime?.ready === true && !busy;
+  const act = async (action: "restore" | "fork" | "clear", checkpointId?: string) => {
     if (!enabled) return;
     const operation = checkpointId ? `${action}:${checkpointId}` : action;
     setBusy(operation);
@@ -2584,9 +2057,7 @@ function Timeline({
     try {
       await runtimeStore.timeline(action, checkpointId);
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Timeline action failed",
-      );
+      setError(cause instanceof Error ? cause.message : "Timeline action failed");
     } finally {
       setBusy("");
     }
@@ -2599,16 +2070,11 @@ function Timeline({
     if (!active) return;
     void runtimeStore
       .timelineCheckpointFiles(active.id)
-      .then((value) => {
+      .then(value => {
         if (!cancelled) setFiles(value);
       })
-      .catch((cause) => {
-        if (!cancelled)
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Timeline files failed to load",
-          );
+      .catch(cause => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Timeline files failed to load");
       });
     return () => {
       cancelled = true;
@@ -2621,9 +2087,7 @@ function Timeline({
     try {
       setDiff(await runtimeStore.timelineCheckpointDiff(active.id, path));
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Timeline diff failed to load",
-      );
+      setError(cause instanceof Error ? cause.message : "Timeline diff failed to load");
     }
   };
   if (timeline?.availability !== "available") {
@@ -2637,33 +2101,26 @@ function Timeline({
       <FeatureUnavailable name="Timeline" />
     );
   }
-  const verifiedCount = checkpoints.filter(
-    (checkpoint) => checkpoint.verified,
-  ).length;
+  const verifiedCount = checkpoints.filter(checkpoint => checkpoint.verified).length;
   return (
     <div className="timeline-layout">
       <div className="timeline-toolbar">
         <span>
-          {checkpoints.length} checkpoint{checkpoints.length === 1 ? "" : "s"} ·{" "}
-          {verifiedCount} verified
+          {checkpoints.length} checkpoint{checkpoints.length === 1 ? "" : "s"} · {verifiedCount} verified
         </span>
         <button
           className="text-button danger"
           type="button"
           disabled={!enabled || checkpoints.length === 0}
-          onClick={() => void act("clear")}
-        >
+          onClick={() => void act("clear")}>
           <IconTrash size={13} />
           {busy === "clear" ? "Clearing…" : "Clear timeline"}
         </button>
       </div>
-      {checkpoints.map((checkpoint) => {
+      {checkpoints.map(checkpoint => {
         const expanded = active?.id === checkpoint.id;
         return (
-          <div
-            className={`checkpoint-item ${expanded ? "is-expanded" : ""}`}
-            key={checkpoint.id}
-          >
+          <div className={`checkpoint-item ${expanded ? "is-expanded" : ""}`} key={checkpoint.id}>
             <div className="checkpoint-row">
               <OverviewOrb
                 state={checkpoint.verified ? "done" : "neutral"}
@@ -2673,16 +2130,9 @@ function Timeline({
                 className="checkpoint-copy"
                 type="button"
                 aria-expanded={expanded}
-                onClick={() =>
-                  setSelected((current) =>
-                    current === checkpoint.id ? undefined : checkpoint.id,
-                  )
-                }
-              >
+                onClick={() => setSelected(current => (current === checkpoint.id ? undefined : checkpoint.id))}>
                 <span className="checkpoint-title">
-                  <strong title={checkpoint.title}>
-                    {oneLine(checkpoint.title)}
-                  </strong>
+                  <strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong>
                 </span>
                 <span className="checkpoint-meta">
                   {checkpoint.branch && (
@@ -2705,14 +2155,10 @@ function Timeline({
                   ) : (
                     <span>No file changes</span>
                   )}
-                  <time dateTime={checkpoint.createdAt}>
-                    {displayTimelineTime(checkpoint.createdAt)}
-                  </time>
+                  <time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time>
                 </span>
               </button>
-              <OverviewStateLabel
-                state={checkpoint.verified ? "done" : "neutral"}
-              >
+              <OverviewStateLabel state={checkpoint.verified ? "done" : "neutral"}>
                 {checkpoint.verified ? "Verified" : "Unverified"}
               </OverviewStateLabel>
               <span className="checkpoint-row-actions">
@@ -2722,8 +2168,7 @@ function Timeline({
                   aria-label="Fork from checkpoint"
                   aria-busy={busy === `fork:${checkpoint.id}`}
                   disabled={!enabled}
-                  onClick={() => void act("fork", checkpoint.id)}
-                >
+                  onClick={() => void act("fork", checkpoint.id)}>
                   {busy === `fork:${checkpoint.id}` ? (
                     <IconLoader2 className="spin" size={15} />
                   ) : (
@@ -2736,8 +2181,7 @@ function Timeline({
                   aria-label="Restore checkpoint"
                   aria-busy={busy === `restore:${checkpoint.id}`}
                   disabled={!enabled}
-                  onClick={() => void act("restore", checkpoint.id)}
-                >
+                  onClick={() => void act("restore", checkpoint.id)}>
                   {busy === `restore:${checkpoint.id}` ? (
                     <IconLoader2 className="spin" size={15} />
                   ) : (
@@ -2790,13 +2234,12 @@ function CheckpointDetail({
   return (
     <div className="checkpoint-inline-detail">
       <div className="checkpoint-files" aria-label="Checkpoint changed files">
-        {files?.files.map((file) => (
+        {files?.files.map(file => (
           <button
             type="button"
             className={selectedPath === file.path ? "is-active" : ""}
             key={file.path}
-            onClick={() => onOpenDiff(file.path)}
-          >
+            onClick={() => onOpenDiff(file.path)}>
             <IconFile size={13} />
             <span title={file.path}>{file.path}</span>
             {file.binary ? (
@@ -2810,9 +2253,7 @@ function CheckpointDetail({
           </button>
         ))}
         {!files && <span className="settings-note">Loading changes…</span>}
-        {files && files.files.length === 0 && (
-          <span className="settings-note">No file changes</span>
-        )}
+        {files && files.files.length === 0 && <span className="settings-note">No file changes</span>}
       </div>
       {selectedPath && <TimelineDiff value={diff} />}
       {error && (
@@ -2837,9 +2278,7 @@ function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
       </div>
     );
   if (value.truncated) {
-    const highlighted = DOMPurify.sanitize(
-      highlightSource(value.text, value.path, true),
-    );
+    const highlighted = DOMPurify.sanitize(highlightSource(value.text, value.path, true));
     return (
       <pre className="file-code timeline-diff">
         <code dangerouslySetInnerHTML={{ __html: highlighted }} />
@@ -2848,24 +2287,15 @@ function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
     );
   }
   return (
-    <Suspense
-      fallback={<div className="timeline-diff-empty">Rendering diff…</div>}
-    >
-      <PierreCodeViewer
-        mode="diff"
-        path={value.path}
-        text={value.text}
-        revision={value.checkpointId}
-      />
+    <Suspense fallback={<div className="timeline-diff-empty">Rendering diff…</div>}>
+      <PierreCodeViewer mode="diff" path={value.path} text={value.text} revision={value.checkpointId} />
     </Suspense>
   );
 }
 
 function oneLine(value: string, max = 120): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > max
-    ? `${normalized.slice(0, max - 1).trimEnd()}…`
-    : normalized;
+  return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
 }
 
 type OverviewState = "neutral" | "done" | "running" | "failed" | "attention";
@@ -2897,65 +2327,34 @@ function LedBar({
     const update = (width: number) => {
       if (width <= 0) return;
       const next = Math.max(12, Math.min(40, Math.floor((width + 2) / 12)));
-      setResponsiveCells((current) => (current === next ? current : next));
+      setResponsiveCells(current => (current === next ? current : next));
     };
     update(bar.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) =>
-      update(entry.contentRect.width),
-    );
+    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
     observer.observe(bar);
     return () => observer.disconnect();
   }, [responsive]);
   const renderedCells = responsive ? responsiveCells : cells;
-  const clamp = (value: number) =>
-    Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+  const clamp = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
   const onA = Math.round((clamp(a) / 100) * renderedCells);
   const onB = Math.round((clamp(b) / 100) * renderedCells);
   const filled = Math.min(renderedCells, onA + onB);
-  const classes = [
-    "overview-led-bar",
-    thin && "is-thin",
-    tone && `tone-${tone}`,
-    running && "is-running",
-  ]
+  const classes = ["overview-led-bar", thin && "is-thin", tone && `tone-${tone}`, running && "is-running"]
     .filter(Boolean)
     .join(" ");
   return (
-    <span
-      ref={barRef}
-      className={classes}
-      aria-label={label}
-      aria-hidden={label ? undefined : true}
-    >
+    <span ref={barRef} className={classes} aria-label={label} aria-hidden={label ? undefined : true}>
       {Array.from({ length: renderedCells }, (_, index) => (
         <i
-          className={
-            index < onA
-              ? "is-on"
-              : index < filled
-                ? "is-on is-b"
-                : running
-                  ? "is-pending"
-                  : ""
-          }
-          style={
-            running && index >= filled
-              ? { animationDelay: `${(index - filled) * 50}ms` }
-              : undefined
-          }
+          className={index < onA ? "is-on" : index < filled ? "is-on is-b" : running ? "is-pending" : ""}
+          style={running && index >= filled ? { animationDelay: `${(index - filled) * 50}ms` } : undefined}
           key={index}
         />
       ))}
     </span>
   );
 }
-function OverviewOrb({
-  state,
-  label,
-}: {
-  state: OverviewState;
-  label: string;
-}) {
+function OverviewOrb({ state, label }: { state: OverviewState; label: string }) {
   return (
     <span className="overview-orb-cell">
       <i className={`overview-orb is-${state}`} aria-label={label} />
@@ -2963,13 +2362,7 @@ function OverviewOrb({
   );
 }
 
-function OverviewStateLabel({
-  state,
-  children,
-}: {
-  state: OverviewState;
-  children: ReactNode;
-}) {
+function OverviewStateLabel({ state, children }: { state: OverviewState; children: ReactNode }) {
   return <span className={`overview-state-label is-${state}`}>{children}</span>;
 }
 
@@ -2982,12 +2375,10 @@ function useResponsiveUsageLedCells() {
     const update = (width: number) => {
       if (width <= 0) return;
       const next = Math.max(12, Math.min(40, Math.round((width - 164) / 12)));
-      setCells((current) => (current === next ? current : next));
+      setCells(current => (current === next ? current : next));
     };
     update(list.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) =>
-      update(entry.contentRect.width),
-    );
+    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
     observer.observe(list);
     return () => observer.disconnect();
   }, []);
@@ -2998,51 +2389,30 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
   const [expanded, setExpanded] = useState(false);
   const [usageListRef, ledCells] = useResponsiveUsageLedCells();
   const toolUsage = [...(metrics?.toolUsage ?? [])].sort(
-    (left, right) =>
-      right.tokens - left.tokens ||
-      right.calls - left.calls ||
-      left.name.localeCompare(right.name),
+    (left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name),
   );
   const inputTokens = metrics?.inputTokens ?? 0;
   const outputTokens = metrics?.outputTokens ?? 0;
   const cacheReadTokens = metrics?.cacheReadTokens ?? 0;
   const cacheWriteTokens = metrics?.cacheWriteTokens ?? 0;
   const inputOutputTokens = inputTokens + outputTokens;
-  const inputPercent =
-    inputOutputTokens > 0 ? (inputTokens / inputOutputTokens) * 100 : 50;
-  const outputPercent =
-    inputOutputTokens > 0 ? (outputTokens / inputOutputTokens) * 100 : 50;
-  const cacheHitRate = formatCacheHitRate(
-    inputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-  );
+  const inputPercent = inputOutputTokens > 0 ? (inputTokens / inputOutputTokens) * 100 : 50;
+  const outputPercent = inputOutputTokens > 0 ? (outputTokens / inputOutputTokens) * 100 : 50;
+  const cacheHitRate = formatCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
   const visibleUsage = expanded ? toolUsage : toolUsage.slice(0, 5);
   const maxToolTokens = toolUsage[0]?.tokens ?? 0;
   return (
-    <InspectorSection
-      title="Session usage"
-      meta={`${metrics?.userMessages ?? 0} turns`}
-      className="session-tool-usage"
-    >
+    <InspectorSection title="Session usage" meta={`${metrics?.userMessages ?? 0} turns`} className="session-tool-usage">
       <div className="session-tool-summary">
         <div className="session-tool-call-total">
           <small>Tool calls</small>
-          <strong className="mono">
-            {formatCompactNumber(metrics?.toolCalls ?? 0)}
-          </strong>
-          <span>
-            {toolUsage.length === 200
-              ? "200 tools shown"
-              : `${toolUsage.length} tools used`}
-          </span>
+          <strong className="mono">{formatCompactNumber(metrics?.toolCalls ?? 0)}</strong>
+          <span>{toolUsage.length === 200 ? "200 tools shown" : `${toolUsage.length} tools used`}</span>
         </div>
         <div className="session-token-composition">
           <div>
             <small>Input + output</small>
-            <strong className="mono">
-              {formatCompactNumber(inputOutputTokens)}
-            </strong>
+            <strong className="mono">{formatCompactNumber(inputOutputTokens)}</strong>
           </div>
           <LedBar
             a={inputPercent}
@@ -3061,13 +2431,11 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
           <div className="session-token-key">
             <span
               title="Share of prompt tokens served from cache"
-              aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}
-            >
+              aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}>
               <strong>Cache input</strong> {cacheHitRate}
             </span>
             <span>
-              <strong>Context</strong>{" "}
-              {Math.round(metrics?.contextPercent ?? 0)}%
+              <strong>Context</strong> {Math.round(metrics?.contextPercent ?? 0)}%
             </span>
           </div>
         </div>
@@ -3080,15 +2448,10 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
       </div>
       {visibleUsage.length ? (
         <div className="session-tool-usage-list" ref={usageListRef}>
-          {visibleUsage.map((usage) => {
-            const scaledTotal =
-              maxToolTokens > 0
-                ? (Math.log1p(usage.tokens) / Math.log1p(maxToolTokens)) * 100
-                : 0;
-            const inputShare =
-              usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
-            const outputShare =
-              usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
+          {visibleUsage.map(usage => {
+            const scaledTotal = maxToolTokens > 0 ? (Math.log1p(usage.tokens) / Math.log1p(maxToolTokens)) * 100 : 0;
+            const inputShare = usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
+            const outputShare = usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
             return (
               <div className="session-tool-usage-row" key={usage.name}>
                 <div>
@@ -3114,19 +2477,15 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
           })}
         </div>
       ) : (
-        <div className="session-tool-usage-empty">
-          No completed tool calls in this session.
-        </div>
+        <div className="session-tool-usage-empty">No completed tool calls in this session.</div>
       )}
       {toolUsage.length > 5 && (
         <button
           className="session-usage-expand"
           type="button"
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? "Show less" : `Show ${toolUsage.length - 5} more`}{" "}
-          <IconChevronDown size={14} />
+          onClick={() => setExpanded(value => !value)}>
+          {expanded ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} />
         </button>
       )}
     </InspectorSection>
@@ -3142,10 +2501,10 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
   const policies = runtime?.operational.tools.policies ?? [];
   const normalized = query.trim().toLowerCase();
   const claimed = new Set<string>();
-  const policyGroups = policies.map((policy) => ({
+  const policyGroups = policies.map(policy => ({
     owner: policy.owner,
     policy,
-    tools: policy.managedTools.filter((tool) => {
+    tools: policy.managedTools.filter(tool => {
       if (claimed.has(tool)) return false;
       claimed.add(tool);
       return true;
@@ -3156,48 +2515,30 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
     {
       owner: "Pi built-ins",
       policy: undefined,
-      tools: (runtime?.availableTools ?? []).filter(
-        (tool) => !claimed.has(tool),
-      ),
+      tools: (runtime?.availableTools ?? []).filter(tool => !claimed.has(tool)),
     },
   ]
-    .map((group) => ({
+    .map(group => ({
       ...group,
-      tools: group.tools.filter(
-        (tool) => !normalized || tool.toLowerCase().includes(normalized),
-      ),
+      tools: group.tools.filter(tool => !normalized || tool.toLowerCase().includes(normalized)),
     }))
-    .filter((group) => group.tools.length);
+    .filter(group => group.tools.length);
   const directOverrides =
-    scope === "project"
-      ? runtime?.runtimePolicy.project.toolOverrides
-      : runtime?.runtimePolicy.session.toolOverrides;
-  const effectiveOverrides =
-    runtime?.runtimePolicy.effective.toolOverrides ?? {};
-  const disabled =
-    live.connection !== "connected" ||
-    !runtime?.ready ||
-    Boolean(live.pendingUi);
-  const visibleCount = groups.reduce(
-    (total, group) => total + group.tools.length,
-    0,
-  );
+    scope === "project" ? runtime?.runtimePolicy.project.toolOverrides : runtime?.runtimePolicy.session.toolOverrides;
+  const effectiveOverrides = runtime?.runtimePolicy.effective.toolOverrides ?? {};
+  const disabled = live.connection !== "connected" || !runtime?.ready || Boolean(live.pendingUi);
+  const visibleCount = groups.reduce((total, group) => total + group.tools.length, 0);
   const setHere = Object.keys(directOverrides ?? {}).length;
   return (
     <div className="tools-page">
       <div className="tool-scope-bar">
-        <div
-          className="policy-scope"
-          role="tablist"
-          aria-label="Tool override scope"
-        >
+        <div className="policy-scope" role="tablist" aria-label="Tool override scope">
           <button
             type="button"
             role="tab"
             aria-selected={scope === "project"}
             className={scope === "project" ? "is-active" : ""}
-            onClick={() => setScope("project")}
-          >
+            onClick={() => setScope("project")}>
             Project
           </button>
           <button
@@ -3205,8 +2546,7 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
             role="tab"
             aria-selected={scope === "session"}
             className={scope === "session" ? "is-active" : ""}
-            onClick={() => setScope("session")}
-          >
+            onClick={() => setScope("session")}>
             This session
           </button>
         </div>
@@ -3217,101 +2557,65 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
           <span className="sr-only">Filter tools</span>
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={event => setQuery(event.target.value)}
             placeholder={`Filter ${runtime?.availableTools.length ?? 0} tools`}
           />
           <span className="mono">{visibleCount}</span>
         </label>
         <p className="tool-override-note">
-          Inherited tools follow global Settings. Package capability and safety
-          gates remain authoritative.
+          Inherited tools follow global Settings. Package capability and safety gates remain authoritative.
         </p>
       </div>
-      <InspectorSection
-        title="Tool overrides"
-        meta={`${setHere} set here`}
-        className="tool-overrides-panel"
-      >
+      <InspectorSection title="Tool overrides" meta={`${setHere} set here`} className="tool-overrides-panel">
         <div className="tool-override-groups">
-          {groups.map((group) => (
+          {groups.map(group => (
             <section className="tool-override-group" key={group.owner}>
               <header>
                 <strong>{group.owner}</strong>
                 <span>{group.tools.length}</span>
               </header>
-              {group.tools.map((tool) => {
-                const capable = group.policy
-                  ? group.policy.enabledTools.includes(tool)
-                  : true;
-                const packageDefault: ToolExposureMode =
-                  group.policy?.deferredTools.includes(tool)
-                    ? "deferred"
-                    : group.policy
-                      ? capable
-                        ? "active"
-                        : "disabled"
-                      : runtime?.activeTools.includes(tool)
-                        ? "active"
-                        : "disabled";
-                const effective = capable
-                  ? (effectiveOverrides[tool] ?? packageDefault)
-                  : "disabled";
+              {group.tools.map(tool => {
+                const capable = group.policy ? group.policy.enabledTools.includes(tool) : true;
+                const packageDefault: ToolExposureMode = group.policy?.deferredTools.includes(tool)
+                  ? "deferred"
+                  : group.policy
+                    ? capable
+                      ? "active"
+                      : "disabled"
+                    : runtime?.activeTools.includes(tool)
+                      ? "active"
+                      : "disabled";
+                const effective = capable ? (effectiveOverrides[tool] ?? packageDefault) : "disabled";
                 const locked = tool === "search_tools";
                 const directOverride = directOverrides?.[tool];
                 const state: OverviewState =
-                  effective === "active"
-                    ? "done"
-                    : effective === "deferred"
-                      ? "attention"
-                      : "neutral";
+                  effective === "active" ? "done" : effective === "deferred" ? "attention" : "neutral";
                 return (
                   <label
                     className={`tool-override-row ${directOverride ? "is-override" : ""} ${locked ? "is-locked" : ""}`}
                     data-effective={effective}
-                    key={tool}
-                  >
-                    <OverviewOrb
-                      state={state}
-                      label={`Current setting: ${effective}`}
-                    />
+                    key={tool}>
+                    <OverviewOrb state={state} label={`Current setting: ${effective}`} />
                     <span className="tool-override-name">
                       <strong>{tool}</strong>
-                      <small className="policy-source">
-                        {locked ? "always on" : effective}
-                      </small>
+                      <small className="policy-source">{locked ? "always on" : effective}</small>
                     </span>
                     <select
                       aria-label={`${scope === "project" ? "Project" : "Session"} override for ${tool}`}
                       value={directOverride ?? "inherit"}
-                      disabled={
-                        disabled ||
-                        locked ||
-                        busy === tool ||
-                        (!capable && !directOverride)
-                      }
-                      onChange={(event) => {
+                      disabled={disabled || locked || busy === tool || (!capable && !directOverride)}
+                      onChange={event => {
                         if (!runtime) return;
-                        const mode = event.target.value as
-                          ToolExposureMode | "inherit";
+                        const mode = event.target.value as ToolExposureMode | "inherit";
                         setBusy(tool);
                         setError("");
                         void runtimeStore
-                          .updateToolPolicy(
-                            scope,
-                            tool,
-                            mode,
-                            runtime.runtimePolicy.revision,
-                          )
-                          .catch((cause) =>
-                            setError(
-                              cause instanceof Error
-                                ? cause.message
-                                : "Tool policy could not be saved",
-                            ),
+                          .updateToolPolicy(scope, tool, mode, runtime.runtimePolicy.revision)
+                          .catch(cause =>
+                            setError(cause instanceof Error ? cause.message : "Tool policy could not be saved"),
                           )
                           .finally(() => setBusy(""));
-                      }}
-                    >
+                      }}>
                       <option value="inherit">Inherit</option>
                       <option value="active" disabled={!capable}>
                         Active
@@ -3366,11 +2670,7 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   const projected = sieve.cumulativeProjected.netCharsSaved;
   const observing = sieve.mode === "observe";
   const latestProjected = sieve.latestMode === "observe";
-  const savings = Object.entries(
-    observing
-      ? sieve.cumulativeProjected.byTool
-      : sieve.cumulativeActual.byTool,
-  )
+  const savings = Object.entries(observing ? sieve.cumulativeProjected.byTool : sieve.cumulativeActual.byTool)
     .filter(([, usage]) => usage.netCharsSaved > 0)
     .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
     .slice(0, 3);
@@ -3378,23 +2678,17 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   const prefixChurn = sieve.stability?.prefixChurnViolations ?? 0;
   const softExceedances = sieve.stability?.softBudgetExceedances ?? 0;
   const healthy = prefixChurn === 0 && softExceedances === 0;
-  const epochReason =
-    sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
+  const epochReason = sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
   const contextPercent = sieve.contextUsagePercent;
 
   return (
     <InspectorSection
       title="Context Pruning"
-      meta={sieve.projectionMode === "stable" ? "stable" : sieve.projectionMode}
-    >
+      meta={sieve.projectionMode === "stable" ? "stable" : sieve.projectionMode}>
       <div className="sieve-gauge">
         <div>
           <strong>Context in use</strong>
-          <b>
-            {contextPercent === undefined
-              ? "—"
-              : `${Math.round(contextPercent)}%`}
-          </b>
+          <b>{contextPercent === undefined ? "—" : `${Math.round(contextPercent)}%`}</b>
         </div>
         <LedBar
           a={contextPercent ?? 0}
@@ -3406,15 +2700,8 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
           }
         />
         <p>
-          <span>
-            Pruning starts at {formatCompactNumber(sieve.threshold ?? 0)}{" "}
-            characters
-          </span>
-          <span>
-            {sieve.updatedAt
-              ? `Updated ${displayTime(sieve.updatedAt)}`
-              : "Update unavailable"}
-          </span>
+          <span>Pruning starts at {formatCompactNumber(sieve.threshold ?? 0)} characters</span>
+          <span>{sieve.updatedAt ? `Updated ${displayTime(sieve.updatedAt)}` : "Update unavailable"}</span>
         </p>
       </div>
 
@@ -3433,8 +2720,7 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
           <small>Last pass</small>
           <strong>{formatCompactNumber(sieve.latest.netCharsSaved)}</strong>
           <span>
-            {formatCompactNumber(sieve.latest.transformed)} of{" "}
-            {formatCompactNumber(sieve.latest.scanned)} pruned
+            {formatCompactNumber(sieve.latest.transformed)} of {formatCompactNumber(sieve.latest.scanned)} pruned
             {latestProjected ? " · projected" : ""}
           </span>
         </div>
@@ -3451,42 +2737,28 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
               <strong>{name}</strong>
               <LedBar a={(usage.netCharsSaved / largestSaving) * 100} thin />
             </div>
-            <span className="mono">
-              {formatCompactNumber(usage.netCharsSaved)}
-            </span>
+            <span className="mono">{formatCompactNumber(usage.netCharsSaved)}</span>
           </div>
         ))}
-        {savings.length === 0 && (
-          <p className="sieve-no-savings">No savings recorded yet.</p>
-        )}
+        {savings.length === 0 && <p className="sieve-no-savings">No savings recorded yet.</p>}
       </div>
 
       <div className="sieve-health-row">
-        <OverviewOrb
-          state={healthy ? "done" : "attention"}
-          label={healthy ? "Healthy" : "Needs attention"}
-        />
+        <OverviewOrb state={healthy ? "done" : "attention"} label={healthy ? "Healthy" : "Needs attention"} />
         <div>
           <strong>
             {healthy
               ? "No prefix churn or budget exceedances"
               : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
           </strong>
-          <small>
-            {formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}{" "}
-            projection reuses
-          </small>
+          <small>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)} projection reuses</small>
         </div>
       </div>
 
       <details className="sieve-projection">
         <summary>
           <span>
-            <strong>
-              {sieve.projectionMode === "standard-v2"
-                ? "Standard V2"
-                : "Projection"}
-            </strong>
+            <strong>{sieve.projectionMode === "standard-v2" ? "Standard V2" : "Projection"}</strong>
             <small>
               {sieve.projectionMode === "standard-v2"
                 ? "Comparison and churn diagnostics."
@@ -3505,23 +2777,15 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
               </div>
               <div>
                 <dt>Frozen results</dt>
-                <dd>
-                  {formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}
-                </dd>
+                <dd>{formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}</dd>
               </div>
               <div>
                 <dt>Chars retained</dt>
-                <dd>
-                  {formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}
-                </dd>
+                <dd>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}</dd>
               </div>
               <div>
                 <dt>Rollover eligible</dt>
-                <dd>
-                  {formatCompactNumber(
-                    sieve.epoch?.rolloverEligibleRetainedChars ?? 0,
-                  )}
-                </dd>
+                <dd>{formatCompactNumber(sieve.epoch?.rolloverEligibleRetainedChars ?? 0)}</dd>
               </div>
               <div>
                 <dt>Epoch started</dt>
@@ -3538,43 +2802,26 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
             <dl>
               <div>
                 <dt>Comparisons</dt>
-                <dd>
-                  {formatCompactNumber(
-                    sieve.stability?.standardComparisons ?? 0,
-                  )}
-                </dd>
+                <dd>{formatCompactNumber(sieve.stability?.standardComparisons ?? 0)}</dd>
               </div>
               <div>
                 <dt>Prefix changes</dt>
-                <dd>
-                  {formatCompactNumber(
-                    sieve.stability?.standardPrefixChurn ?? 0,
-                  )}
-                </dd>
+                <dd>{formatCompactNumber(sieve.stability?.standardPrefixChurn ?? 0)}</dd>
               </div>
               <div>
                 <dt>Chars invalidated</dt>
-                <dd>
-                  {formatCompactNumber(
-                    sieve.stability?.standardEstimatedInvalidatedChars ?? 0,
-                  )}
-                </dd>
+                <dd>{formatCompactNumber(sieve.stability?.standardEstimatedInvalidatedChars ?? 0)}</dd>
               </div>
               <div>
                 <dt>Earliest change</dt>
-                <dd>
-                  {sieve.stability?.standardEarliestChangedPriorMessageIndex ??
-                    "None"}
-                </dd>
+                <dd>{sieve.stability?.standardEarliestChangedPriorMessageIndex ?? "None"}</dd>
               </div>
-              {Object.entries(sieve.stability?.standardChangesByKind ?? {}).map(
-                ([kind, count]) => (
-                  <div key={kind}>
-                    <dt>{kind.replace(/([A-Z])/g, " $1").toLowerCase()}</dt>
-                    <dd>{formatCompactNumber(count)}</dd>
-                  </div>
-                ),
-              )}
+              {Object.entries(sieve.stability?.standardChangesByKind ?? {}).map(([kind, count]) => (
+                <div key={kind}>
+                  <dt>{kind.replace(/([A-Z])/g, " $1").toLowerCase()}</dt>
+                  <dd>{formatCompactNumber(count)}</dd>
+                </div>
+              ))}
             </dl>
           )}
         </div>
@@ -3590,16 +2837,12 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
 
 function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
   const active = jobs
-    .filter((job) => job.state === "running" || job.state === "cancelling")
-    .sort(
-      (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
-    );
+    .filter(job => job.state === "running" || job.state === "cancelling")
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt));
   const settled = jobs
-    .filter((job) => job.state !== "running" && job.state !== "cancelling")
+    .filter(job => job.state !== "running" && job.state !== "cancelling")
     .sort(
-      (left, right) =>
-        Date.parse(right.finishedAt ?? right.startedAt) -
-        Date.parse(left.finishedAt ?? left.startedAt),
+      (left, right) => Date.parse(right.finishedAt ?? right.startedAt) - Date.parse(left.finishedAt ?? left.startedAt),
     )
     .slice(0, 6);
   const [now, setNow] = useState(Date.now());
@@ -3610,13 +2853,9 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
   }, [active.length]);
   const visible = [...active, ...settled];
   return (
-    <InspectorSection
-      title="Heartbeat jobs"
-      meta={`${active.length} running`}
-      className="heartbeat-panel"
-    >
+    <InspectorSection title="Heartbeat jobs" meta={`${active.length} running`} className="heartbeat-panel">
       <div className="overview-list">
-        {visible.map((job) => {
+        {visible.map(job => {
           const startedAt = Date.parse(job.startedAt);
           const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : now;
           const duration = Math.max(0, finishedAt - startedAt);
@@ -3630,8 +2869,7 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
                   : "neutral";
           const timestamp = job.finishedAt ?? job.startedAt;
           const timingLabel = job.finishedAt ? "Finished" : "Started";
-          const label =
-            job.state === "completed" ? "Done" : job.state.replace("_", " ");
+          const label = job.state === "completed" ? "Done" : job.state.replace("_", " ");
           return (
             <article className="overview-list-row" key={job.id}>
               <OverviewOrb state={state} label={label} />
@@ -3639,9 +2877,7 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
                 <strong title={job.label}>{job.label}</strong>
                 <small>
                   {timingLabel} {displayTime(timestamp)}
-                  {job.exitCode !== undefined
-                    ? ` · exit ${job.exitCode ?? "signal"}`
-                    : ""}
+                  {job.exitCode !== undefined ? ` · exit ${job.exitCode ?? "signal"}` : ""}
                 </small>
               </div>
               <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
@@ -3679,8 +2915,7 @@ function InspectorSection({
     <details
       className={`inspector-section ${className}`}
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
+      onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>
         <span>
           <strong>{title}</strong>
@@ -3696,15 +2931,11 @@ function InspectorSection({
 function TodoList({
   work,
 }: {
-  work: NonNullable<
-    NonNullable<
-      RuntimeStoreSnapshot["runtime"]
-    >["operational"]["continuity"]["work"]
-  >;
+  work: NonNullable<NonNullable<RuntimeStoreSnapshot["runtime"]>["operational"]["continuity"]["work"]>;
 }) {
   return (
     <ol className="todo-list">
-      {work.todos.map((todo) => {
+      {work.todos.map(todo => {
         const state: OverviewState =
           todo.status === "done"
             ? "done"

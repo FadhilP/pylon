@@ -28,14 +28,8 @@ const FAILURE_MESSAGE_MAX_LENGTH = 500;
  * `broadTokens` (default true) also scrubs any long opaque token. Turn it off for text
  * whose usefulness depends on long identifiers surviving — see BROAD_TOKEN_PATTERN.
  */
-export function redact(
-  text: string,
-  options: { broadTokens?: boolean } = {},
-): { text: string; count: number } {
-  const patterns =
-    options.broadTokens === false
-      ? PROVIDER_PATTERNS
-      : [...PROVIDER_PATTERNS, BROAD_TOKEN_PATTERN];
+export function redact(text: string, options: { broadTokens?: boolean } = {}): { text: string; count: number } {
+  const patterns = options.broadTokens === false ? PROVIDER_PATTERNS : [...PROVIDER_PATTERNS, BROAD_TOKEN_PATTERN];
   // A private sentinel keeps the marker itself from being re-matched by a later pattern.
   const sentinel = "\uE000";
   let count = 0;
@@ -49,21 +43,11 @@ export function redact(
 }
 
 /** Redacts, flattens control characters, and bounds an error for display to a model or user. */
-export function sanitizeFailureMessage(
-  value: unknown,
-  fallback: string,
-): string {
-  const message =
-    value instanceof Error
-      ? value.message
-      : typeof value === "string"
-        ? value
-        : fallback;
+export function sanitizeFailureMessage(value: unknown, fallback: string): string {
+  const message = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
   const clean =
     redact(message)
       .text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
       .trim() || fallback;
-  return clean.length > FAILURE_MESSAGE_MAX_LENGTH
-    ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
-    : clean;
+  return clean.length > FAILURE_MESSAGE_MAX_LENGTH ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...` : clean;
 }

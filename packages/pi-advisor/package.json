@@ -3,19 +3,41 @@
   "version": "0.1.0",
   "description": "Tool-free strategic model consultation for Pi",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=24.15.0" },
-  "files": ["extensions", "src", "README.md", "LICENSE"],
-  "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
-  "pi": { "extensions": ["./extensions/pi-advisor.ts"] },
-  "dependencies": { "pylon-core": "0.1.0" },
-  "pylon": { "settings": "./src/web-settings.ts" },
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-advisor.ts"
+    ]
+  },
+  "dependencies": {
+    "pylon-core": "0.1.0"
+  },
+  "pylon": {
+    "settings": "./src/web-settings.ts"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
-  "devDependencies": { "typescript": "^5.8.0" },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
   "license": "MIT"
 }

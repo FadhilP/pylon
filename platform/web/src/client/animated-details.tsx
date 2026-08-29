@@ -21,10 +21,7 @@ export function AnimatedDetails({
     window.clearTimeout(closeTimer.current);
     if (expanded) {
       setExpanded(false);
-      const delay = window.matchMedia("(prefers-reduced-motion: reduce)")
-        .matches
-        ? 0
-        : 160;
+      const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160;
       closeTimer.current = window.setTimeout(() => setOpen(false), delay);
       return;
     }
@@ -34,16 +31,12 @@ export function AnimatedDetails({
   };
 
   return (
-    <details
-      className={`${className}${expanded ? " is-expanded" : ""}`}
-      open={open}
-    >
+    <details className={`${className}${expanded ? " is-expanded" : ""}`} open={open}>
       <summary
-        onClick={(event) => {
+        onClick={event => {
           event.preventDefault();
           toggle();
-        }}
-      >
+        }}>
         {summary}
       </summary>
       <div className="aggregate-disclosure-motion">

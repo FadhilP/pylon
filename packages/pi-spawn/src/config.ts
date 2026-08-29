@@ -5,15 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const toolAvailabilities = ["deferred", "active"] as const;
 export type ToolAvailability = (typeof toolAvailabilities)[number];
-export const thinkingLevels = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export type SpawnConfig = {
   version: 1;
@@ -28,20 +20,19 @@ export const defaultConfig = (): SpawnConfig => ({
   agentAvailability: "deferred",
   sessionAvailability: "deferred",
 });
-export const configPath = (agentDir = getAgentDir()) =>
-  join(agentDir, "pi-spawn", "config.json");
+export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-spawn", "config.json");
 const validAvailability = (value: unknown): value is ToolAvailability =>
   toolAvailabilities.includes(value as ToolAvailability);
 const validModels = (value: unknown): value is string[] =>
   Array.isArray(value) &&
   value.length > 0 &&
   new Set(value).size === value.length &&
-  value.every((model) => typeof model === "string" && Boolean(model.trim()));
+  value.every(model => typeof model === "string" && Boolean(model.trim()));
 const validThinkingLevels = (value: unknown): value is ThinkingLevel[] =>
   Array.isArray(value) &&
   value.length > 0 &&
   new Set(value).size === value.length &&
-  value.every((level) => thinkingLevels.includes(level as ThinkingLevel));
+  value.every(level => thinkingLevels.includes(level as ThinkingLevel));
 
 export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
   try {
@@ -54,18 +45,13 @@ export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
         !validAvailability(value.toolAvailability)
       )
         throw new Error("invalid config");
-      return {
-        version: 1,
-        agentAvailability: value.toolAvailability,
-        sessionAvailability: value.toolAvailability,
-      };
+      return { version: 1, agentAvailability: value.toolAvailability, sessionAvailability: value.toolAvailability };
     }
     if (
       !validAvailability(value.agentAvailability) ||
       !validAvailability(value.sessionAvailability) ||
       (value.models !== undefined && !validModels(value.models)) ||
-      (value.agentThinkingLevels !== undefined &&
-        !validThinkingLevels(value.agentThinkingLevels))
+      (value.agentThinkingLevels !== undefined && !validThinkingLevels(value.agentThinkingLevels))
     ) {
       throw new Error("invalid config");
     }
@@ -74,9 +60,7 @@ export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
       agentAvailability: value.agentAvailability,
       sessionAvailability: value.sessionAvailability,
       ...(value.models ? { models: value.models } : {}),
-      ...(value.agentThinkingLevels
-        ? { agentThinkingLevels: value.agentThinkingLevels }
-        : {}),
+      ...(value.agentThinkingLevels ? { agentThinkingLevels: value.agentThinkingLevels } : {}),
     };
   } catch (error: any) {
     if (error?.code === "ENOENT") return defaultConfig();
@@ -85,16 +69,11 @@ export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
   }
 }
 
-export async function saveConfig(
-  config: SpawnConfig,
-  path = configPath(),
-): Promise<void> {
+export async function saveConfig(config: SpawnConfig, path = configPath()): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});

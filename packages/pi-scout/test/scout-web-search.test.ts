@@ -1,10 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import scoutWebSearchExtension, {
-  formatResults,
-  searchExa,
-  searchWeb,
-} from "../src/scout-web-search.ts";
+import scoutWebSearchExtension, { formatResults, searchExa, searchWeb } from "../src/scout-web-search.ts";
 
 const providerText = `Title: Docs & API
 URL: https://example.com/docs
@@ -50,10 +46,7 @@ Blocked.
 const mcpResponse = (text = providerText) =>
   `event: message\ndata: ${JSON.stringify({ result: { content: [{ type: "text", text }] } })}\n\n`;
 
-function context(
-  models: Array<{ provider: string; id: string }>,
-  apiKey?: string,
-) {
+function context(models: Array<{ provider: string; id: string }>, apiKey?: string) {
   return {
     modelRegistry: {
       getAvailable() {
@@ -61,11 +54,7 @@ function context(
       },
       async getApiKeyAndHeaders() {
         return apiKey
-          ? {
-              ok: true,
-              apiKey,
-              headers: { "x-auth-source": "test", ignored: null },
-            }
+          ? { ok: true, apiKey, headers: { "x-auth-source": "test", ignored: null } }
           : { ok: false, error: "missing" };
       },
     },
@@ -74,9 +63,7 @@ function context(
 
 function jwt(account = "account-123") {
   const payload = Buffer.from(
-    JSON.stringify({
-      "https://api.openai.com/auth": { chatgpt_account_id: account },
-    }),
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: account } }),
   ).toString("base64url");
   return `header.${payload}.signature`;
 }
@@ -115,63 +102,30 @@ function openAIResponse() {
 test("Exa MCP search sends a bounded request and parses unique public URL candidates", async () => {
   let requested = "";
   let requestBody: any;
-  const results = await searchExa(
-    "android gradle plugin",
-    8,
-    undefined,
-    async (input, init) => {
-      requested = String(input);
-      requestBody = JSON.parse(String(init?.body));
-      assert.equal(init?.redirect, "manual");
-      assert.equal(init?.method, "POST");
-      return new Response(mcpResponse(), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    },
-  );
+  const results = await searchExa("android gradle plugin", 8, undefined, async (input, init) => {
+    requested = String(input);
+    requestBody = JSON.parse(String(init?.body));
+    assert.equal(init?.redirect, "manual");
+    assert.equal(init?.method, "POST");
+    return new Response(mcpResponse(), { status: 200, headers: { "content-type": "text/event-stream" } });
+  });
   assert.equal(new URL(requested).hostname, "mcp.exa.ai");
   assert.deepEqual(requestBody.params, {
     name: "web_search_exa",
     arguments: { query: "android gradle plugin", numResults: 8 },
   });
   assert.deepEqual(results, [
-    {
-      title: "Docs & API",
-      url: "https://example.com/docs",
-      snippet: "Official reference.",
-    },
-    {
-      title: "Guide",
-      url: "https://developer.example/guide",
-      snippet: "Guide text.",
-    },
+    { title: "Docs & API", url: "https://example.com/docs", snippet: "Official reference." },
+    { title: "Guide", url: "https://developer.example/guide", snippet: "Guide text." },
   ]);
 });
 
 test("Exa search parses JSON tool payloads", async () => {
   const text = JSON.stringify({
-    results: [
-      {
-        title: "Reference",
-        url: "https://example.com/reference",
-        highlights: ["First", "Second"],
-      },
-    ],
+    results: [{ title: "Reference", url: "https://example.com/reference", highlights: ["First", "Second"] }],
   });
-  const results = await searchExa(
-    "query",
-    1,
-    undefined,
-    async () => new Response(mcpResponse(text)),
-  );
-  assert.deepEqual(results, [
-    {
-      title: "Reference",
-      url: "https://example.com/reference",
-      snippet: "First Second",
-    },
-  ]);
+  const results = await searchExa("query", 1, undefined, async () => new Response(mcpResponse(text)));
+  assert.deepEqual(results, [{ title: "Reference", url: "https://example.com/reference", snippet: "First Second" }]);
 });
 
 test("Exa search rejects off-origin redirects, oversized bodies, and malformed responses", async () => {
@@ -180,11 +134,7 @@ test("Exa search rejects off-origin redirects, oversized bodies, and malformed r
       "query",
       5,
       undefined,
-      async () =>
-        new Response(null, {
-          status: 307,
-          headers: { location: "https://example.com/search" },
-        }),
+      async () => new Response(null, { status: 307, headers: { location: "https://example.com/search" } }),
     ),
     /outside Exa/,
   );
@@ -194,11 +144,7 @@ test("Exa search rejects off-origin redirects, oversized bodies, and malformed r
       "query",
       5,
       undefined,
-      async () =>
-        new Response("x", {
-          status: 200,
-          headers: { "content-length": String(256 * 1024 + 1) },
-        }),
+      async () => new Response("x", { status: 200, headers: { "content-length": String(256 * 1024 + 1) } }),
     ),
     /size limit/,
   );
@@ -240,10 +186,7 @@ test("auto search uses an existing OpenAI Codex subscription and returns only bo
       requestBody = JSON.parse(String(init?.body));
       requestHeaders = new Headers(init?.headers);
       assert.equal(init?.redirect, "error");
-      return new Response(openAIResponse(), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
+      return new Response(openAIResponse(), { status: 200, headers: { "content-type": "text/event-stream" } });
     },
   );
   assert.equal(requested, "https://chatgpt.com/backend-api/codex/responses");
@@ -264,10 +207,7 @@ test("auto search uses an existing OpenAI Codex subscription and returns only bo
       { title: "Guide", url: "https://developer.example/guide", snippet: "" },
     ],
   });
-  assert.doesNotMatch(
-    JSON.stringify(searched),
-    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
+  assert.doesNotMatch(JSON.stringify(searched), new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("registry provider controls the OpenAI endpoint and arbitrary auth headers are not forwarded", async () => {
@@ -352,18 +292,11 @@ test("formatted search output enforces its final byte cap", () => {
 test("auto search uses Exa only when OpenAI auth is unavailable and explicit OpenAI fails closed", async () => {
   const missing = context([{ provider: "openai", id: "gpt-5.4" }]);
   let requests = 0;
-  const searched = await searchWeb(
-    "query",
-    1,
-    "auto",
-    undefined,
-    missing,
-    async (input) => {
-      requests++;
-      assert.equal(new URL(String(input)).hostname, "mcp.exa.ai");
-      return new Response(mcpResponse());
-    },
-  );
+  const searched = await searchWeb("query", 1, "auto", undefined, missing, async input => {
+    requests++;
+    assert.equal(new URL(String(input)).hostname, "mcp.exa.ai");
+    return new Response(mcpResponse());
+  });
   assert.equal(searched.provider, "exa");
   assert.equal(requests, 1);
   await assert.rejects(

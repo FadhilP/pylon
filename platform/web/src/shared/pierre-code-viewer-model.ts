@@ -1,8 +1,4 @@
-import {
-  parsePatchFiles,
-  type CodeViewItem,
-  type FileDiffLoadedChangedFiles,
-} from "@pierre/diffs";
+import { parsePatchFiles, type CodeViewItem, type FileDiffLoadedChangedFiles } from "@pierre/diffs";
 
 export function createPierreCodeViewItem({
   mode,
@@ -18,16 +14,10 @@ export function createPierreCodeViewItem({
   revision: string;
 }): CodeViewItem | undefined {
   if (mode === "file") {
-    return {
-      id,
-      type: "file",
-      file: { name: path, contents: text, cacheKey: `${revision}:${path}` },
-    };
+    return { id, type: "file", file: { name: path, contents: text, cacheKey: `${revision}:${path}` } };
   }
   try {
-    const files = parsePatchFiles(text, `${revision}:${path}`).flatMap(
-      (patch) => patch.files,
-    );
+    const files = parsePatchFiles(text, `${revision}:${path}`).flatMap(patch => patch.files);
     if (files.length !== 1) return undefined;
     return { id, type: "diff", fileDiff: files[0]! };
   } catch {
@@ -47,12 +37,8 @@ export function createPierreDiffItems({
 }): CodeViewItem[] {
   try {
     return parsePatchFiles(text, `${revision}:${id}`)
-      .flatMap((patch) => patch.files)
-      .map((fileDiff, index) => ({
-        id: `${id}:${index}`,
-        type: "diff" as const,
-        fileDiff,
-      }));
+      .flatMap(patch => patch.files)
+      .map((fileDiff, index) => ({ id: `${id}:${index}`, type: "diff" as const, fileDiff }));
   } catch {
     return [];
   }
@@ -79,15 +65,7 @@ export function createPierreLoadedDiffFiles({
   )
     throw new Error("Full file context is unavailable");
   return {
-    oldFile: {
-      name: path,
-      contents: base.text,
-      cacheKey: `${revision}:${path}:base`,
-    },
-    newFile: {
-      name: path,
-      contents: current.text,
-      cacheKey: `${revision}:${path}:current`,
-    },
+    oldFile: { name: path, contents: base.text, cacheKey: `${revision}:${path}:base` },
+    newFile: { name: path, contents: current.text, cacheKey: `${revision}:${path}:current` },
   };
 }

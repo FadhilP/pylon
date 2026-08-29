@@ -1,19 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  REDACTION_MARKER,
-  redact,
-  sanitizeFailureMessage,
-} from "../src/redact.ts";
+import { REDACTION_MARKER, redact, sanitizeFailureMessage } from "../src/redact.ts";
 
-const CONTROL_CHARS = String.fromCharCode(
-  0x00,
-  0x1f,
-  0x7f,
-  0x9f,
-  0x2028,
-  0x2029,
-);
+const CONTROL_CHARS = String.fromCharCode(0x00, 0x1f, 0x7f, 0x9f, 0x2028, 0x2029);
 const controlCharPattern = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 test("redaction covers every provider key shape and reports a count", () => {
@@ -69,15 +58,6 @@ test("failure diagnostics are redacted, flattened, and bounded", () => {
   assert.doesNotMatch(message, controlCharPattern);
   assert.ok(!message.includes(secret));
   assert.match(message, /\[possible credential redacted\]/);
-  assert.equal(
-    sanitizeFailureMessage(
-      "authorization: Bearer short-token",
-      "Delegate failed.",
-    ),
-    REDACTION_MARKER,
-  );
-  assert.equal(
-    sanitizeFailureMessage({ private: "value" }, "Delegate failed."),
-    "Delegate failed.",
-  );
+  assert.equal(sanitizeFailureMessage("authorization: Bearer short-token", "Delegate failed."), REDACTION_MARKER);
+  assert.equal(sanitizeFailureMessage({ private: "value" }, "Delegate failed."), "Delegate failed.");
 });

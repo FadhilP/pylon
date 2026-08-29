@@ -68,22 +68,17 @@ const ALLOWED_ENV = new Set([
 ]);
 
 const PROVIDER_ENV = new Set(
-  [...ALLOWED_ENV].filter((key) =>
-    /(?:API_KEY|OAUTH_TOKEN|AWS_|AZURE_|CLOUDFLARE_|ACCOUNT_ID|GATEWAY_ID|RESOURCE_NAME|DEPLOYMENT_NAME)/.test(
-      key,
-    ),
+  [...ALLOWED_ENV].filter(key =>
+    /(?:API_KEY|OAUTH_TOKEN|AWS_|AZURE_|CLOUDFLARE_|ACCOUNT_ID|GATEWAY_ID|RESOURCE_NAME|DEPLOYMENT_NAME)/.test(key),
   ),
 );
 
 function selectedProviderEnv(provider: string): Set<string> {
   const name = provider.toLowerCase();
   const selected = new Set<string>();
-  const include = (...keys: string[]) =>
-    keys.forEach((key) => selected.add(key));
-  if (name.includes("anthropic"))
-    include("ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
-  if (name.includes("openai") && !name.includes("azure"))
-    include("OPENAI_API_KEY");
+  const include = (...keys: string[]) => keys.forEach(key => selected.add(key));
+  if (name.includes("anthropic")) include("ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
+  if (name.includes("openai") && !name.includes("azure")) include("OPENAI_API_KEY");
   if (name.includes("azure"))
     include(
       "AZURE_OPENAI_API_KEY",
@@ -92,8 +87,7 @@ function selectedProviderEnv(provider: string): Set<string> {
       "AZURE_OPENAI_API_VERSION",
       "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
     );
-  if (name.includes("google") || name.includes("gemini"))
-    include("GEMINI_API_KEY");
+  if (name.includes("google") || name.includes("gemini")) include("GEMINI_API_KEY");
   const direct: Array<[string, string[]]> = [
     ["deepseek", ["DEEPSEEK_API_KEY"]],
     ["nvidia", ["NVIDIA_API_KEY"]],
@@ -108,13 +102,9 @@ function selectedProviderEnv(provider: string): Set<string> {
     ["moonshot", ["MOONSHOT_API_KEY"]],
     ["opencode", ["OPENCODE_API_KEY"]],
     ["kimi", ["KIMI_API_KEY"]],
-    [
-      "cloudflare",
-      ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
-    ],
+    ["cloudflare", ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]],
   ];
-  for (const [needle, keys] of direct)
-    if (name.includes(needle)) include(...keys);
+  for (const [needle, keys] of direct) if (name.includes(needle)) include(...keys);
   if (name.includes("bedrock") || name.includes("amazon"))
     include(
       "AWS_PROFILE",
@@ -147,9 +137,7 @@ export function scoutChildEnv(
     provider || additionalProviders.length
       ? new Set([
           ...(provider ? selectedProviderEnv(provider) : []),
-          ...additionalProviders.flatMap((name) => [
-            ...selectedProviderEnv(name),
-          ]),
+          ...additionalProviders.flatMap(name => [...selectedProviderEnv(name)]),
         ])
       : undefined;
   for (const [key, value] of Object.entries(source)) {
@@ -157,9 +145,7 @@ export function scoutChildEnv(
     if (
       value !== undefined &&
       (ALLOWED_ENV.has(normalized) || normalized.startsWith("LC_")) &&
-      (!providerEnv ||
-        !PROVIDER_ENV.has(normalized) ||
-        providerEnv.has(normalized))
+      (!providerEnv || !PROVIDER_ENV.has(normalized) || providerEnv.has(normalized))
     )
       env[key] = value;
   }

@@ -8,12 +8,8 @@ import { elementReferences } from "../src/element-ref.ts";
 import { PublicNetworkProxy } from "../src/public-proxy.ts";
 
 const live = process.env.PI_HELIOS_LIVE_BROWSER === "1";
-const exec = (
-  command: string,
-  args: string[],
-  options?: { signal?: AbortSignal; timeout?: number; cwd?: string },
-) =>
-  new Promise<any>((resolve) => {
+const exec = (command: string, args: string[], options?: { signal?: AbortSignal; timeout?: number; cwd?: string }) =>
+  new Promise<any>(resolve => {
     execFile(
       command,
       args,
@@ -26,12 +22,7 @@ const exec = (
       },
       (error, stdout, stderr) =>
         resolve({
-          code:
-            typeof (error as any)?.code === "number"
-              ? (error as any).code
-              : error
-                ? 1
-                : 0,
+          code: typeof (error as any)?.code === "number" ? (error as any).code : error ? 1 : 0,
           stdout,
           stderr,
           killed: Boolean((error as any)?.killed),
@@ -40,162 +31,100 @@ const exec = (
   });
 
 function reference(snapshot: string | undefined, role: string): string {
-  const ref = elementReferences(
-    snapshot?.split(/\r?\n/).find((line) => line.includes(`- ${role}`)) ?? "",
-  )[0];
+  const ref = elementReferences(snapshot?.split(/\r?\n/).find(line => line.includes(`- ${role}`)) ?? "")[0];
   assert.ok(ref, `missing ${role} reference in snapshot`);
   return ref;
 }
 
-test(
-  "live pinned CLI owned browser workflow",
-  { skip: !live, timeout: 120_000 },
-  async () => {
-    const server = createServer((_request, response) => {
-      response.setHeader("content-type", "text/html");
-      response.end(
-        "<!doctype html><title>Helios Live</title><label>Name <input></label><button onclick=\"document.title='Clicked'\">Submit</button>",
-      );
-    });
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
+test("live pinned CLI owned browser workflow", { skip: !live, timeout: 120_000 }, async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "text/html");
+    response.end(
+      "<!doctype html><title>Helios Live</title><label>Name <input></label><button onclick=\"document.title='Clicked'\">Submit</button>",
     );
-    const address = server.address();
-    assert.ok(address && typeof address === "object");
-    const manager = new BrowserSessionManager(exec);
-    try {
-      const started = await manager.start(
-        "live-contract",
-        `http://127.0.0.1:${address.port}`,
-      );
-      assert.ok(
-        started.snapshot,
-        "open should return its automatic post-action snapshot",
-      );
-      const filled = await manager.operate("live-contract", {
-        kind: "fill",
-        target: reference(started.snapshot, "textbox"),
-        text: "Helios",
-      });
-      const afterFill =
-        filled.snapshot ??
-        (await manager.operate("live-contract", { kind: "snapshot", depth: 6 }))
-          .snapshot;
-      const clicked = await manager.operate("live-contract", {
-        kind: "click",
-        target: reference(afterFill, "button"),
-      });
-      assert.ok(
-        clicked.snapshot,
-        "click should return its automatic post-action snapshot",
-      );
-      const screenshot = await manager.operate("live-contract", {
-        kind: "screenshot",
-        fullPage: true,
-      });
-      assert.ok(screenshot.artifactPath);
-      await rm(screenshot.artifactPath!, { force: true });
-      await manager.operate("live-contract", {
-        kind: "tab-new",
-        url: "about:blank",
-      });
-      const tabs = await manager.operate("live-contract", { kind: "tab-list" });
-      assert.equal(tabs.tabs?.length, 2);
-      await manager.operate("live-contract", { kind: "tab-select", index: 0 });
-      await manager.operate("live-contract", { kind: "tab-close", index: 1 });
-      await manager.close("live-contract", "close");
-    } finally {
-      await manager.shutdown();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-    }
-  },
-);
-
-test(
-  "live Web Scout proxy prevents Chromium loopback bypass",
-  { skip: !live, timeout: 120_000 },
-  async () => {
-    let requests = 0;
-    const server = createServer((_request, response) => {
-      requests++;
-      response.end("private");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const manager = new BrowserSessionManager(exec);
+  try {
+    const started = await manager.start("live-contract", `http://127.0.0.1:${address.port}`);
+    assert.ok(started.snapshot, "open should return its automatic post-action snapshot");
+    const filled = await manager.operate("live-contract", {
+      kind: "fill",
+      target: reference(started.snapshot, "textbox"),
+      text: "Helios",
     });
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
-    const address = server.address();
-    assert.ok(address && typeof address === "object");
-    const proxy = await PublicNetworkProxy.start();
-    const manager = new BrowserSessionManager(exec);
-    try {
-      await manager.start(
-        "live-web-isolation",
-        "about:blank",
-        undefined,
-        false,
-        {
-          proxy: { server: proxy.serverUrl },
-        },
-      );
-      await manager
-        .operate("live-web-isolation", {
-          kind: "navigate",
-          url: `http://127.0.0.1:${address.port}/private`,
-        })
-        .catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      assert.equal(requests, 0);
-      await manager.close("live-web-isolation", "close");
-    } finally {
-      await manager.shutdown();
-      await proxy.close();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-    }
-  },
-);
+    const afterFill =
+      filled.snapshot ?? (await manager.operate("live-contract", { kind: "snapshot", depth: 6 })).snapshot;
+    const clicked = await manager.operate("live-contract", { kind: "click", target: reference(afterFill, "button") });
+    assert.ok(clicked.snapshot, "click should return its automatic post-action snapshot");
+    const screenshot = await manager.operate("live-contract", { kind: "screenshot", fullPage: true });
+    assert.ok(screenshot.artifactPath);
+    await rm(screenshot.artifactPath!, { force: true });
+    await manager.operate("live-contract", { kind: "tab-new", url: "about:blank" });
+    const tabs = await manager.operate("live-contract", { kind: "tab-list" });
+    assert.equal(tabs.tabs?.length, 2);
+    await manager.operate("live-contract", { kind: "tab-select", index: 0 });
+    await manager.operate("live-contract", { kind: "tab-close", index: 1 });
+    await manager.close("live-contract", "close");
+  } finally {
+    await manager.shutdown();
+    await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
+  }
+});
 
-test(
-  "live Web Scout proxy navigates Google-hosted public pages",
-  { skip: !live, timeout: 120_000 },
-  async () => {
-    const proxy = await PublicNetworkProxy.start();
-    const manager = new BrowserSessionManager(exec);
-    try {
-      await manager.start("live-web-google", "about:blank", undefined, false, {
-        proxy: { server: proxy.serverUrl },
-      });
-      const result = await manager.operate("live-web-google", {
-        kind: "navigate",
-        url: "https://developer.android.com/build/releases/gradle-plugin",
-      });
-      assert.equal(
-        result.page?.url.startsWith("https://developer.android.com/"),
-        true,
-      );
-      assert.ok(result.snapshot);
-      await manager.close("live-web-google", "close");
-    } finally {
-      await manager.shutdown();
-      await proxy.close();
-    }
-  },
-);
+test("live Web Scout proxy prevents Chromium loopback bypass", { skip: !live, timeout: 120_000 }, async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.end("private");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const proxy = await PublicNetworkProxy.start();
+  const manager = new BrowserSessionManager(exec);
+  try {
+    await manager.start("live-web-isolation", "about:blank", undefined, false, { proxy: { server: proxy.serverUrl } });
+    await manager
+      .operate("live-web-isolation", { kind: "navigate", url: `http://127.0.0.1:${address.port}/private` })
+      .catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(requests, 0);
+    await manager.close("live-web-isolation", "close");
+  } finally {
+    await manager.shutdown();
+    await proxy.close();
+    await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
+  }
+});
 
-test(
-  "live pinned CLI CDP attach/detach",
-  { skip: !process.env.PI_HELIOS_LIVE_CDP, timeout: 90_000 },
-  async () => {
-    const manager = new BrowserSessionManager(exec);
-    try {
-      await manager.attachCdp("live-cdp", process.env.PI_HELIOS_LIVE_CDP!);
-      await manager.operate("live-cdp", { kind: "snapshot", depth: 3 });
-      await manager.close("live-cdp", "detach");
-    } finally {
-      await manager.shutdown();
-    }
-  },
-);
+test("live Web Scout proxy navigates Google-hosted public pages", { skip: !live, timeout: 120_000 }, async () => {
+  const proxy = await PublicNetworkProxy.start();
+  const manager = new BrowserSessionManager(exec);
+  try {
+    await manager.start("live-web-google", "about:blank", undefined, false, { proxy: { server: proxy.serverUrl } });
+    const result = await manager.operate("live-web-google", {
+      kind: "navigate",
+      url: "https://developer.android.com/build/releases/gradle-plugin",
+    });
+    assert.equal(result.page?.url.startsWith("https://developer.android.com/"), true);
+    assert.ok(result.snapshot);
+    await manager.close("live-web-google", "close");
+  } finally {
+    await manager.shutdown();
+    await proxy.close();
+  }
+});
+
+test("live pinned CLI CDP attach/detach", { skip: !process.env.PI_HELIOS_LIVE_CDP, timeout: 90_000 }, async () => {
+  const manager = new BrowserSessionManager(exec);
+  try {
+    await manager.attachCdp("live-cdp", process.env.PI_HELIOS_LIVE_CDP!);
+    await manager.operate("live-cdp", { kind: "snapshot", depth: 3 });
+    await manager.close("live-cdp", "detach");
+  } finally {
+    await manager.shutdown();
+  }
+});

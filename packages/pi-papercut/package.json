@@ -3,19 +3,34 @@
   "version": "0.1.0",
   "description": "Durable project-scoped workflow friction capture for Pi",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=24.15.0" },
-  "files": ["extensions", "src", "README.md", "LICENSE"],
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit"
   },
-  "pi": { "extensions": ["./extensions/pi-papercut.ts"] },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-papercut.ts"
+    ]
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
-  "devDependencies": { "typescript": "^5.8.0" },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
   "license": "MIT"
 }

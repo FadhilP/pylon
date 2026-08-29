@@ -7,6 +7,7 @@ Pylon Web always loads pylon-core and does not expose a disable control because 
 ## Numbered line edits
 
 **Revision-guarded numbered edits** are enabled by default. When enabled, Pylon uses Pi's native `read` and `edit` for session models whose advertised base and tier output prices are all below 3× their input prices; it uses numbered edits otherwise. Missing or zero pricing keeps numbered edits enabled. The automatic choice is session-only and is re-evaluated when the model changes. Disable the setting to always leave Pi's native `read` and `edit` unchanged. When numbered edits are active:
+
 - `read` prefixes text with absolute line numbers and a compact file-version tag backed by a full internal SHA-256.
 - `edit` replaces or inserts complete numbered lines only when the tag still matches and the target lines were displayed.
 - Disjoint operations resolve against one snapshot, validate together, and write once through Pi's per-file mutation queue.
@@ -75,7 +76,9 @@ pi.events.emit("pylon:tool-policy", {
   deferredToolUsage: { example_tool: "inspect example project data" }, // optional compact discovery phrase
   allowOnly: undefined,
   restoreTools: undefined,
-  acknowledge: () => { coordinated = true; },
+  acknowledge: () => {
+    coordinated = true;
+  },
 });
 ```
 

@@ -27,8 +27,7 @@ export class GenerationGate {
   }
 
   beginRecovery(): number {
-    if (this.state !== "unavailable")
-      throw new Error("runtime is not unavailable");
+    if (this.state !== "unavailable") throw new Error("runtime is not unavailable");
     this.pending = this.current + 1;
     this.recovering = true;
     this.state = "replacing";
@@ -43,16 +42,14 @@ export class GenerationGate {
   }
 
   invalidateCurrent(): number {
-    if (this.state !== "replacing" || this.pending === undefined)
-      throw new Error("replacement was not started");
+    if (this.state !== "replacing" || this.pending === undefined) throw new Error("replacement was not started");
     this.current = this.pending;
     this.state = "unavailable";
     return this.current;
   }
 
   commitReplacement(): number {
-    if (this.pending === undefined)
-      throw new Error("replacement was not started");
+    if (this.pending === undefined) throw new Error("replacement was not started");
     this.current = this.pending;
     this.pending = undefined;
     this.recovering = false;
@@ -61,8 +58,7 @@ export class GenerationGate {
   }
 
   failReplacement(): void {
-    if (this.pending !== undefined && this.current < this.pending)
-      this.current = this.pending;
+    if (this.pending !== undefined && this.current < this.pending) this.current = this.pending;
     this.pending = undefined;
     this.recovering = false;
     this.state = "unavailable";
@@ -79,18 +75,13 @@ export class GenerationGate {
   }
 
   acceptsUi(capturedGeneration: number): boolean {
-    return (
-      (this.state === "ready" || this.state === "replacing") &&
-      capturedGeneration === this.current
-    );
+    return (this.state === "ready" || this.state === "replacing") && capturedGeneration === this.current;
   }
 
   assert(expectedGeneration: number): void {
     if (!this.ready) throw new Error("runtime is not ready");
     if (expectedGeneration !== this.current) {
-      const error = new Error(
-        `stale session generation: expected ${this.current}`,
-      );
+      const error = new Error(`stale session generation: expected ${this.current}`);
       error.name = "StaleGenerationError";
       throw error;
     }

@@ -51,10 +51,7 @@ import {
 
 type SieveMode = "enabled" | "observe" | "disabled";
 
-type RawRecoverableResult = RecoverableActiveResult & {
-  sourceHash: string;
-  message: any;
-};
+type RawRecoverableResult = RecoverableActiveResult & { sourceHash: string; message: any };
 
 const STANDARD_CHURN_KINDS = [
   "activeThreshold",
@@ -105,9 +102,7 @@ type PersistedTelemetry = {
   recallsByTool: Record<string, { recalls: number; recalledChars: number }>;
   stability: Omit<
     StabilityStats,
-    | "recoverableEntries"
-    | "earliestChangedPriorMessageIndex"
-    | "standardEarliestChangedPriorMessageIndex"
+    "recoverableEntries" | "earliestChangedPriorMessageIndex" | "standardEarliestChangedPriorMessageIndex"
   >;
 };
 
@@ -119,17 +114,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 /** Rejects oversized names and the keys that would shadow Object.prototype members. */
 const isSafeToolName = (value: string) =>
-  !!value &&
-  value.length <= 200 &&
-  value !== "__proto__" &&
-  value !== "prototype" &&
-  value !== "constructor";
+  !!value && value.length <= 200 && value !== "__proto__" && value !== "prototype" && value !== "constructor";
 
 const Count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-const exact = (properties: TProperties) =>
-  Type.Object(properties, { additionalProperties: false });
-const counters = (keys: readonly string[]) =>
-  exact(Object.fromEntries(keys.map((key) => [key, Count])));
+const exact = (properties: TProperties) => Type.Object(properties, { additionalProperties: false });
+const counters = (keys: readonly string[]) => exact(Object.fromEntries(keys.map(key => [key, Count])));
 
 const ToolUsageSchema = exact({
   scanned: Count,
@@ -160,17 +149,14 @@ const LEGACY_STABILITY_KEYS = [
 ] as const;
 const LegacyStabilitySchema = counters(LEGACY_STABILITY_KEYS);
 const CurrentStabilitySchema = exact({
-  ...Object.fromEntries(LEGACY_STABILITY_KEYS.map((key) => [key, Count])),
+  ...Object.fromEntries(LEGACY_STABILITY_KEYS.map(key => [key, Count])),
   standardComparisons: Count,
   standardPrefixChurn: Count,
   standardEstimatedInvalidatedChars: Count,
   standardChangesByKind: counters(STANDARD_CHURN_KINDS),
 });
 /** Entries written before the standard-v2 churn counters existed are still accepted. */
-const StabilitySchema = Type.Union([
-  CurrentStabilitySchema,
-  LegacyStabilitySchema,
-]);
+const StabilitySchema = Type.Union([CurrentStabilitySchema, LegacyStabilitySchema]);
 
 const PersistedTelemetrySchema = exact({
   version: Type.Literal(1),
@@ -191,10 +177,7 @@ const LEGACY_TRANSFORM_COUNTERS = ["giantError"] as const;
  * Validates an open-ended `{ toolName: counters }` record, screening keys and capping
  * the entry count so a tampered session entry cannot blow up memory.
  */
-function parseToolRecord<T>(
-  value: unknown,
-  schema: TSchema,
-): Record<string, T> | undefined {
+function parseToolRecord<T>(value: unknown, schema: TSchema): Record<string, T> | undefined {
   if (!isRecord(value)) return;
   const entries = Object.entries(value);
   if (entries.length > MAX_PERSISTED_TOOL_ENTRIES) return;
@@ -215,30 +198,23 @@ function parseTransformStats(value: unknown): TransformStats | undefined {
     fixed.transformedBy = transformedBy;
   }
   if (!Check(TransformStatsSchema, fixed)) return;
-  const byTool = parseToolRecord<TransformStats["byTool"][string]>(
-    rawByTool,
-    ToolUsageSchema,
-  );
+  const byTool = parseToolRecord<TransformStats["byTool"][string]>(rawByTool, ToolUsageSchema);
   return byTool && ({ ...fixed, byTool } as TransformStats);
 }
 
-function parsePersistedTelemetry(
-  value: unknown,
-): PersistedTelemetry | undefined {
+function parsePersistedTelemetry(value: unknown): PersistedTelemetry | undefined {
   if (!Check(PersistedTelemetrySchema, value)) return;
-  const parsed = value as Omit<
-    PersistedTelemetry,
-    "cumulativeActual" | "cumulativeProjected" | "recallsByTool"
-  > & {
+  const parsed = value as Omit<PersistedTelemetry, "cumulativeActual" | "cumulativeProjected" | "recallsByTool"> & {
     cumulativeActual: unknown;
     cumulativeProjected: unknown;
     recallsByTool: unknown;
   };
   const cumulativeActual = parseTransformStats(parsed.cumulativeActual);
   const cumulativeProjected = parseTransformStats(parsed.cumulativeProjected);
-  const recallsByTool = parseToolRecord<
-    PersistedTelemetry["recallsByTool"][string]
-  >(parsed.recallsByTool, RecallUsageSchema);
+  const recallsByTool = parseToolRecord<PersistedTelemetry["recallsByTool"][string]>(
+    parsed.recallsByTool,
+    RecallUsageSchema,
+  );
   if (!cumulativeActual || !cumulativeProjected || !recallsByTool) return;
   return {
     version: 1,
@@ -258,33 +234,21 @@ function parsePersistedTelemetry(
   };
 }
 
-const estimatedTokens = (characters: number) =>
-  Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
+const estimatedTokens = (characters: number) => Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
 
 /**
  * Index of the first message that differs between two projections, i.e. where the
  * provider's cached prefix stops being reusable. Returns `previous.length` when the
  * whole prior projection still matches.
  */
-function firstDivergence(
-  previous: readonly unknown[],
-  next: readonly unknown[],
-): number {
+function firstDivergence(previous: readonly unknown[], next: readonly unknown[]): number {
   let index = 0;
-  while (
-    index < previous.length &&
-    JSON.stringify(previous[index]) === JSON.stringify(next[index])
-  )
-    index++;
+  while (index < previous.length && JSON.stringify(previous[index]) === JSON.stringify(next[index])) index++;
   return index;
 }
 
 const projectionModeLabel = (mode: ProjectionMode) =>
-  mode === "stable"
-    ? "stable (experimental)"
-    : mode === "standard-v2"
-      ? "standard v2"
-      : "standard";
+  mode === "stable" ? "stable (experimental)" : mode === "standard-v2" ? "standard v2" : "standard";
 
 const SKIP_LABELS: Record<keyof TransformStats["skipped"], string> = {
   recentWindow: "recent-window",
@@ -295,20 +259,16 @@ const SKIP_LABELS: Record<keyof TransformStats["skipped"], string> = {
   atOrBelowThreshold: "at/below-threshold",
   recoveryUnavailable: "recovery-unavailable",
 };
-const TRANSFORM_LABELS: Record<keyof TransformStats["transformedBy"], string> =
-  {
-    ageThreshold: "age-threshold",
-    budget: "budget",
-    activeThreshold: "active-threshold",
-    staleRead: "stale-read",
-    duplicate: "duplicate",
-    errorCap: "error-cap",
-    mixedText: "mixed-text",
-  };
-const countersText = (
-  labels: Record<string, string>,
-  counters: Record<string, number>,
-) =>
+const TRANSFORM_LABELS: Record<keyof TransformStats["transformedBy"], string> = {
+  ageThreshold: "age-threshold",
+  budget: "budget",
+  activeThreshold: "active-threshold",
+  staleRead: "stale-read",
+  duplicate: "duplicate",
+  errorCap: "error-cap",
+  mixedText: "mixed-text",
+};
+const countersText = (labels: Record<string, string>, counters: Record<string, number>) =>
   Object.entries(labels)
     .map(([key, label]) => `${label} ${counters[key]}`)
     .join(", ");
@@ -372,19 +332,10 @@ function statusText({
   const cumulative = emptyTransformStats();
   addTransformStats(cumulative, cumulativeActual);
   addTransformStats(cumulative, cumulativeProjected);
-  const latestLabel =
-    latestMode === "observe"
-      ? "projected transformations"
-      : "actual transformations";
+  const latestLabel = latestMode === "observe" ? "projected transformations" : "actual transformations";
   const frozen = [...(epoch?.entries.values() ?? [])];
-  const frozenSource = frozen.reduce(
-    (sum, entry) => sum + entry.sourceChars,
-    0,
-  );
-  const frozenRetained = frozen.reduce(
-    (sum, entry) => sum + entry.retainedChars,
-    0,
-  );
+  const frozenSource = frozen.reduce((sum, entry) => sum + entry.sourceChars, 0);
+  const frozenRetained = frozen.reduce((sum, entry) => sum + entry.retainedChars, 0);
 
   return [
     `pi-sieve: ${mode}; projection ${projectionModeLabel(projectionMode)}`,
@@ -407,7 +358,7 @@ function statusText({
           : RECENT_WINDOW_POLICY
     }`,
     `Epoch: ${epoch?.id ?? "not started"}${epoch ? ` (${epoch.reason}, ${epoch.startedAt})` : ""}; frozen ${frozen.length}; source ${frozenSource} chars; retained ${frozenRetained} chars`,
-    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; automatic rollovers ${stability.automaticRollovers}; watermark crossings ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars; standard comparisons ${stability.standardComparisons}; standard prefix churn ${stability.standardPrefixChurn}; standard estimated invalidated ${stability.standardEstimatedInvalidatedChars} chars; standard changes ${STANDARD_CHURN_KINDS.map((kind) => `${kind} ${stability.standardChangesByKind[kind]}`).join(", ")}`,
+    `Stability: new projections ${stability.newProjections}; cache hits ${stability.projectionCacheHits}; explicit reflows ${stability.explicitReflows}; automatic rollovers ${stability.automaticRollovers}; watermark crossings ${stability.softBudgetExceedances}; prefix-churn violations ${stability.prefixChurnViolations}; estimated invalidated ${stability.estimatedInvalidatedChars} chars; standard comparisons ${stability.standardComparisons}; standard prefix churn ${stability.standardPrefixChurn}; standard estimated invalidated ${stability.standardEstimatedInvalidatedChars} chars; standard changes ${STANDARD_CHURN_KINDS.map(kind => `${kind} ${stability.standardChangesByKind[kind]}`).join(", ")}`,
     `Latest call (${latestMode === "observe" ? "observe projections" : "enabled actual"}): ${statsText(latestStats, latestLabel)}`,
     `Cumulative outcomes: actual transformations ${cumulativeActual.transformed}; actual gross omitted ~${estimatedTokens(cumulativeActual.omittedChars)} tokens; actual net saved ~${estimatedTokens(cumulativeActual.netCharsSaved)} tokens; projected observe transformations ${cumulativeProjected.transformed}; projected observe gross omitted ~${estimatedTokens(cumulativeProjected.omittedChars)} tokens; projected observe net saved ~${estimatedTokens(cumulativeProjected.netCharsSaved)} tokens`,
     `Cumulative classifications: ${statsText(cumulative, "qualifying transformations")}`,
@@ -423,26 +374,16 @@ function fingerprint(
   rolloverHighMultiplier: number,
   rolloverLowMultiplier: number,
 ) {
-  const active =
-    typeof pi.getActiveTools === "function"
-      ? [...pi.getActiveTools()].sort()
-      : [];
+  const active = typeof pi.getActiveTools === "function" ? [...pi.getActiveTools()].sort() : [];
   const all = typeof pi.getAllTools === "function" ? pi.getAllTools() : [];
   const activeSet = new Set(active);
   const schemas = all
     .filter((tool: any) => activeSet.has(tool.name))
-    .map((tool: any) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    }))
+    .map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }))
     .sort((left: any, right: any) => left.name.localeCompare(right.name));
   const value = {
-    model: ctx?.model
-      ? { provider: ctx.model.provider, id: ctx.model.id }
-      : undefined,
-    systemPrompt:
-      typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : "",
+    model: ctx?.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+    systemPrompt: typeof ctx?.getSystemPrompt === "function" ? ctx.getSystemPrompt() : "",
     active,
     schemas,
     cwd: resolve(ctx?.cwd ?? process.cwd()),
@@ -456,10 +397,7 @@ function fingerprint(
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-export default function sieveExtension(
-  pi: ExtensionAPI,
-  options: { configPath?: string } = {},
-) {
+export default function sieveExtension(pi: ExtensionAPI, options: { configPath?: string } = {}) {
   let mode: SieveMode = "enabled";
   let projectionMode: ProjectionMode = "standard-v2";
   let threshold = SIEVE_THRESHOLD;
@@ -472,10 +410,7 @@ export default function sieveExtension(
   let activePruning = true;
   let activeRecalls = 0;
   let activeRecalledChars = 0;
-  let recallsByTool: Record<
-    string,
-    { recalls: number; recalledChars: number }
-  > = {};
+  let recallsByTool: Record<string, { recalls: number; recalledChars: number }> = {};
   let recoverableActiveResults = new Map<string, RecoverableActiveResult>();
   let rawRecoverableResults = new Map<string, RawRecoverableResult>();
   let continuityRecoverableIds = new Set<string>();
@@ -500,12 +435,7 @@ export default function sieveExtension(
     standardEstimatedInvalidatedChars: 0,
     standardChangesByKind: emptyStandardChangesByKind(),
   };
-  let previousStandardProjection:
-    | {
-        messages: any[];
-        replacements: Map<number, StandardProjectionKind>;
-      }
-    | undefined;
+  let previousStandardProjection: { messages: any[]; replacements: Map<number, StandardProjectionKind> } | undefined;
   let softBudgetExceededInEpoch = false;
   let persistedConfig = defaultConfig();
   const settingsPath = options.configPath ?? configPath();
@@ -520,34 +450,17 @@ export default function sieveExtension(
   let configLoadError: unknown;
   let configQueue: Promise<void> = loadConfig(settingsPath)
     .then(applyConfig)
-    .catch((error) => {
+    .catch(error => {
       configLoadError = error;
     });
 
-  const beginEpoch = (
-    reason: EpochReason,
-    ctx?: any,
-    knownFingerprint?: string,
-  ) => {
+  const beginEpoch = (reason: EpochReason, ctx?: any, knownFingerprint?: string) => {
     const promptFingerprint =
       knownFingerprint ??
-      fingerprint(
-        pi,
-        ctx,
-        threshold,
-        activePruning,
-        projectionMode,
-        rolloverHighMultiplier,
-        rolloverLowMultiplier,
-      );
+      fingerprint(pi, ctx, threshold, activePruning, projectionMode, rolloverHighMultiplier, rolloverLowMultiplier);
     epoch = createProjectionEpoch(
       reason,
-      {
-        threshold,
-        activePruning,
-        rolloverHighMultiplier,
-        rolloverLowMultiplier,
-      },
+      { threshold, activePruning, rolloverHighMultiplier, rolloverLowMultiplier },
       promptFingerprint,
     );
     pendingEpochReason = undefined;
@@ -574,21 +487,10 @@ export default function sieveExtension(
       startedAt: epoch?.startedAt,
       promptFingerprint: epoch?.promptFingerprint,
       frozenResultCount: entries.length,
-      frozenSourceChars: entries.reduce(
-        (sum, entry) => sum + entry.sourceChars,
-        0,
-      ),
-      frozenRetainedChars: entries.reduce(
-        (sum, entry) => sum + entry.retainedChars,
-        0,
-      ),
-      rolloverEligibleRetainedChars: epoch
-        ? retainedProjectionBudget(epoch)
-        : 0,
-      recoverableEntries: entries.filter(
-        (entry) =>
-          entry.recoverable && !epoch?.taintedIds.has(entry.toolCallId),
-      ).length,
+      frozenSourceChars: entries.reduce((sum, entry) => sum + entry.sourceChars, 0),
+      frozenRetainedChars: entries.reduce((sum, entry) => sum + entry.retainedChars, 0),
+      rolloverEligibleRetainedChars: epoch ? retainedProjectionBudget(epoch) : 0,
+      recoverableEntries: entries.filter(entry => entry.recoverable && !epoch?.taintedIds.has(entry.toolCallId)).length,
     };
   };
   const stateSnapshot = (available = true) => ({
@@ -611,9 +513,7 @@ export default function sieveExtension(
     stability,
     ...(contextUsagePercent !== undefined ? { contextUsagePercent } : {}),
     updatedAt: new Date().toISOString(),
-    ...(configLoadError
-      ? { error: (configLoadError as any)?.message ?? String(configLoadError) }
-      : {}),
+    ...(configLoadError ? { error: (configLoadError as any)?.message ?? String(configLoadError) } : {}),
   });
   const resetTelemetry = () => {
     latestStats = emptyTransformStats();
@@ -657,8 +557,7 @@ export default function sieveExtension(
       estimatedInvalidatedChars: stability.estimatedInvalidatedChars,
       standardComparisons: stability.standardComparisons,
       standardPrefixChurn: stability.standardPrefixChurn,
-      standardEstimatedInvalidatedChars:
-        stability.standardEstimatedInvalidatedChars,
+      standardEstimatedInvalidatedChars: stability.standardEstimatedInvalidatedChars,
       standardChangesByKind: structuredClone(stability.standardChangesByKind),
     },
   });
@@ -680,8 +579,7 @@ export default function sieveExtension(
     if (!Array.isArray(entries)) return;
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index];
-      if (entry?.type !== "custom" || entry.customType !== TELEMETRY_ENTRY_TYPE)
-        continue;
+      if (entry?.type !== "custom" || entry.customType !== TELEMETRY_ENTRY_TYPE) continue;
       const restored = parsePersistedTelemetry(entry.data);
       if (!restored) continue;
       cumulativeActual = restored.cumulativeActual;
@@ -698,15 +596,10 @@ export default function sieveExtension(
       break;
     }
   };
-  const publishState = () =>
-    pi.events.emit("pi-sieve:state-change", stateSnapshot());
-  const disposeStateRequest = pi.events.on(
-    "pi-sieve:state-request",
-    (request: any) => {
-      if (request?.version === 1 && typeof request.respond === "function")
-        request.respond(stateSnapshot());
-    },
-  );
+  const publishState = () => pi.events.emit("pi-sieve:state-change", stateSnapshot());
+  const disposeStateRequest = pi.events.on("pi-sieve:state-request", (request: any) => {
+    if (request?.version === 1 && typeof request.respond === "function") request.respond(stateSnapshot());
+  });
   const updateConfig = async (patch: {
     activePruning?: boolean;
     threshold?: number;
@@ -718,17 +611,11 @@ export default function sieveExtension(
       if (configLoadError) throw configLoadError;
       const next: SieveConfig = {
         version: 1,
-        activePruning:
-          patch.activePruning ?? configuredActivePruning(persistedConfig),
+        activePruning: patch.activePruning ?? configuredActivePruning(persistedConfig),
         threshold: patch.threshold ?? configuredThreshold(persistedConfig),
-        projectionMode:
-          patch.projectionMode ?? configuredProjectionMode(persistedConfig),
-        rolloverHighMultiplier:
-          patch.rolloverHighMultiplier ??
-          configuredRolloverHighMultiplier(persistedConfig),
-        rolloverLowMultiplier:
-          patch.rolloverLowMultiplier ??
-          configuredRolloverLowMultiplier(persistedConfig),
+        projectionMode: patch.projectionMode ?? configuredProjectionMode(persistedConfig),
+        rolloverHighMultiplier: patch.rolloverHighMultiplier ?? configuredRolloverHighMultiplier(persistedConfig),
+        rolloverLowMultiplier: patch.rolloverLowMultiplier ?? configuredRolloverLowMultiplier(persistedConfig),
       };
       await saveConfig(next, settingsPath);
       applyConfig(next);
@@ -738,8 +625,7 @@ export default function sieveExtension(
   };
 
   const refreshRecallTool = () => {
-    const recallEnabled =
-      mode === "enabled" && (activePruning || continuityRecallActive);
+    const recallEnabled = mode === "enabled" && (activePruning || continuityRecallActive);
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -748,30 +634,21 @@ export default function sieveExtension(
       managedTools: [RECALL_TOOL_NAME],
       enabledTools: recallEnabled ? [RECALL_TOOL_NAME] : [],
       ...(recallEnabled
-        ? {
-            toolUsage: {
-              [RECALL_TOOL_NAME]:
-                "recover a registered tool result omitted from the active context",
-            },
-          }
+        ? { toolUsage: { [RECALL_TOOL_NAME]: "recover a registered tool result omitted from the active context" } }
         : {}),
       acknowledge: () => {
         coordinated = true;
       },
     });
     if (coordinated) return;
-    const active = pi
-      .getActiveTools()
-      .filter((name) => name !== RECALL_TOOL_NAME);
+    const active = pi.getActiveTools().filter(name => name !== RECALL_TOOL_NAME);
     if (recallEnabled) active.push(RECALL_TOOL_NAME);
     pi.setActiveTools(active);
   };
   const syncContinuityBoundary = (ctx: any) => {
     let boundary: ReturnType<typeof continuityProjectionBoundary>;
     try {
-      boundary = continuityProjectionBoundary(
-        ctx?.sessionManager?.getBranch?.() ?? [],
-      );
+      boundary = continuityProjectionBoundary(ctx?.sessionManager?.getBranch?.() ?? []);
     } catch {
       boundary = undefined;
     }
@@ -783,40 +660,25 @@ export default function sieveExtension(
   pi.registerTool({
     name: RECALL_TOOL_NAME,
     label: "Sieve Recall",
-    description:
-      "Recover one registered tool result omitted by pi-sieve from the current active raw context.",
+    description: "Recover one registered tool result omitted by pi-sieve from the current active raw context.",
     parameters: Type.Object({
-      toolCallId: Type.String({
-        minLength: 1,
-        description: "Exact toolCallId shown in pi-sieve omission marker",
-      }),
+      toolCallId: Type.String({ minLength: 1, description: "Exact toolCallId shown in pi-sieve omission marker" }),
     }),
     async execute(_toolCallId, params) {
       const registered =
         mode === "enabled" && (activePruning || continuityRecallActive)
           ? recoverableActiveResults.get(params.toolCallId)
           : undefined;
-      const source = registered
-        ? rawRecoverableResults.get(params.toolCallId)
-        : undefined;
-      const continuityRegistered = continuityRecoverableIds.has(
-        params.toolCallId,
-      );
-      const frozen =
-        projectionMode === "stable"
-          ? epoch?.entries.get(params.toolCallId)
-          : undefined;
+      const source = registered ? rawRecoverableResults.get(params.toolCallId) : undefined;
+      const continuityRegistered = continuityRecoverableIds.has(params.toolCallId);
+      const frozen = projectionMode === "stable" ? epoch?.entries.get(params.toolCallId) : undefined;
       if (
         !registered ||
         !source ||
         source.toolName !== registered.toolName ||
         source.isError !== registered.isError ||
-        (continuityRegistered &&
-          continuityRecoverableSourceHashes.get(params.toolCallId) !==
-            source.sourceHash) ||
-        (projectionMode === "stable" &&
-          !continuityRegistered &&
-          frozen?.sourceHash !== source.sourceHash)
+        (continuityRegistered && continuityRecoverableSourceHashes.get(params.toolCallId) !== source.sourceHash) ||
+        (projectionMode === "stable" && !continuityRegistered && frozen?.sourceHash !== source.sourceHash)
       ) {
         return {
           content: [
@@ -825,28 +687,17 @@ export default function sieveExtension(
               text: `No recoverable result for toolCallId ${JSON.stringify(params.toolCallId)}.`,
             },
           ],
-          details: {
-            found: false,
-            sourceToolCallId: params.toolCallId,
-            sourceToolName: "",
-            sourceIsError: false,
-          },
+          details: { found: false, sourceToolCallId: params.toolCallId, sourceToolName: "", sourceIsError: false },
         };
       }
       const sourceChars = source.message.content.reduce(
         (length: number, block: any) =>
-          length +
-          (block?.type === "text" && typeof block.text === "string"
-            ? block.text.length
-            : 0),
+          length + (block?.type === "text" && typeof block.text === "string" ? block.text.length : 0),
         0,
       );
       activeRecalls++;
       activeRecalledChars += sourceChars;
-      const recallUsage = recallsByTool[registered.toolName] ?? {
-        recalls: 0,
-        recalledChars: 0,
-      };
+      const recallUsage = recallsByTool[registered.toolName] ?? { recalls: 0, recalledChars: 0 };
       recallsByTool = {
         ...recallsByTool,
         [registered.toolName]: {
@@ -872,11 +723,7 @@ export default function sieveExtension(
     await configQueue;
     restoreTelemetry(ctx);
     requestEpoch(
-      event?.reason === "reload"
-        ? "reload"
-        : event?.reason === "startup"
-          ? "session-start"
-          : "session-replacement",
+      event?.reason === "reload" ? "reload" : event?.reason === "startup" ? "session-start" : "session-replacement",
     );
     syncContinuityBoundary(ctx);
     refreshRecallTool();
@@ -903,11 +750,7 @@ export default function sieveExtension(
   pi.on("session_shutdown", () => {
     disposeStateRequest();
     pi.events.emit("pi-sieve:state-change", stateSnapshot(false));
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "unregister",
-      owner: "pi-sieve",
-    });
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-sieve" });
   });
 
   /** Runs the configured projection mode over the raw messages. */
@@ -915,14 +758,8 @@ export default function sieveExtension(
     projectionMode === "stable"
       ? stableSieveMessages(messages, epoch!, { cwd })
       : projectionMode === "standard-v2"
-        ? standardV2SieveMessages(messages, threshold, {
-            pruneActive: activePruning,
-            cwd,
-          })
-        : sieveMessages(messages, threshold, {
-            pruneActive: activePruning,
-            cwd,
-          });
+        ? standardV2SieveMessages(messages, threshold, { pruneActive: activePruning, cwd })
+        : sieveMessages(messages, threshold, { pruneActive: activePruning, cwd });
 
   /** Converts an epoch mismatch into a deliberate boundary and reprojects. */
   const reflowStableEpoch = (
@@ -931,10 +768,8 @@ export default function sieveExtension(
     diagnostics: ProjectionDiagnostics,
     currentFingerprint: string,
   ) => {
-    stability.earliestChangedPriorMessageIndex ??=
-      diagnostics.earliestChangedMessageIndex;
-    stability.estimatedInvalidatedChars +=
-      diagnostics.estimatedInvalidatedChars;
+    stability.earliestChangedPriorMessageIndex ??= diagnostics.earliestChangedMessageIndex;
+    stability.estimatedInvalidatedChars += diagnostics.estimatedInvalidatedChars;
     beginEpoch(
       diagnostics.ambiguousReflows > 0
         ? "ambiguous-id"
@@ -951,12 +786,7 @@ export default function sieveExtension(
    * Reseeds the epoch newest-first when retained source crosses the high watermark.
    * Returns the rollover projection only when it actually frees budget.
    */
-  const rolloverStableEpoch = (
-    messages: any[],
-    ctx: any,
-    previous: any,
-    currentFingerprint: string,
-  ) => {
+  const rolloverStableEpoch = (messages: any[], ctx: any, previous: any, currentFingerprint: string) => {
     if (!softBudgetExceededInEpoch) {
       stability.softBudgetExceedances++;
       softBudgetExceededInEpoch = true;
@@ -964,32 +794,18 @@ export default function sieveExtension(
     const previousBudget = retainedProjectionBudget(epoch!);
     const rolloverEpoch = createProjectionEpoch(
       "budget-rollover",
-      {
-        threshold,
-        activePruning,
-        rolloverHighMultiplier,
-        rolloverLowMultiplier,
-      },
+      { threshold, activePruning, rolloverHighMultiplier, rolloverLowMultiplier },
       currentFingerprint,
     );
-    const rerun = rolloverStableSieveMessages(
-      messages,
-      rolloverEpoch,
-      rolloverLowMultiplier * threshold,
-      { cwd: ctx?.cwd },
-    );
+    const rerun = rolloverStableSieveMessages(messages, rolloverEpoch, rolloverLowMultiplier * threshold, {
+      cwd: ctx?.cwd,
+    });
     const rolloverBudget = retainedProjectionBudget(rolloverEpoch);
-    if (
-      rolloverBudget >= previousBudget ||
-      rolloverBudget > rolloverLowMultiplier * threshold
-    )
-      return;
+    if (rolloverBudget >= previousBudget || rolloverBudget > rolloverLowMultiplier * threshold) return;
     const changedIndex = firstDivergence(previous.messages, rerun.messages);
     if (changedIndex < previous.messages.length) {
       stability.earliestChangedPriorMessageIndex ??= changedIndex;
-      stability.estimatedInvalidatedChars += JSON.stringify(
-        previous.messages.slice(changedIndex),
-      ).length;
+      stability.estimatedInvalidatedChars += JSON.stringify(previous.messages.slice(changedIndex)).length;
     }
     epoch = rolloverEpoch;
     recoverableActiveResults.clear();
@@ -1005,36 +821,16 @@ export default function sieveExtension(
     const { boundary, changed } = syncContinuityBoundary(ctx);
     if (changed) refreshRecallTool();
     const continuityResult = boundary
-      ? continuitySieveMessages(
-          messages,
-          boundary.frozenToolCallIds,
-          result.messages,
-        )
+      ? continuitySieveMessages(messages, boundary.frozenToolCallIds, result.messages)
       : undefined;
-    continuityRecoverableIds = new Set(
-      continuityResult?.recoverableActiveResults.map(
-        (item) => item.toolCallId,
-      ) ?? [],
-    );
+    continuityRecoverableIds = new Set(continuityResult?.recoverableActiveResults.map(item => item.toolCallId) ?? []);
     continuityRecoverableSourceHashes = new Map();
     for (let index = 0; index < messages.length; index++) {
       const message: any = messages[index];
-      if (
-        message?.role === "toolResult" &&
-        continuityRecoverableIds.has(message.toolCallId)
-      )
-        continuityRecoverableSourceHashes.set(
-          message.toolCallId,
-          projectionSourceHash(messages, index, ctx?.cwd),
-        );
+      if (message?.role === "toolResult" && continuityRecoverableIds.has(message.toolCallId))
+        continuityRecoverableSourceHashes.set(message.toolCallId, projectionSourceHash(messages, index, ctx?.cwd));
     }
-    if (
-      !continuityResult ||
-      !(
-        continuityResult.stats.transformed ||
-        continuityResult.preservedToolCallIds.size
-      )
-    )
+    if (!continuityResult || !(continuityResult.stats.transformed || continuityResult.preservedToolCallIds.size))
       return result;
     addTransformStats(result.stats, continuityResult.stats);
     return {
@@ -1044,38 +840,22 @@ export default function sieveExtension(
       recoverableActiveResults: [
         ...new Map([
           ...result.recoverableActiveResults
-            .filter(
-              (item: RecoverableActiveResult) =>
-                !continuityResult.preservedToolCallIds.has(item.toolCallId),
-            )
-            .map(
-              (item: RecoverableActiveResult) =>
-                [item.toolCallId, item] as const,
-            ),
-          ...continuityResult.recoverableActiveResults.map(
-            (item) => [item.toolCallId, item] as const,
-          ),
+            .filter((item: RecoverableActiveResult) => !continuityResult.preservedToolCallIds.has(item.toolCallId))
+            .map((item: RecoverableActiveResult) => [item.toolCallId, item] as const),
+          ...continuityResult.recoverableActiveResults.map(item => [item.toolCallId, item] as const),
         ]).values(),
       ],
     };
   };
 
   /** Tracks how far the standard projection's stable prefix moved since the last call. */
-  const recordStandardChurn = (
-    result: any,
-    diagnostics: StandardProjectionDiagnostics,
-  ) => {
-    const currentReplacements = new Map(
-      diagnostics.replacements.map((item) => [item.messageIndex, item.kind]),
-    );
+  const recordStandardChurn = (result: any, diagnostics: StandardProjectionDiagnostics) => {
+    const currentReplacements = new Map(diagnostics.replacements.map(item => [item.messageIndex, item.kind]));
     if (previousStandardProjection) {
       stability.standardComparisons++;
       const priorLength = previousStandardProjection.messages.length;
       const changedIndex = firstDivergence(
-        previousStandardProjection.messages.slice(
-          0,
-          Math.min(priorLength, result.messages.length),
-        ),
+        previousStandardProjection.messages.slice(0, Math.min(priorLength, result.messages.length)),
         result.messages,
       );
       if (changedIndex < priorLength) {
@@ -1094,39 +874,23 @@ export default function sieveExtension(
         ).length;
       }
     }
-    previousStandardProjection = {
-      messages: structuredClone(result.messages),
-      replacements: currentReplacements,
-    };
+    previousStandardProjection = { messages: structuredClone(result.messages), replacements: currentReplacements };
   };
 
   /** Snapshots the raw text behind every registered recoverable result, for sieve_recall. */
   const indexRecoverables = (result: any, messages: any[], ctx: any) => {
     recoverableActiveResults = new Map(
-      result.recoverableActiveResults.map((item: RecoverableActiveResult) => [
-        item.toolCallId,
-        item,
-      ]),
+      result.recoverableActiveResults.map((item: RecoverableActiveResult) => [item.toolCallId, item]),
     );
     const rawCounts = new Map<string, number>();
     for (const message of messages as any[]) {
-      if (
-        message?.role === "toolResult" &&
-        typeof message.toolCallId === "string" &&
-        message.toolCallId
-      )
-        rawCounts.set(
-          message.toolCallId,
-          (rawCounts.get(message.toolCallId) ?? 0) + 1,
-        );
+      if (message?.role === "toolResult" && typeof message.toolCallId === "string" && message.toolCallId)
+        rawCounts.set(message.toolCallId, (rawCounts.get(message.toolCallId) ?? 0) + 1);
     }
     rawRecoverableResults = new Map();
     for (let index = 0; index < messages.length; index++) {
       const message: any = messages[index];
-      const registered =
-        message?.role === "toolResult"
-          ? recoverableActiveResults.get(message.toolCallId)
-          : undefined;
+      const registered = message?.role === "toolResult" ? recoverableActiveResults.get(message.toolCallId) : undefined;
       // An ambiguous id cannot be recovered unambiguously, so it is never registered.
       if (!registered || rawCounts.get(message.toolCallId) !== 1) continue;
       rawRecoverableResults.set(message.toolCallId, {
@@ -1148,42 +912,23 @@ export default function sieveExtension(
       rolloverHighMultiplier,
       rolloverLowMultiplier,
     );
-    if (!epoch || pendingEpochReason)
-      beginEpoch(
-        pendingEpochReason || "session-start",
-        ctx,
-        currentFingerprint,
-      );
-    else if (epoch.promptFingerprint !== currentFingerprint)
-      beginEpoch("prompt-fingerprint", ctx, currentFingerprint);
+    if (!epoch || pendingEpochReason) beginEpoch(pendingEpochReason || "session-start", ctx, currentFingerprint);
+    else if (epoch.promptFingerprint !== currentFingerprint) beginEpoch("prompt-fingerprint", ctx, currentFingerprint);
 
     let result: any = project(event.messages, ctx?.cwd);
     const stable = projectionMode === "stable";
-    let diagnostics =
-      stable && "diagnostics" in result
-        ? (result.diagnostics as ProjectionDiagnostics)
-        : undefined;
+    let diagnostics = stable && "diagnostics" in result ? (result.diagnostics as ProjectionDiagnostics) : undefined;
     const standardDiagnostics =
       projectionMode === "standard-v2" && "diagnostics" in result
         ? (result.diagnostics as StandardProjectionDiagnostics)
         : undefined;
 
     if (stable && diagnostics?.requiresReflow) {
-      result = reflowStableEpoch(
-        event.messages,
-        ctx,
-        diagnostics,
-        currentFingerprint,
-      );
+      result = reflowStableEpoch(event.messages, ctx, diagnostics, currentFingerprint);
       diagnostics = result.diagnostics;
     }
     if (stable && diagnostics?.softBudgetExceeded) {
-      const rolled = rolloverStableEpoch(
-        event.messages,
-        ctx,
-        result,
-        currentFingerprint,
-      );
+      const rolled = rolloverStableEpoch(event.messages, ctx, result, currentFingerprint);
       if (rolled) {
         result = rolled;
         diagnostics = rolled.diagnostics;
@@ -1194,18 +939,14 @@ export default function sieveExtension(
 
     latestMode = mode;
     latestStats = result.stats;
-    const usage =
-      typeof ctx?.getContextUsage === "function"
-        ? ctx.getContextUsage()
-        : undefined;
+    const usage = typeof ctx?.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
     contextUsagePercent = usage?.percent ?? undefined;
     if (stable && diagnostics) {
       stability.newProjections += diagnostics.newProjections;
       stability.projectionCacheHits += diagnostics.cacheHits;
       stability.recoverableEntries = result.recoverableActiveResults.length;
     }
-    if (standardDiagnostics && mode === "enabled")
-      recordStandardChurn(result, standardDiagnostics);
+    if (standardDiagnostics && mode === "enabled") recordStandardChurn(result, standardDiagnostics);
 
     if (mode === "observe") {
       addTransformStats(cumulativeProjected, result.stats);
@@ -1225,29 +966,17 @@ export default function sieveExtension(
    * Persists a settings change, reporting failures the same way for every subcommand.
    * Returns false when the save failed and the caller should stop.
    */
-  const saveSetting = async (
-    ctx: any,
-    what: string,
-    patch: Parameters<typeof updateConfig>[0],
-  ) => {
+  const saveSetting = async (ctx: any, what: string, patch: Parameters<typeof updateConfig>[0]) => {
     try {
       await updateConfig(patch);
       return true;
     } catch (error: any) {
-      ctx.ui.notify(
-        `Could not save pi-sieve ${what}: ${error?.message ?? String(error)}`,
-        "error",
-      );
+      ctx.ui.notify(`Could not save pi-sieve ${what}: ${error?.message ?? String(error)}`, "error");
       return false;
     }
   };
 
-  const PROJECTION_VALUES = [
-    "stable",
-    "standard-v2",
-    "standard",
-    "legacy",
-  ] as const;
+  const PROJECTION_VALUES = ["stable", "standard-v2", "standard", "legacy"] as const;
   const USAGE =
     "Usage: /sieve enable|observe|disable|status|projection <standard|standard-v2|stable>|reflow" +
     "|rollover <high low|reset>|active <enable|disable>|threshold " +
@@ -1261,17 +990,12 @@ export default function sieveExtension(
 
   /** Matches `<name>` with no argument. */
   const bare = (name: string, run: Subcommand["run"]): Subcommand => ({
-    matches: (parts) => parts.length === 1 && parts[0] === name,
+    matches: parts => parts.length === 1 && parts[0] === name,
     run,
   });
   /** Matches `<name> <value>` where the value is one of `values`. */
-  const withValue = (
-    name: string,
-    values: readonly string[],
-    run: Subcommand["run"],
-  ): Subcommand => ({
-    matches: (parts) =>
-      parts.length === 2 && parts[0] === name && values.includes(parts[1]),
+  const withValue = (name: string, values: readonly string[], run: Subcommand["run"]): Subcommand => ({
+    matches: parts => parts.length === 2 && parts[0] === name && values.includes(parts[1]),
     run,
   });
 
@@ -1297,12 +1021,7 @@ export default function sieveExtension(
 
   const subcommands: Subcommand[] = [
     withValue("active", ["enable", "disable"], async (parts, ctx) => {
-      if (
-        !(await saveSetting(ctx, "active-result setting", {
-          activePruning: parts[1] === "enable",
-        }))
-      )
-        return;
+      if (!(await saveSetting(ctx, "active-result setting", { activePruning: parts[1] === "enable" }))) return;
       requestEpoch("configuration-change");
       refreshRecallTool();
       publishState();
@@ -1312,12 +1031,8 @@ export default function sieveExtension(
       );
     }),
     withValue("projection", PROJECTION_VALUES, async (parts, ctx) => {
-      const next: ProjectionMode =
-        parts[1] === "standard" ? "standard-v2" : (parts[1] as ProjectionMode);
-      if (
-        !(await saveSetting(ctx, "projection mode", { projectionMode: next }))
-      )
-        return;
+      const next: ProjectionMode = parts[1] === "standard" ? "standard-v2" : (parts[1] as ProjectionMode);
+      if (!(await saveSetting(ctx, "projection mode", { projectionMode: next }))) return;
       requestEpoch("configuration-change");
       publishState();
       ctx.ui.notify(
@@ -1330,10 +1045,7 @@ export default function sieveExtension(
       requestEpoch("explicit-reflow");
       persistTelemetry();
       publishState();
-      ctx.ui.notify(
-        "pi-sieve will rebuild projections on the next provider call; cached prefix will reset.",
-        "info",
-      );
+      ctx.ui.notify("pi-sieve will rebuild projections on the next provider call; cached prefix will reset.", "info");
     }),
     bare("enable", (_parts, ctx) => setMode("enabled", ctx)),
     bare("observe", (_parts, ctx) => setMode("observe", ctx)),
@@ -1345,14 +1057,10 @@ export default function sieveExtension(
       ctx.ui.notify("pi-sieve statistics reset.", "info");
     }),
     {
-      matches: (parts) =>
-        parts[0] === "rollover" &&
-        (parts.length === 3 || (parts.length === 2 && parts[1] === "reset")),
+      matches: parts => parts[0] === "rollover" && (parts.length === 3 || (parts.length === 2 && parts[1] === "reset")),
       run: async (parts, ctx) => {
         const reset = parts[1] === "reset";
-        const high = reset
-          ? DEFAULT_ROLLOVER_HIGH_MULTIPLIER
-          : Number(parts[1]);
+        const high = reset ? DEFAULT_ROLLOVER_HIGH_MULTIPLIER : Number(parts[1]);
         const low = reset ? DEFAULT_ROLLOVER_LOW_MULTIPLIER : Number(parts[2]);
         if (
           !Number.isSafeInteger(high) ||
@@ -1368,10 +1076,7 @@ export default function sieveExtension(
           return;
         }
         if (
-          !(await saveSetting(ctx, "rollover settings", {
-            rolloverHighMultiplier: high,
-            rolloverLowMultiplier: low,
-          }))
+          !(await saveSetting(ctx, "rollover settings", { rolloverHighMultiplier: high, rolloverLowMultiplier: low }))
         )
           return;
         requestEpoch("configuration-change");
@@ -1383,26 +1088,16 @@ export default function sieveExtension(
       },
     },
     {
-      matches: (parts) =>
-        parts.length === 2 &&
-        parts[0] === "threshold" &&
-        (parts[1] === "reset" || /^\d+$/.test(parts[1])),
+      matches: parts =>
+        parts.length === 2 && parts[0] === "threshold" && (parts[1] === "reset" || /^\d+$/.test(parts[1])),
       run: async (parts, ctx) => {
         const reset = parts[1] === "reset";
         const candidate = reset ? SIEVE_THRESHOLD : Number(parts[1]);
-        if (
-          !Number.isSafeInteger(candidate) ||
-          candidate < MIN_SIEVE_THRESHOLD ||
-          candidate > MAX_SIEVE_THRESHOLD
-        ) {
-          ctx.ui.notify(
-            `Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`,
-            "info",
-          );
+        if (!Number.isSafeInteger(candidate) || candidate < MIN_SIEVE_THRESHOLD || candidate > MAX_SIEVE_THRESHOLD) {
+          ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "info");
           return;
         }
-        if (!(await saveSetting(ctx, "threshold", { threshold: candidate })))
-          return;
+        if (!(await saveSetting(ctx, "threshold", { threshold: candidate }))) return;
         requestEpoch("configuration-change");
         publishState();
         ctx.ui.notify(
@@ -1435,14 +1130,11 @@ export default function sieveExtension(
   ];
 
   pi.registerCommand("sieve", {
-    description:
-      "Configure cache-stable outbound tool-result projections, rollback mode, and recall",
+    description: "Configure cache-stable outbound tool-result projections, rollback mode, and recall",
     handler: async (args, ctx) => {
       // A bare /sieve has always shown usage rather than defaulting to status.
       const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const subcommand = subcommands.find((candidate) =>
-        candidate.matches(parts),
-      );
+      const subcommand = subcommands.find(candidate => candidate.matches(parts));
       if (!subcommand) {
         ctx.ui.notify(USAGE, "info");
         return;

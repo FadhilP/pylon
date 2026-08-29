@@ -22,10 +22,7 @@ export interface CompactionDisplayReadModel {
   records: CompactionDisplayRecordReadModel[];
   failedTools: CompactionDisplaySourceReadModel[];
   toolResults: CompactionDisplaySourceReadModel[];
-  history: {
-    read: CompactionDisplayHistoryRecordReadModel[];
-    modified: CompactionDisplayHistoryRecordReadModel[];
-  };
+  history: { read: CompactionDisplayHistoryRecordReadModel[]; modified: CompactionDisplayHistoryRecordReadModel[] };
 }
 
 export interface CompactionMessageReadModel {
@@ -92,13 +89,7 @@ export interface ToolActivityReadModel {
   durationMs?: number;
 }
 
-export type DelegatedAgentKind =
-  | "advisor"
-  | "grunt"
-  | "repo_scout"
-  | "web_scout"
-  | "spawn_agent"
-  | "spawn_session";
+export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout" | "spawn_agent" | "spawn_session";
 export type SpawnExecutionActionReadModel = "create" | "continue" | "adopt";
 
 export interface DelegatedAgentActivityReadModel {
@@ -221,8 +212,7 @@ export interface SessionMetricsReadModel {
   toolUsage?: ToolUsageReadModel[];
 }
 
-export type ThinkingLevelReadModel =
-  "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevelReadModel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelOptionReadModel {
   provider: string;
@@ -236,10 +226,7 @@ export interface SessionControlsReadModel {
   models: ModelOptionReadModel[];
   thinkingLevel?: ThinkingLevelReadModel;
   thinkingLevels: ThinkingLevelReadModel[];
-  pending?: {
-    model: ModelOptionReadModel;
-    thinkingLevel: ThinkingLevelReadModel;
-  };
+  pending?: { model: ModelOptionReadModel; thinkingLevel: ThinkingLevelReadModel };
   commands?: SlashCommandReadModel[];
 }
 
@@ -258,11 +245,7 @@ export interface ProviderAuthReadModel {
     configured: boolean;
     stored: boolean;
     credentialType?: ProviderAuthType;
-    methods: Array<{
-      type: ProviderAuthType;
-      name: string;
-      interactive: boolean;
-    }>;
+    methods: Array<{ type: ProviderAuthType; name: string; interactive: boolean }>;
   }>;
   flow?: {
     id: string;
@@ -274,11 +257,7 @@ export interface ProviderAuthReadModel {
     authUrl?: string;
     instructions?: string;
     links?: Array<{ url: string; label?: string }>;
-    deviceCode?: {
-      userCode: string;
-      verificationUri: string;
-      expiresAt?: string;
-    };
+    deviceCode?: { userCode: string; verificationUri: string; expiresAt?: string };
   };
 }
 
@@ -340,15 +319,7 @@ export interface VerificationCheckReadModel {
 
 export interface VerificationReadModel {
   availability: FeatureState;
-  state?:
-    | "running"
-    | "passed"
-    | "failed"
-    | "cancelled"
-    | "stale"
-    | "error"
-    | "no_checks"
-    | "clean";
+  state?: "running" | "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
   runId?: string;
   scope?: "changed" | "project";
   startedAt?: string;
@@ -367,13 +338,7 @@ export interface VerifyOptionReadModel {
 export interface JobReadModel {
   id: string;
   label: string;
-  state:
-    | "running"
-    | "cancelling"
-    | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+  state: "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out";
   startedAt: string;
   finishedAt?: string;
   exitCode?: number | null;
@@ -407,11 +372,7 @@ export interface ContinuityWorkReadModel {
   approved: boolean;
   approvalPending: boolean;
   planSummary: string;
-  handoff?: {
-    workingSet: string[];
-    assumptions: string[];
-    acceptanceCriteria: string[];
-  };
+  handoff?: { workingSet: string[]; assumptions: string[]; acceptanceCriteria: string[] };
   planRevision?: number;
   revisionFeedback?: { revision: number; text: string; createdAt: string };
   currentTodoId?: string;
@@ -437,15 +398,8 @@ export interface ContinuityMemoryNoteReadModel {
   guidance: string;
   authority: "user_instruction" | "project_contract" | "imported";
   origin: "user" | "agent" | "migration";
-  disposition?:
-    | "archival"
-    | "eligible_advisory"
-    | "eligible_enforced"
-    | "quarantined"
-    | "superseded"
-    | "revoked";
-  enforcementAuthority?:
-    "context_only" | "warning" | "validation" | "blocking_guard";
+  disposition?: "archival" | "eligible_advisory" | "eligible_enforced" | "quarantined" | "superseded" | "revoked";
+  enforcementAuthority?: "context_only" | "warning" | "validation" | "blocking_guard";
   relatedPaths?: string[];
   revision: number;
   updatedAt: string;
@@ -468,12 +422,7 @@ export interface TimelineCheckpointReadModel {
   branch?: string;
   verified: boolean;
   ownerSessionId: string;
-  changes?: {
-    fileCount: number;
-    additions: number;
-    deletions: number;
-    binaryCount: number;
-  };
+  changes?: { fileCount: number; additions: number; deletions: number; binaryCount: number };
 }
 
 export interface TimelineReadModel {

@@ -77,8 +77,7 @@ export function TerminalPanel({
     const terminal = new Terminal({
       cursorBlink: true,
       convertEol: true,
-      fontFamily:
-        'ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+      fontFamily: 'ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.35,
       scrollback: 5_000,
@@ -93,8 +92,7 @@ export function TerminalPanel({
     let disposed = false;
     let ready = false;
     const send = (value: object) => {
-      if (socket.readyState === WebSocket.OPEN)
-        socket.send(JSON.stringify(value));
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
     };
     const fitTerminal = () => {
       if (!host.clientWidth || !host.clientHeight) return;
@@ -109,28 +107,17 @@ export function TerminalPanel({
     const themeObserver = new MutationObserver(() => {
       terminal.options.theme = terminalTheme();
     });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
-    const input = terminal.onData((data) => send({ type: "input", data }));
-    const resize = terminal.onResize(
-      ({ cols, rows }) => ready && send({ type: "resize", cols, rows }),
-    );
-    socket.addEventListener("message", (event) => {
-      let message: {
-        type?: string;
-        data?: string;
-        message?: string;
-        code?: number;
-      };
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const input = terminal.onData(data => send({ type: "input", data }));
+    const resize = terminal.onResize(({ cols, rows }) => ready && send({ type: "resize", cols, rows }));
+    socket.addEventListener("message", event => {
+      let message: { type?: string; data?: string; message?: string; code?: number };
       try {
         message = JSON.parse(String(event.data));
       } catch {
         return;
       }
-      if (message.type === "output" && typeof message.data === "string")
-        terminal.write(message.data);
+      if (message.type === "output" && typeof message.data === "string") terminal.write(message.data);
       else if (message.type === "ready") {
         ready = true;
         setStatus("Connected");
@@ -146,12 +133,10 @@ export function TerminalPanel({
         setStatus(`Exited (${message.code ?? 0})`);
       }
     });
-    socket.addEventListener("close", (event) => {
+    socket.addEventListener("close", event => {
       if (disposed) return;
       ready = false;
-      const message =
-        event.reason ||
-        (event.code === 1000 ? "Terminal closed" : "Terminal disconnected");
+      const message = event.reason || (event.code === 1000 ? "Terminal closed" : "Terminal disconnected");
       setStatus(message);
       terminal.writeln(`\r\n[${message}]`);
     });
@@ -197,14 +182,9 @@ export function TerminalPanel({
           <button
             className="icon-button"
             type="button"
-            onClick={() =>
-              window.confirm(
-                "Shut down this terminal and stop any running process?",
-              ) && onShutdown()
-            }
+            onClick={() => window.confirm("Shut down this terminal and stop any running process?") && onShutdown()}
             aria-label="Shut down terminal"
-            title="Shut down terminal"
-          >
+            title="Shut down terminal">
             <IconPower size={15} />
           </button>
           <button
@@ -212,8 +192,7 @@ export function TerminalPanel({
             type="button"
             onClick={onClose}
             aria-label="Close terminal drawer"
-            title="Close terminal drawer"
-          >
+            title="Close terminal drawer">
             <IconX size={16} />
           </button>
         </span>

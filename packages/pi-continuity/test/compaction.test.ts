@@ -11,78 +11,42 @@ import {
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "../src/compaction.ts";
-import {
-  assertSafe,
-  assertSafePath,
-  redactPathSecrets,
-  redactSecrets,
-} from "../src/secrets.ts";
+import { assertSafe, assertSafePath, redactPathSecrets, redactSecrets } from "../src/secrets.ts";
 import type { Work } from "../src/active-work.ts";
 
 let sequence = 0;
 const entry = (value: Record<string, any>) =>
-  ({
-    id: value.id ?? `entry-${++sequence}`,
-    parentId: null,
-    timestamp: new Date().toISOString(),
-    ...value,
-  }) as any;
+  ({ id: value.id ?? `entry-${++sequence}`, parentId: null, timestamp: new Date().toISOString(), ...value }) as any;
 const user = (content: string, id?: string) =>
-  entry({
-    id,
-    type: "message",
-    message: { role: "user", content, timestamp: Date.now() },
-  });
+  entry({ id, type: "message", message: { role: "user", content, timestamp: Date.now() } });
 const assistant = (content: any, id?: string) =>
   entry({
     id,
     type: "message",
     message: {
       role: "assistant",
-      content:
-        typeof content === "string"
-          ? [{ type: "text", text: content }]
-          : content,
+      content: typeof content === "string" ? [{ type: "text", text: content }] : content,
       timestamp: Date.now(),
     },
   });
-const toolCall = (
-  toolCallId: string,
-  name: string,
-  args: Record<string, unknown>,
-  id?: string,
-) =>
+const toolCall = (toolCallId: string, name: string, args: Record<string, unknown>, id?: string) =>
   assistant([{ type: "toolCall", id: toolCallId, name, arguments: args }], id);
 
 test("credential heuristic distinguishes nested paths from credential components", () => {
   const javaBasename = `${"LongDescriptive".repeat(5)}Validator.java`;
-  const nestedPath =
-    "src/components/really/deep/nested/LongDescriptiveValidator.java";
+  const nestedPath = "src/components/really/deep/nested/LongDescriptiveValidator.java";
   assert.doesNotThrow(() => assertSafe(javaBasename));
   assert.equal(redactSecrets(javaBasename), javaBasename);
   assert.doesNotThrow(() => assertSafePath(nestedPath));
   assert.equal(redactPathSecrets(nestedPath), nestedPath);
 
   for (const signal of ["0", "+", "/", "_", "-", "="])
-    assert.equal(
-      redactSecrets(`${"A".repeat(49)}${signal}`),
-      "[REDACTED CREDENTIAL]",
-    );
+    assert.equal(redactSecrets(`${"A".repeat(49)}${signal}`), "[REDACTED CREDENTIAL]");
   assert.equal(redactSecrets(`${"A".repeat(48)}0`), `${"A".repeat(48)}0`);
   assert.throws(() => assertSafe(`${"A".repeat(49)}0`), /possible credential/);
-  assert.throws(
-    () => assertSafePath(`packages/${"A".repeat(49)}0/config.ts`),
-    /possible credential/,
-  );
-  assert.throws(
-    () =>
-      assertSafePath("packages/ghp_abcdefghijklmnopqrstuvwxyz123456/config.ts"),
-    /possible credential/,
-  );
-  assert.throws(
-    () => assertSafe(`token=${"A".repeat(60)}`),
-    /possible credential/,
-  );
+  assert.throws(() => assertSafePath(`packages/${"A".repeat(49)}0/config.ts`), /possible credential/);
+  assert.throws(() => assertSafePath("packages/ghp_abcdefghijklmnopqrstuvwxyz123456/config.ts"), /possible credential/);
+  assert.throws(() => assertSafe(`token=${"A".repeat(60)}`), /possible credential/);
 });
 const toolResult = (
   content: string,
@@ -119,14 +83,7 @@ const work = (overrides: Partial<Work> = {}): Work => ({
   approved: true,
   constraints: ["Keep compatibility"],
   planSummary: "Implement then verify",
-  todos: [
-    {
-      id: "todo_1",
-      text: "Implement compaction",
-      status: "in_progress",
-      updatedAt: new Date().toISOString(),
-    },
-  ],
+  todos: [{ id: "todo_1", text: "Implement compaction", status: "in_progress", updatedAt: new Date().toISOString() }],
   currentTodoId: "todo_1",
   runId: "run",
   timelineId: "timeline",
@@ -162,10 +119,7 @@ test("keeps the latest complete turn without duplicating its retained request", 
   ];
   const result = build(entries);
   assert.doesNotMatch(result.summary, /Exact latest request\nwith spacing/);
-  assert.match(
-    result.summary,
-    /## Current Task[\s\S]*request retained verbatim at the compaction cut/,
-  );
+  assert.match(result.summary, /## Current Task[\s\S]*request retained verbatim at the compaction cut/);
   assert.match(result.summary, /## Current Work[\s\S]*- Goal:/);
   assert.equal(result.firstKeptEntryId, "current");
   assert.equal(result.details?.currentTaskEntryId, "current");
@@ -181,27 +135,14 @@ test("isolates approved-plan history at the latest valid handoff", () => {
     assistant("Executing"),
   ];
   const result = build(entries);
-  assert.doesNotMatch(
-    result.summary,
-    /Secret planning discussion|Executor request/,
-  );
-  assert.match(
-    result.summary,
-    /request retained verbatim at the compaction cut/,
-  );
+  assert.doesNotMatch(result.summary, /Secret planning discussion|Executor request/);
+  assert.match(result.summary, /request retained verbatim at the compaction cut/);
   assert.equal(result.firstKeptEntryId, "executor");
   assert.equal(result.details?.handoffEntryId, "handoff");
 });
 
 test("repeated compaction merges structured file history without parsing its rendered summary", () => {
-  const readCall = assistant([
-    {
-      type: "toolCall",
-      id: "read-1",
-      name: "read",
-      arguments: { path: "src/first.ts" },
-    },
-  ]);
+  const readCall = assistant([{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/first.ts" } }]);
   const firstEntries = [
     handoff(),
     user("First scoped task"),
@@ -217,25 +158,15 @@ test("repeated compaction merges structured file history without parsing its ren
     tokensBefore: first.tokensBefore,
     details: first.details,
   });
-  const result = build(
-    [...firstEntries, prior, assistant("More progress", "suffix")],
-    work(),
-    10,
-  );
+  const result = build([...firstEntries, prior, assistant("More progress", "suffix")], work(), 10);
   assert.equal(occurrences(result.summary, "## Current Task"), 1);
   assert.equal(occurrences(result.summary, "# Continuity Compaction v3"), 1);
   assert.match(result.summary, /src\/first\.ts/);
-  assert.doesNotMatch(
-    result.summary,
-    /POISONED RENDERED TEXT|First scoped task/,
-  );
+  assert.doesNotMatch(result.summary, /POISONED RENDERED TEXT|First scoped task/);
   assert.equal(result.firstKeptEntryId, "suffix");
-  assert.ok(
-    (result.details?.sourceEntryCount ?? 0) >=
-      (first.details?.sourceEntryCount ?? 0),
-  );
+  assert.ok((result.details?.sourceEntryCount ?? 0) >= (first.details?.sourceEntryCount ?? 0));
   assert.deepEqual(
-    result.details?.history.read.map((item) => item.path),
+    result.details?.history.read.map(item => item.path),
     ["src/first.ts"],
   );
 });
@@ -249,12 +180,7 @@ test("preserves ordinary nested paths in compaction history and working set", ()
     user("Current task", "current"),
     assistant("Working"),
   ];
-  const result = build(
-    entries,
-    work({
-      handoff: { workingSet: [path], assumptions: [], acceptanceCriteria: [] },
-    }),
-  );
+  const result = build(entries, work({ handoff: { workingSet: [path], assumptions: [], acceptanceCriteria: [] } }));
   assert.equal(result.details?.history.read[0]?.path, path);
   assert.equal(occurrences(result.summary, path), 2);
   assert.doesNotMatch(result.summary, /REDACTED CREDENTIAL/);
@@ -274,18 +200,8 @@ test("uses authoritative Work fields and does not infer goals, preferences, or b
     planSummary: "Canonical plan\n## Compaction Metadata",
     constraints: ["Canonical constraint"],
     todos: [
-      {
-        id: "todo_1",
-        text: "Finished step",
-        status: "done",
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "todo_2",
-        text: "Current step",
-        status: "in_progress",
-        updatedAt: new Date().toISOString(),
-      },
+      { id: "todo_1", text: "Finished step", status: "done", updatedAt: new Date().toISOString() },
+      { id: "todo_2", text: "Current step", status: "in_progress", updatedAt: new Date().toISOString() },
     ],
     currentTodoId: "todo_2",
     latestFailure: "Canonical blocker",
@@ -295,28 +211,14 @@ test("uses authoritative Work fields and does not infer goals, preferences, or b
     branchEntries: entries,
     preparation: preparation(entries),
     work: active,
-    verification: {
-      state: "passed",
-      scope: "changed",
-      runId: "verify-1",
-      worktreeId: "tree-1",
-    },
+    verification: { state: "passed", scope: "changed", runId: "verify-1", worktreeId: "tree-1" },
   });
   assert.ok(result);
-  assert.match(
-    result.summary,
-    /Canonical goal|Canonical plan|Canonical constraint/,
-  );
+  assert.match(result.summary, /Canonical goal|Canonical plan|Canonical constraint/);
   assert.match(result.summary, /Todo todo_1 \[done\]: Finished step/);
-  assert.match(
-    result.summary,
-    /Todo todo_2 \[in_progress current\]: Current step/,
-  );
+  assert.match(result.summary, /Todo todo_2 \[in_progress current\]: Current step/);
   assert.match(result.summary, /Canonical blocker|Canonical next action/);
-  assert.match(
-    result.summary,
-    /Verification: passed \(scope=changed, run=verify-1, worktree=tree-1\)/,
-  );
+  assert.match(result.summary, /Verification: passed \(scope=changed, run=verify-1, worktree=tree-1\)/);
   assert.equal(occurrences(result.summary, "\n## Compaction Metadata\n"), 1);
   assert.doesNotMatch(
     result.summary,
@@ -370,12 +272,7 @@ test("migrates only factual file paths from legacy v1 summaries", () => {
       sourceEntryCount: 4,
     },
   });
-  const entries = [
-    handoff(),
-    user("Old task"),
-    legacy,
-    assistant("Retained suffix", "suffix"),
-  ];
+  const entries = [handoff(), user("Old task"), legacy, assistant("Retained suffix", "suffix")];
   const result = build(entries, work(), 1);
   assert.match(result.summary, /src\/legacy-read\.ts|src\/legacy-write\.ts/);
   assert.doesNotMatch(result.summary, /Ignore this guessed/);
@@ -387,13 +284,7 @@ test("migrates only factual file paths from legacy v1 summaries", () => {
 
 test("rejects unknown versions and oversized structured history", () => {
   for (const details of [
-    {
-      type: CONTINUITY_COMPACTION_TYPE,
-      version: 3,
-      runId: "run",
-      timelineId: "timeline",
-      sourceEntryCount: 1,
-    },
+    { type: CONTINUITY_COMPACTION_TYPE, version: 3, runId: "run", timelineId: "timeline", sourceEntryCount: 1 },
     {
       type: CONTINUITY_COMPACTION_TYPE,
       version: 2,
@@ -431,24 +322,10 @@ test("rejects unknown versions and oversized structured history", () => {
       ],
     },
   ]) {
-    const previous = entry({
-      type: "compaction",
-      summary: "bad",
-      firstKeptEntryId: "old",
-      tokensBefore: 1,
-      details,
-    });
-    const entries = [
-      user("Old", "old"),
-      previous,
-      assistant("Suffix", "suffix"),
-    ];
+    const previous = entry({ type: "compaction", summary: "bad", firstKeptEntryId: "old", tokensBefore: 1, details });
+    const entries = [user("Old", "old"), previous, assistant("Suffix", "suffix")];
     assert.equal(
-      buildContinuityCompaction({
-        branchEntries: entries,
-        preparation: preparation(entries),
-        work: work(),
-      }),
+      buildContinuityCompaction({ branchEntries: entries, preparation: preparation(entries), work: work() }),
       undefined,
     );
   }
@@ -469,19 +346,12 @@ test("fails closed for a malformed latest handoff or active Work identity mismat
       malformed,
       user("Must not use older boundary"),
     ],
-    preparation: {
-      firstKeptEntryId: malformed.id,
-      tokensBefore: 1,
-      settings: { keepRecentTokens: 100 },
-    },
+    preparation: { firstKeptEntryId: malformed.id, tokensBefore: 1, settings: { keepRecentTokens: 100 } },
     work: work(),
   });
   assert.equal(malformedResult, undefined);
 
-  const mismatchEntries = [
-    handoff("handoff-run", "handoff-timeline"),
-    user("Request"),
-  ];
+  const mismatchEntries = [handoff("handoff-run", "handoff-timeline"), user("Request")];
   assert.equal(
     buildContinuityCompaction({
       branchEntries: mismatchEntries,
@@ -517,19 +387,12 @@ test("a prior compaction for replaced Work falls back to the current Work identi
     toolCall("new-read", "read", { path: "new/work.ts" }, "new-read-call"),
     assistant("Retained suffix", "suffix"),
   ];
-  const result = build(
-    entries,
-    work({ runId: "new-run", timelineId: "new-timeline" }),
-    1,
-  );
+  const result = build(entries, work({ runId: "new-run", timelineId: "new-timeline" }), 1);
 
   assert.equal(result.details?.runId, "new-run");
   assert.equal(result.details?.timelineId, "new-timeline");
   assert.equal(result.firstKeptEntryId, "suffix");
-  assert.doesNotMatch(
-    result.summary,
-    /OLD WORK SUMMARY MUST NOT RETURN|old\/work\.ts/,
-  );
+  assert.doesNotMatch(result.summary, /OLD WORK SUMMARY MUST NOT RETURN|old\/work\.ts/);
   assert.match(result.summary, /new\/work\.ts/);
 });
 
@@ -547,8 +410,7 @@ test("a new handoff rejects a previous summary from another boundary", () => {
     user("Old executor task"),
     entry({
       type: "compaction",
-      summary:
-        "# Continuity Compaction v1\n\n[Older History]\n### Goals and scope changes\n- MUST NOT RETURN",
+      summary: "# Continuity Compaction v1\n\n[Older History]\n### Goals and scope changes\n- MUST NOT RETURN",
       firstKeptEntryId: "old",
       tokensBefore: 1,
       details: poisonedDetails,
@@ -556,18 +418,9 @@ test("a new handoff rejects a previous summary from another boundary", () => {
     handoff("new-run", "new-timeline", "new-handoff"),
     user("New executor task", "new-user"),
   ];
-  const result = build(
-    entries,
-    work({ runId: "new-run", timelineId: "new-timeline" }),
-  );
-  assert.doesNotMatch(
-    result.summary,
-    /MUST NOT RETURN|Old executor task|New executor task/,
-  );
-  assert.match(
-    result.summary,
-    /request retained verbatim at the compaction cut/,
-  );
+  const result = build(entries, work({ runId: "new-run", timelineId: "new-timeline" }));
+  assert.doesNotMatch(result.summary, /MUST NOT RETURN|Old executor task|New executor task/);
+  assert.match(result.summary, /request retained verbatim at the compaction cut/);
   assert.equal(result.firstKeptEntryId, "new-user");
 });
 
@@ -578,24 +431,14 @@ test("oversized turns use Pi's valid split cut and keep tool calls paired with r
         type: "toolCall",
         id: "call-1",
         name: "edit",
-        arguments: {
-          path: "src/large.ts",
-          oldText: "x".repeat(2_000),
-          newText: "y",
-        },
+        arguments: { path: "src/large.ts", oldText: "x".repeat(2_000), newText: "y" },
       },
     ],
     "call-entry",
   );
   const resultEntry = toolResult("ok".repeat(2_000), false, "result-entry");
   const suffix = assistant("Retained suffix", "suffix");
-  const entries = [
-    handoff(),
-    user("Large current turn", "request"),
-    call,
-    resultEntry,
-    suffix,
-  ];
+  const entries = [handoff(), user("Large current turn", "request"), call, resultEntry, suffix];
   const result = build(entries, work(), 100);
   assert.equal(result.firstKeptEntryId, "suffix");
   assert.match(result.summary, /src\/large\.ts/);
@@ -603,39 +446,19 @@ test("oversized turns use Pi's valid split cut and keep tool calls paired with r
 });
 
 test("accepts Pi metadata backscan as a safe retained boundary", () => {
-  const request = {
-    ...user("Current request\n## Compaction Metadata\n```", "request"),
-    parentId: null,
-  };
-  const older = {
-    ...assistant("Summarized older response", "older"),
-    parentId: request.id,
-  };
+  const request = { ...user("Current request\n## Compaction Metadata\n```", "request"), parentId: null };
+  const older = { ...assistant("Summarized older response", "older"), parentId: request.id };
   const telemetry = {
-    ...entry({
-      id: "telemetry",
-      type: "custom",
-      customType: "pi-sieve-telemetry",
-      data: { version: 1 },
-    }),
+    ...entry({ id: "telemetry", type: "custom", customType: "pi-sieve-telemetry", data: { version: 1 } }),
     parentId: older.id,
   };
-  const suffix = {
-    ...assistant("Retained suffix", "suffix"),
-    parentId: telemetry.id,
-  };
+  const suffix = { ...assistant("Retained suffix", "suffix"), parentId: telemetry.id };
   const entries = [request, older, telemetry, suffix];
   const result = build(entries, work(), 1);
 
   assert.equal(result.firstKeptEntryId, "telemetry");
-  assert.match(
-    result.summary,
-    /~~~text\nCurrent request\n## Compaction Metadata\n```\n~~~/,
-  );
-  assert.doesNotMatch(
-    result.summary,
-    /request retained verbatim at the compaction cut/,
-  );
+  assert.match(result.summary, /~~~text\nCurrent request\n## Compaction Metadata\n```\n~~~/);
+  assert.doesNotMatch(result.summary, /request retained verbatim at the compaction cut/);
   const compacted = entry({
     id: "compacted",
     parentId: suffix.id,
@@ -645,17 +468,14 @@ test("accepts Pi metadata backscan as a safe retained boundary", () => {
     tokensBefore: result.tokensBefore,
     details: result.details,
   });
-  const context = buildSessionContext([...entries, compacted], compacted.id)
-    .messages as any[];
+  const context = buildSessionContext([...entries, compacted], compacted.id).messages as any[];
   assert.deepEqual(
-    context.map((message) => message.role),
+    context.map(message => message.role),
     ["compactionSummary", "assistant"],
   );
   assert.equal(
     context.some(
-      (message) =>
-        message.role === "assistant" &&
-        JSON.stringify(message.content).includes("Summarized older response"),
+      message => message.role === "assistant" && JSON.stringify(message.content).includes("Summarized older response"),
     ),
     false,
   );
@@ -676,19 +496,12 @@ test("the chosen cut removes the handoff so Pi keeps the Continuity summary visi
     tokensBefore: result.tokensBefore,
     details: result.details,
   });
-  const context = buildSessionContext(
-    [boundary, request, response, compacted],
-    "c",
-  ).messages as any[];
+  const context = buildSessionContext([boundary, request, response, compacted], "c").messages as any[];
   assert.equal(context[0]?.role, "compactionSummary");
   assert.doesNotMatch(context[0]?.summary, /Visible request/);
   assert.match(JSON.stringify(context), /Visible request/);
   assert.equal(
-    context.some(
-      (message) =>
-        message.role === "custom" &&
-        message.customType === "pi-continuity-handoff",
-    ),
+    context.some(message => message.role === "custom" && message.customType === "pi-continuity-handoff"),
     false,
   );
 });
@@ -699,10 +512,7 @@ test("uses only supplied active ancestry, not sibling branch content", () => {
   void sibling;
   const result = build(active);
   assert.equal(result.firstKeptEntryId, "active");
-  assert.doesNotMatch(
-    result.summary,
-    /Active branch request|Sibling-only secret/,
-  );
+  assert.doesNotMatch(result.summary, /Active branch request|Sibling-only secret/);
 });
 
 test("redacts credential-like text from request, Work, and tool errors", () => {
@@ -714,10 +524,7 @@ test("redacts credential-like text from request, Work, and tool errors", () => {
     toolResult(`password=${credential}`, true),
     user(`Use ${credential}`, "current"),
   ];
-  const result = build(
-    entries,
-    work({ goal: `Rotate token=${credential} and ${slashCredential}` }),
-  );
+  const result = build(entries, work({ goal: `Rotate token=${credential} and ${slashCredential}` }));
   assert.doesNotMatch(result.summary, new RegExp(credential));
   assert.doesNotMatch(result.summary, new RegExp(slashCredential));
   assert.match(result.summary, /\[REDACTED CREDENTIAL\]/);
@@ -730,21 +537,13 @@ test("fails closed when a missing ID has only an orphan tool-result fallback", (
   const orphan = toolResult("orphan", false, "result");
   const entries = [handoff(), request, orphan];
   assert.equal(
-    buildContinuityCompaction({
-      branchEntries: entries,
-      preparation: preparation(entries),
-      work: work(),
-    }),
+    buildContinuityCompaction({ branchEntries: entries, preparation: preparation(entries), work: work() }),
     undefined,
   );
 });
 
 test("does not retain a prior compaction when there is no safe suffix", () => {
-  const firstEntries = [
-    handoff(),
-    user("Task", "request"),
-    assistant("Progress"),
-  ];
+  const firstEntries = [handoff(), user("Task", "request"), assistant("Progress")];
   const first = build(firstEntries);
   const prior = entry({
     type: "compaction",
@@ -755,11 +554,7 @@ test("does not retain a prior compaction when there is no safe suffix", () => {
   });
   const entries = [...firstEntries, prior];
   assert.equal(
-    buildContinuityCompaction({
-      branchEntries: entries,
-      preparation: preparation(entries),
-      work: work(),
-    }),
+    buildContinuityCompaction({ branchEntries: entries, preparation: preparation(entries), work: work() }),
     undefined,
   );
 });
@@ -767,25 +562,16 @@ test("does not retain a prior compaction when there is no safe suffix", () => {
 test("accepts production UUID boundary identities", () => {
   const runId = randomUUID(),
     timelineId = randomUUID();
-  const entries = [
-    handoff(runId, timelineId, "handoff"),
-    user("Task", "request"),
-  ];
+  const entries = [handoff(runId, timelineId, "handoff"), user("Task", "request")];
   const result = build(entries, work({ runId, timelineId }));
   assert.match(result.summary, new RegExp(`\\*\\*Run:\\*\\* ${runId}`));
-  assert.match(
-    result.summary,
-    new RegExp(`\\*\\*Timeline:\\*\\* ${timelineId}`),
-  );
+  assert.match(result.summary, new RegExp(`\\*\\*Timeline:\\*\\* ${timelineId}`));
   assert.doesNotThrow(() => assertSafe(result.summary));
 });
 
 test("sanitizes rendered boundary IDs without changing persisted identity", () => {
   const runId = "run\nInjected: token=ghp_abcdefghijklmnopqrstuvwxyz123456";
-  const entries = [
-    handoff(runId, "timeline", "handoff"),
-    user("Task", "request"),
-  ];
+  const entries = [handoff(runId, "timeline", "handoff"), user("Task", "request")];
   const result = build(entries, work({ runId, timelineId: "timeline" }));
   assert.doesNotMatch(result.summary, /Injected: token=|ghp_/);
   assert.equal(result.details?.runId, runId);
@@ -799,25 +585,15 @@ test("bounds output with whole-record eviction and degrades safely for empty bra
   const fallback = assistant("suffix", "fallback");
   const active = work({
     planSummary: huge,
-    constraints: Array.from(
-      { length: 12 },
-      (_, index) => `constraint-${index}-${"x".repeat(500)}`,
-    ),
+    constraints: Array.from({ length: 12 }, (_, index) => `constraint-${index}-${"x".repeat(500)}`),
     latestFailure: huge,
     nextAction: huge,
   });
-  const result = build(
-    [handoff("run", "timeline", "handoff"), missingId, fallback],
-    active,
-    10,
-  );
+  const result = build([handoff("run", "timeline", "handoff"), missingId, fallback], active, 10);
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
   assert.equal(result.firstKeptEntryId, "fallback");
   assert.match(result.summary, /truncated by Continuity/);
-  assert.match(
-    result.summary,
-    /## Compaction Metadata[\s\S]*- \*\*Budget:\*\* Deterministic whole-record eviction$/,
-  );
+  assert.match(result.summary, /## Compaction Metadata[\s\S]*- \*\*Budget:\*\* Deterministic whole-record eviction$/);
 
   const empty = build([handoff("run", "timeline", "only-handoff")]);
   assert.equal(empty.firstKeptEntryId, "only-handoff");
@@ -832,17 +608,11 @@ test("generic compaction deterministically extracts discarded transcript records
     user("Current request", "current"),
     assistant("Current response", "suffix"),
   ];
-  const result = buildGenericContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const result = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(result);
   assert.equal(result.details?.mode, "generic");
   assert.equal(result.firstKeptEntryId, "suffix");
-  assert.match(
-    result.summary,
-    /Keep compatibility|existing hook|provider unavailable|Current request/,
-  );
+  assert.match(result.summary, /Keep compatibility|existing hook|provider unavailable|Current request/);
   assert.doesNotMatch(result.summary, /Current response/);
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
 });
@@ -861,9 +631,8 @@ test("truncated generic metadata stays within limits for later active-work compa
   const details = first.details;
   assert.ok(isContinuityCompactionDetails(details));
   assert.equal(details.mode, "generic");
-  if (details.mode !== "generic")
-    assert.fail("expected generic compaction details");
-  assert.ok(details.records.every((record) => record.text.length <= 2_000));
+  if (details.mode !== "generic") assert.fail("expected generic compaction details");
+  assert.ok(details.records.every(record => record.text.length <= 2_000));
 
   const prior = entry({
     type: "compaction",
@@ -872,12 +641,7 @@ test("truncated generic metadata stays within limits for later active-work compa
     tokensBefore: first.tokensBefore,
     details,
   });
-  const resumedEntries = [
-    ...firstEntries,
-    prior,
-    user("Active request", "active"),
-    assistant("Progress", "progress"),
-  ];
+  const resumedEntries = [...firstEntries, prior, user("Active request", "active"), assistant("Progress", "progress")];
   assert.ok(
     buildContinuityCompaction({
       branchEntries: resumedEntries,
@@ -890,12 +654,7 @@ test("truncated generic metadata stays within limits for later active-work compa
 test("generic compaction excludes superseded read and discovery errors from canonical and review context", () => {
   const entries = [
     user("Earlier request", "old"),
-    toolCall(
-      "fd-bad",
-      "fd",
-      { pattern: "*continuity*", path: "packages" },
-      "fd-bad-call",
-    ),
+    toolCall("fd-bad", "fd", { pattern: "*continuity*", path: "packages" }, "fd-bad-call"),
     toolResult(
       "fd failed (2): regex parse error: repetition operator missing expression",
       true,
@@ -903,67 +662,17 @@ test("generic compaction excludes superseded read and discovery errors from cano
       "fd",
       "fd-bad",
     ),
-    toolCall(
-      "fd-good",
-      "fd",
-      { pattern: "*continuity*", path: "packages", glob: true },
-      "fd-good-call",
-    ),
-    toolResult(
-      "packages/pi-continuity",
-      false,
-      "fd-good-result",
-      "fd",
-      "fd-good",
-    ),
+    toolCall("fd-good", "fd", { pattern: "*continuity*", path: "packages", glob: true }, "fd-good-call"),
+    toolResult("packages/pi-continuity", false, "fd-good-result", "fd", "fd-good"),
     toolCall("read-old", "read", { path: "missing.ts" }, "read-old-call"),
-    toolResult(
-      "No such file or directory",
-      true,
-      "read-old-result",
-      "read",
-      "read-old",
-    ),
+    toolResult("No such file or directory", true, "read-old-result", "read", "read-old"),
     toolCall("read-new", "read", { path: "missing.ts" }, "read-new-call"),
-    toolResult(
-      "export const recovered = true;",
-      false,
-      "read-new-result",
-      "read",
-      "read-new",
-    ),
-    toolCall(
-      "rg-protected",
-      "rg",
-      { pattern: "secret", path: "private" },
-      "rg-protected-call",
-    ),
-    toolResult(
-      "Permission denied",
-      true,
-      "rg-protected-result",
-      "rg",
-      "rg-protected",
-    ),
-    toolCall(
-      "rg-success",
-      "rg",
-      { pattern: "public", path: "private" },
-      "rg-success-call",
-    ),
-    toolResult(
-      "private/public.ts:1:ok",
-      false,
-      "rg-success-result",
-      "rg",
-      "rg-success",
-    ),
-    toolCall(
-      "rg-unresolved",
-      "rg",
-      { pattern: "*", path: "src" },
-      "rg-unresolved-call",
-    ),
+    toolResult("export const recovered = true;", false, "read-new-result", "read", "read-new"),
+    toolCall("rg-protected", "rg", { pattern: "secret", path: "private" }, "rg-protected-call"),
+    toolResult("Permission denied", true, "rg-protected-result", "rg", "rg-protected"),
+    toolCall("rg-success", "rg", { pattern: "public", path: "private" }, "rg-success-call"),
+    toolResult("private/public.ts:1:ok", false, "rg-success-result", "rg", "rg-success"),
+    toolCall("rg-unresolved", "rg", { pattern: "*", path: "src" }, "rg-unresolved-call"),
     toolResult(
       "regex parse error: repetition operator missing expression",
       true,
@@ -971,62 +680,23 @@ test("generic compaction excludes superseded read and discovery errors from cano
       "rg",
       "rg-unresolved",
     ),
-    toolCall(
-      "rg-unknown",
-      "rg",
-      { pattern: "old", path: "runtime" },
-      "rg-unknown-call",
-    ),
-    toolResult(
-      "unexpected search engine failure",
-      true,
-      "rg-unknown-result",
-      "rg",
-      "rg-unknown",
-    ),
-    toolCall(
-      "rg-unknown-success",
-      "rg",
-      { pattern: "new", path: "runtime" },
-      "rg-unknown-success-call",
-    ),
-    toolResult(
-      "runtime/new.ts:1:ok",
-      false,
-      "rg-unknown-success-result",
-      "rg",
-      "rg-unknown-success",
-    ),
-    toolCall(
-      "edit-failed",
-      "edit",
-      { path: "src/file.ts" },
-      "edit-failed-call",
-    ),
-    toolResult(
-      "Exact text replacement did not match",
-      true,
-      "edit-failed-result",
-      "edit",
-      "edit-failed",
-    ),
+    toolCall("rg-unknown", "rg", { pattern: "old", path: "runtime" }, "rg-unknown-call"),
+    toolResult("unexpected search engine failure", true, "rg-unknown-result", "rg", "rg-unknown"),
+    toolCall("rg-unknown-success", "rg", { pattern: "new", path: "runtime" }, "rg-unknown-success-call"),
+    toolResult("runtime/new.ts:1:ok", false, "rg-unknown-success-result", "rg", "rg-unknown-success"),
+    toolCall("edit-failed", "edit", { path: "src/file.ts" }, "edit-failed-call"),
+    toolResult("Exact text replacement did not match", true, "edit-failed-result", "edit", "edit-failed"),
     user("Current request", "current"),
     assistant("Retained response", "suffix"),
   ];
-  const draft = prepareContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(draft);
-  assert.doesNotMatch(
-    draft.canonical.summary,
-    /fd failed \(2\)|No such file or directory/,
-  );
+  assert.doesNotMatch(draft.canonical.summary, /fd failed \(2\)|No such file or directory/);
   assert.match(
     draft.canonical.summary,
     /Permission denied|regex parse error|unexpected search engine failure|Exact text replacement did not match/,
   );
-  const sourceIds = draft.reviewSources.map((source) => source.sourceEntryId);
+  const sourceIds = draft.reviewSources.map(source => source.sourceEntryId);
   assert.equal(sourceIds.includes("fd-bad-result"), false);
   assert.equal(sourceIds.includes("read-old-result"), false);
   assert.equal(sourceIds.includes("rg-protected-result"), true);
@@ -1038,68 +708,21 @@ test("generic compaction excludes superseded read and discovery errors from cano
 test("tool error filtering fails closed and keeps only the newest duplicate", () => {
   const entries = [
     user("Earlier request", "old"),
-    toolResult(
-      "regex parse error from an orphan result",
-      true,
-      "orphan",
-      "fd",
-      "missing-call",
-    ),
-    toolCall(
-      "fd-other",
-      "fd",
-      { pattern: "x", path: "missing" },
-      "fd-other-call",
-    ),
-    toolResult(
-      "The system cannot find the path specified",
-      true,
-      "path-error",
-      "fd",
-      "fd-other",
-    ),
-    toolCall(
-      "fd-success",
-      "fd",
-      { pattern: "x", path: "other" },
-      "fd-success-call",
-    ),
+    toolResult("regex parse error from an orphan result", true, "orphan", "fd", "missing-call"),
+    toolCall("fd-other", "fd", { pattern: "x", path: "missing" }, "fd-other-call"),
+    toolResult("The system cannot find the path specified", true, "path-error", "fd", "fd-other"),
+    toolCall("fd-success", "fd", { pattern: "x", path: "other" }, "fd-success-call"),
     toolResult("other/x.ts", false, "path-success", "fd", "fd-success"),
-    toolCall(
-      "fd-duplicate-1",
-      "fd",
-      { pattern: "x", path: "src" },
-      "fd-duplicate-call-1",
-    ),
-    toolResult(
-      "temporary search backend error",
-      true,
-      "duplicate-old",
-      "fd",
-      "fd-duplicate-1",
-    ),
-    toolCall(
-      "fd-duplicate-2",
-      "fd",
-      { pattern: "x", path: "src" },
-      "fd-duplicate-call-2",
-    ),
-    toolResult(
-      "temporary search backend error",
-      true,
-      "duplicate-new",
-      "fd",
-      "fd-duplicate-2",
-    ),
+    toolCall("fd-duplicate-1", "fd", { pattern: "x", path: "src" }, "fd-duplicate-call-1"),
+    toolResult("temporary search backend error", true, "duplicate-old", "fd", "fd-duplicate-1"),
+    toolCall("fd-duplicate-2", "fd", { pattern: "x", path: "src" }, "fd-duplicate-call-2"),
+    toolResult("temporary search backend error", true, "duplicate-new", "fd", "fd-duplicate-2"),
     user("Current request", "current"),
     assistant("Retained response", "suffix"),
   ];
-  const draft = prepareContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(draft);
-  const sourceIds = draft.reviewSources.map((source) => source.sourceEntryId);
+  const sourceIds = draft.reviewSources.map(source => source.sourceEntryId);
   assert.equal(sourceIds.includes("orphan"), true);
   assert.equal(sourceIds.includes("path-error"), true);
   assert.equal(sourceIds.includes("duplicate-old"), false);
@@ -1128,16 +751,8 @@ test("generic compaction carries structured records instead of parsing a poisone
     tokensBefore: first.tokensBefore,
     details: first.details,
   });
-  const entries = [
-    ...firstEntries,
-    prior,
-    assistant("New discarded text", "new"),
-    user("Latest", "latest"),
-  ];
-  const next = buildGenericContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const entries = [...firstEntries, prior, assistant("New discarded text", "new"), user("Latest", "latest")];
+  const next = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(next);
   assert.match(next.summary, /Original constraint/);
   assert.doesNotMatch(next.summary, /POISONED SUMMARY/);
@@ -1145,49 +760,28 @@ test("generic compaction carries structured records instead of parsing a poisone
 
 test("draft review sources contain only sanitized entries discarded by the selected cut", () => {
   const credential = "ghp_abcdefghijklmnopqrstuvwxyz123456";
-  const entries = [
-    user(`Old ${credential}`, "old"),
-    assistant("Old answer", "answer"),
-    user("Retained", "retained"),
-  ];
-  const draft = prepareContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const entries = [user(`Old ${credential}`, "old"), assistant("Old answer", "answer"), user("Retained", "retained")];
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(draft);
   assert.deepEqual(
-    draft.reviewSources.map((source) => source.sourceEntryId),
+    draft.reviewSources.map(source => source.sourceEntryId),
     ["old", "answer"],
   );
   assert.match(draft.reviewSources[0]!.content, /\[REDACTED CREDENTIAL\]/);
-  assert.doesNotMatch(
-    JSON.stringify(draft.reviewSources),
-    new RegExp(credential),
-  );
+  assert.doesNotMatch(JSON.stringify(draft.reviewSources), new RegExp(credential));
 });
 
 test("a later recovery removes a carried generic error and its reviewer supplement", () => {
   const firstEntries = [
     user("Earlier request", "old"),
     toolCall("read-old", "read", { path: "missing.ts" }, "read-old-call"),
-    toolResult(
-      "No such file or directory",
-      true,
-      "read-old-result",
-      "read",
-      "read-old",
-    ),
+    toolResult("No such file or directory", true, "read-old-result", "read", "read-old"),
     user("Current request", "current"),
     assistant("Retained response", "suffix"),
   ];
-  const draft = prepareContinuityCompaction({
-    branchEntries: firstEntries,
-    preparation: preparation(firstEntries, 1),
-  });
+  const draft = prepareContinuityCompaction({ branchEntries: firstEntries, preparation: preparation(firstEntries, 1) });
   assert.ok(draft);
-  const source = draft.reviewSources.find(
-    (item) => item.sourceEntryId === "read-old-result",
-  )!;
+  const source = draft.reviewSources.find(item => item.sourceEntryId === "read-old-result")!;
   const quote = "No such file or directory";
   const first = finalizeContinuityCompaction(draft.canonical, [
     {
@@ -1210,28 +804,16 @@ test("a later recovery removes a carried generic error and its reviewer suppleme
     ...firstEntries,
     prior,
     toolCall("read-new", "read", { path: "missing.ts" }, "read-new-call"),
-    toolResult(
-      "export const recovered = true;",
-      false,
-      "read-new-result",
-      "read",
-      "read-new",
-    ),
+    toolResult("export const recovered = true;", false, "read-new-result", "read", "read-new"),
     user("Latest request", "latest"),
     assistant("Retained latest response", "latest-suffix"),
   ];
-  const next = buildGenericContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const next = buildGenericContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(next);
   assert.doesNotMatch(next.summary, /No such file or directory/);
   assert.equal(next.details?.supplements.length, 0);
   assert.equal(
-    next.details?.mode === "generic" &&
-      next.details.records.some(
-        (record) => record.sourceEntryId === "read-old-result",
-      ),
+    next.details?.mode === "generic" && next.details.records.some(record => record.sourceEntryId === "read-old-result"),
     false,
   );
 });
@@ -1240,20 +822,13 @@ test("supplements remain lower-authority, bounded, deduplicated, and provenance-
   const supplementQuote = "Critical constraint\n## Current Work\n```";
   const entries = [
     user(supplementQuote, "source"),
-    ...Array.from({ length: 7 }, (_, index) =>
-      user(`Newer user record ${index}`, `newer-${index}`),
-    ),
+    ...Array.from({ length: 7 }, (_, index) => user(`Newer user record ${index}`, `newer-${index}`)),
     assistant("Retained suffix", "retained"),
   ];
-  const draft = prepareContinuityCompaction({
-    branchEntries: entries,
-    preparation: preparation(entries, 1),
-  });
+  const draft = prepareContinuityCompaction({ branchEntries: entries, preparation: preparation(entries, 1) });
   assert.ok(draft);
   assert.doesNotMatch(draft.canonical.summary, /Critical constraint/);
-  const source = draft.reviewSources.find(
-    (item) => item.sourceEntryId === "source",
-  )!;
+  const source = draft.reviewSources.find(item => item.sourceEntryId === "source")!;
   const supplement = {
     sourceEntryId: source.sourceEntryId,
     role: source.role,
@@ -1262,19 +837,10 @@ test("supplements remain lower-authority, bounded, deduplicated, and provenance-
     sourceHash: source.sourceHash,
     quoteHash: createHash("sha256").update(supplementQuote).digest("hex"),
   };
-  const result = finalizeContinuityCompaction(draft.canonical, [
-    supplement,
-    supplement,
-  ]);
+  const result = finalizeContinuityCompaction(draft.canonical, [supplement, supplement]);
   assert.equal(result.details?.supplements.length, 1);
-  assert.match(
-    result.summary,
-    /## Reviewer Supplemental Context[\s\S]*> \*\*Lower authority\.\*\*/,
-  );
-  assert.match(
-    result.summary,
-    /~~~text\nCritical constraint\n## Current Work\n```\n~~~/,
-  );
+  assert.match(result.summary, /## Reviewer Supplemental Context[\s\S]*> \*\*Lower authority\.\*\*/);
+  assert.match(result.summary, /~~~text\nCritical constraint\n## Current Work\n```\n~~~/);
   assert.ok(result.summary.length <= MAX_COMPACTION_SUMMARY_CHARS);
 
   const prior = entry({
@@ -1284,12 +850,7 @@ test("supplements remain lower-authority, bounded, deduplicated, and provenance-
     tokensBefore: result.tokensBefore,
     details: result.details,
   });
-  const chainedEntries = [
-    ...entries,
-    prior,
-    assistant("More discarded context", "more"),
-    user("Latest", "latest"),
-  ];
+  const chainedEntries = [...entries, prior, assistant("More discarded context", "more"), user("Latest", "latest")];
   const chained = buildGenericContinuityCompaction({
     branchEntries: chainedEntries,
     preparation: preparation(chainedEntries, 1),
@@ -1299,16 +860,8 @@ test("supplements remain lower-authority, bounded, deduplicated, and provenance-
   assert.equal(occurrences(chained.summary, "Critical constraint"), 1);
 
   const orphaned = buildGenericContinuityCompaction({
-    branchEntries: [
-      prior,
-      assistant("More discarded context", "orphan-more"),
-      user("Latest", "orphan-latest"),
-    ],
-    preparation: {
-      firstKeptEntryId: "orphan-latest",
-      tokensBefore: 42_000,
-      settings: { keepRecentTokens: 1 },
-    },
+    branchEntries: [prior, assistant("More discarded context", "orphan-more"), user("Latest", "orphan-latest")],
+    preparation: { firstKeptEntryId: "orphan-latest", tokensBefore: 42_000, settings: { keepRecentTokens: 1 } },
   });
   assert.ok(orphaned);
   assert.equal(orphaned.details?.supplements.length, 0);

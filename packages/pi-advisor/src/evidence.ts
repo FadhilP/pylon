@@ -11,12 +11,7 @@ export type EvidenceRef = {
   verification?: string;
   verifications?: string[];
 };
-export type EvidenceRecord = {
-  ref: EvidenceRef;
-  excerpt: string;
-  text: string;
-  unavailable: boolean;
-};
+export type EvidenceRecord = { ref: EvidenceRef; excerpt: string; text: string; unavailable: boolean };
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_RANGE_LINES = 200;
@@ -38,32 +33,15 @@ function safeField(value: string): string {
     .trim();
 }
 
-function annotations(
-  ref: EvidenceRef,
-  field: "claim" | "verification",
-): string[] {
+function annotations(ref: EvidenceRef, field: "claim" | "verification"): string[] {
   const values =
-    field === "claim"
-      ? [ref.claim, ...(ref.claims ?? [])]
-      : [ref.verification, ...(ref.verifications ?? [])];
-  return [
-    ...new Set(values.filter((value): value is string => Boolean(value))),
-  ];
+    field === "claim" ? [ref.claim, ...(ref.claims ?? [])] : [ref.verification, ...(ref.verifications ?? [])];
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 function mergeAnnotations(target: EvidenceRef, earlier: EvidenceRef): void {
-  const claims = [
-    ...new Set([
-      ...annotations(earlier, "claim"),
-      ...annotations(target, "claim"),
-    ]),
-  ];
-  const verifications = [
-    ...new Set([
-      ...annotations(earlier, "verification"),
-      ...annotations(target, "verification"),
-    ]),
-  ];
+  const claims = [...new Set([...annotations(earlier, "claim"), ...annotations(target, "claim")])];
+  const verifications = [...new Set([...annotations(earlier, "verification"), ...annotations(target, "verification")])];
   delete target.claim;
   delete target.claims;
   delete target.verification;
@@ -75,10 +53,7 @@ function mergeAnnotations(target: EvidenceRef, earlier: EvidenceRef): void {
 }
 
 function sameEvidenceVersion(a: EvidenceRef, b: EvidenceRef): boolean {
-  return (
-    a.path.replace(/\\/g, "/") === b.path.replace(/\\/g, "/") &&
-    a.revision === b.revision
-  );
+  return a.path.replace(/\\/g, "/") === b.path.replace(/\\/g, "/") && a.revision === b.revision;
 }
 
 /** Widens `next` to cover `current` too, or returns false when they cannot merge. */
@@ -100,9 +75,7 @@ function absorb(next: EvidenceRef, current: EvidenceRef): boolean {
   return true;
 }
 
-export function mergeEvidenceRefs(
-  references: readonly EvidenceRef[],
-): EvidenceRef[] {
+export function mergeEvidenceRefs(references: readonly EvidenceRef[]): EvidenceRef[] {
   let merged: EvidenceRef[] = [];
   for (const reference of references) {
     const next = { ...reference };
@@ -117,7 +90,7 @@ export function mergeEvidenceRefs(
       absorbed.add(current);
       insertAt = Math.min(insertAt, index);
     }
-    merged = merged.filter((ref) => !absorbed.has(ref));
+    merged = merged.filter(ref => !absorbed.has(ref));
     merged.splice(insertAt, 0, next);
   }
   return merged;
@@ -125,36 +98,24 @@ export function mergeEvidenceRefs(
 
 function formatRecord(ref: EvidenceRef, excerpt: string): string {
   const metadata = [
-    ...annotations(ref, "claim").map((claim) => `Claim: ${safeField(claim)}`),
+    ...annotations(ref, "claim").map(claim => `Claim: ${safeField(claim)}`),
     ref.revision ? `Revision: ${safeField(ref.revision)}` : "",
-    ...annotations(ref, "verification").map(
-      (verification) => `Verification: ${safeField(verification)}`,
-    ),
+    ...annotations(ref, "verification").map(verification => `Verification: ${safeField(verification)}`),
   ].filter(Boolean);
-  return [
-    `--- ${safeField(ref.path)}:${ref.start}-${ref.end} ---`,
-    ...metadata,
-    excerpt,
-  ].join("\n");
+  return [`--- ${safeField(ref.path)}:${ref.start}-${ref.end} ---`, ...metadata, excerpt].join("\n");
 }
 
 async function resolveEvidencePath(
   root: string,
   referencePath: string,
 ): Promise<{ path: string; workspacePath: string }> {
-  if (referencePath.split(/[\\/]/).includes(".git"))
-    throw Error("path must be outside .git");
+  if (referencePath.split(/[\\/]/).includes(".git")) throw Error("path must be outside .git");
   const path = await realpath(resolve(root, referencePath));
   const fromRoot = relative(root, path);
-  if (
-    fromRoot === ".." ||
-    fromRoot.startsWith(`..${sep}`) ||
-    isAbsolute(fromRoot)
-  )
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot))
     throw Error("path escapes workspace");
   const workspacePath = fromRoot.split(sep).join("/");
-  if (workspacePath.split("/").includes(".git"))
-    throw Error("path must be outside .git");
+  if (workspacePath.split("/").includes(".git")) throw Error("path must be outside .git");
   return { path, workspacePath };
 }
 
@@ -187,8 +148,7 @@ export async function loadEvidenceRecords(
     let excerpt: string;
     let unavailable = false;
     try {
-      if (!validRange(ref))
-        throw Error(`range must contain 1..${MAX_RANGE_LINES} lines`);
+      if (!validRange(ref)) throw Error(`range must contain 1..${MAX_RANGE_LINES} lines`);
       const resolved = await resolveEvidencePath(root, ref.path);
       recordRef = { ...ref, path: resolved.workspacePath };
       excerpt = await readExcerpt(resolved.path, ref);
@@ -196,12 +156,7 @@ export async function loadEvidenceRecords(
       unavailable = true;
       excerpt = `[evidence unavailable: ${error?.message ?? String(error)}]`;
     }
-    records.push({
-      ref: recordRef,
-      excerpt,
-      text: formatRecord(recordRef, excerpt),
-      unavailable,
-    });
+    records.push({ ref: recordRef, excerpt, text: formatRecord(recordRef, excerpt), unavailable });
   }
   return records;
 }

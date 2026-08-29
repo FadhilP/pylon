@@ -11,8 +11,7 @@ const exec = promisify(execFile);
 
 async function repository() {
   const root = await mkdtemp(join(tmpdir(), "pi-timeline-test-"));
-  const git = async (...args: string[]) =>
-    (await exec("git", args, { cwd: root, windowsHide: true })).stdout.trim();
+  const git = async (...args: string[]) => (await exec("git", args, { cwd: root, windowsHide: true })).stdout.trim();
   await git("init", "-q");
   await git("config", "user.email", "timeline@test.local");
   await git("config", "user.name", "timeline-test");
@@ -26,18 +25,10 @@ async function repository() {
 test("preflight refuses common untracked credential files", async () => {
   const { root } = await repository();
   try {
-    await writeFile(
-      join(root, ".npmrc"),
-      "//registry.example/:_authToken=secret\n",
-    );
+    await writeFile(join(root, ".npmrc"), "//registry.example/:_authToken=secret\n");
     await assert.rejects(preflight(root), /Unsafe untracked path: \.npmrc/);
   } finally {
-    await rm(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -56,16 +47,8 @@ test("preflight scans initialized gitlinks without .gitmodules", async () => {
     await childGit("commit", "-qm", "child");
     await assert.rejects(access(join(root, ".gitmodules")));
     await writeFile(join(child, ".npmrc"), "token=secret\n");
-    await assert.rejects(
-      preflight(root),
-      /Unsafe untracked path: child\/\.npmrc/,
-    );
+    await assert.rejects(preflight(root), /Unsafe untracked path: child\/\.npmrc/);
   } finally {
-    await rm(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

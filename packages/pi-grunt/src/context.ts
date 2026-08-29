@@ -1,8 +1,5 @@
 import { packRecentRecords } from "pylon-core/context-packing";
-import {
-  redact as redactText,
-  sanitizeFailureMessage,
-} from "pylon-core/redact";
+import { redact as redactText, sanitizeFailureMessage } from "pylon-core/redact";
 
 export { sanitizeFailureMessage };
 
@@ -26,8 +23,7 @@ export function buildWorkerContext(
   pinnedTexts: readonly string[] = [],
 ): string {
   if (maxChars <= 0 || maxItems <= 0) return "";
-  const normalize = (text: string) =>
-    redact(text).replace(/\r\n/g, "\n").trim();
+  const normalize = (text: string) => redact(text).replace(/\r\n/g, "\n").trim();
   const pinned = new Set(pinnedTexts.map(normalize).filter(Boolean));
   const records: string[] = [];
   for (const entry of entries) {
@@ -42,21 +38,13 @@ export function buildWorkerContext(
         label = "Main assistant";
         content = contentText(message.content);
       }
-    } else if (
-      (entry?.type === "compaction" || entry?.type === "branch_summary") &&
-      entry.summary
-    ) {
+    } else if ((entry?.type === "compaction" || entry?.type === "branch_summary") && entry.summary) {
       label = "Earlier context summary";
       content = entry.summary;
     }
     content = redact(content).trim();
-    if (label && content && !pinned.has(normalize(content)))
-      records.push(`${label}: ${content}`);
+    if (label && content && !pinned.has(normalize(content))) records.push(`${label}: ${content}`);
   }
 
-  return packRecentRecords(records, {
-    maxChars,
-    maxItems,
-    identity: normalize,
-  });
+  return packRecentRecords(records, { maxChars, maxItems, identity: normalize });
 }

@@ -14,10 +14,7 @@ const defaultStats = {
   tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
   cost: 0.1,
 };
-const defaultState = {
-  model: { provider: "fake", id: "model" },
-  thinkingLevel: "high",
-};
+const defaultState = { model: { provider: "fake", id: "model" }, thinkingLevel: "high" };
 const rpc = (
   body: string,
   stats: typeof defaultStats | null,
@@ -54,13 +51,7 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
     {
       ...defaultStats,
       userMessages: 3,
-      tokens: {
-        input: 30,
-        output: 12,
-        cacheRead: 20,
-        cacheWrite: 1,
-        total: 63,
-      },
+      tokens: { input: 30, output: 12, cacheRead: 20, cacheWrite: 1, total: 63 },
       cost: 0.9,
     },
   );
@@ -71,36 +62,20 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
     cwd: child.dir,
     prompt: "hello",
     invocation: child.invocation,
-    onActivity: (item) => activity.push(`${item.id}:${item.kind}:${item.tool}`),
-    onUsage: (item) => usage.push(item),
-    onState: (state) => states.push(state),
+    onActivity: item => activity.push(`${item.id}:${item.kind}:${item.tool}`),
+    onUsage: item => usage.push(item),
+    onState: state => states.push(state),
   });
   assert.equal(run.text, "reply:hello");
   assert.deepEqual(usage, [
     { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1 },
-    {
-      input: 3,
-      output: 5,
-      cacheRead: 7,
-      cacheWrite: 9,
-      cost: 0.30000000000000004,
-    },
+    { input: 3, output: 5, cacheRead: 7, cacheWrite: 9, cost: 0.30000000000000004 },
   ]);
   assert.deepEqual(run.usage, usage.at(-1));
-  assert.deepEqual(run.sessionUsage, {
-    input: 30,
-    output: 12,
-    cacheRead: 20,
-    cacheWrite: 1,
-    cost: 0.9,
-  });
+  assert.deepEqual(run.sessionUsage, { input: 30, output: 12, cacheRead: 20, cacheWrite: 1, cost: 0.9 });
   assert.deepEqual(activity, ["call-read:call:read", "call-read:result:read"]);
   assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
-  assert.equal(
-    run.activity[1]?.durationMs !== undefined &&
-      run.activity[1].durationMs >= 0,
-    true,
-  );
+  assert.equal(run.activity[1]?.durationMs !== undefined && run.activity[1].durationMs >= 0, true);
   assert.deepEqual(states.at(-1), { model: "fake/model", thinking: "high" });
   assert.equal(run.model, "fake/model");
   assert.equal(run.thinking, "high");
@@ -120,7 +95,7 @@ test("runner streams bounded assistant text with a message-end fallback", async 
     cwd: child.dir,
     prompt: "x",
     invocation: child.invocation,
-    onText: (value) => text.push(value),
+    onText: value => text.push(value),
   });
   assert.deepEqual(text, ["", "Hello ", "Hello world", "Hello world"]);
   assert.equal(run.text, "Hello world");
@@ -139,11 +114,7 @@ test("runner waits for a Continuity turn triggered after asynchronous compaction
     },25);
     setInterval(()=>{},1000);
   }`);
-  const run = await runSpawn([], {
-    cwd: child.dir,
-    prompt: "x",
-    invocation: child.invocation,
-  });
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
   assert.equal(run.error, undefined);
   assert.equal(run.text, "continued");
   assert.equal(run.turns, 2);
@@ -168,11 +139,7 @@ test("runner recognizes continuation across alternate compaction event ordering 
       },25);
       setInterval(()=>{},1000);
     }`);
-    const run = await runSpawn([], {
-      cwd: child.dir,
-      prompt: "x",
-      invocation: child.invocation,
-    });
+    const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
     assert.equal(run.error, undefined);
     assert.equal(run.text, "continued");
   }
@@ -187,12 +154,7 @@ test("runner eventually settles when successful compaction produces no continuat
     setInterval(()=>{},1000);
   }`);
   const started = Date.now();
-  const run = await runSpawn([], {
-    cwd: child.dir,
-    prompt: "x",
-    invocation: child.invocation,
-    timeoutMs: 3_000,
-  });
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation, timeoutMs: 3_000 });
   assert.equal(run.error, "Spawned thread returned no assistant text.");
   assert.ok(Date.now() - started >= 900);
 });
@@ -207,11 +169,7 @@ test("runner preserves every correlated tool event in one invocation", async () 
     emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{}}});
     emit({type:'agent_settled'});setInterval(()=>{},1000);
   }`);
-  const run = await runSpawn([], {
-    cwd: child.dir,
-    prompt: "x",
-    invocation: child.invocation,
-  });
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
   assert.equal(run.activity.length, 250);
   assert.equal(run.activity[0]?.id, "call-0");
   assert.equal(run.activity.at(-1)?.id, "call-124");
@@ -245,11 +203,7 @@ test("runner keeps a completed turn when cumulative session stats are unavailabl
   const body = `if(command.type==='prompt'){emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{input:2}}});emit({type:'agent_settled'});setInterval(()=>{},1000);}`;
   for (const stats of [null, { ...defaultStats, cost: -1 }]) {
     const child = await fake(body, stats);
-    const run = await runSpawn([], {
-      cwd: child.dir,
-      prompt: "x",
-      invocation: child.invocation,
-    });
+    const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
     assert.equal(run.error, undefined);
     assert.equal(run.sessionUsage, undefined);
     assert.equal(run.usage.input, 2);
@@ -261,13 +215,7 @@ test("runner reports rejected commands and accepts protocol lines larger than 1 
     `emit({id:command.id,type:'response',command:'prompt',success:false,error:'denied'});setInterval(()=>{},1000);`,
   );
   assert.match(
-    (
-      await runSpawn([], {
-        cwd: rejected.dir,
-        prompt: "x",
-        invocation: rejected.invocation,
-      })
-    ).error ?? "",
+    (await runSpawn([], { cwd: rejected.dir, prompt: "x", invocation: rejected.invocation })).error ?? "",
     /denied/,
   );
 
@@ -275,12 +223,7 @@ test("runner reports rejected commands and accepts protocol lines larger than 1 
     emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'x'.repeat(1024*1024+1)}],stopReason:'stop',usage:{}}});
     emit({type:'agent_settled'});setInterval(()=>{},1000);
   }`);
-  const run = await runSpawn([], {
-    cwd: large.dir,
-    prompt: "x",
-    invocation: large.invocation,
-    timeoutMs: 5000,
-  });
+  const run = await runSpawn([], { cwd: large.dir, prompt: "x", invocation: large.invocation, timeoutMs: 5000 });
   assert.equal(run.error, undefined);
   assert.equal(run.truncated, true);
   assert.ok(Buffer.byteLength(run.text) <= 50 * 1024);
@@ -337,11 +280,7 @@ test("runner fails unhandled and malformed RPC UI dialogs closed", async () => {
       emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],stopReason:'stop',usage:{}}});
       emit({type:'agent_settled'});setInterval(()=>{},1000);
     }`);
-    const run = await runSpawn([], {
-      cwd: child.dir,
-      prompt: "x",
-      invocation: child.invocation,
-    });
+    const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
     assert.equal(run.error, undefined);
     const response = JSON.parse(run.text);
     assert.equal(response.type, "extension_ui_response");
@@ -388,7 +327,7 @@ test("runner aborts pending UI handlers when the child turn times out", async ()
     invocation: child.invocation,
     timeoutMs: 1_000, // Allow child Node startup while package tests run concurrently.
     onUiRequest: (_request, signal) =>
-      new Promise((resolve) => {
+      new Promise(resolve => {
         signal.addEventListener(
           "abort",
           () => {

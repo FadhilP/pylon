@@ -17,9 +17,7 @@ import {
   restoreMemoryLedger,
 } from "../src/memory-runtime.ts";
 
-const draft = (
-  activateUntil: ActivationDraft["lifecycle"]["activateUntil"] = "task_complete",
-): ActivationDraft => ({
+const draft = (activateUntil: ActivationDraft["lifecycle"]["activateUntil"] = "task_complete"): ActivationDraft => ({
   classification: "grounded",
   subscriptions: ["before_tool_call"],
   predicate: {
@@ -31,18 +29,8 @@ const draft = (
   delivery: "warn",
   lifecycle: { activateUntil, rearmOn: ["context_compacted"] },
   examples: {
-    positive: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" },
-      },
-    ],
-    hardNegative: [
-      {
-        event: "before_tool_call",
-        facts: { "tool.name": "edit", "file.path": "src/source/client.ts" },
-      },
-    ],
+    positive: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" } }],
+    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/source/client.ts" } }],
   },
 });
 const note = (activationDraft = draft()): NotebookNote => ({
@@ -57,10 +45,7 @@ const note = (activationDraft = draft()): NotebookNote => ({
   disposition: "eligible_advisory",
   enforcementAuthority: "warning",
   activationDraft,
-  rawProposal: {
-    trigger: "editing generated files",
-    guidance: "Edit the generator instead.",
-  },
+  rawProposal: { trigger: "editing generated files", guidance: "Edit the generator instead." },
   rewriteCharacter: "format_only",
   revision: 1,
   createdAt: "2025-01-01T00:00:00.000Z",
@@ -82,24 +67,15 @@ test("sidecar compilation keeps prose canonical and indexes only compiled drafts
     disposition: "eligible_enforced" as const,
     enforcementAuthority: "blocking_guard" as const,
   };
-  const sidecar = compileMemorySidecar(
-    [archival, active, enforced],
-    3,
-    "2025-01-01T00:00:00.000Z",
-  );
+  const sidecar = compileMemorySidecar([archival, active, enforced], 3, "2025-01-01T00:00:00.000Z");
   assert.equal(sidecar.memoryRevision, 3);
   assert.deepEqual(
-    sidecar.rules.map((rule) => rule.memoryId),
+    sidecar.rules.map(rule => rule.memoryId),
     [active.id],
   );
-  assert.deepEqual(sidecar.failures, [
-    { memoryId: enforced.id, noteRevision: 1, reason: "policy_ineligible" },
-  ]);
+  assert.deepEqual(sidecar.failures, [{ memoryId: enforced.id, noteRevision: 1, reason: "policy_ineligible" }]);
   assert.match(sidecar.rules[0]!.sourceSnapshotId, /^[0-9a-f]{64}$/);
-  assert.match(
-    sidecar.rules[0]!.cacheKey,
-    new RegExp(`^${active.id}:1:[0-9a-f]{64}:1:1$`),
-  );
+  assert.match(sidecar.rules[0]!.cacheKey, new RegExp(`^${active.id}:1:[0-9a-f]{64}:1:1$`));
 });
 
 test("prospective matching allows none and delivers an active rule once per context epoch", () => {
@@ -128,7 +104,7 @@ test("prospective matching allows none and delivers an active rule once per cont
   processed = processMemoryEvent(index, hit, ledger);
   ledger = processed.ledger;
   assert.deepEqual(
-    processed.interventions.map((item) => item.memoryId),
+    processed.interventions.map(item => item.memoryId),
     [memory.id],
   );
   const second = eventFrame({
@@ -141,14 +117,10 @@ test("prospective matching allows none and delivers an active rule once per cont
   });
   processed = processMemoryEvent(index, second, ledger);
   ledger = processed.ledger;
-  assert.deepEqual(
-    processed.interventions,
-    [],
-    "active task rule remains visible without duplicate delivery",
-  );
+  assert.deepEqual(processed.interventions, [], "active task rule remains visible without duplicate delivery");
   ledger = rearmMemoryAfterCompaction(ledger);
   assert.deepEqual(
-    activeMemoryForDelivery(ledger).map((item) => item.memoryId),
+    activeMemoryForDelivery(ledger).map(item => item.memoryId),
     [memory.id],
   );
   ledger = markActiveMemoryDelivered(ledger, activeMemoryForDelivery(ledger));
@@ -216,9 +188,7 @@ test("candidate delivery modes are downgraded to advisory interventions", () => 
     facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" },
   });
   assert.deepEqual(
-    processMemoryEvent(index, event, ledger).interventions.map(
-      (item) => item.mode,
-    ),
+    processMemoryEvent(index, event, ledger).interventions.map(item => item.mode),
     ["warn"],
   );
 });
@@ -244,26 +214,14 @@ test("event-complete delivery remains visible once per context epoch", () => {
   assert.equal(result.interventions.length, 0);
   result = processMemoryEvent(index, call("two"), ledger);
   ledger = result.ledger;
-  assert.equal(
-    result.interventions.length,
-    0,
-    "visible memory is not repeated for a sibling tool call",
-  );
+  assert.equal(result.interventions.length, 0, "visible memory is not repeated for a sibling tool call");
   ledger = rearmMemoryAfterCompaction(ledger);
   result = processMemoryEvent(index, call("three"), ledger);
-  assert.equal(
-    result.interventions.length,
-    1,
-    "compaction rearms event-complete delivery",
-  );
+  assert.equal(result.interventions.length, 1, "compaction rearms event-complete delivery");
 });
 
 test("ledger restoration is strict, bounded, and branch-local", () => {
-  const stored = {
-    ...emptyMemoryLedger("session", 2),
-    contextEpoch: 3,
-    sequence: 4,
-  };
+  const stored = { ...emptyMemoryLedger("session", 2), contextEpoch: 3, sequence: 4 };
   assert.equal(isMemoryLedger(stored), true);
   const restored = restoreMemoryLedger(
     [{ type: "custom", customType: MEMORY_LEDGER_ENTRY_TYPE, data: stored }],
@@ -274,13 +232,7 @@ test("ledger restoration is strict, bounded, and branch-local", () => {
   assert.equal(restored.taskGeneration, 5);
   assert.equal(
     restoreMemoryLedger(
-      [
-        {
-          type: "custom",
-          customType: MEMORY_LEDGER_ENTRY_TYPE,
-          data: { ...stored, extra: true },
-        },
-      ],
+      [{ type: "custom", customType: MEMORY_LEDGER_ENTRY_TYPE, data: { ...stored, extra: true } }],
       "session",
       1,
     ).contextEpoch,

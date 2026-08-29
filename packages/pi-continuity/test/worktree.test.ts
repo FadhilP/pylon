@@ -6,11 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
-import {
-  captureEvidenceRanges,
-  currentChangedPaths,
-  worktreeFingerprint,
-} from "../src/worktree.ts";
+import { captureEvidenceRanges, currentChangedPaths, worktreeFingerprint } from "../src/worktree.ts";
 const exec = promisify(execFile);
 async function git(cwd: string, ...args: string[]) {
   return exec("git", args, { cwd, windowsHide: true });
@@ -51,16 +47,8 @@ test("unknown Git state is explicit and sensitive evidence names fail closed", a
     assert.equal(await currentChangedPaths(root), undefined);
     assert.equal(await worktreeFingerprint(root), undefined);
     await mkdir(join(root, "nested"));
-    await writeFile(
-      join(root, "nested", "secrets.json"),
-      '{"token":"definitely-secret-value"}\n',
-    );
-    await assert.rejects(
-      captureEvidenceRanges(root, [
-        { path: "nested/secrets.json", start: 1, end: 1 },
-      ]),
-      /sensitive/,
-    );
+    await writeFile(join(root, "nested", "secrets.json"), '{"token":"definitely-secret-value"}\n');
+    await assert.rejects(captureEvidenceRanges(root, [{ path: "nested/secrets.json", start: 1, end: 1 }]), /sensitive/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

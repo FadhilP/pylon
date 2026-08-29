@@ -32,11 +32,7 @@ export function parsePorcelainZ(output: string): string[] {
   return [...paths].sort();
 }
 
-async function mapConcurrent<T, R>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T) => Promise<R>,
-): Promise<R[]> {
+async function mapConcurrent<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(
@@ -60,65 +56,30 @@ async function fileFingerprint(root: string, path: string): Promise<string> {
       .update(await readFile(absolute))
       .digest("hex");
   } catch (error: any) {
-    return error?.code === "ENOENT"
-      ? "missing"
-      : `error:${error?.code ?? "unknown"}`;
+    return error?.code === "ENOENT" ? "missing" : `error:${error?.code ?? "unknown"}`;
   }
 }
 
-export async function captureWorktree(
-  exec: Exec,
-  cwd: string,
-): Promise<WorktreeSnapshot> {
+export async function captureWorktree(exec: Exec, cwd: string): Promise<WorktreeSnapshot> {
   try {
-    const rootResult = await exec(
-      "git",
-      ["-C", cwd, "rev-parse", "--show-toplevel"],
-      { timeout: 10_000 },
-    );
+    const rootResult = await exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { timeout: 10_000 });
     if (rootResult.code !== 0)
-      return {
-        available: false,
-        paths: new Map(),
-        error: rootResult.stderr.trim() || "not a Git worktree",
-      };
+      return { available: false, paths: new Map(), error: rootResult.stderr.trim() || "not a Git worktree" };
     const root = rootResult.stdout.trim();
     const [status, headResult] = await Promise.all([
-      exec(
-        "git",
-        ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        { timeout: 10_000 },
-      ),
+      exec("git", ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeout: 10_000 }),
       exec("git", ["-C", root, "rev-parse", "HEAD"], { timeout: 10_000 }),
     ]);
     if (status.code !== 0)
-      return {
-        available: false,
-        paths: new Map(),
-        root,
-        error: status.stderr.trim() || "git status failed",
-      };
+      return { available: false, paths: new Map(), root, error: status.stderr.trim() || "git status failed" };
     if (headResult.code !== 0)
-      return {
-        available: false,
-        paths: new Map(),
-        root,
-        error: "Git repository has no HEAD commit",
-      };
+      return { available: false, paths: new Map(), root, error: "Git repository has no HEAD commit" };
     const dirtyPaths = parsePorcelainZ(status.stdout);
-    const fingerprints = await mapConcurrent(dirtyPaths, 8, (path) =>
-      fileFingerprint(root, path),
-    );
-    const paths = new Map(
-      dirtyPaths.map((path, index) => [path, fingerprints[index]]),
-    );
+    const fingerprints = await mapConcurrent(dirtyPaths, 8, path => fileFingerprint(root, path));
+    const paths = new Map(dirtyPaths.map((path, index) => [path, fingerprints[index]]));
     return { available: true, paths, root, head: headResult.stdout.trim() };
   } catch (error: any) {
-    return {
-      available: false,
-      paths: new Map(),
-      error: error?.message ?? String(error),
-    };
+    return { available: false, paths: new Map(), error: error?.message ?? String(error) };
   }
 }
 
@@ -126,30 +87,19 @@ export async function compareWorktrees(
   before: WorktreeSnapshot,
   after: WorktreeSnapshot,
   cwd = before.root ?? "",
-): Promise<{
-  changedPaths: string[];
-  preExistingDirtyTouched: string[];
-}> {
-  if (!before.available || !after.available)
-    return { changedPaths: [], preExistingDirtyTouched: [] };
+): Promise<{ changedPaths: string[]; preExistingDirtyTouched: string[] }> {
+  if (!before.available || !after.available) return { changedPaths: [], preExistingDirtyTouched: [] };
   const root = before.root ?? after.root ?? cwd;
   const candidates = new Set([...before.paths.keys(), ...after.paths.keys()]);
   const changedPaths: string[] = [];
   const preExistingDirtyTouched: string[] = [];
   for (const path of candidates) {
     const beforeFingerprint = before.paths.get(path);
-    const afterFingerprint =
-      after.paths.get(path) ?? (await fileFingerprint(root, path));
-    if (
-      beforeFingerprint === undefined ||
-      beforeFingerprint !== afterFingerprint
-    ) {
+    const afterFingerprint = after.paths.get(path) ?? (await fileFingerprint(root, path));
+    if (beforeFingerprint === undefined || beforeFingerprint !== afterFingerprint) {
       changedPaths.push(path);
       if (beforeFingerprint !== undefined) preExistingDirtyTouched.push(path);
     }
   }
-  return {
-    changedPaths: changedPaths.sort(),
-    preExistingDirtyTouched: preExistingDirtyTouched.sort(),
-  };
+  return { changedPaths: changedPaths.sort(), preExistingDirtyTouched: preExistingDirtyTouched.sort() };
 }

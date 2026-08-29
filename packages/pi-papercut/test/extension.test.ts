@@ -27,41 +27,28 @@ function runtime() {
         for (const handler of eventHandlers.get(channel) ?? []) handler(value);
       },
       on: (channel: string, handler: Function) => {
-        eventHandlers.set(channel, [
-          ...(eventHandlers.get(channel) ?? []),
-          handler,
-        ]);
+        eventHandlers.set(channel, [...(eventHandlers.get(channel) ?? []), handler]);
         return () =>
           eventHandlers.set(
             channel,
-            (eventHandlers.get(channel) ?? []).filter(
-              (item) => item !== handler,
-            ),
+            (eventHandlers.get(channel) ?? []).filter(item => item !== handler),
           );
       },
     },
-    on: (name: string, handler: Function) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    registerCommand: (name: string, command: any) =>
-      commands.set(name, command),
+    registerCommand: (name: string, command: any) => commands.set(name, command),
   };
   extension(pi);
   return { tools, commands, handlers, eventHandlers, emitted, pi };
 }
 
-function context(
-  cwd: string,
-  notifications: Array<{ text: string; level: string }> = [],
-) {
+function context(cwd: string, notifications: Array<{ text: string; level: string }> = []) {
   return {
     cwd,
     model: { provider: "openai", id: "gpt-test" },
     sessionManager: { getSessionId: () => "session-1" },
-    ui: {
-      notify: (text: string, level: string) =>
-        notifications.push({ text, level }),
-    },
+    ui: { notify: (text: string, level: string) => notifications.push({ text, level }) },
   } as any;
 }
 
@@ -80,11 +67,7 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
     ctx,
   );
   assert.match(first.content[0].text, /captured/i);
-  assert.deepEqual(first.details.papercut.source, {
-    sessionId: "session-1",
-    provider: "openai",
-    model: "gpt-test",
-  });
+  assert.deepEqual(first.details.papercut.source, { sessionId: "session-1", provider: "openai", model: "gpt-test" });
   const repeated = await tool.execute(
     "two",
     { message: "setup required an undocumented retry." },
@@ -94,52 +77,25 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   );
   assert.match(repeated.content[0].text, /already open.*seen 2/i);
 
-  const listed = await tool.execute(
-    "list",
-    { action: "list" },
-    undefined,
-    undefined,
-    ctx,
-  );
+  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, ctx);
   assert.match(listed.content[0].text, /Papercuts \(open, 1\)/);
   const id = listed.details.records[0].id;
   const resolved = await tool.execute(
     "resolve",
-    {
-      action: "resolve",
-      ids: [id.slice(0, 8)],
-      note: "Documented setup and added a regression test.",
-    },
+    { action: "resolve", ids: [id.slice(0, 8)], note: "Documented setup and added a regression test." },
     undefined,
     undefined,
     ctx,
   );
   assert.match(resolved.content[0].text, /Resolved papercut/);
-  const open = await tool.execute(
-    "open",
-    { action: "list" },
-    undefined,
-    undefined,
-    ctx,
-  );
+  const open = await tool.execute("open", { action: "list" }, undefined, undefined, ctx);
   assert.match(open.content[0].text, /No open papercuts/);
-  const closed = await tool.execute(
-    "closed",
-    { action: "list", status: "resolved" },
-    undefined,
-    undefined,
-    ctx,
-  );
-  assert.match(
-    closed.content[0].text,
-    /Documented setup and added a regression test/,
-  );
+  const closed = await tool.execute("closed", { action: "list", status: "resolved" }, undefined, undefined, ctx);
+  assert.match(closed.content[0].text, /Documented setup and added a regression test/);
 
-  for (const handler of app.handlers.get("session_start") ?? [])
-    await handler({}, ctx);
+  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
   const policy = app.emitted.find(
-    (item) =>
-      item.channel === "pylon:tool-policy" && item.value?.kind === "register",
+    item => item.channel === "pylon:tool-policy" && item.value?.kind === "register",
   )?.value;
   assert.deepEqual(policy.deferredTools, []);
   let response: Promise<any> | undefined;
@@ -157,60 +113,27 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   });
   const page = await response;
   assert.equal(page.total, 1);
-  assert.equal(
-    page.records[0].resolution,
-    "Documented setup and added a regression test.",
-  );
+  assert.equal(page.records[0].resolution, "Documented setup and added a regression test.");
   assert.equal(page.records[0].source, undefined);
   assert.equal(page.records[0].lastSource, undefined);
   await assert.rejects(
-    tool.execute(
-      "invalid",
-      { action: "list", ids: [id] },
-      undefined,
-      undefined,
-      ctx,
-    ),
+    tool.execute("invalid", { action: "list", ids: [id] }, undefined, undefined, ctx),
     /not valid when listing/,
   );
   await assert.rejects(
-    tool.execute(
-      "missing-ids",
-      { action: "dismiss" },
-      undefined,
-      undefined,
-      ctx,
-    ),
+    tool.execute("missing-ids", { action: "dismiss" }, undefined, undefined, ctx),
     /ids are required/,
   );
   await assert.rejects(
-    tool.execute(
-      "missing-note",
-      { action: "resolve", ids: [id] },
-      undefined,
-      undefined,
-      ctx,
-    ),
+    tool.execute("missing-note", { action: "resolve", ids: [id] }, undefined, undefined, ctx),
     /note is required/,
   );
   await assert.rejects(
-    tool.execute(
-      "reopen-note",
-      { action: "reopen", ids: [id], note: "extra" },
-      undefined,
-      undefined,
-      ctx,
-    ),
+    tool.execute("reopen-note", { action: "reopen", ids: [id], note: "extra" }, undefined, undefined, ctx),
     /note is not valid/,
   );
   await assert.rejects(
-    tool.execute(
-      "secret",
-      { message: "token=super-secret-value" },
-      undefined,
-      undefined,
-      ctx,
-    ),
+    tool.execute("secret", { message: "token=super-secret-value" }, undefined, undefined, ctx),
     /possible credential/,
   );
 
@@ -222,10 +145,7 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   await command.handler("all", commandCtx);
   await command.handler("capture this", commandCtx);
   assert.match(notifications[0].text, /No open papercuts/i);
-  assert.match(
-    notifications[1].text,
-    /Documented setup and added a regression test/i,
-  );
+  assert.match(notifications[1].text, /Documented setup and added a regression test/i);
   assert.match(notifications[2].text, /Papercuts \(all, 1\)/i);
   assert.match(notifications[3].text, /usage: \/papercuts/i);
   assert.equal(notifications[3].level, "error");
@@ -265,11 +185,7 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   });
   assert.equal(deleteResult.ok, true);
   assert.equal(
-    app.emitted.some(
-      (item) =>
-        item.channel === "pi-papercut:state-change" &&
-        item.value.counts.total === 0,
-    ),
+    app.emitted.some(item => item.channel === "pi-papercut:state-change" && item.value.counts.total === 0),
     true,
   );
 });

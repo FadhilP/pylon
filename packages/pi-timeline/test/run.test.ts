@@ -2,50 +2,35 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  findRunEntry,
-  hasTimeline,
-  isRunEntry,
-  runTimelineId,
-} from "../src/run.ts";
+import { findRunEntry, hasTimeline, isRunEntry, runTimelineId } from "../src/run.ts";
 import { classifyCompatibility } from "../src/compatibility.ts";
 
 test("checkpoint compatibility keeps refs informational", () => {
-  const current = {
-    gitRoot: join(tmpdir(), "repo"),
-    head: "a".repeat(40),
-    headRef: "refs/heads/main",
-  };
-  assert.deepEqual(
-    classifyCompatibility(
-      { ...current, headRef: null },
-      { ...current, headRef: null },
-    ),
-    { allowed: true, refState: "same" },
-  );
-  assert.deepEqual(
-    classifyCompatibility({ ...current, headRef: null }, current),
-    { allowed: true, refState: "target-detached" },
-  );
-  assert.deepEqual(
-    classifyCompatibility(current, { ...current, headRef: null }),
-    { allowed: true, refState: "current-detached" },
-  );
-  assert.deepEqual(
-    classifyCompatibility(current, { ...current, headRef: "refs/heads/other" }),
-    { allowed: true, refState: "ref-mismatch" },
-  );
-  assert.deepEqual(
-    classifyCompatibility(current, { ...current, head: "b".repeat(40) }),
-    { allowed: false, reason: "head-mismatch" },
-  );
-  assert.deepEqual(
-    classifyCompatibility(current, {
-      ...current,
-      gitRoot: join(tmpdir(), "other"),
-    }),
-    { allowed: false, reason: "repository-mismatch" },
-  );
+  const current = { gitRoot: join(tmpdir(), "repo"), head: "a".repeat(40), headRef: "refs/heads/main" };
+  assert.deepEqual(classifyCompatibility({ ...current, headRef: null }, { ...current, headRef: null }), {
+    allowed: true,
+    refState: "same",
+  });
+  assert.deepEqual(classifyCompatibility({ ...current, headRef: null }, current), {
+    allowed: true,
+    refState: "target-detached",
+  });
+  assert.deepEqual(classifyCompatibility(current, { ...current, headRef: null }), {
+    allowed: true,
+    refState: "current-detached",
+  });
+  assert.deepEqual(classifyCompatibility(current, { ...current, headRef: "refs/heads/other" }), {
+    allowed: true,
+    refState: "ref-mismatch",
+  });
+  assert.deepEqual(classifyCompatibility(current, { ...current, head: "b".repeat(40) }), {
+    allowed: false,
+    reason: "head-mismatch",
+  });
+  assert.deepEqual(classifyCompatibility(current, { ...current, gitRoot: join(tmpdir(), "other") }), {
+    allowed: false,
+    reason: "repository-mismatch",
+  });
 });
 
 test("latest valid run metadata preserves explicit timeline lineage", () => {
@@ -57,16 +42,8 @@ test("latest valid run metadata preserves explicit timeline lineage", () => {
     role: "planner" as const,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
-  const executor = {
-    ...planner,
-    role: "executor" as const,
-    parentSessionId: "planner-session",
-  };
-  const nextPlan = {
-    ...planner,
-    runId: "run-2",
-    timelineId: "run-1",
-  };
+  const executor = { ...planner, role: "executor" as const, parentSessionId: "planner-session" };
+  const nextPlan = { ...planner, runId: "run-2", timelineId: "run-1" };
   assert.equal(isRunEntry(planner), true);
   assert.equal(isRunEntry({ ...planner, timelineId: undefined }), false);
   assert.equal(isRunEntry(nextPlan), true);
@@ -85,15 +62,7 @@ test("latest valid run metadata preserves explicit timeline lineage", () => {
     hasTimeline(
       [
         ...entries,
-        {
-          type: "custom",
-          customType: "pylon-run",
-          data: {
-            ...planner,
-            runId: "unrelated",
-            timelineId: "unrelated",
-          },
-        },
+        { type: "custom", customType: "pylon-run", data: { ...planner, runId: "unrelated", timelineId: "unrelated" } },
       ],
       "run-1",
     ),

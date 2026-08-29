@@ -28,10 +28,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   };
 }
 
-export async function updateSettings(
-  value: any,
-  { agentDir }: { agentDir: string },
-): Promise<void> {
+export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
   if (
     value?.kind !== "grunt" ||
     !["disabled", "session", "model"].includes(value.mode) ||
@@ -41,11 +38,8 @@ export async function updateSettings(
     !Array.isArray(value.thinkingLevels) ||
     !value.thinkingLevels.length ||
     new Set(value.thinkingLevels).size !== value.thinkingLevels.length ||
-    !value.thinkingLevels.every((level: unknown) =>
-      thinkingLevels.includes(level as ThinkingLevel),
-    ) ||
-    (value.mode === "model" &&
-      (typeof value.model !== "string" || !value.model.trim()))
+    !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel)) ||
+    (value.mode === "model" && (typeof value.model !== "string" || !value.model.trim()))
   ) {
     throw new Error("invalid Grunt settings");
   }

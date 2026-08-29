@@ -28,11 +28,7 @@ test("child invocation does not mistake an embedding web host for the Pi CLI", a
     process.env.PI_CODING_AGENT = "true";
     assert.notEqual(getPiInvocation(["--mode", "json"]).args[0], host);
     process.argv[1] = embedded.args[0]!;
-    assert.deepEqual(getPiInvocation(["--mode", "json"]).args, [
-      embedded.args[0],
-      "--mode",
-      "json",
-    ]);
+    assert.deepEqual(getPiInvocation(["--mode", "json"]).args, [embedded.args[0], "--mode", "json"]);
   } finally {
     process.argv[1] = originalScript;
     if (originalMarker === undefined) delete process.env.PI_CODING_AGENT;
@@ -51,13 +47,13 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
   const run = await runPi([], {
     cwd: dir,
     invocation: { command: process.execPath, args: [script] },
-    onUsage: (item) => usage.push(item),
+    onUsage: item => usage.push(item),
   });
   assert.equal(run.text, "turn 2");
   assert.equal(run.cwd, dir);
   assert.equal(run.turns, 2);
   assert.deepEqual(
-    usage.map((item) => item.input),
+    usage.map(item => item.input),
     [1, 3],
   );
   assert.deepEqual(run.usage, usage.at(-1));
@@ -94,10 +90,7 @@ test("runner fails closed on incomplete model stop reasons", async () => {
       script,
       `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'unfinished'}],stopReason:'${stopReason}',usage:{}}}))`,
     );
-    const run = await runPi([], {
-      cwd: dir,
-      invocation: { command: process.execPath, args: [script] },
-    });
+    const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
     assert.equal(run.failure, "child_error");
     assert.match(run.error ?? "", /incomplete stop reason/);
   }
@@ -110,10 +103,7 @@ test("runner fails closed on malformed protocol despite a later normal stop", as
     script,
     `console.log('not-json'); console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{}}}))`,
   );
-  const run = await runPi([], {
-    cwd: dir,
-    invocation: { command: process.execPath, args: [script] },
-  });
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
   assert.equal(run.failure, "child_error");
   assert.match(run.error ?? "", /malformed JSON/);
 });
@@ -121,15 +111,8 @@ test("runner fails closed on malformed protocol despite a later normal stop", as
 test("runner aborts oversized protocol buffers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-overflow-"));
   const script = join(dir, "overflow.mjs");
-  await writeFile(
-    script,
-    `process.stdout.write('x'.repeat(${GRUNT_PROTOCOL_MAX_BYTES}+1));setTimeout(()=>{},10000);`,
-  );
-  const run = await runPi([], {
-    cwd: dir,
-    invocation: { command: process.execPath, args: [script] },
-    timeoutMs: 5000,
-  });
+  await writeFile(script, `process.stdout.write('x'.repeat(${GRUNT_PROTOCOL_MAX_BYTES}+1));setTimeout(()=>{},10000);`);
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] }, timeoutMs: 5000 });
   assert.equal(run.failure, "child_error");
   assert.equal(run.error, "Worker protocol buffer exceeded 5 MiB.");
 });
@@ -152,20 +135,9 @@ test("runner stops before another turn when budget is exhausted", async () => {
 });
 
 test("runner terminates when reported non-cache context exceeds 262144 tokens", async () => {
+  assert.equal(contextTokensFromUsage({ totalTokens: GRUNT_CONTEXT_LIMIT + 50, cacheRead: 50 }), GRUNT_CONTEXT_LIMIT);
   assert.equal(
-    contextTokensFromUsage({
-      totalTokens: GRUNT_CONTEXT_LIMIT + 50,
-      cacheRead: 50,
-    }),
-    GRUNT_CONTEXT_LIMIT,
-  );
-  assert.equal(
-    contextTokensFromUsage({
-      input: 200_000,
-      output: 62_145,
-      cacheRead: 500_000,
-      cacheWrite: 0,
-    }),
+    contextTokensFromUsage({ input: 200_000, output: 62_145, cacheRead: 500_000, cacheWrite: 0 }),
     GRUNT_CONTEXT_LIMIT + 1,
   );
 
@@ -175,10 +147,7 @@ test("runner terminates when reported non-cache context exceeds 262144 tokens", 
     script,
     `console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'too large'}],stopReason:'toolUse',usage:{input:262145,output:0,cacheRead:500000,cacheWrite:0}}})); setInterval(() => {}, 1000);`,
   );
-  const run = await runPi([], {
-    cwd: dir,
-    invocation: { command: process.execPath, args: [script] },
-  });
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
   assert.equal(run.failure, "context_exceeded");
   assert.match(run.error ?? "", /262145 > 262144 tokens/);
 });
@@ -187,10 +156,7 @@ test("runner marks child failures as potentially partial", async () => {
   const dir = await mkdtemp(join(tmpdir(), "grunt-fail-"));
   const script = join(dir, "fail.mjs");
   await writeFile(script, "process.exit(2)");
-  const run = await runPi([], {
-    cwd: dir,
-    invocation: { command: process.execPath, args: [script] },
-  });
+  const run = await runPi([], { cwd: dir, invocation: { command: process.execPath, args: [script] } });
   assert.equal(run.failure, "child_error");
   assert.match(run.error ?? "", /edits may remain/);
 });

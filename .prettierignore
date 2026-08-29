@@ -1,0 +1,12 @@
+# Build output
+dist/
+dist-server/
+*.tsbuildinfo
+*.map
+
+# Lockfiles: generated, and reformatting them churns the whole diff
+package-lock.json
+
+# Local state
+.pi/
+*.log

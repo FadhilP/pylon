@@ -1,10 +1,7 @@
 // Adapted from pi-web-access's OpenAI/Codex and zero-config Exa search providers.
 // Copyright (c) 2025 Nico Bailon. MIT licensed; see THIRD_PARTY_NOTICES.md.
 import { BlockList, isIP } from "node:net";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
@@ -24,22 +21,12 @@ const SEARCH_PROVIDERS = ["auto", "openai", "exa"] as const;
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 type McpResponse = {
-  result?: {
-    content?: Array<{ type?: string; text?: string }>;
-    isError?: boolean;
-  };
+  result?: { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   error?: { code?: number; message?: string };
 };
-type OpenAIAuth = {
-  provider: "openai-codex" | "openai";
-  apiKey: string;
-  model: string;
-};
+type OpenAIAuth = { provider: "openai-codex" | "openai"; apiKey: string; model: string };
 export type ScoutSearchResult = { title: string; url: string; snippet: string };
-export type ScoutSearchResponse = {
-  provider: "openai" | "exa";
-  results: ScoutSearchResult[];
-};
+export type ScoutSearchResponse = { provider: "openai" | "exa"; results: ScoutSearchResult[] };
 
 const blockedV4 = new BlockList();
 for (const [address, prefix] of [
@@ -85,26 +72,17 @@ function publicLiteral(hostname: string): boolean {
 
 function boundedText(value: string, maximum: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length <= maximum
-    ? normalized
-    : `${normalized.slice(0, maximum - 1)}…`;
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, maximum - 1)}…`;
 }
 
 function resultUrl(value: string): string | undefined {
   try {
     const url = new URL(value.trim());
-    if (url.searchParams.get("utm_source") === "openai")
-      url.searchParams.delete("utm_source");
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.username ||
-      url.password ||
-      !url.hostname
-    )
+    if (url.searchParams.get("utm_source") === "openai") url.searchParams.delete("utm_source");
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || !url.hostname)
       return undefined;
     const port = url.port || (url.protocol === "https:" ? "443" : "80");
-    if ((port !== "80" && port !== "443") || url.href.length > 2048)
-      return undefined;
+    if ((port !== "80" && port !== "443") || url.href.length > 2048) return undefined;
     const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const family = isIP(host);
     if (
@@ -154,11 +132,7 @@ function requestSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-async function fetchExa(
-  body: string,
-  signal: AbortSignal,
-  fetchImpl: FetchLike,
-): Promise<Response> {
+async function fetchExa(body: string, signal: AbortSignal, fetchImpl: FetchLike): Promise<Response> {
   let current = new URL(EXA_SEARCH_URL);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     const response = await fetchImpl(current, {
@@ -174,11 +148,9 @@ async function fetchExa(
     });
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get("location");
-    if (!location || redirects === MAX_REDIRECTS)
-      throw new Error("Search endpoint redirected too many times");
+    if (!location || redirects === MAX_REDIRECTS) throw new Error("Search endpoint redirected too many times");
     const next = new URL(location, current);
-    if (next.origin !== EXA_SEARCH_ORIGIN)
-      throw new Error("Search endpoint redirected outside Exa");
+    if (next.origin !== EXA_SEARCH_ORIGIN) throw new Error("Search endpoint redirected outside Exa");
     current = next;
   }
   throw new Error("Search endpoint redirected too many times");
@@ -201,14 +173,9 @@ function mcpPayload(body: string): McpResponse {
 
 function providerText(payload: McpResponse): string {
   if (payload.error)
-    throw new Error(
-      `Exa search failed${typeof payload.error.code === "number" ? ` (${payload.error.code})` : ""}`,
-    );
-  const text = payload.result?.content?.find(
-    (item) => item.type === "text" && item.text?.trim(),
-  )?.text;
-  if (payload.result?.isError || !text)
-    throw new Error("Exa returned no search results");
+    throw new Error(`Exa search failed${typeof payload.error.code === "number" ? ` (${payload.error.code})` : ""}`);
+  const text = payload.result?.content?.find(item => item.type === "text" && item.text?.trim())?.text;
+  if (payload.result?.isError || !text) throw new Error("Exa returned no search results");
   return text;
 }
 
@@ -219,10 +186,7 @@ function parseTextResults(text: string, count: number): ScoutSearchResult[] {
     const title = boundedText(block.match(/^Title: (.+)$/m)?.[1] ?? "", 240);
     const url = resultUrl(block.match(/^URL: (.+)$/m)?.[1] ?? "");
     if (!title || !url || seen.has(url)) continue;
-    const content =
-      block.match(
-        /\n(?:Highlights:|Text:)\s*\n([\s\S]*?)(?:\n---\s*$|$)/,
-      )?.[1] ?? "";
+    const content = block.match(/\n(?:Highlights:|Text:)\s*\n([\s\S]*?)(?:\n---\s*$|$)/)?.[1] ?? "";
     seen.add(url);
     results.push({ title, url, snippet: boundedText(content, 600) });
     if (results.length >= count) break;
@@ -233,12 +197,7 @@ function parseTextResults(text: string, count: number): ScoutSearchResult[] {
 function parseExaResults(text: string, count: number): ScoutSearchResult[] {
   try {
     const value = JSON.parse(text) as {
-      results?: Array<{
-        title?: unknown;
-        url?: unknown;
-        text?: unknown;
-        highlights?: unknown;
-      }>;
+      results?: Array<{ title?: unknown; url?: unknown; text?: unknown; highlights?: unknown }>;
     };
     if (Array.isArray(value.results)) {
       const results: ScoutSearchResult[] = [];
@@ -247,21 +206,13 @@ function parseExaResults(text: string, count: number): ScoutSearchResult[] {
         const url = resultUrl(typeof item.url === "string" ? item.url : "");
         if (!url || seen.has(url)) continue;
         const highlights = Array.isArray(item.highlights)
-          ? item.highlights
-              .filter((part): part is string => typeof part === "string")
-              .join(" ")
+          ? item.highlights.filter((part): part is string => typeof part === "string").join(" ")
           : "";
         seen.add(url);
         results.push({
-          title: boundedText(
-            typeof item.title === "string" ? item.title : url,
-            240,
-          ),
+          title: boundedText(typeof item.title === "string" ? item.title : url, 240),
           url,
-          snippet: boundedText(
-            highlights || (typeof item.text === "string" ? item.text : ""),
-            600,
-          ),
+          snippet: boundedText(highlights || (typeof item.text === "string" ? item.text : ""), 600),
         });
         if (results.length >= count) break;
       }
@@ -279,30 +230,18 @@ export async function searchExa(
 ): Promise<ScoutSearchResult[]> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery || normalizedQuery.length > MAX_QUERY_LENGTH)
-    throw new Error(
-      `Search query must contain 1 to ${MAX_QUERY_LENGTH} characters`,
-    );
-  const count = Number.isInteger(maxResults)
-    ? Math.max(1, Math.min(maxResults, MAX_RESULTS))
-    : 5;
+    throw new Error(`Search query must contain 1 to ${MAX_QUERY_LENGTH} characters`);
+  const count = Number.isInteger(maxResults) ? Math.max(1, Math.min(maxResults, MAX_RESULTS)) : 5;
   const request = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
     method: "tools/call",
-    params: {
-      name: EXA_SEARCH_TOOL,
-      arguments: { query: normalizedQuery, numResults: count },
-    },
+    params: { name: EXA_SEARCH_TOOL, arguments: { query: normalizedQuery, numResults: count } },
   });
   const response = await fetchExa(request, requestSignal(signal), fetchImpl);
-  if (!response.ok)
-    throw new Error(`Exa search failed with status ${response.status}`);
-  const results = parseExaResults(
-    providerText(mcpPayload(await readBoundedBody(response))),
-    count,
-  );
-  if (!results.length)
-    throw new Error("Exa returned no parseable search results");
+  if (!response.ok) throw new Error(`Exa search failed with status ${response.status}`);
+  const results = parseExaResults(providerText(mcpPayload(await readBoundedBody(response))), count);
+  if (!results.length) throw new Error("Exa returned no parseable search results");
   return results;
 }
 
@@ -311,9 +250,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   if (!part) return undefined;
   try {
     const value = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-    return value && typeof value === "object"
-      ? (value as Record<string, unknown>)
-      : undefined;
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }
@@ -328,23 +265,16 @@ function accountId(token: string): string | undefined {
 
 function pickOpenAIModel<T extends { id: string }>(models: T[]): T | undefined {
   const eligible = models
-    .filter(
-      (model) =>
-        !model.id.split("-").some((part) => part === "pro" || part === "ultra"),
-    )
-    .sort((left, right) =>
-      right.id.localeCompare(left.id, undefined, { numeric: true }),
-    );
+    .filter(model => !model.id.split("-").some(part => part === "pro" || part === "ultra"))
+    .sort((left, right) => right.id.localeCompare(left.id, undefined, { numeric: true }));
   return (
-    eligible.find((model) => model.id.includes("terra")) ??
-    eligible.find((model) => /^gpt-\d+(\.\d+)?$/.test(model.id)) ??
+    eligible.find(model => model.id.includes("terra")) ??
+    eligible.find(model => /^gpt-\d+(\.\d+)?$/.test(model.id)) ??
     eligible[0]
   );
 }
 
-export async function resolveOpenAIAuth(
-  ctx?: ExtensionContext,
-): Promise<OpenAIAuth | undefined> {
+export async function resolveOpenAIAuth(ctx?: ExtensionContext): Promise<OpenAIAuth | undefined> {
   if (!ctx) return undefined;
   let models: ReturnType<typeof ctx.modelRegistry.getAvailable>;
   try {
@@ -352,20 +282,15 @@ export async function resolveOpenAIAuth(
   } catch {
     throw new Error("OpenAI credential registry unavailable");
   }
-  const candidates = (["openai-codex", "openai"] as const).flatMap(
-    (provider) => {
-      const model = pickOpenAIModel(
-        models.filter((candidate) => candidate.provider === provider),
-      );
-      return model ? [{ provider, model }] : [];
-    },
-  );
+  const candidates = (["openai-codex", "openai"] as const).flatMap(provider => {
+    const model = pickOpenAIModel(models.filter(candidate => candidate.provider === provider));
+    return model ? [{ provider, model }] : [];
+  });
   if (!candidates.length) return undefined;
   for (const { provider, model } of candidates) {
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (auth.ok && auth.apiKey)
-        return { provider, apiKey: auth.apiKey, model: model.id };
+      if (auth.ok && auth.apiKey) return { provider, apiKey: auth.apiKey, model: model.id };
     } catch {}
   }
   throw new Error("OpenAI credential resolution failed");
@@ -388,42 +313,31 @@ function parseOpenAIOutput(text: string): unknown[] {
     const data = line.slice(5).trim();
     if (!data || data === "[DONE]") continue;
     try {
-      const value = JSON.parse(data) as {
-        type?: unknown;
-        item?: unknown;
-        response?: { output?: unknown };
-      };
-      if (value.type === "response.output_item.done" && value.item)
-        items.push(value.item);
+      const value = JSON.parse(data) as { type?: unknown; item?: unknown; response?: { output?: unknown } };
+      if (value.type === "response.output_item.done" && value.item) items.push(value.item);
       if (
-        (value.type === "response.done" ||
-          value.type === "response.completed") &&
+        (value.type === "response.done" || value.type === "response.completed") &&
         Array.isArray(value.response?.output)
       )
         completed = value.response.output;
     } catch {}
   }
   const output = completed?.length ? completed : items;
-  if (!output.length)
-    throw new Error("OpenAI returned no parseable search output");
+  if (!output.length) throw new Error("OpenAI returned no parseable search output");
   return output;
 }
 
 function snippetAround(text: string, start: unknown, end: unknown): string {
   if (typeof start !== "number" || typeof end !== "number") return "";
   return boundedText(
-    text
-      .slice(Math.max(0, start - 100), Math.min(text.length, end + 100))
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1"),
+    text.slice(Math.max(0, start - 100), Math.min(text.length, end + 100)).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1"),
     300,
   );
 }
 
 /** Narrows an untrusted provider payload node to a readable record. */
 const asObject = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : undefined;
+  value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 
 type AddResult = (url: unknown, title: unknown, snippet?: string) => void;
 
@@ -431,8 +345,7 @@ type AddResult = (url: unknown, title: unknown, snippet?: string) => void;
 function addCitationResults(output: unknown[], add: AddResult): void {
   for (const item of output) {
     const message = asObject(item);
-    if (message?.type !== "message" || !Array.isArray(message.content))
-      continue;
+    if (message?.type !== "message" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       const value = asObject(part);
       if (!value || !Array.isArray(value.annotations)) continue;
@@ -440,11 +353,7 @@ function addCitationResults(output: unknown[], add: AddResult): void {
       for (const annotation of value.annotations) {
         const citation = asObject(annotation);
         if (citation?.type !== "url_citation") continue;
-        add(
-          citation.url,
-          citation.title,
-          snippetAround(text, citation.start_index, citation.end_index),
-        );
+        add(citation.url, citation.title, snippetAround(text, citation.start_index, citation.end_index));
       }
     }
   }
@@ -460,20 +369,13 @@ function addSearchCallResults(output: unknown[], add: AddResult): void {
       if (!Array.isArray(group)) continue;
       for (const source of group) {
         const record = asObject(source);
-        if (record)
-          add(
-            record.url ?? record.source_website_url,
-            record.title ?? record.caption,
-          );
+        if (record) add(record.url ?? record.source_website_url, record.title ?? record.caption);
       }
     }
   }
 }
 
-function parseOpenAIResults(
-  output: unknown[],
-  count: number,
-): ScoutSearchResult[] {
+function parseOpenAIResults(output: unknown[], count: number): ScoutSearchResult[] {
   const results: ScoutSearchResult[] = [];
   const seen = new Set<string>();
   const add: AddResult = (rawUrl, rawTitle, snippet = "") => {
@@ -481,10 +383,7 @@ function parseOpenAIResults(
     if (!url || seen.has(url) || results.length >= count) return;
     seen.add(url);
     results.push({
-      title: boundedText(
-        typeof rawTitle === "string" && rawTitle.trim() ? rawTitle : url,
-        240,
-      ),
+      title: boundedText(typeof rawTitle === "string" && rawTitle.trim() ? rawTitle : url, 240),
       url,
       snippet: boundedText(snippet, 600),
     });
@@ -513,36 +412,26 @@ export async function searchOpenAI(
     if (id) headers["chatgpt-account-id"] = id;
     headers.originator = "pi";
   }
-  const response = await fetchImpl(
-    codex ? CODEX_RESPONSES_URL : OPENAI_RESPONSES_URL,
-    {
-      method: "POST",
-      redirect: "error",
-      headers,
-      body: JSON.stringify({
-        model: auth.model,
-        instructions: `Find around ${maxResults} relevant public sources. Return concise source citations.`,
-        input: [
-          { role: "user", content: [{ type: "input_text", text: query }] },
-        ],
-        tools: [{ type: "web_search" }],
-        include: ["web_search_call.action.sources"],
-        store: false,
-        stream: true,
-        tool_choice: "required",
-        parallel_tool_calls: true,
-      }),
-      signal: requestSignal(signal),
-    },
-  );
-  if (!response.ok)
-    throw new Error(`OpenAI search failed with status ${response.status}`);
-  const results = parseOpenAIResults(
-    parseOpenAIOutput(await readBoundedBody(response)),
-    maxResults,
-  );
-  if (!results.length)
-    throw new Error("OpenAI returned no parseable search results");
+  const response = await fetchImpl(codex ? CODEX_RESPONSES_URL : OPENAI_RESPONSES_URL, {
+    method: "POST",
+    redirect: "error",
+    headers,
+    body: JSON.stringify({
+      model: auth.model,
+      instructions: `Find around ${maxResults} relevant public sources. Return concise source citations.`,
+      input: [{ role: "user", content: [{ type: "input_text", text: query }] }],
+      tools: [{ type: "web_search" }],
+      include: ["web_search_call.action.sources"],
+      store: false,
+      stream: true,
+      tool_choice: "required",
+      parallel_tool_calls: true,
+    }),
+    signal: requestSignal(signal),
+  });
+  if (!response.ok) throw new Error(`OpenAI search failed with status ${response.status}`);
+  const results = parseOpenAIResults(parseOpenAIOutput(await readBoundedBody(response)), maxResults);
+  if (!results.length) throw new Error("OpenAI returned no parseable search results");
   return results;
 }
 
@@ -556,34 +445,16 @@ export async function searchWeb(
 ): Promise<ScoutSearchResponse> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery || normalizedQuery.length > MAX_QUERY_LENGTH)
-    throw new Error(
-      `Search query must contain 1 to ${MAX_QUERY_LENGTH} characters`,
-    );
-  const count = Number.isInteger(maxResults)
-    ? Math.max(1, Math.min(maxResults, MAX_RESULTS))
-    : 5;
+    throw new Error(`Search query must contain 1 to ${MAX_QUERY_LENGTH} characters`);
+  const count = Number.isInteger(maxResults) ? Math.max(1, Math.min(maxResults, MAX_RESULTS)) : 5;
   if (provider !== "exa") {
     const auth = await resolveOpenAIAuth(ctx);
     if (auth)
-      return {
-        provider: "openai",
-        results: await searchOpenAI(
-          normalizedQuery,
-          count,
-          auth,
-          signal,
-          fetchImpl,
-        ),
-      };
+      return { provider: "openai", results: await searchOpenAI(normalizedQuery, count, auth, signal, fetchImpl) };
     if (provider === "openai")
-      throw new Error(
-        "OpenAI search is unavailable; sign in with /login or configure OPENAI_API_KEY",
-      );
+      throw new Error("OpenAI search is unavailable; sign in with /login or configure OPENAI_API_KEY");
   }
-  return {
-    provider: "exa",
-    results: await searchExa(normalizedQuery, count, signal, fetchImpl),
-  };
+  return { provider: "exa", results: await searchExa(normalizedQuery, count, signal, fetchImpl) };
 }
 
 export function formatResults(
@@ -600,8 +471,7 @@ export function formatResults(
       `   ${result.url}`,
       ...(result.snippet ? [`   ${result.snippet}`] : []),
     ];
-    if (Buffer.byteLength([...lines, ...block].join("\n")) > MAX_OUTPUT_BYTES)
-      break;
+    if (Buffer.byteLength([...lines, ...block].join("\n")) > MAX_OUTPUT_BYTES) break;
     lines.push(...block);
     shown++;
   }
@@ -614,8 +484,7 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
     label: "Web Scout Search",
     description:
       "Find public-web pages matching a query and return bounded titles, URLs, and snippets for discovery. This tool does not open pages or verify their contents; open useful results with scout_browser before citing them. The default auto provider uses available OpenAI/Codex subscription or API-key auth, otherwise keyless Exa. Each query is sent to the selected provider.",
-    promptSnippet:
-      "Find public-web URL candidates, then open and verify useful results with scout_browser",
+    promptSnippet: "Find public-web URL candidates, then open and verify useful results with scout_browser",
     parameters: Type.Object(
       {
         query: Type.String({
@@ -634,8 +503,7 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
         provider: Type.Optional(
           StringEnum(SEARCH_PROVIDERS, {
             default: "auto",
-            description:
-              "Search provider; auto prefers available OpenAI/Codex auth and otherwise uses Exa",
+            description: "Search provider; auto prefers available OpenAI/Codex auth and otherwise uses Exa",
           }),
         ),
       },
@@ -644,13 +512,7 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_id, params, signal, _onUpdate, ctx) {
       try {
-        const searched = await searchWeb(
-          params.query,
-          params.maxResults,
-          params.provider,
-          signal,
-          ctx,
-        );
+        const searched = await searchWeb(params.query, params.maxResults, params.provider, signal, ctx);
         const formatted = formatResults(searched.provider, searched.results);
         return {
           content: [{ type: "text" as const, text: formatted.text }],
@@ -663,8 +525,7 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
         };
       } catch (error) {
         if (signal?.aborted) throw new Error("Web search cancelled");
-        const message =
-          error instanceof Error ? error.message : "Web search failed";
+        const message = error instanceof Error ? error.message : "Web search failed";
         throw new Error(message.slice(0, 300));
       }
     },

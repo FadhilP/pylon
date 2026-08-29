@@ -3,15 +3,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
 
-export const thinkingLevels = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 export const defaultThinkingLevels: ThinkingLevel[] = ["medium", "high"];
 export const gruntModes = ["isolated", "direct", "dynamic"] as const;
@@ -26,84 +18,61 @@ export type GruntConfig = {
 };
 export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
   config.thinkingLevels ?? defaultThinkingLevels;
-export const gruntMode = (config: GruntConfig): GruntMode =>
-  config.mode ?? "isolated";
+export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
 export const isGruntEnabled = (config: GruntConfig): boolean =>
-  config.disabled === false ||
-  (config.disabled !== true && Boolean(config.model));
+  config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const DEFAULT_GRUNT_TIMEOUT_MS = 60 * 60 * 1000;
 export const DEFAULT_GRUNT_MAX_TURNS = 40;
 export const DEFAULT_GRUNT_MAX_COST_USD = 2;
 export const DEFAULT_GRUNT_PARENT_CONTEXT_CHARS = 0;
-export const configPath = (agentDir = getAgentDir()) =>
-  join(agentDir, "pi-grunt", "config.json");
+export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-grunt", "config.json");
 
-export function gruntTimeoutMs(
-  value = process.env.PI_GRUNT_TIMEOUT_MS,
-): number {
+export function gruntTimeoutMs(value = process.env.PI_GRUNT_TIMEOUT_MS): number {
   if (value === undefined) return DEFAULT_GRUNT_TIMEOUT_MS;
   const timeout = Number(value);
   if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 7_200_000)
-    throw new Error(
-      "PI_GRUNT_TIMEOUT_MS must be an integer between 1 and 7200000",
-    );
+    throw new Error("PI_GRUNT_TIMEOUT_MS must be an integer between 1 and 7200000");
   return timeout;
 }
 
-export function gruntMaxTurns(
-  value: string | number | undefined = process.env.PI_GRUNT_MAX_TURNS,
-): number {
+export function gruntMaxTurns(value: string | number | undefined = process.env.PI_GRUNT_MAX_TURNS): number {
   if (value === undefined) return DEFAULT_GRUNT_MAX_TURNS;
   const turns = Number(value);
-  if (!Number.isSafeInteger(turns) || turns < 1)
-    throw new Error("PI_GRUNT_MAX_TURNS must be a positive safe integer");
+  if (!Number.isSafeInteger(turns) || turns < 1) throw new Error("PI_GRUNT_MAX_TURNS must be a positive safe integer");
   return turns;
 }
 
-export function gruntMaxCostUsd(
-  value = process.env.PI_GRUNT_MAX_COST_USD,
-): number {
+export function gruntMaxCostUsd(value = process.env.PI_GRUNT_MAX_COST_USD): number {
   if (value === undefined) return DEFAULT_GRUNT_MAX_COST_USD;
   const cost = Number(value);
   if (!Number.isFinite(cost) || cost <= 0 || cost > 100)
-    throw new Error(
-      "PI_GRUNT_MAX_COST_USD must be a number greater than 0 and at most 100",
-    );
+    throw new Error("PI_GRUNT_MAX_COST_USD must be a number greater than 0 and at most 100");
   return cost;
 }
 
-export function gruntParentContextChars(
-  value = process.env.PI_GRUNT_PARENT_CONTEXT_CHARS,
-): number {
+export function gruntParentContextChars(value = process.env.PI_GRUNT_PARENT_CONTEXT_CHARS): number {
   if (value === undefined) return DEFAULT_GRUNT_PARENT_CONTEXT_CHARS;
   const chars = Number(value);
   if (!Number.isInteger(chars) || chars < 0 || chars > 12_000)
-    throw new Error(
-      "PI_GRUNT_PARENT_CONTEXT_CHARS must be an integer between 0 and 12000",
-    );
+    throw new Error("PI_GRUNT_PARENT_CONTEXT_CHARS must be an integer between 0 and 12000");
   return chars;
 }
 
 export async function loadConfig(path = configPath()): Promise<GruntConfig> {
   return loadJsonConfig(
     path,
-    (value) => {
+    value => {
       if (
         value?.version !== 1 ||
-        (value.model !== undefined &&
-          (typeof value.model !== "string" || !value.model.trim())) ||
+        (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
         (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
         (value.mode !== undefined && !gruntModes.includes(value.mode)) ||
-        (value.maxTurns !== undefined &&
-          (!Number.isSafeInteger(value.maxTurns) || value.maxTurns < 1)) ||
+        (value.maxTurns !== undefined && (!Number.isSafeInteger(value.maxTurns) || value.maxTurns < 1)) ||
         (value.thinkingLevels !== undefined &&
           (!Array.isArray(value.thinkingLevels) ||
             !value.thinkingLevels.length ||
-            new Set(value.thinkingLevels).size !==
-              value.thinkingLevels.length ||
-            !value.thinkingLevels.every((level: unknown) =>
-              thinkingLevels.includes(level as ThinkingLevel),
-            )))
+            new Set(value.thinkingLevels).size !== value.thinkingLevels.length ||
+            !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel))))
       )
         return undefined;
       return {
@@ -111,9 +80,7 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
         ...(value.model ? { model: value.model } : {}),
         ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
         ...(value.mode !== undefined ? { mode: value.mode } : {}),
-        ...(value.thinkingLevels !== undefined
-          ? { thinkingLevels: value.thinkingLevels }
-          : {}),
+        ...(value.thinkingLevels !== undefined ? { thinkingLevels: value.thinkingLevels } : {}),
         ...(value.maxTurns !== undefined ? { maxTurns: value.maxTurns } : {}),
       } satisfies GruntConfig;
     },
@@ -121,16 +88,13 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
   );
 }
 
-export const saveConfig = (config: GruntConfig, path = configPath()) =>
-  saveJsonConfig(config, path);
+export const saveConfig = (config: GruntConfig, path = configPath()) => saveJsonConfig(config, path);
 
 export async function resetConfig(path = configPath()): Promise<void> {
   await rm(path, { force: true });
 }
 
-export function parseModelRef(
-  ref: string,
-): { provider: string; id: string } | undefined {
+export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
   const slash = ref.indexOf("/");
   if (slash < 1 || slash === ref.length - 1) return undefined;
   return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };

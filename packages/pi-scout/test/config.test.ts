@@ -19,16 +19,7 @@ import { readSettings, updateSettings } from "../src/web-settings.ts";
 test("config is atomic, validated, and corrupt input is preserved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-config-"));
   const path = join(dir, "nested", "config.json");
-  await saveConfig(
-    {
-      version: 1,
-      model: "openai/gpt",
-      thinking: "xhigh",
-      disabled: true,
-      webSearch: true,
-    },
-    path,
-  );
+  await saveConfig({ version: 1, model: "openai/gpt", thinking: "xhigh", disabled: true, webSearch: true }, path);
   assert.deepEqual(await loadConfig(path), {
     version: 1,
     model: "openai/gpt",
@@ -37,26 +28,15 @@ test("config is atomic, validated, and corrupt input is preserved", async () => 
     webSearch: true,
   });
   await saveConfig({ version: 1, disabled: false, webSearch: false }, path);
-  assert.deepEqual(await loadConfig(path), {
-    version: 1,
-    disabled: false,
-    webSearch: false,
-  });
+  assert.deepEqual(await loadConfig(path), { version: 1, disabled: false, webSearch: false });
   await writeFile(path, "bad");
   assert.deepEqual(await loadConfig(path), { version: 1 });
 });
 
 test("Pylon Scout settings round-trip optional OpenAI/Exa search", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "scout-web-settings-"));
-  assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "scout",
-    mode: "disabled",
-    webSearch: false,
-  });
-  await updateSettings(
-    { kind: "scout", mode: "session", thinking: "high", webSearch: true },
-    { agentDir },
-  );
+  assert.deepEqual(await readSettings({ agentDir }), { kind: "scout", mode: "disabled", webSearch: false });
+  await updateSettings({ kind: "scout", mode: "session", thinking: "high", webSearch: true }, { agentDir });
   assert.deepEqual(await readSettings({ agentDir }), {
     kind: "scout",
     mode: "session",
@@ -70,10 +50,7 @@ test("Pylon Scout settings round-trip optional OpenAI/Exa search", async () => {
     webSearch: true,
   });
   await assert.rejects(
-    updateSettings(
-      { kind: "scout", mode: "session", webSearch: "yes" },
-      { agentDir },
-    ),
+    updateSettings({ kind: "scout", mode: "session", webSearch: "yes" }, { agentDir }),
     /invalid Scout settings/,
   );
 });
@@ -101,14 +78,7 @@ test("Scout reported-cost ceiling defaults, disables, and validates overrides", 
 });
 
 test("model refs support thinking without breaking colon model IDs", () => {
-  assert.deepEqual(parseModelRef("p/m:low"), {
-    provider: "p",
-    id: "m",
-    thinking: "low",
-  });
-  assert.deepEqual(parseModelRef("ollama/qwen:7b"), {
-    provider: "ollama",
-    id: "qwen:7b",
-  });
+  assert.deepEqual(parseModelRef("p/m:low"), { provider: "p", id: "m", thinking: "low" });
+  assert.deepEqual(parseModelRef("ollama/qwen:7b"), { provider: "ollama", id: "qwen:7b" });
   assert.equal(parseModelRef("m"), undefined);
 });

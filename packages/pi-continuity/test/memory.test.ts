@@ -33,17 +33,10 @@ const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
   scope: "project",
   owner: "owner",
   trigger: "changing package settings",
-  guidance:
-    "Apply updates to subsequent runtimes; do not expect hot reconfiguration.",
+  guidance: "Apply updates to subsequent runtimes; do not expect hot reconfiguration.",
   authority: "project_contract",
   origin: "agent",
-  sourceRefs: [
-    {
-      type: "repository",
-      path: "src/config.ts",
-      excerptSha256: "a".repeat(64),
-    },
-  ],
+  sourceRefs: [{ type: "repository", path: "src/config.ts", excerptSha256: "a".repeat(64) }],
   relatedPaths: ["src/config.ts"],
   disposition: "archival",
   enforcementAuthority: "context_only",
@@ -65,20 +58,11 @@ const reviewedAdd = (overrides = {}) => ({
   trigger: "changing settings",
   guidance: "Restart the runtime after configuration changes.",
   authority: "project_contract" as const,
-  sourceRefs: [
-    {
-      type: "repository" as const,
-      path: "src/config.ts",
-      excerptSha256: "b".repeat(64),
-    },
-  ],
+  sourceRefs: [{ type: "repository" as const, path: "src/config.ts", excerptSha256: "b".repeat(64) }],
   disposition: "archival" as const,
   enforcementAuthority: "context_only" as const,
   activationDraft: archivalActivationDraft(),
-  rawProposal: {
-    trigger: "changing settings",
-    guidance: "Restart the runtime after configuration changes.",
-  },
+  rawProposal: { trigger: "changing settings", guidance: "Restart the runtime after configuration changes." },
   rewriteCharacter: "format_only" as const,
   ...overrides,
 });
@@ -98,29 +82,15 @@ const review = (overrides: Partial<ReviewRecord> = {}): ReviewRecord => ({
 });
 
 test("V6 state validates strict records and owner visibility", () => {
-  const user = note({
-    id: randomUUID(),
-    scope: "user",
-    owner: "default",
-    authority: "user_instruction",
-  });
+  const user = note({ id: randomUUID(), scope: "user", owner: "default", authority: "user_instruction" });
   const file = state(note(), user);
   assert.equal(isMemoryState(file), true);
   assert.equal(file.schemaVersion, 6);
   assert.deepEqual(notesForOwners(file.notes, "owner"), file.notes);
   assert.equal(notesForOwners(file.notes, "other").length, 1);
   assert.equal(normalizeMemoryState({ ...file, unknown: true }), undefined);
-  assert.equal(
-    normalizeMemoryState({
-      ...file,
-      notes: [{ ...file.notes[0], owner: undefined }],
-    }),
-    undefined,
-  );
-  assert.equal(
-    normalizeMemoryState({ ...file, notes: [{ ...user, owner: "forged" }] }),
-    undefined,
-  );
+  assert.equal(normalizeMemoryState({ ...file, notes: [{ ...file.notes[0], owner: undefined }] }), undefined);
+  assert.equal(normalizeMemoryState({ ...file, notes: [{ ...user, owner: "forged" }] }), undefined);
 });
 
 test("reviewer output is V2, strict, and conservatively archives missing or invalid activation", () => {
@@ -135,22 +105,13 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
     activationDraft: archivalActivationDraft(),
     reasonCode: "durable_rule",
   };
-  const output = parseReviewerOutput(
-    JSON.stringify({ version: 2, decisions: [accepted] }),
-    1,
-  );
+  const output = parseReviewerOutput(JSON.stringify({ version: 2, decisions: [accepted] }), 1);
   assert.equal(output.decisions[0]?.verdict, "accept");
-  assert.throws(
-    () => parseReviewerOutput('{"version":1,"decisions":[]}', 1),
-    /invalid envelope/,
-  );
+  assert.throws(() => parseReviewerOutput('{"version":1,"decisions":[]}', 1), /invalid envelope/);
   for (const activationDraft of [undefined, { classification: "grounded" }]) {
     const decision = { ...accepted, activationDraft } as any;
     if (activationDraft === undefined) delete decision.activationDraft;
-    const parsed = parseReviewerOutput(
-      JSON.stringify({ version: 2, decisions: [decision] }),
-      1,
-    ).decisions[0] as any;
+    const parsed = parseReviewerOutput(JSON.stringify({ version: 2, decisions: [decision] }), 1).decisions[0] as any;
     assert.equal(parsed.activationDraft.classification, "archival");
   }
   assert.throws(
@@ -158,14 +119,7 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
       parseReviewerOutput(
         JSON.stringify({
           version: 2,
-          decisions: [
-            {
-              proposalIndex: 0,
-              verdict: "reject",
-              reasonCode: "task_local",
-              extra: true,
-            },
-          ],
+          decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local", extra: true }],
         }),
         1,
       ),
@@ -174,12 +128,7 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
   assert.throws(
     () =>
       parseReviewerOutput(
-        JSON.stringify({
-          version: 2,
-          decisions: [
-            { proposalIndex: 1, verdict: "reject", reasonCode: "task_local" },
-          ],
-        }),
+        JSON.stringify({ version: 2, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "task_local" }] }),
         1,
       ),
     /unknown/,
@@ -189,17 +138,13 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
       version: 2,
       decisions: [
         { proposalIndex: 1, verdict: "reject", reasonCode: "task_local" },
-        {
-          proposalIndex: 0,
-          verdict: "defer",
-          reasonCode: "insufficient_context",
-        },
+        { proposalIndex: 0, verdict: "defer", reasonCode: "insufficient_context" },
       ],
     }),
     2,
   );
   assert.deepEqual(
-    sorted.decisions.map((decision) => decision.proposalIndex),
+    sorted.decisions.map(decision => decision.proposalIndex),
     [0, 1],
   );
 });
@@ -260,13 +205,7 @@ test("every documented reviewer decision branch parses", () => {
     },
   ];
   for (const decision of decisions)
-    assert.equal(
-      parseReviewerOutput(
-        JSON.stringify({ version: 2, decisions: [decision] }),
-        1,
-      ).decisions.length,
-      1,
-    );
+    assert.equal(parseReviewerOutput(JSON.stringify({ version: 2, decisions: [decision] }), 1).decisions.length, 1);
 });
 
 test("invalid decision diagnostics are bounded and do not echo model fields", () => {
@@ -314,51 +253,31 @@ test("direct edit and delete use scoped revision CAS and user authority", () => 
   assert.deepEqual(edited.notes[0]?.sourceRefs, [{ type: "direct_user_edit" }]);
   assert.equal(edited.notes[0]?.disposition, "archival");
   assert.equal(edited.audits?.at(-1)?.type, "direct_edit");
-  assert.throws(
-    () => directEdit(edited, "project", "owner", original.id, 1, "x", "y"),
-    /changed/,
-  );
+  assert.throws(() => directEdit(edited, "project", "owner", original.id, 1, "x", "y"), /changed/);
   const deleted = directDelete(edited, "project", "owner", original.id, 2);
   assert.equal(deleted.notes.length, 0);
   assert.equal(deleted.audits?.at(-1)?.type, "direct_delete");
 });
 
 test("abandoned pending reviews are explicitly discarded after retention", () => {
-  const pending = review({
-    toolCallId: "old",
-    reviewedAt: "2020-01-01T00:00:00.000Z",
-  });
-  const reconciled = discardExpiredReviews(
-    { ...state(), reviews: [pending] },
-    new Date("2020-02-15T00:00:00.000Z"),
-  );
+  const pending = review({ toolCallId: "old", reviewedAt: "2020-01-01T00:00:00.000Z" });
+  const reconciled = discardExpiredReviews({ ...state(), reviews: [pending] }, new Date("2020-02-15T00:00:00.000Z"));
   assert.equal(reconciled.reviews[0]?.status, "discarded");
   assert.match(reconciled.reviews[0]?.discardReason ?? "", /abandoned/);
 });
 
 test("pending review capacity rejects new staging without evicting approved operations", () => {
   const reviews = Array.from({ length: 200 }, (_, index): ReviewRecord =>
-    review({
-      toolCallId: `call-${index}`,
-      reviewedAt: new Date(1_700_000_000_000 + index).toISOString(),
-    }),
+    review({ toolCallId: `call-${index}`, reviewedAt: new Date(1_700_000_000_000 + index).toISOString() }),
   );
   const full: MemoryStateFile = { ...state(), reviews };
-  const next: ReviewRecord = {
-    ...reviews[0]!,
-    reviewId: randomUUID(),
-    toolCallId: "next",
-  };
+  const next: ReviewRecord = { ...reviews[0]!, reviewId: randomUUID(), toolCallId: "next" };
   assert.throws(() => stageReview(full, next), /ledger is full/);
   assert.equal(full.reviews.length, 200);
 });
 
 test("V5 migration preserves prose and provenance while archiving pending reviews", () => {
-  const {
-    disposition: _disposition,
-    enforcementAuthority: _enforcementAuthority,
-    ...legacyNote
-  } = note();
+  const { disposition: _disposition, enforcementAuthority: _enforcementAuthority, ...legacyNote } = note();
   const legacyReview = {
     ...review({ operations: [reviewedAdd()], status: "approved_pending" }),
     operations: [
@@ -393,43 +312,21 @@ test("V5 migration preserves prose and provenance while archiving pending review
   assert.equal(migrated.notes[0]?.enforcementAuthority, "context_only");
   assert.equal(migrated.reviews[0]?.status, "discarded");
   assert.equal(migrated.reviews[0]?.operations[0]?.operation, "add");
-  assert.deepEqual(
-    (migrated.reviews[0]?.operations[0] as any)?.sourceRefs,
-    legacyReview.operations[0]?.sourceRefs,
-  );
-  assert.deepEqual(
-    migrateV5MemoryState(legacy, now),
-    migrated,
-    "fixed migration time gives deterministic output",
-  );
-  assert.equal(
-    migrateV5MemoryState(migrated, now),
-    undefined,
-    "migration is not reapplied to V6 state",
-  );
-  assert.equal(
-    migrateV5MemoryState({ ...legacy, notes: [{}] }, now),
-    undefined,
-  );
+  assert.deepEqual((migrated.reviews[0]?.operations[0] as any)?.sourceRefs, legacyReview.operations[0]?.sourceRefs);
+  assert.deepEqual(migrateV5MemoryState(legacy, now), migrated, "fixed migration time gives deterministic output");
+  assert.equal(migrateV5MemoryState(migrated, now), undefined, "migration is not reapplied to V6 state");
+  assert.equal(migrateV5MemoryState({ ...legacy, notes: [{}] }, now), undefined);
 });
 
 test("deduplication, rendering, and safety ceilings never evict", () => {
   const first = note();
   assert.equal(
-    exactDuplicate(
-      [first],
-      "project",
-      "owner",
-      ` ${first.trigger.toUpperCase()} `,
-      first.guidance,
-    )?.id,
+    exactDuplicate([first], "project", "owner", ` ${first.trigger.toUpperCase()} `, first.guidance)?.id,
     first.id,
   );
   assert.match(renderNote(first), /^Memory: When changing package settings,/);
   const oversized = state(
-    ...Array.from({ length: 1_001 }, (_, index) =>
-      note({ id: randomUUID(), trigger: `trigger ${index}` }),
-    ),
+    ...Array.from({ length: 1_001 }, (_, index) => note({ id: randomUUID(), trigger: `trigger ${index}` })),
   );
   assert.throws(() => enforceMemoryLimits(oversized), /1,000-note/);
 });

@@ -19,7 +19,5 @@ export async function runGrouped<T>(
       }
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(limit, groups.length) }, () => worker()),
-  );
+  await Promise.all(Array.from({ length: Math.min(limit, groups.length) }, () => worker()));
 }

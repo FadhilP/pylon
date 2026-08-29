@@ -1,12 +1,6 @@
 import { extname } from "node:path";
 
-export type SymbolRow = {
-  name: string;
-  kind: string;
-  line: number;
-  column: number;
-  signature: string;
-};
+export type SymbolRow = { name: string; kind: string; line: number; column: number; signature: string };
 
 const languages: Record<string, string> = {
   ".c": "c",
@@ -61,15 +55,14 @@ const exclusiveRules: Record<string, readonly SymbolRule[]> = {
     {
       pattern: /^\s*(?:async\s+)?(def|class)\s+([A-Za-z_]\w*)/,
       name: 2,
-      kind: (match) => (match[1] === "def" ? "function" : "class"),
+      kind: match => (match[1] === "def" ? "function" : "class"),
     },
   ],
   go: [
     {
-      pattern:
-        /^\s*(?:func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)|type\s+([A-Za-z_]\w*)\s+(struct|interface))/,
+      pattern: /^\s*(?:func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)|type\s+([A-Za-z_]\w*)\s+(struct|interface))/,
       name: [1, 2],
-      kind: (match) => (match[1] ? "function" : match[3]),
+      kind: match => (match[1] ? "function" : match[3]),
     },
   ],
   rust: [
@@ -77,29 +70,23 @@ const exclusiveRules: Record<string, readonly SymbolRule[]> = {
       pattern:
         /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|struct|enum|trait|type|mod|const|static)\s+([A-Za-z_]\w*)/,
       name: 2,
-      kind: (match) => (match[1] === "fn" ? "function" : match[1]),
+      kind: match => (match[1] === "fn" ? "function" : match[1]),
     },
   ],
   ruby: [
     {
       pattern: /^\s*(def|class|module)\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)/,
       name: 2,
-      kind: (match) => (match[1] === "def" ? "function" : match[1]),
+      kind: match => (match[1] === "def" ? "function" : match[1]),
     },
   ],
-  shell: [
-    {
-      pattern: /^\s*(?:function\s+)?([A-Za-z_]\w*)\s*(?:\(\s*\))?\s*\{/,
-      name: 1,
-      kind: "function",
-    },
-  ],
+  shell: [{ pattern: /^\s*(?:function\s+)?([A-Za-z_]\w*)\s*(?:\(\s*\))?\s*\{/, name: 1, kind: "function" }],
   dart: [
     {
       pattern:
         /^\s*(?:(?:abstract|base|final|interface|sealed|mixin)\s+)*(class|enum|mixin|extension(?:\s+type)?|typedef)\s+([A-Za-z_$][\w$]*)/,
       name: 2,
-      kind: (match) => match[1].replace(/\s+/g, " "),
+      kind: match => match[1].replace(/\s+/g, " "),
     },
     {
       pattern:
@@ -115,7 +102,7 @@ const declarationRule: SymbolRule = {
   pattern:
     /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:public\s+|private\s+|protected\s+|static\s+|abstract\s+)*(?:async\s+)?(class|interface|enum|function|type|namespace|module|struct|trait)\s+([A-Za-z_$][\w$]*)/,
   name: 2,
-  kind: (match) => match[1],
+  kind: match => match[1],
 };
 
 const scriptRules: readonly SymbolRule[] = [
@@ -167,18 +154,10 @@ const sharedRules: Record<string, readonly SymbolRule[]> = {
 };
 
 function rulesFor(language: string): readonly SymbolRule[] {
-  return (
-    exclusiveRules[language] ?? [
-      declarationRule,
-      ...(sharedRules[language] ?? []),
-    ]
-  );
+  return exclusiveRules[language] ?? [declarationRule, ...(sharedRules[language] ?? [])];
 }
 
-function matchedName(
-  match: RegExpExecArray,
-  name: SymbolRule["name"],
-): string | undefined {
+function matchedName(match: RegExpExecArray, name: SymbolRule["name"]): string | undefined {
   if (typeof name === "number") return match[name];
   for (const group of name) if (match[group]) return match[group];
   return undefined;

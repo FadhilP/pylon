@@ -8,13 +8,9 @@ export interface TimelineConfig {
   editRollbackDefault: boolean;
 }
 
-export const defaultConfig = (): TimelineConfig => ({
-  version: 1,
-  editRollbackDefault: false,
-});
+export const defaultConfig = (): TimelineConfig => ({ version: 1, editRollbackDefault: false });
 
-export const configPath = (agentDir = getAgentDir()) =>
-  join(agentDir, "pi-timeline", "config.json");
+export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-timeline", "config.json");
 
 export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
   let serialized: string;
@@ -28,22 +24,14 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
   if (value?.version !== 1 || typeof value.editRollbackDefault !== "boolean") {
     throw new Error("invalid pi-timeline config");
   }
-  return {
-    version: 1,
-    editRollbackDefault: value.editRollbackDefault,
-  };
+  return { version: 1, editRollbackDefault: value.editRollbackDefault };
 }
 
-export async function saveConfig(
-  config: TimelineConfig,
-  path = configPath(),
-): Promise<void> {
+export async function saveConfig(config: TimelineConfig, path = configPath()): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);

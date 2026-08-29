@@ -3,16 +3,30 @@
   "version": "0.1.0",
   "description": "Focused, low-noise TUI experience for Pi",
   "type": "module",
-  "keywords": ["pi-package"],
-  "engines": { "node": ">=24.15.0" },
-  "files": ["extensions", "src", "themes", "README.md", "LICENSE"],
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "themes",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit"
   },
   "pi": {
-    "extensions": ["./extensions/pi-focus.ts"],
-    "themes": ["./themes/focus-dark.json"]
+    "extensions": [
+      "./extensions/pi-focus.ts"
+    ],
+    "themes": [
+      "./themes/focus-dark.json"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

@@ -1,9 +1,6 @@
 import type { ModelOptionReadModel } from "./protocol/events.ts";
 
-export const agentColorId = (agent: {
-  id: string;
-  threadId?: string;
-}): string => agent.threadId ?? agent.id;
+export const agentColorId = (agent: { id: string; threadId?: string }): string => agent.threadId ?? agent.id;
 
 export function formatWorkDuration(value: number): string {
   const seconds = Math.max(0, Math.floor(value / 1_000));
@@ -43,14 +40,9 @@ export function formatRelativeTime(value: string, now = Date.now()): string {
   return `${Math.floor(days / 365)}y`;
 }
 
-export function formatSessionActivity(
-  modifiedAt: string,
-  workStartedAt?: string,
-  now = Date.now(),
-): string {
+export function formatSessionActivity(modifiedAt: string, workStartedAt?: string, now = Date.now()): string {
   const startedAt = workStartedAt ? Date.parse(workStartedAt) : Number.NaN;
-  if (!Number.isNaN(startedAt))
-    return `Working for ${formatWorkDuration(now - startedAt)}`;
+  if (!Number.isNaN(startedAt)) return `Working for ${formatWorkDuration(now - startedAt)}`;
   const relativeTime = formatRelativeTime(modifiedAt, now);
   return relativeTime === "Unknown" ? "Unknown" : `${relativeTime} ago`;
 }
@@ -63,49 +55,30 @@ export function formatCompactNumber(value: number): string {
     { value: 1_000_000, suffix: "M" },
     { value: 1_000, suffix: "K" },
   ];
-  const unit = units.find((item) => absolute >= item.value);
+  const unit = units.find(item => absolute >= item.value);
   if (!unit) return Math.round(value).toLocaleString();
   const scaled = value / unit.value;
-  const rounded =
-    scaled < 10 ? Math.round(scaled * 10) / 10 : Math.round(scaled);
+  const rounded = scaled < 10 ? Math.round(scaled * 10) / 10 : Math.round(scaled);
   return `${rounded}${unit.suffix}`;
 }
 
-export function formatCacheHitRate(
-  inputTokens: number,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-): string {
+export function formatCacheHitRate(inputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): string {
   const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-  return promptTokens > 0
-    ? `${((cacheReadTokens / promptTokens) * 100).toFixed(2)}%`
-    : "—";
+  return promptTokens > 0 ? `${((cacheReadTokens / promptTokens) * 100).toFixed(2)}%` : "—";
 }
 
-export function modelLabel(
-  reference: string,
-  models: ModelOptionReadModel[],
-): string {
+export function modelLabel(reference: string, models: ModelOptionReadModel[]): string {
   const match = models.find(
-    (model) =>
-      reference === model.name ||
-      reference === model.id ||
-      reference === `${model.provider}/${model.id}`,
+    model => reference === model.name || reference === model.id || reference === `${model.provider}/${model.id}`,
   );
   if (match) return match.name;
   const id = reference.split("/").at(-1) ?? reference;
   const parts = id.split(/[-_]+/);
   const prefix =
-    /^gpt$/i.test(parts[0] ?? "") && /^\d/.test(parts[1] ?? "")
-      ? [`GPT-${parts[1]}`, ...parts.slice(2)]
-      : parts;
+    /^gpt$/i.test(parts[0] ?? "") && /^\d/.test(parts[1] ?? "") ? [`GPT-${parts[1]}`, ...parts.slice(2)] : parts;
   return prefix
-    .map((part) =>
-      part === prefix[0] && part.startsWith("GPT-")
-        ? part
-        : part
-          ? part[0]!.toUpperCase() + part.slice(1)
-          : "",
+    .map(part =>
+      part === prefix[0] && part.startsWith("GPT-") ? part : part ? part[0]!.toUpperCase() + part.slice(1) : "",
     )
     .join(" ");
 }

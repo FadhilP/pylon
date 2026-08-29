@@ -9,9 +9,7 @@ export interface PortReservation {
   release(): Promise<void>;
 }
 
-export async function reserveHeliosPort(
-  port: number,
-): Promise<PortReservation | undefined> {
+export async function reserveHeliosPort(port: number): Promise<PortReservation | undefined> {
   const path = join(tmpdir(), `pi-helios-port-${port}.lock`);
   let handle: FileHandle;
   try {
@@ -19,7 +17,7 @@ export async function reserveHeliosPort(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const age = await stat(path)
-      .then((info) => Date.now() - info.mtimeMs)
+      .then(info => Date.now() - info.mtimeMs)
       .catch(() => 0);
     if (age <= STALE_LOCK_MS) return undefined;
     await rm(path, { force: true }).catch(() => {});

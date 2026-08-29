@@ -1,27 +1,11 @@
 import type { CodeViewItem, FileDiffContentsLoader } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
-import {
-  Component,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  createPierreCodeViewItem,
-  createPierreDiffItems,
-} from "../shared/pierre-code-viewer-model";
+import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPierreCodeViewItem, createPierreDiffItems } from "../shared/pierre-code-viewer-model";
 
 const ITEM_ID_PREFIX = "pylon-selected-file";
 
-class PierreViewerErrorBoundary extends Component<
-  {
-    children: ReactNode;
-    fallback: ReactNode;
-  },
-  { failed: boolean }
-> {
+class PierreViewerErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError() {
@@ -61,19 +45,9 @@ export default function PierreCodeViewer({
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     document.documentElement.dataset.theme === "light" ? "light" : "dark",
   );
-  const itemId = useMemo(
-    () => `${ITEM_ID_PREFIX}:${mode}:${path}`,
-    [mode, path],
-  );
+  const itemId = useMemo(() => `${ITEM_ID_PREFIX}:${mode}:${path}`, [mode, path]);
   const item = useMemo<CodeViewItem | undefined>(
-    () =>
-      createPierreCodeViewItem({
-        mode,
-        id: itemId,
-        path,
-        text,
-        revision,
-      }),
+    () => createPierreCodeViewItem({ mode, id: itemId, path, text, revision }),
     [itemId, mode, path, revision, text],
   );
   const items = useMemo<CodeViewItem[]>(() => {
@@ -91,9 +65,7 @@ export default function PierreCodeViewer({
             range: {
               start: targetLine,
               end: targetLine,
-              ...(mode === "diff"
-                ? { side: "additions" as const, endSide: "additions" as const }
-                : {}),
+              ...(mode === "diff" ? { side: "additions" as const, endSide: "additions" as const } : {}),
             },
           }
         : null,
@@ -102,14 +74,9 @@ export default function PierreCodeViewer({
 
   useEffect(() => {
     const observer = new MutationObserver(() =>
-      setTheme(
-        document.documentElement.dataset.theme === "light" ? "light" : "dark",
-      ),
+      setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark"),
     );
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
@@ -128,9 +95,7 @@ export default function PierreCodeViewer({
 
   const fallback = (
     <pre className={`file-code${mode === "diff" ? " is-diff" : ""}`}>
-      <code>
-        {mode === "diff" && unifiedDiff !== undefined ? unifiedDiff : text}
-      </code>
+      <code>{mode === "diff" && unifiedDiff !== undefined ? unifiedDiff : text}</code>
     </pre>
   );
   if (!items.length) return fallback;

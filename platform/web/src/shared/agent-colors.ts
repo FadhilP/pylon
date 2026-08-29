@@ -8,9 +8,7 @@ export function assignAgentColorSlots(
 ): Map<string, number> {
   const identities = [...new Set(agents.map(agentColorId))];
   const active = new Set(identities);
-  const next = new Map(
-    [...previous].filter(([identity]) => active.has(identity)),
-  );
+  const next = new Map([...previous].filter(([identity]) => active.has(identity)));
   const used = new Set(next.values());
   for (const identity of identities) {
     if (next.has(identity)) continue;
@@ -22,13 +20,7 @@ export function assignAgentColorSlots(
   return next;
 }
 
-export function agentColorTokens(slot: number): {
-  color: string;
-  soft: string;
-} {
+export function agentColorTokens(slot: number): { color: string; soft: string } {
   const hue = (slot * 137) % 360;
-  return {
-    color: `hsl(${hue} 24% 56%)`,
-    soft: `hsl(${hue} 24% 56% / 0.15)`,
-  };
+  return { color: `hsl(${hue} 24% 56%)`, soft: `hsl(${hue} 24% 56% / 0.15)` };
 }

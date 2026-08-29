@@ -7,10 +7,7 @@ test("plan revisions reject duplicate normalized todo text without mutating Work
   setPlan(work, ["Implement"]);
   const before = structuredClone(work.todos);
 
-  assert.throws(
-    () => setPlan(work, ["Same step", " same   STEP "]),
-    /unique non-empty text/,
-  );
+  assert.throws(() => setPlan(work, ["Same step", " same   STEP "]), /unique non-empty text/);
   assert.deepEqual(work.todos, before);
   assert.equal(isWork(work), true);
 });
@@ -50,10 +47,7 @@ test("explicit todo IDs preserve progress across wording changes", () => {
       { id: reviewId, status: "pending" },
     ],
   );
-  assert.throws(
-    () => setPlan(work, [{ id: "todo_missing", text: "Unknown" }]),
-    /IDs from the current plan/,
-  );
+  assert.throws(() => setPlan(work, [{ id: "todo_missing", text: "Unknown" }]), /IDs from the current plan/);
   assert.throws(
     () =>
       setPlan(work, [

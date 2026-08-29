@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
-export type RetainedTerminal = {
-  sessionId: string;
-  generation: number;
-  cwdLabel?: string;
-};
+export type RetainedTerminal = { sessionId: string; generation: number; cwdLabel?: string };
 
 const MAX_RETAINED_TERMINALS = 8;
 
@@ -16,17 +12,11 @@ const MAX_RETAINED_TERMINALS = 8;
  * A terminal is dropped when its session sleeps or is no longer selected, since
  * its PTY is gone by then.
  */
-export function useTerminalDrawer(
-  live: RuntimeStoreSnapshot,
-  initialHeight: () => number,
-) {
+export function useTerminalDrawer(live: RuntimeStoreSnapshot, initialHeight: () => number) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalSessionId, setTerminalSessionId] = useState<string>();
-  const [retainedTerminals, setRetainedTerminals] = useState<
-    RetainedTerminal[]
-  >([]);
-  const [terminalDrawerHeight, setTerminalDrawerHeight] =
-    useState(initialHeight);
+  const [retainedTerminals, setRetainedTerminals] = useState<RetainedTerminal[]>([]);
+  const [terminalDrawerHeight, setTerminalDrawerHeight] = useState(initialHeight);
 
   const close = () => {
     setTerminalOpen(false);
@@ -47,9 +37,7 @@ export function useTerminalDrawer(
         .map(([sessionId]) => sessionId),
     );
     if (!sleeping.size) return;
-    setRetainedTerminals((current) =>
-      current.filter((terminal) => !sleeping.has(terminal.sessionId)),
-    );
+    setRetainedTerminals(current => current.filter(terminal => !sleeping.has(terminal.sessionId)));
     if (terminalSessionId && sleeping.has(terminalSessionId)) close();
   }, [live.sessionStatuses, terminalSessionId]);
 
@@ -64,24 +52,19 @@ export function useTerminalDrawer(
       generation: live.runtime.sessionGeneration,
       cwdLabel: live.runtime.cwdLabel,
     };
-    setRetainedTerminals((current) => {
+    setRetainedTerminals(current => {
       // Reuse the existing entry so an already-attached terminal keeps its PTY.
-      const existing = current.find(
-        (item) => item.sessionId === terminal.sessionId,
+      const existing = current.find(item => item.sessionId === terminal.sessionId);
+      return [...current.filter(item => item.sessionId !== terminal.sessionId), existing ?? terminal].slice(
+        -MAX_RETAINED_TERMINALS,
       );
-      return [
-        ...current.filter((item) => item.sessionId !== terminal.sessionId),
-        existing ?? terminal,
-      ].slice(-MAX_RETAINED_TERMINALS);
     });
     setTerminalSessionId(terminal.sessionId);
     setTerminalOpen(true);
   };
 
   const releaseTerminal = (sessionId: string) => {
-    setRetainedTerminals((current) =>
-      current.filter((item) => item.sessionId !== sessionId),
-    );
+    setRetainedTerminals(current => current.filter(item => item.sessionId !== sessionId));
   };
 
   return {

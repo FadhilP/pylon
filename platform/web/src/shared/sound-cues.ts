@@ -31,24 +31,14 @@ export function appendWebAudioCue(
   event: { eventId: string; sessionId: string; type: string; payload: unknown },
 ): WebAudioCue[] {
   const payload =
-    event.payload &&
-    typeof event.payload === "object" &&
-    !Array.isArray(event.payload)
+    event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
       ? (event.payload as Record<string, unknown>)
       : {};
   const statusCue = event.type === "session.status" ? payload.cue : undefined;
   const attention = event.type === "ui.request" || statusCue === "attention";
   const completed =
-    (event.type === "agent.end" &&
-      payload.stopped !== true &&
-      payload.willRetry !== true) ||
+    (event.type === "agent.end" && payload.stopped !== true && payload.willRetry !== true) ||
     statusCue === "turn-complete";
-  const kind: WebAudioCueKind | undefined = attention
-    ? "attention"
-    : completed
-      ? "turn-complete"
-      : undefined;
-  return kind
-    ? [...cues, { id: event.eventId, kind }].slice(-MAX_AUDIO_CUES)
-    : cues;
+  const kind: WebAudioCueKind | undefined = attention ? "attention" : completed ? "turn-complete" : undefined;
+  return kind ? [...cues, { id: event.eventId, kind }].slice(-MAX_AUDIO_CUES) : cues;
 }

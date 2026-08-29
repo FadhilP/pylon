@@ -44,10 +44,7 @@ const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
   updatedAt: "2025-01-01T00:00:00.000Z",
   ...overrides,
 });
-const packet = (
-  proposals: ReviewPacket["proposals"],
-  notes: NotebookNote[] = [],
-): ReviewPacket => ({
+const packet = (proposals: ReviewPacket["proposals"], notes: NotebookNote[] = []): ReviewPacket => ({
   version: 2,
   sessionId: "s",
   projectOwner: "owner",
@@ -56,33 +53,14 @@ const packet = (
   candidateDuplicates: [],
   candidateConflicts: [],
 });
-const preparedUser = (
-  proposal: MemoryProposal,
-  quote = "Keep replies concise.",
-): PreflightProposal => ({
+const preparedUser = (proposal: MemoryProposal, quote = "Keep replies concise."): PreflightProposal => ({
   proposal,
   owner: "default",
-  quote: {
-    quote,
-    sessionId: "s",
-    entryId: "u",
-    quoteSha256: sha256(quote),
-    entrySha256: sha256(quote),
-  },
-  sourceRefs: [
-    {
-      type: "user_message",
-      sessionId: "s",
-      entryId: "u",
-      quoteSha256: sha256(quote),
-    },
-  ],
+  quote: { quote, sessionId: "s", entryId: "u", quoteSha256: sha256(quote), entrySha256: sha256(quote) },
+  sourceRefs: [{ type: "user_message", sessionId: "s", entryId: "u", quoteSha256: sha256(quote) }],
   verificationStatus,
 });
-const accepted = (
-  proposalIndex = 0,
-  overrides: Record<string, unknown> = {},
-): ReviewerDecision =>
+const accepted = (proposalIndex = 0, overrides: Record<string, unknown> = {}): ReviewerDecision =>
   ({
     proposalIndex,
     verdict: "accept",
@@ -134,14 +112,7 @@ test("quote resolution ignores assistant text and hashes the immutable user entr
   const result = resolveExactUserQuote(
     [
       userEntry("u1", quote),
-      {
-        id: "a1",
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: quote }],
-        },
-      },
+      { id: "a1", type: "message", message: { role: "assistant", content: [{ type: "text", text: quote }] } },
     ],
     quote,
     "session",
@@ -159,10 +130,7 @@ test("preflight verifies provenance and builds bounded candidate groups", async 
     guidance: "Keep replies concise.",
     basis: { type: "user_instruction", quote: "Keep replies concise." },
   };
-  const existing = note({
-    trigger: "answering",
-    guidance: "Keep answers concise.",
-  });
+  const existing = note({ trigger: "answering", guidance: "Keep answers concise." });
   const state = { ...emptyMemoryState(), notes: [existing] };
   const result = await preflightMemoryProposals({
     rawProposals: [proposal],
@@ -174,10 +142,7 @@ test("preflight verifies provenance and builds bounded candidate groups", async 
   });
   assert.equal(result.proposals[0]?.owner, "default");
   assert.equal(result.proposals[0]?.verificationStatus.status, "verified");
-  assert.match(
-    result.proposals[0]?.verificationStatus.sourceSnapshotId ?? "",
-    /^[0-9a-f]{64}$/,
-  );
+  assert.match(result.proposals[0]?.verificationStatus.sourceSnapshotId ?? "", /^[0-9a-f]{64}$/);
   assert.equal(result.packet.version, 2);
   assert.equal("existingNotes" in result.packet, false);
   assert.ok(result.packet.candidateDuplicates.length <= 20);
@@ -185,10 +150,7 @@ test("preflight verifies provenance and builds bounded candidate groups", async 
 
 test("preflight allows durable task-like words and routes fuzzy duplicates to review", async () => {
   const quote = "When working on TODO comments, preserve issue references.";
-  const existing = note({
-    trigger: "working on user TODO requests",
-    guidance: "Keep answers concise and direct.",
-  });
+  const existing = note({ trigger: "working on user TODO requests", guidance: "Keep answers concise and direct." });
   const proposal = {
     operation: "add",
     scope: "user",
@@ -227,10 +189,7 @@ test("exact duplicate proposals are marked covered and produce no mutation", asy
     projectOwner: "o",
   });
   assert.equal(result.proposals[0]?.coveredBy?.id, existing.id);
-  const decision = accepted(0, {
-    trigger: proposal.trigger,
-    guidance: proposal.guidance,
-  });
+  const decision = accepted(0, { trigger: proposal.trigger, guidance: proposal.guidance });
   const record = reviewedRecord({
     decisions: [decision],
     preflight: result.proposals,
@@ -289,32 +248,19 @@ test("review record preserves evidence, computes advisory policy, and rejects in
     scope: "project",
     trigger: "changing the ownership boundary",
     guidance: "Preserve the documented ownership boundary.",
-    basis: {
-      type: "project_contract",
-      evidence: [{ path: "README.md", start: 1, end: 1 }],
-    },
+    basis: { type: "project_contract", evidence: [{ path: "README.md", start: 1, end: 1 }] },
   };
   const prepared: PreflightProposal = {
     proposal,
     owner: "o",
     evidence: [
-      {
-        path: "README.md",
-        start: 1,
-        end: 1,
-        excerpt: "documented ownership boundary",
-        excerptSha256: "b".repeat(64),
-      },
+      { path: "README.md", start: 1, end: 1, excerpt: "documented ownership boundary", excerptSha256: "b".repeat(64) },
     ],
-    sourceRefs: [
-      { type: "repository", path: "README.md", excerptSha256: "b".repeat(64) },
-    ],
+    sourceRefs: [{ type: "repository", path: "README.md", excerptSha256: "b".repeat(64) }],
     relatedPaths: ["README.md"],
     verificationStatus,
   };
-  const reviewPacket = packet([
-    { proposal, owner: "o", evidence: prepared.evidence, verificationStatus },
-  ]);
+  const reviewPacket = packet([{ proposal, owner: "o", evidence: prepared.evidence, verificationStatus }]);
   const decision = accepted(0, {
     scope: "project",
     trigger: proposal.trigger,
@@ -332,7 +278,7 @@ test("review record preserves evidence, computes advisory policy, and rejects in
   });
   assert.equal(record.verificationStatus.status, "verified");
   assert.deepEqual(
-    record.evidenceBatches?.map((batch) => batch.length),
+    record.evidenceBatches?.map(batch => batch.length),
     [1],
   );
   assert.equal((record.operations[0] as any).disposition, "archival");
@@ -370,13 +316,8 @@ test("rewrite preservation is format-only in the advisory rollout", () => {
     basis: { type: "user_instruction", quote },
   };
   const prepared = preparedUser(proposal, quote),
-    reviewPacket = packet([
-      { proposal, owner: "default", quote: prepared.quote, verificationStatus },
-    ]);
-  const rewrite = (
-    trigger: string,
-    guidance = proposal.guidance,
-  ): ReviewerDecision => ({
+    reviewPacket = packet([{ proposal, owner: "default", quote: prepared.quote, verificationStatus }]);
+  const rewrite = (trigger: string, guidance = proposal.guidance): ReviewerDecision => ({
     proposalIndex: 0,
     verdict: "rewrite",
     operation: "add",
@@ -414,9 +355,7 @@ test("rewrite preservation is format-only in the advisory rollout", () => {
   assert.throws(
     () =>
       reviewedRecord({
-        decisions: [
-          rewrite("editing files", "Edit the generator and run tests."),
-        ],
+        decisions: [rewrite("editing files", "Edit the generator and run tests.")],
         preflight: [prepared],
         packet: reviewPacket,
         sessionId: "s",
@@ -455,17 +394,7 @@ test("reviewer removals require an explicit revocation and complete target", () 
       reviewedRecord({
         decisions: [decision],
         preflight: [prepared],
-        packet: packet(
-          [
-            {
-              proposal,
-              owner: "default",
-              quote: prepared.quote,
-              verificationStatus,
-            },
-          ],
-          [target],
-        ),
+        packet: packet([{ proposal, owner: "default", quote: prepared.quote, verificationStatus }], [target]),
         sessionId: "s",
         toolCallId: "c",
         generation: 1,
@@ -479,12 +408,7 @@ test("reviewer strictly rejects malformed, incomplete, unknown, and secret-rewri
   for (const output of [
     "not json",
     JSON.stringify({ version: 2, decisions: [] }),
-    JSON.stringify({
-      version: 2,
-      decisions: [
-        { proposalIndex: 1, verdict: "reject", reasonCode: "unsupported" },
-      ],
-    }),
+    JSON.stringify({ version: 2, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "unsupported" }] }),
     JSON.stringify({
       version: 2,
       decisions: [
@@ -524,16 +448,11 @@ test("reviewer diagnostics never echo malformed output", async () => {
 
 test("reviewer surfaces provider failures, truncation, and caller aborts", async () => {
   await assert.rejects(
-    reviewerInput(async () => ({
-      ...reviewResponse("", "error"),
-      errorMessage: "provider unavailable",
-    })),
+    reviewerInput(async () => ({ ...reviewResponse("", "error"), errorMessage: "provider unavailable" })),
     /provider unavailable/,
   );
   await assert.rejects(
-    reviewerInput(async () =>
-      reviewResponse('{"version":2,"decisions":[]}', "length"),
-    ),
+    reviewerInput(async () => reviewResponse('{"version":2,"decisions":[]}', "length")),
     /truncated/,
   );
   const abort = new AbortController();
@@ -560,10 +479,7 @@ test("merge targets remain bounded to supplied candidate notes", () => {
   };
   const prepared = preparedUser(proposal),
     target = note({ id: targetId, revision: 2 });
-  const reviewPacket = packet(
-    [{ proposal, owner: "default", quote: prepared.quote, verificationStatus }],
-    [target],
-  );
+  const reviewPacket = packet([{ proposal, owner: "default", quote: prepared.quote, verificationStatus }], [target]);
   const merge = (overrides: Record<string, unknown> = {}): ReviewerDecision =>
     ({
       proposalIndex: 0,

@@ -9,9 +9,7 @@ export type Exec = (
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function validatePngHeader(size: number, header: Buffer): void {
   if (size === 0) throw new Error("Screenshot command produced an empty image");
@@ -31,12 +29,7 @@ export async function validatePngFile(path: string): Promise<void> {
     const header = Buffer.alloc(Math.min(size, PNG_SIGNATURE.length));
     let offset = 0;
     while (offset < header.length) {
-      const { bytesRead } = await file.read(
-        header,
-        offset,
-        header.length - offset,
-        offset,
-      );
+      const { bytesRead } = await file.read(header, offset, header.length - offset, offset);
       if (!bytesRead) break;
       offset += bytesRead;
     }
@@ -56,13 +49,8 @@ async function outputCreated(path: string): Promise<boolean> {
 
 export function loopbackUrl(value: string, protocols: readonly string[]): URL {
   const url = new URL(value);
-  if (
-    !protocols.includes(url.protocol) ||
-    !LOOPBACK_HOSTS.has(url.hostname.toLowerCase())
-  ) {
-    throw new Error(
-      `Helios only permits loopback ${protocols.join("/")} endpoints`,
-    );
+  if (!protocols.includes(url.protocol) || !LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
+    throw new Error(`Helios only permits loopback ${protocols.join("/")} endpoints`);
   }
   return url;
 }
@@ -198,8 +186,7 @@ export async function findWindow(
   signal?: AbortSignal,
   platform: NodeJS.Platform = process.platform,
 ): Promise<WindowTarget> {
-  if (platform !== "win32")
-    throw new Error("Window capture currently supports Windows only");
+  if (platform !== "win32") throw new Error("Window capture currently supports Windows only");
   const query = title.trim();
   if (!query) throw new Error("Window capture requires a non-empty title");
   const encodedQuery = Buffer.from(query, "utf8").toString("base64");
@@ -213,22 +200,10 @@ export async function findWindow(
   );
   if (result.code !== 0) throw failed("Window lookup", result);
   try {
-    const target = JSON.parse(result.stdout.trim()) as {
-      Handle?: unknown;
-      ProcessId?: unknown;
-      Title?: unknown;
-    };
-    if (
-      typeof target.Handle !== "number" ||
-      typeof target.ProcessId !== "number" ||
-      typeof target.Title !== "string"
-    )
+    const target = JSON.parse(result.stdout.trim()) as { Handle?: unknown; ProcessId?: unknown; Title?: unknown };
+    if (typeof target.Handle !== "number" || typeof target.ProcessId !== "number" || typeof target.Title !== "string")
       throw new Error();
-    return {
-      handle: target.Handle,
-      processId: target.ProcessId,
-      title: target.Title,
-    };
+    return { handle: target.Handle, processId: target.ProcessId, title: target.Title };
   } catch {
     throw new Error("Window lookup returned an invalid result");
   }
@@ -241,8 +216,7 @@ export async function captureWindow(
   signal?: AbortSignal,
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
-  if (platform !== "win32")
-    throw new Error("Window capture currently supports Windows only");
+  if (platform !== "win32") throw new Error("Window capture currently supports Windows only");
   const encodedPath = Buffer.from(outputPath, "utf8").toString("base64");
   const result = await exec(
     "powershell.exe",
@@ -253,6 +227,5 @@ export async function captureWindow(
     { signal, timeout: 15_000 },
   );
   if (result.code !== 0) throw failed("Window capture", result);
-  if (!(await outputCreated(outputPath)))
-    throw new Error("Window capture produced no screenshot file");
+  if (!(await outputCreated(outputPath))) throw new Error("Window capture produced no screenshot file");
 }

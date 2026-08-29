@@ -8,15 +8,7 @@ import {
 } from "@tabler/icons-react";
 import type { RuntimeStoreSnapshot } from "./runtime/event-store";
 
-export type PanelId =
-  | "chat"
-  | "inspector"
-  | "database"
-  | "agents"
-  | "files"
-  | "browser"
-  | "compaction"
-  | "attachment";
+export type PanelId = "chat" | "inspector" | "database" | "agents" | "files" | "browser" | "compaction" | "attachment";
 export type RightPanel = PanelId | null;
 
 type IconComponent = typeof IconDatabase;
@@ -47,19 +39,11 @@ export type WorkspaceModeDefinition = {
 /** Modes reachable from the topbar switch, in the order they appear there. */
 export const WORKSPACE_MODES: WorkspaceModeDefinition[] = [
   { id: "chat", label: "Chat" },
-  {
-    id: "files",
-    label: "Files",
-    shellClass: "is-files-mode",
-    displacesConversation: true,
-    requiresSession: true,
-  },
+  { id: "files", label: "Files", shellClass: "is-files-mode", displacesConversation: true, requiresSession: true },
 ];
 
-export function workspaceModeDefinition(
-  mode: WorkspaceModeId,
-): WorkspaceModeDefinition {
-  return WORKSPACE_MODES.find((item) => item.id === mode) ?? WORKSPACE_MODES[0];
+export function workspaceModeDefinition(mode: WorkspaceModeId): WorkspaceModeDefinition {
+  return WORKSPACE_MODES.find(item => item.id === mode) ?? WORKSPACE_MODES[0];
 }
 
 /** App state the topbar needs to decide what to show. */
@@ -85,14 +69,8 @@ export type PanelDefinition = {
   badge?: (runtime: Runtime, context: PanelContext) => PanelBadge;
 };
 
-export const SHARED_PANEL_WIDTH: PanelWidth = {
-  key: "pylon-right-panel-width",
-  default: 380,
-};
-const DATABASE_PANEL_WIDTH: PanelWidth = {
-  key: "pylon-database-panel-width",
-  default: 920,
-};
+export const SHARED_PANEL_WIDTH: PanelWidth = { key: "pylon-right-panel-width", default: 380 };
+const DATABASE_PANEL_WIDTH: PanelWidth = { key: "pylon-database-panel-width", default: 920 };
 
 /**
  * Panels reachable from the topbar, in the order they appear there.
@@ -108,25 +86,17 @@ export const PANELS: PanelDefinition[] = [
     icon: IconMessageCircle,
     ariaId: "chat-panel",
     // Offered by any mode that pushes the conversation out of the main area.
-    showButton: (context) =>
-      Boolean(
-        workspaceModeDefinition(context.workspaceMode).displacesConversation,
-      ),
+    showButton: context => Boolean(workspaceModeDefinition(context.workspaceMode).displacesConversation),
   },
-  {
-    id: "inspector",
-    label: "Inspector",
-    icon: IconLayoutDashboard,
-    ariaId: "session-inspector",
-  },
+  { id: "inspector", label: "Inspector", icon: IconLayoutDashboard, ariaId: "session-inspector" },
   {
     id: "agents",
     label: "Agents",
     icon: IconUsers,
     ariaId: "agents-panel",
-    badge: (runtime) => {
+    badge: runtime => {
       const runs = runtime?.conversation.delegatedRuns ?? [];
-      const active = runs.filter((run) => run.status === "running").length;
+      const active = runs.filter(run => run.status === "running").length;
       return {
         count: runs.length,
         live: active > 0,
@@ -140,8 +110,8 @@ export const PANELS: PanelDefinition[] = [
     icon: IconFiles,
     ariaId: "files-panel",
     // Redundant in files mode, where the workspace already shows them inline.
-    showButton: (context) => context.workspaceMode !== "files",
-    badge: (runtime) => ({ count: runtime?.workspace?.changedCount ?? 0 }),
+    showButton: context => context.workspaceMode !== "files",
+    badge: runtime => ({ count: runtime?.workspace?.changedCount ?? 0 }),
   },
   {
     id: "database",
@@ -149,16 +119,16 @@ export const PANELS: PanelDefinition[] = [
     icon: IconDatabase,
     ariaId: "database-panel",
     width: DATABASE_PANEL_WIDTH,
-    showButton: (context) => context.stateqlEnabled,
-    requiresPackage: (context) => context.stateqlEnabled,
+    showButton: context => context.stateqlEnabled,
+    requiresPackage: context => context.stateqlEnabled,
   },
   {
     id: "browser",
     label: "Browser",
     icon: IconWorld,
     ariaId: "browser-panel",
-    showButton: (context) => context.browserAvailable,
-    requiresPackage: (context) => context.browserAvailable,
+    showButton: context => context.browserAvailable,
+    requiresPackage: context => context.browserAvailable,
     badge: (_runtime, context) => ({
       live: context.browserActive,
       ariaLabel: `Helios browser${context.browserActive ? ", active" : ""}`,
@@ -166,10 +136,8 @@ export const PANELS: PanelDefinition[] = [
   },
 ];
 
-export function panelDefinition(
-  panel: RightPanel,
-): PanelDefinition | undefined {
-  return panel ? PANELS.find((item) => item.id === panel) : undefined;
+export function panelDefinition(panel: RightPanel): PanelDefinition | undefined {
+  return panel ? PANELS.find(item => item.id === panel) : undefined;
 }
 
 export function panelWidthSlot(panel: RightPanel): PanelWidth {
@@ -181,10 +149,7 @@ export function clampPanelWidth(value: number): number {
 }
 
 export function initialPanelWidths(): Record<string, number> {
-  const slots = [
-    SHARED_PANEL_WIDTH,
-    ...PANELS.flatMap((panel) => panel.width ?? []),
-  ];
+  const slots = [SHARED_PANEL_WIDTH, ...PANELS.flatMap(panel => panel.width ?? [])];
   const widths: Record<string, number> = {};
   for (const slot of slots) {
     let stored = Number.NaN;
@@ -193,9 +158,7 @@ export function initialPanelWidths(): Record<string, number> {
     } catch {
       /* Storage can be unavailable in hardened browser contexts. */
     }
-    widths[slot.key] = clampPanelWidth(
-      Number.isFinite(stored) && stored > 0 ? stored : slot.default,
-    );
+    widths[slot.key] = clampPanelWidth(Number.isFinite(stored) && stored > 0 ? stored : slot.default);
   }
   return widths;
 }

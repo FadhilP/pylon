@@ -25,18 +25,9 @@ import type { RuntimeSnapshot } from "../../shared/protocol/snapshots.ts";
 import type { ConversationTurnIndexItem } from "../../shared/protocol/snapshots.ts";
 import type { DriverEvent } from "./pi-driver.ts";
 import { cloneOperational } from "./operational-projections.ts";
-import {
-  PROMPT_FILES_CUSTOM_TYPE,
-  PROMPT_IMAGE_ATTACHMENT_VERSION,
-} from "./prompt-attachments.ts";
-import {
-  settleRunningActivities,
-  terminalActivityStatus,
-} from "../../shared/transcript.ts";
-import {
-  MAX_UNSEEN_COMPLETIONS,
-  validCompletionSessionId,
-} from "../../shared/session-completions.ts";
+import { PROMPT_FILES_CUSTOM_TYPE, PROMPT_IMAGE_ATTACHMENT_VERSION } from "./prompt-attachments.ts";
+import { settleRunningActivities, terminalActivityStatus } from "../../shared/transcript.ts";
+import { MAX_UNSEEN_COMPLETIONS, validCompletionSessionId } from "../../shared/session-completions.ts";
 
 const MAX_TEXT = 60 * 1024;
 const MAX_MESSAGES = 100;
@@ -59,19 +50,13 @@ const spawnControlActions = new Set(["status", "cancel"]);
 export const HISTORY_PAGE_SIZE = MAX_MESSAGES;
 
 export function encodeHistoryCursor(index: number): string {
-  return Buffer.from(`h:${Math.max(0, Math.floor(index))}`).toString(
-    "base64url",
-  );
+  return Buffer.from(`h:${Math.max(0, Math.floor(index))}`).toString("base64url");
 }
 
 export function decodeHistoryCursor(cursor: string): number | undefined {
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    if (
-      !/^h:\d+$/.test(decoded) ||
-      encodeHistoryCursor(Number(decoded.slice(2))) !== cursor
-    )
-      return undefined;
+    if (!/^h:\d+$/.test(decoded) || encodeHistoryCursor(Number(decoded.slice(2))) !== cursor) return undefined;
     const index = Number(decoded.slice(2));
     return Number.isSafeInteger(index) ? index : undefined;
   } catch {
@@ -80,19 +65,13 @@ export function decodeHistoryCursor(cursor: string): number | undefined {
 }
 
 export function encodeTurnIndexCursor(index: number): string {
-  return Buffer.from(`t:${Math.max(0, Math.floor(index))}`).toString(
-    "base64url",
-  );
+  return Buffer.from(`t:${Math.max(0, Math.floor(index))}`).toString("base64url");
 }
 
 export function decodeTurnIndexCursor(cursor: string): number | undefined {
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    if (
-      !/^t:\d+$/.test(decoded) ||
-      encodeTurnIndexCursor(Number(decoded.slice(2))) !== cursor
-    )
-      return undefined;
+    if (!/^t:\d+$/.test(decoded) || encodeTurnIndexCursor(Number(decoded.slice(2))) !== cursor) return undefined;
     const index = Number(decoded.slice(2));
     return Number.isSafeInteger(index) ? index : undefined;
   } catch {
@@ -106,25 +85,16 @@ function text(value: unknown, maximum = MAX_TEXT): string {
   return typeof value === "string" ? value.slice(0, maximum) : "";
 }
 function createdAt(value: unknown): string | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Date.parse(value)
-        : Number.NaN;
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
   if (!Number.isFinite(parsed)) return undefined;
   const date = new Date(parsed);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 function object(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 function id(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.length > 0
-    ? value.slice(0, 128)
-    : fallback;
+  return typeof value === "string" && value.length > 0 ? value.slice(0, 128) : fallback;
 }
 function role(value: unknown): MessageReadModel["role"] {
   if (value === "toolResult" || value === "tool") return "tool";
@@ -133,34 +103,27 @@ function role(value: unknown): MessageReadModel["role"] {
   return "user";
 }
 function thinkingLevel(value: unknown): MessageReadModel["thinkingLevel"] {
-  return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-    String(value),
-  )
+  return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(value))
     ? (value as MessageReadModel["thinkingLevel"])
     : undefined;
 }
 function attachmentCount(value: unknown): number | undefined {
   const content = object(value).content;
   if (!Array.isArray(content)) return undefined;
-  const count = content.filter((part) => object(part).type === "image").length;
+  const count = content.filter(part => object(part).type === "image").length;
   return count > 0 ? Math.min(4, count) : undefined;
 }
 function promptFileCount(value: unknown): number | undefined {
   const raw = object(value);
   if (raw.customType !== PROMPT_FILES_CUSTOM_TYPE) return undefined;
   const files = object(raw.details).files;
-  return Array.isArray(files) && files.length > 0
-    ? Math.min(100, files.length)
-    : undefined;
+  return Array.isArray(files) && files.length > 0 ? Math.min(100, files.length) : undefined;
 }
 function imageBytes(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   return Math.max(0, (data.length / 4) * 3 - padding);
 }
-function imageAttachments(
-  value: unknown,
-  sourceEntryId?: unknown,
-): MessageAttachmentReadModel[] | undefined {
+function imageAttachments(value: unknown, sourceEntryId?: unknown): MessageAttachmentReadModel[] | undefined {
   if (typeof sourceEntryId !== "string" || !sourceEntryId) return undefined;
   const content = object(value).content;
   if (!Array.isArray(content)) return undefined;
@@ -173,9 +136,7 @@ function imageAttachments(
       typeof image.mimeType !== "string"
     )
       return [];
-    const imageIndex = content
-      .slice(0, index)
-      .filter((item) => object(item).type === "image").length;
+    const imageIndex = content.slice(0, index).filter(item => object(item).type === "image").length;
     return [
       {
         sourceEntryId: id(sourceEntryId, ""),
@@ -189,10 +150,7 @@ function imageAttachments(
   });
   return attachments.length ? attachments : undefined;
 }
-function promptFileAttachments(
-  value: unknown,
-  sourceEntryId?: unknown,
-): MessageAttachmentReadModel[] | undefined {
+function promptFileAttachments(value: unknown, sourceEntryId?: unknown): MessageAttachmentReadModel[] | undefined {
   const raw = object(value);
   const details = object(raw.details);
   if (
@@ -227,11 +185,8 @@ function promptFileAttachments(
   });
   return attachments.length ? attachments : undefined;
 }
-function compactionDisplay(
-  value: unknown,
-): CompactionDisplayReadModel | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+function compactionDisplay(value: unknown): CompactionDisplayReadModel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   const source = (item: unknown) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
@@ -247,8 +202,7 @@ function compactionDisplay(
   };
   const record = (item: unknown) =>
     source(item) &&
-    ((item as Record<string, unknown>).role === "user" ||
-      (item as Record<string, unknown>).role === "assistant");
+    ((item as Record<string, unknown>).role === "user" || (item as Record<string, unknown>).role === "assistant");
   const historyRecord = (item: unknown) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const record = item as Record<string, unknown>;
@@ -257,8 +211,7 @@ function compactionDisplay(
       record.path.length > 0 &&
       record.path.length <= MAX_COMPACTION_DISPLAY_PATH &&
       (record.sourceEntryId === undefined ||
-        (typeof record.sourceEntryId === "string" &&
-          record.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID))
+        (typeof record.sourceEntryId === "string" && record.sourceEntryId.length <= MAX_COMPACTION_DISPLAY_SOURCE_ID))
     );
   };
   const history = raw.history as Record<string, unknown> | undefined;
@@ -266,8 +219,7 @@ function compactionDisplay(
     !Array.isArray(raw.records) ||
     !Array.isArray(raw.failedTools) ||
     !Array.isArray(raw.toolResults) ||
-    raw.records.length + raw.failedTools.length + raw.toolResults.length >
-      MAX_COMPACTION_DISPLAY_RECORDS ||
+    raw.records.length + raw.failedTools.length + raw.toolResults.length > MAX_COMPACTION_DISPLAY_RECORDS ||
     !raw.records.every(record) ||
     !raw.failedTools.every(source) ||
     !raw.toolResults.every(source) ||
@@ -283,45 +235,31 @@ function compactionDisplay(
     return undefined;
   const sourceValue = (item: unknown) => {
     const record = item as Record<string, unknown>;
-    return {
-      sourceEntryId: record.sourceEntryId as string,
-      text: record.text as string,
-    };
+    return { sourceEntryId: record.sourceEntryId as string, text: record.text as string };
   };
   const historyValue = (item: unknown) => {
     const record = item as Record<string, unknown>;
     return {
       path: record.path as string,
-      ...(typeof record.sourceEntryId === "string"
-        ? { sourceEntryId: record.sourceEntryId }
-        : {}),
+      ...(typeof record.sourceEntryId === "string" ? { sourceEntryId: record.sourceEntryId } : {}),
     };
   };
   return {
-    records: raw.records.map((item) => ({
+    records: raw.records.map(item => ({
       ...sourceValue(item),
       role: (item as Record<string, unknown>).role as "user" | "assistant",
     })),
     failedTools: raw.failedTools.map(sourceValue),
     toolResults: raw.toolResults.map(sourceValue),
-    history: {
-      read: history.read.map(historyValue),
-      modified: history.modified.map(historyValue),
-    },
+    history: { read: history.read.map(historyValue), modified: history.modified.map(historyValue) },
   };
 }
 
 function compactionMessage(value: unknown): MessageReadModel["compaction"] {
   const raw = object(value);
-  if (
-    !Number.isSafeInteger(raw.contextAfterTokens) ||
-    Number(raw.contextAfterTokens) < 0
-  )
-    return undefined;
+  if (!Number.isSafeInteger(raw.contextAfterTokens) || Number(raw.contextAfterTokens) < 0) return undefined;
   const optionalCount = (value: unknown) =>
-    Number.isSafeInteger(value) && Number(value) >= 0
-      ? Number(value)
-      : undefined;
+    Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
   const contextBeforeTokens = optionalCount(raw.contextBeforeTokens);
   const sourceEntryCount = optionalCount(raw.sourceEntryCount);
   const display = compactionDisplay(raw.display);
@@ -337,7 +275,7 @@ function messageText(value: unknown): string {
   if (typeof raw.content === "string") return text(raw.content);
   if (!Array.isArray(raw.content)) return text(raw.text);
   return raw.content
-    .flatMap((part) => {
+    .flatMap(part => {
       const item = object(part);
       return typeof item.text === "string" ? [item.text] : [];
     })
@@ -345,16 +283,9 @@ function messageText(value: unknown): string {
     .slice(0, MAX_TEXT);
 }
 
-export function continuityCompactionInterruptionId(
-  value: unknown,
-): string | undefined {
+export function continuityCompactionInterruptionId(value: unknown): string | undefined {
   const raw = object(value);
-  if (
-    raw.role !== "assistant" ||
-    raw.stopReason !== "aborted" ||
-    !Array.isArray(raw.diagnostics)
-  )
-    return undefined;
+  if (raw.role !== "assistant" || raw.stopReason !== "aborted" || !Array.isArray(raw.diagnostics)) return undefined;
   for (let index = raw.diagnostics.length - 1; index >= 0; index--) {
     const diagnostic = object(raw.diagnostics[index]);
     const details = object(diagnostic.details);
@@ -373,15 +304,10 @@ export function continuityCompactionInterruptionId(
 function latestMessages(messages: MessageReadModel[]): MessageReadModel[] {
   if (messages.length <= MAX_MESSAGES) return messages;
   const tail = messages.slice(-(MAX_MESSAGES - 1));
-  const latestUser = [...messages]
-    .reverse()
-    .find((message) => message.role === "user");
-  if (!latestUser || tail.includes(latestUser))
-    return messages.slice(-MAX_MESSAGES);
+  const latestUser = [...messages].reverse().find(message => message.role === "user");
+  if (!latestUser || tail.includes(latestUser)) return messages.slice(-MAX_MESSAGES);
   const userIndex = messages.indexOf(latestUser);
-  const insertion = tail.findIndex(
-    (message) => messages.indexOf(message) > userIndex,
-  );
+  const insertion = tail.findIndex(message => messages.indexOf(message) > userIndex);
   tail.splice(insertion < 0 ? tail.length : insertion, 0, latestUser);
   return tail;
 }
@@ -400,30 +326,21 @@ function boundedLines(value: unknown): string[] | undefined {
 }
 export function browserValue(value: unknown, depth = 0): unknown {
   if (depth > 4) return "[truncated]";
-  if (value === null || typeof value === "boolean" || typeof value === "number")
-    return value;
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return value.slice(0, MAX_PAYLOAD_TEXT);
-  if (Array.isArray(value))
-    return value.slice(0, 50).map((item) => browserValue(item, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, 50).map(item => browserValue(item, depth + 1));
   if (typeof value === "object")
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .slice(0, 50)
         .filter(([key]) => !/token|secret|authorization|password/i.test(key))
-        .map(([key, item]) => [
-          key.slice(0, 100),
-          browserValue(item, depth + 1),
-        ]),
+        .map(([key, item]) => [key.slice(0, 100), browserValue(item, depth + 1)]),
     );
   return undefined;
 }
 
-function spawnToolKind(
-  value: unknown,
-): "spawn_agent" | "spawn_session" | undefined {
-  return value === "spawn_agent" || value === "spawn_session"
-    ? value
-    : undefined;
+function spawnToolKind(value: unknown): "spawn_agent" | "spawn_session" | undefined {
+  return value === "spawn_agent" || value === "spawn_session" ? value : undefined;
 }
 
 function spawnAction(input: unknown): string | undefined {
@@ -432,63 +349,34 @@ function spawnAction(input: unknown): string | undefined {
 }
 
 function delegatedId(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= 128
-    ? value
-    : undefined;
+  return typeof value === "string" && value.length > 0 && value.length <= 128 ? value : undefined;
 }
 
-function delegatedAgentKind(
-  value: unknown,
-  input?: unknown,
-): DelegatedAgentKind | undefined {
+function delegatedAgentKind(value: unknown, input?: unknown): DelegatedAgentKind | undefined {
   if (!delegatedAgentKinds.has(value as DelegatedAgentKind)) return undefined;
   const kind = value as DelegatedAgentKind;
   if (kind !== "spawn_agent" && kind !== "spawn_session") return kind;
   const action = spawnAction(input);
-  if (
-    !spawnExecutionActions.has(String(action)) ||
-    (action === "adopt" && kind !== "spawn_session")
-  )
-    return undefined;
+  if (!spawnExecutionActions.has(String(action)) || (action === "adopt" && kind !== "spawn_session")) return undefined;
   return kind;
 }
 
-function boundedNumber(
-  value: unknown,
-  maximum = Number.MAX_SAFE_INTEGER,
-): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.min(maximum, value)
-    : undefined;
+function boundedNumber(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : undefined;
 }
 
-function delegatedUsage(
-  value: unknown,
-): DelegatedAgentUsageReadModel | undefined {
+function delegatedUsage(value: unknown): DelegatedAgentUsageReadModel | undefined {
   const raw = object(value);
   const input = boundedNumber(raw.input);
   const output = boundedNumber(raw.output);
   const cacheRead = boundedNumber(raw.cacheRead);
   const cacheWrite = boundedNumber(raw.cacheWrite);
   const cost = boundedNumber(raw.cost, 1_000_000_000);
-  if (
-    [input, output, cacheRead, cacheWrite, cost].some(
-      (item) => item === undefined,
-    )
-  )
-    return undefined;
-  return {
-    input: input!,
-    output: output!,
-    cacheRead: cacheRead!,
-    cacheWrite: cacheWrite!,
-    cost: cost!,
-  };
+  if ([input, output, cacheRead, cacheWrite, cost].some(item => item === undefined)) return undefined;
+  return { input: input!, output: output!, cacheRead: cacheRead!, cacheWrite: cacheWrite!, cost: cost! };
 }
 
-function delegatedActivity(
-  value: unknown,
-): DelegatedAgentActivityReadModel[] | undefined {
+function delegatedActivity(value: unknown): DelegatedAgentActivityReadModel[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result: DelegatedAgentActivityReadModel[] = [];
   for (const rawValue of value) {
@@ -500,20 +388,13 @@ function delegatedActivity(
     let activityText = text(raw.text, MAX_AGENT_ACTIVITY_TEXT);
     if (activityText) {
       try {
-        activityText =
-          browserJson(JSON.parse(activityText))?.slice(
-            0,
-            MAX_AGENT_ACTIVITY_TEXT,
-          ) ?? activityText;
+        activityText = browserJson(JSON.parse(activityText))?.slice(0, MAX_AGENT_ACTIVITY_TEXT) ?? activityText;
       } catch {
         /* Non-JSON tool input remains bounded plain text. */
       }
       activityText = activityText
         .replace(/\bBearer\s+\S+/gi, "Bearer <redacted>")
-        .replace(
-          /\b((?:api[_-]?key|token|secret|password|cookie)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi,
-          "$1<redacted>",
-        )
+        .replace(/\b((?:api[_-]?key|token|secret|password|cookie)\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1<redacted>")
         .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted>")
         .slice(0, MAX_AGENT_ACTIVITY_TEXT);
     }
@@ -534,33 +415,19 @@ function delegatedActivity(
 
 function delegatedRequest(input: unknown): string | undefined {
   const raw = object(input);
-  return (
-    text(raw.request ?? raw.task ?? raw.prompt, MAX_PAYLOAD_TEXT) || undefined
-  );
+  return text(raw.request ?? raw.task ?? raw.prompt, MAX_PAYLOAD_TEXT) || undefined;
 }
 
-function spawnMetadata(
-  kind: DelegatedAgentKind,
-  input: unknown,
-  details: Record<string, unknown>,
-) {
+function spawnMetadata(kind: DelegatedAgentKind, input: unknown, details: Record<string, unknown>) {
   if (kind !== "spawn_agent" && kind !== "spawn_session") return {};
   const action = spawnAction(input);
-  const validAction =
-    spawnExecutionActions.has(String(action)) &&
-    (action !== "adopt" || kind === "spawn_session");
+  const validAction = spawnExecutionActions.has(String(action)) && (action !== "adopt" || kind === "spawn_session");
   const marker = object(details.piSpawn);
   const expectedKind = kind === "spawn_agent" ? "agent" : "session";
-  const threadId =
-    marker.version === 1 && marker.kind === expectedKind
-      ? delegatedId(marker.id)
-      : undefined;
-  const runId =
-    details.background === true ? delegatedId(details.runId) : undefined;
+  const threadId = marker.version === 1 && marker.kind === expectedKind ? delegatedId(marker.id) : undefined;
+  const runId = details.background === true ? delegatedId(details.runId) : undefined;
   return {
-    ...(validAction
-      ? { action: action as "create" | "continue" | "adopt" }
-      : {}),
+    ...(validAction ? { action: action as "create" | "continue" | "adopt" } : {}),
     ...(threadId ? { threadId } : {}),
     ...(runId ? { runId } : {}),
   };
@@ -571,12 +438,7 @@ function validSpawnControlTarget(
   kind: DelegatedAgentKind | undefined,
   details: Record<string, unknown>,
 ): previous is DelegatedAgentRunReadModel {
-  if (
-    !previous ||
-    kind !== previous.kind ||
-    delegatedId(details.runId) !== previous.runId
-  )
-    return false;
+  if (!previous || kind !== previous.kind || delegatedId(details.runId) !== previous.runId) return false;
   const metadata = spawnMetadata(kind, undefined, details);
   return !!metadata.threadId && metadata.threadId === previous.threadId;
 }
@@ -592,21 +454,12 @@ function delegatedEndStatus(
     raw.failed === true ||
     Boolean(raw.error) ||
     Boolean(details.failureCode) ||
-    (spawned &&
-      typeof details.status === "string" &&
-      !["completed", "running"].includes(details.status));
+    (spawned && typeof details.status === "string" && !["completed", "running"].includes(details.status));
   if (failed) return "failed";
   if (!spawned || details.status !== "running") return "completed";
   const metadata = spawnMetadata(kind, undefined, details);
-  const startedAt =
-    typeof details.startedAt === "string" &&
-    !Number.isNaN(Date.parse(details.startedAt));
-  return details.background === true &&
-    metadata.runId &&
-    metadata.threadId &&
-    startedAt
-    ? "running"
-    : "completed";
+  const startedAt = typeof details.startedAt === "string" && !Number.isNaN(Date.parse(details.startedAt));
+  return details.background === true && metadata.runId && metadata.threadId && startedAt ? "running" : "completed";
 }
 
 function equalDelegatedRunExceptDuration(
@@ -640,30 +493,18 @@ function updateDelegatedRun(
       : activityDelta?.length
         ? [...previousActivity, ...activityDelta]
         : previousActivity;
-  const nextStatus =
-    previous && previous.status !== "running" && status === "running"
-      ? previous.status
-      : status;
+  const nextStatus = previous && previous.status !== "running" && status === "running" ? previous.status : status;
   const request = delegatedRequest(input);
-  const partialResponse =
-    status === "running" ? text(details.partialResponse) : "";
-  const response =
-    status === "running"
-      ? partialResponse || previous?.response
-      : messageText(raw);
+  const partialResponse = status === "running" ? text(details.partialResponse) : "";
+  const response = status === "running" ? partialResponse || previous?.response : messageText(raw);
   const agentName = text(details.agentName, 24) || undefined;
   const startedAt =
-    typeof details.startedAt === "string" &&
-    !Number.isNaN(Date.parse(details.startedAt))
+    typeof details.startedAt === "string" && !Number.isNaN(Date.parse(details.startedAt))
       ? details.startedAt
       : undefined;
-  const modelName =
-    text(details.advisorModel ?? details.model, 200) || undefined;
+  const modelName = text(details.advisorModel ?? details.model, 200) || undefined;
   const level = thinkingLevel(details.thinking);
-  const durationMs = boundedNumber(
-    details.durationMs,
-    7 * 24 * 60 * 60 * 1_000,
-  );
+  const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
   const usage = delegatedUsage(details.usage);
   const sessionUsage = delegatedUsage(details.sessionUsage);
   return {
@@ -697,37 +538,11 @@ export function projectDelegatedToolEvent(
   const name = raw.name ?? raw.toolName;
   const kind = delegatedAgentKind(name, input) ?? previous?.kind;
   if (!kind) return undefined;
-  if (phase === "start")
-    return updateDelegatedRun(
-      previous,
-      kind,
-      toolId,
-      turn,
-      input,
-      undefined,
-      "running",
-    );
-  if (phase === "update")
-    return updateDelegatedRun(
-      previous,
-      kind,
-      toolId,
-      turn,
-      input,
-      raw.partialResult,
-      "running",
-    );
+  if (phase === "start") return updateDelegatedRun(previous, kind, toolId, turn, input, undefined, "running");
+  if (phase === "update") return updateDelegatedRun(previous, kind, toolId, turn, input, raw.partialResult, "running");
   const result = raw.result ?? raw;
   const details = object(object(result).details);
-  return updateDelegatedRun(
-    previous,
-    kind,
-    toolId,
-    turn,
-    input,
-    result,
-    delegatedEndStatus(raw, kind, details),
-  );
+  return updateDelegatedRun(previous, kind, toolId, turn, input, result, delegatedEndStatus(raw, kind, details));
 }
 
 function mergeDelegatedRun(
@@ -735,48 +550,29 @@ function mergeDelegatedRun(
   live: DelegatedAgentRunReadModel,
 ): DelegatedAgentRunReadModel {
   const terminal = transcript.status !== "running" ? transcript : live;
-  const activity =
-    live.activity.length >= transcript.activity.length
-      ? live.activity
-      : transcript.activity;
+  const activity = live.activity.length >= transcript.activity.length ? live.activity : transcript.activity;
   const usage = terminal.usage ?? live.usage ?? transcript.usage;
-  const sessionUsage =
-    terminal.sessionUsage ?? live.sessionUsage ?? transcript.sessionUsage;
-  const durationMs =
-    terminal.durationMs ?? live.durationMs ?? transcript.durationMs;
+  const sessionUsage = terminal.sessionUsage ?? live.sessionUsage ?? transcript.sessionUsage;
+  const durationMs = terminal.durationMs ?? live.durationMs ?? transcript.durationMs;
   return {
     id: transcript.id,
     kind: transcript.kind,
     turn: transcript.turn,
     status: terminal.status,
     activity: structuredClone(activity),
-    ...((live.agentName ?? transcript.agentName)
-      ? { agentName: live.agentName ?? transcript.agentName }
-      : {}),
-    ...((live.startedAt ?? transcript.startedAt)
-      ? { startedAt: live.startedAt ?? transcript.startedAt }
-      : {}),
-    ...((live.request ?? transcript.request)
-      ? { request: live.request ?? transcript.request }
-      : {}),
+    ...((live.agentName ?? transcript.agentName) ? { agentName: live.agentName ?? transcript.agentName } : {}),
+    ...((live.startedAt ?? transcript.startedAt) ? { startedAt: live.startedAt ?? transcript.startedAt } : {}),
+    ...((live.request ?? transcript.request) ? { request: live.request ?? transcript.request } : {}),
     ...((terminal.response ?? live.response ?? transcript.response)
       ? { response: terminal.response ?? live.response ?? transcript.response }
       : {}),
-    ...((live.modelName ?? transcript.modelName)
-      ? { modelName: live.modelName ?? transcript.modelName }
-      : {}),
+    ...((live.modelName ?? transcript.modelName) ? { modelName: live.modelName ?? transcript.modelName } : {}),
     ...((live.thinkingLevel ?? transcript.thinkingLevel)
       ? { thinkingLevel: live.thinkingLevel ?? transcript.thinkingLevel }
       : {}),
-    ...((live.runId ?? transcript.runId)
-      ? { runId: live.runId ?? transcript.runId }
-      : {}),
-    ...((live.threadId ?? transcript.threadId)
-      ? { threadId: live.threadId ?? transcript.threadId }
-      : {}),
-    ...((live.action ?? transcript.action)
-      ? { action: live.action ?? transcript.action }
-      : {}),
+    ...((live.runId ?? transcript.runId) ? { runId: live.runId ?? transcript.runId } : {}),
+    ...((live.threadId ?? transcript.threadId) ? { threadId: live.threadId ?? transcript.threadId } : {}),
+    ...((live.action ?? transcript.action) ? { action: live.action ?? transcript.action } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage: { ...usage } } : {}),
     ...(sessionUsage ? { sessionUsage: { ...sessionUsage } } : {}),
@@ -787,14 +583,11 @@ export function mergeDelegatedRuns(
   transcript: readonly DelegatedAgentRunReadModel[],
   live: readonly DelegatedAgentRunReadModel[],
 ): DelegatedAgentRunReadModel[] {
-  const runs = new Map(transcript.map((run) => [run.id, structuredClone(run)]));
+  const runs = new Map(transcript.map(run => [run.id, structuredClone(run)]));
   for (const run of live) {
     const persisted = runs.get(run.id);
     runs.delete(run.id);
-    runs.set(
-      run.id,
-      persisted ? mergeDelegatedRun(persisted, run) : structuredClone(run),
-    );
+    runs.set(run.id, persisted ? mergeDelegatedRun(persisted, run) : structuredClone(run));
   }
   while (runs.size > MAX_DELEGATED_RUNS) {
     const terminal = [...runs].find(([, run]) => run.status !== "running");
@@ -812,15 +605,8 @@ export function browserJson(value: unknown): string | undefined {
   }
 }
 
-export function latestVisibleUserIndex(
-  messages: unknown[],
-  end = messages.length,
-): number | undefined {
-  for (
-    let index = Math.min(messages.length, Math.max(0, Math.floor(end))) - 1;
-    index >= 0;
-    index--
-  ) {
+export function latestVisibleUserIndex(messages: unknown[], end = messages.length): number | undefined {
+  for (let index = Math.min(messages.length, Math.max(0, Math.floor(end))) - 1; index >= 0; index--) {
     const raw = object(messages[index]);
     if (role(raw.role) === "user" && !promptFileCount(raw)) return index;
   }
@@ -836,17 +622,13 @@ interface ConversationScan {
 }
 
 /** Final status of every tool call that has a result anywhere in history. */
-function collectToolStatuses(
-  messages: unknown[],
-): Map<string, "completed" | "failed"> {
+function collectToolStatuses(messages: unknown[]): Map<string, "completed" | "failed"> {
   const statuses = new Map<string, "completed" | "failed">();
   for (const message of messages) {
     const raw = object(message);
-    if (role(raw.role) !== "tool" || typeof raw.toolCallId !== "string")
-      continue;
+    if (role(raw.role) !== "tool" || typeof raw.toolCallId !== "string") continue;
     // A failure anywhere wins, so never downgrade a call already marked failed.
-    if (raw.isError !== true && statuses.get(raw.toolCallId) === "failed")
-      continue;
+    if (raw.isError !== true && statuses.get(raw.toolCallId) === "failed") continue;
     statuses.set(raw.toolCallId, raw.isError === true ? "failed" : "completed");
   }
   return statuses;
@@ -870,31 +652,18 @@ function scanAssistantToolCalls(
     const item = object(part);
     if (item.type !== "toolCall" || typeof item.id !== "string") continue;
     const name = text(item.name, 200) || "Tool";
-    scan.toolCalls.set(item.id, {
-      name,
-      rawInput: item.arguments,
-      turn: context.userTurn,
-    });
+    scan.toolCalls.set(item.id, { name, rawInput: item.arguments, turn: context.userTurn });
 
     const kind = delegatedAgentKind(name, item.arguments);
     if (scan.includeDelegated && kind) {
       scan.delegatedRuns.set(
         item.id,
-        updateDelegatedRun(
-          undefined,
-          kind,
-          item.id,
-          context.userTurn,
-          item.arguments,
-          undefined,
-          "running",
-        ),
+        updateDelegatedRun(undefined, kind, item.id, context.userTurn, item.arguments, undefined, "running"),
       );
       trimMap(scan.delegatedRuns, MAX_DELEGATED_RUNS);
     }
 
-    if (!context.projected || context.projectedToolResultIds.has(item.id))
-      continue;
+    if (!context.projected || context.projectedToolResultIds.has(item.id)) continue;
     const fallbackId = `history-${context.index}-tool-${partIndex}`;
     const durationMs = context.toolDurations?.get(item.id);
     unmatched.push({
@@ -948,24 +717,13 @@ function recordSpawnControl(
   if (!scan.includeDelegated) return;
   const details = object(raw.details);
   const canonicalId = scan.spawnRunIds.get(delegatedId(details.runId) ?? "");
-  const previous = canonicalId
-    ? scan.delegatedRuns.get(canonicalId)
-    : undefined;
-  if (!canonicalId || !validSpawnControlTarget(previous, controlKind, details))
-    return;
+  const previous = canonicalId ? scan.delegatedRuns.get(canonicalId) : undefined;
+  if (!canonicalId || !validSpawnControlTarget(previous, controlKind, details)) return;
   const status = delegatedEndStatus(raw, controlKind, details);
   if (previous.status !== "running" && status !== previous.status) return;
   scan.delegatedRuns.set(
     canonicalId,
-    updateDelegatedRun(
-      previous,
-      controlKind,
-      canonicalId,
-      previous.turn,
-      undefined,
-      raw,
-      status,
-    ),
+    updateDelegatedRun(previous, controlKind, canonicalId, previous.turn, undefined, raw, status),
   );
 }
 
@@ -981,24 +739,16 @@ export function projectConversation(
 ): Pick<ConversationReadModel, "messages" | "delegatedRuns"> {
   const start = Math.min(
     messages.length,
-    Math.max(
-      0,
-      Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES)),
-    ),
+    Math.max(0, Math.floor(options.start ?? Math.max(0, messages.length - MAX_MESSAGES))),
   );
-  const end = Math.min(
-    messages.length,
-    Math.max(start, Math.floor(options.end ?? messages.length)),
-  );
+  const end = Math.min(messages.length, Math.max(start, Math.floor(options.end ?? messages.length)));
   const includeDelegated = options.includeDelegated !== false;
   const pinnedUserIndex = latestVisibleUserIndex(messages, end) ?? -1;
   const completedToolStatuses = collectToolStatuses(messages);
   const projectedToolResultIds = new Set(
-    messages.slice(0, end).flatMap((message) => {
+    messages.slice(0, end).flatMap(message => {
       const raw = object(message);
-      return role(raw.role) === "tool" && typeof raw.toolCallId === "string"
-        ? [raw.toolCallId]
-        : [];
+      return role(raw.role) === "tool" && typeof raw.toolCallId === "string" ? [raw.toolCallId] : [];
     }),
   );
   const scan: ConversationScan = {
@@ -1022,11 +772,7 @@ export function projectConversation(
       if (latestProjectedUser) {
         latestProjectedUser.fileAttachmentCount = fileCount;
         const attachments = promptFileAttachments(raw, raw.entryId);
-        if (attachments)
-          latestProjectedUser.attachments = [
-            ...(latestProjectedUser.attachments ?? []),
-            ...attachments,
-          ];
+        if (attachments) latestProjectedUser.attachments = [...(latestProjectedUser.attachments ?? []), ...attachments];
       }
       continue;
     }
@@ -1048,31 +794,17 @@ export function projectConversation(
       const name = text(raw.toolName, 200) || call?.name || "Tool";
       const kind = delegatedAgentKind(name, call?.rawInput);
       const controlKind = spawnToolKind(name);
-      const control =
-        controlKind &&
-        spawnControlActions.has(String(spawnAction(call?.rawInput)));
-      if (kind)
-        recordDelegatedResult(
-          scan,
-          raw,
-          toolId,
-          kind,
-          call?.turn ?? userTurn,
-          call?.rawInput,
-        );
+      const control = controlKind && spawnControlActions.has(String(spawnAction(call?.rawInput)));
+      if (kind) recordDelegatedResult(scan, raw, toolId, kind, call?.turn ?? userTurn, call?.rawInput);
       else if (control) recordSpawnControl(scan, raw, controlKind);
       if (index < start && index !== pinnedUserIndex) continue;
       projectedMessages.push({
         id: fallbackId,
-        ...(typeof raw.entryId === "string"
-          ? { entryId: id(raw.entryId, fallbackId) }
-          : {}),
+        ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, fallbackId) } : {}),
         role: "tool",
         text: messageText(raw),
         streaming: false,
-        ...(createdAt(raw.timestamp ?? raw.createdAt)
-          ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) }
-          : {}),
+        ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
         tool: {
           id: toolId,
           name,
@@ -1091,18 +823,12 @@ export function projectConversation(
     const compaction = compactionMessage(raw.compaction);
     const result: MessageReadModel = {
       id: `history-${index}`,
-      ...(typeof raw.entryId === "string"
-        ? { entryId: id(raw.entryId, `history-${index}`) }
-        : {}),
+      ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, `history-${index}`) } : {}),
       role: messageRole,
       text: messageText(raw),
       streaming: false,
-      ...(createdAt(raw.timestamp ?? raw.createdAt)
-        ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) }
-        : {}),
-      ...(messageRole === "user" && raw.canUndo === true
-        ? { canUndo: true }
-        : {}),
+      ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
+      ...(messageRole === "user" && raw.canUndo === true ? { canUndo: true } : {}),
       ...(images ? { attachmentCount: images } : {}),
       ...(attachments ? { attachments } : {}),
       ...(messageRole === "system" && typeof raw.customType === "string"
@@ -1114,17 +840,12 @@ export function projectConversation(
     if (messageRole === "user") latestProjectedUser = result;
   }
   return {
-    messages:
-      options.limitMessages === false
-        ? projectedMessages
-        : latestMessages(projectedMessages),
+    messages: options.limitMessages === false ? projectedMessages : latestMessages(projectedMessages),
     delegatedRuns: [...delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS),
   };
 }
 
-export function projectConversationTurnIndex(
-  messages: unknown[],
-): ConversationTurnIndexItem[] {
+export function projectConversationTurnIndex(messages: unknown[]): ConversationTurnIndexItem[] {
   const turns: ConversationTurnIndexItem[] = [];
   for (let index = 0; index < messages.length; index++) {
     const raw = object(messages[index]);
@@ -1133,15 +854,8 @@ export function projectConversationTurnIndex(
     const images = attachmentCount(raw);
     turns.push({
       promptId: id(raw.entryId, `history-${index}`),
-      preview: (
-        text ||
-        (images
-          ? `${images} attached image${images === 1 ? "" : "s"}`
-          : "Empty prompt")
-      ).slice(0, 120),
-      ...(createdAt(raw.timestamp ?? raw.createdAt)
-        ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) }
-        : {}),
+      preview: (text || (images ? `${images} attached image${images === 1 ? "" : "s"}` : "Empty prompt")).slice(0, 120),
+      ...(createdAt(raw.timestamp ?? raw.createdAt) ? { createdAt: createdAt(raw.timestamp ?? raw.createdAt) } : {}),
       cursor: encodeHistoryCursor(index),
     });
   }
@@ -1156,10 +870,7 @@ export function projectMessages(messages: unknown[]): MessageReadModel[] {
 export class RuntimeProjection {
   private readonly messages = new Map<string, MessageReadModel>();
   private readonly tools = new Map<string, ToolActivityReadModel>();
-  private readonly delegatedRuns = new Map<
-    string,
-    DelegatedAgentRunReadModel
-  >();
+  private readonly delegatedRuns = new Map<string, DelegatedAgentRunReadModel>();
   private readonly toolInputs = new Map<string, unknown>();
   private readonly spawnRunIds = new Map<string, string>();
   private pendingUpdate?: { id: string; text: string };
@@ -1176,10 +887,8 @@ export class RuntimeProjection {
     private runtime: RuntimeSnapshot,
     private readonly publish: Publish,
   ) {
-    for (const message of runtime.conversation.messages)
-      this.messages.set(message.id, { ...message });
-    for (const tool of runtime.conversation.tools)
-      this.tools.set(tool.id, { ...tool });
+    for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
+    for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
     for (const run of runtime.conversation.delegatedRuns) {
       this.delegatedRuns.set(run.id, structuredClone(run));
       if (run.runId) this.spawnRunIds.set(run.runId, run.id);
@@ -1191,32 +900,17 @@ export class RuntimeProjection {
       ...this.runtime,
       conversation: {
         ...this.runtime.conversation,
-        messages: [...this.messages.values()].map((message) => ({
-          ...message,
-        })),
-        tools: [...this.tools.values()]
-          .slice(-MAX_TOOLS)
-          .map((tool) => ({ ...tool })),
-        delegatedRuns: [...this.delegatedRuns.values()]
-          .slice(-MAX_DELEGATED_RUNS)
-          .map((run) => structuredClone(run)),
+        messages: [...this.messages.values()].map(message => ({ ...message })),
+        tools: [...this.tools.values()].slice(-MAX_TOOLS).map(tool => ({ ...tool })),
+        delegatedRuns: [...this.delegatedRuns.values()].slice(-MAX_DELEGATED_RUNS).map(run => structuredClone(run)),
       },
       operational: cloneOperational(this.runtime.operational),
-      ...(this.runtime.providerAuth
-        ? { providerAuth: structuredClone(this.runtime.providerAuth) }
-        : {}),
+      ...(this.runtime.providerAuth ? { providerAuth: structuredClone(this.runtime.providerAuth) } : {}),
       extensionUi: {
         ...this.runtime.extensionUi,
-        notifications: this.runtime.extensionUi.notifications.map((item) => ({
-          ...item,
-        })),
-        statuses: this.runtime.extensionUi.statuses.map((item) => ({
-          ...item,
-        })),
-        widgets: this.runtime.extensionUi.widgets.map((item) => ({
-          ...item,
-          lines: [...item.lines],
-        })),
+        notifications: this.runtime.extensionUi.notifications.map(item => ({ ...item })),
+        statuses: this.runtime.extensionUi.statuses.map(item => ({ ...item })),
+        widgets: this.runtime.extensionUi.widgets.map(item => ({ ...item, lines: [...item.lines] })),
       },
     };
   }
@@ -1228,28 +922,21 @@ export class RuntimeProjection {
   refresh(runtime: RuntimeSnapshot): void {
     const finalAssistant = [...runtime.conversation.messages]
       .reverse()
-      .find((message) => message.role === "assistant" && !message.streaming);
+      .find(message => message.role === "assistant" && !message.streaming);
     if (finalAssistant) this.reconcileAssistant(finalAssistant);
     for (const run of runtime.conversation.delegatedRuns) {
       const previous = this.delegatedRuns.get(run.id);
-      if (
-        run.status === "running" ||
-        (previous && previous.status !== "running")
-      )
-        continue;
+      if (run.status === "running" || (previous && previous.status !== "running")) continue;
       const next = previous
         ? {
             ...structuredClone(previous),
             ...structuredClone(run),
             activity: structuredClone(
-              run.activity.length > previous.activity.length
-                ? run.activity
-                : previous.activity,
+              run.activity.length > previous.activity.length ? run.activity : previous.activity,
             ),
           }
         : structuredClone(run);
-      if (!previous || !isDeepStrictEqual(previous, next))
-        this.setDelegatedRun(next);
+      if (!previous || !isDeepStrictEqual(previous, next)) this.setDelegatedRun(next);
     }
     this.runtime = {
       ...this.runtime,
@@ -1263,30 +950,23 @@ export class RuntimeProjection {
       optionalCapabilities: { ...runtime.optionalCapabilities },
       diagnostics: [...runtime.diagnostics],
       sessionControls: structuredClone(runtime.sessionControls),
-      providerAuth: runtime.providerAuth
-        ? structuredClone(runtime.providerAuth)
-        : undefined,
+      providerAuth: runtime.providerAuth ? structuredClone(runtime.providerAuth) : undefined,
       runtimePolicy: structuredClone(runtime.runtimePolicy),
       metrics: { ...runtime.metrics },
-      discoverIndex: runtime.discoverIndex
-        ? { ...runtime.discoverIndex }
-        : undefined,
+      discoverIndex: runtime.discoverIndex ? { ...runtime.discoverIndex } : undefined,
       conversation: {
         ...this.runtime.conversation,
         workStartedAt: runtime.conversation.workStartedAt,
         workModelName: runtime.conversation.workModelName,
         workThinkingLevel: runtime.conversation.workThinkingLevel,
         stopping: runtime.conversation.stopping,
-        stoppedRun: runtime.conversation.stoppedRun
-          ? { ...runtime.conversation.stoppedRun }
-          : undefined,
+        stoppedRun: runtime.conversation.stoppedRun ? { ...runtime.conversation.stoppedRun } : undefined,
         agentError: runtime.conversation.agentError,
       },
       operational: cloneOperational(runtime.operational),
     };
     this.publish("session.controls", this.runtime.sessionControls);
-    if (this.runtime.providerAuth)
-      this.publish("provider.auth", this.runtime.providerAuth);
+    if (this.runtime.providerAuth) this.publish("provider.auth", this.runtime.providerAuth);
     this.publish("runtime.policy", this.runtime.runtimePolicy);
     this.publish("metrics.update", this.runtime.metrics);
   }
@@ -1299,12 +979,9 @@ export class RuntimeProjection {
     this.delegatedRuns.clear();
     this.turnMessages.clear();
     this.latestAssistantMessageId = undefined;
-    for (const message of runtime.conversation.messages)
-      this.messages.set(message.id, { ...message });
-    for (const tool of runtime.conversation.tools)
-      this.tools.set(tool.id, { ...tool });
-    for (const run of runtime.conversation.delegatedRuns)
-      this.delegatedRuns.set(run.id, structuredClone(run));
+    for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
+    for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
+    for (const run of runtime.conversation.delegatedRuns) this.delegatedRuns.set(run.id, structuredClone(run));
     this.pendingUi = undefined;
   }
 
@@ -1327,25 +1004,17 @@ export class RuntimeProjection {
     }
     if (event.type === "session.status") {
       const sessionId = event.sessionId.slice(0, 128);
-      if (
-        event.completed &&
-        validCompletionSessionId(sessionId) &&
-        sessionId !== this.runtime.sessionId
-      ) {
+      if (event.completed && validCompletionSessionId(sessionId) && sessionId !== this.runtime.sessionId) {
         this.unseenCompletions.delete(sessionId);
         this.unseenCompletions.add(sessionId);
         while (this.unseenCompletions.size > MAX_UNSEEN_COMPLETIONS) {
-          this.unseenCompletions.delete(
-            this.unseenCompletions.values().next().value!,
-          );
+          this.unseenCompletions.delete(this.unseenCompletions.values().next().value!);
         }
       }
       this.publish("session.status", {
         sessionId,
         state: event.state,
-        ...(Object.hasOwn(event, "workStartedAt")
-          ? { workStartedAt: event.workStartedAt }
-          : {}),
+        ...(Object.hasOwn(event, "workStartedAt") ? { workStartedAt: event.workStartedAt } : {}),
         ...(event.completed ? { completed: true } : {}),
         ...(event.cue ? { cue: event.cue } : {}),
       });
@@ -1368,8 +1037,7 @@ export class RuntimeProjection {
     }
 
     if (event.type === "ui.closed") {
-      if (this.pendingUi?.requestId === event.requestId)
-        this.pendingUi = undefined;
+      if (this.pendingUi?.requestId === event.requestId) this.pendingUi = undefined;
       this.publish("ui.closed", { requestId: event.requestId.slice(0, 128) });
       return;
     }
@@ -1383,55 +1051,31 @@ export class RuntimeProjection {
       this.publish(`operational.${event.channel}`, operational);
       return;
     }
-    if (
-      event.type === "session.replaced" ||
-      event.type === "session.unavailable"
-    ) {
+    if (event.type === "session.replaced" || event.type === "session.unavailable") {
       const sessionId = event.sessionId.slice(0, 128);
       this.unseenCompletions.delete(sessionId);
       this.replaceRuntime(structuredClone(event.runtime));
       this.runtime.sessionId = sessionId;
       this.runtime.sessionGeneration = event.sessionGeneration;
       this.runtime.ready = event.type === "session.replaced";
-      this.publish(event.type, {
-        sessionId,
-        sessionGeneration: event.sessionGeneration,
-      });
+      this.publish(event.type, { sessionId, sessionGeneration: event.sessionGeneration });
       return;
     }
     if (event.type === "command.result") {
-      this.runtime.commandResult = event.result
-        ? structuredClone(event.result)
-        : undefined;
+      this.runtime.commandResult = event.result ? structuredClone(event.result) : undefined;
       this.publish("command.result", event.result ?? {});
       return;
     }
     if (event.type !== "session.event") return;
     const raw = object(event.payload);
-    const kind = String(raw.type ?? raw.event ?? raw.kind ?? "").replace(
-      /-/g,
-      "_",
-    );
-    if (kind === "message_start" || kind === "message_starting")
-      return this.messageStart(raw);
-    if (kind === "message_update" || kind === "message_delta")
-      return this.messageUpdate(raw);
-    if (kind === "message_end" || kind === "message_complete")
-      return this.messageEnd(raw);
-    if (kind === "continuity_compaction_interruption")
-      return this.removeActiveMessage(raw);
-    if (
-      kind === "tool_execution_start" ||
-      kind === "tool_start" ||
-      kind === "tool_call_start"
-    )
+    const kind = String(raw.type ?? raw.event ?? raw.kind ?? "").replace(/-/g, "_");
+    if (kind === "message_start" || kind === "message_starting") return this.messageStart(raw);
+    if (kind === "message_update" || kind === "message_delta") return this.messageUpdate(raw);
+    if (kind === "message_end" || kind === "message_complete") return this.messageEnd(raw);
+    if (kind === "continuity_compaction_interruption") return this.removeActiveMessage(raw);
+    if (kind === "tool_execution_start" || kind === "tool_start" || kind === "tool_call_start")
       return this.toolStart(raw);
-    if (
-      kind === "tool_execution_end" ||
-      kind === "tool_end" ||
-      kind === "tool_call_end" ||
-      kind === "tool_result"
-    )
+    if (kind === "tool_execution_end" || kind === "tool_end" || kind === "tool_call_end" || kind === "tool_result")
       return this.toolEnd(raw);
     if (kind === "spawn_progress") return this.spawnProgress(raw);
     if (kind === "tool_execution_update") return this.toolUpdate(raw);
@@ -1444,33 +1088,24 @@ export class RuntimeProjection {
       kind === "retry_end"
     )
       return this.retry(raw, kind);
-    if (
-      kind === "compaction" ||
-      kind === "compaction_start" ||
-      kind === "compaction_end"
-    )
+    if (kind === "compaction" || kind === "compaction_start" || kind === "compaction_end")
       return this.compaction(raw, kind);
     if (kind === "metrics" || kind === "session_stats" || kind === "usage")
       return this.metrics(object(raw.metrics ?? raw.stats ?? raw));
     if (kind === "worktree_summary") return this.worktreeSummary(raw);
     if (kind === "discover_index") return this.discoverIndex(raw);
     if (kind === "session_info_changed") return this.sessionInfoChanged(raw);
-    if (kind === "session_controls_error" || kind === "runtime_error")
-      return this.runtimeError(raw);
+    if (kind === "session_controls_error" || kind === "runtime_error") return this.runtimeError(raw);
     if (kind === "prompt_undo") return this.promptUndo(raw);
     if (kind === "agent_start") return this.agentStart(raw);
-    if (kind === "agent_end" || kind === "agent_error")
-      return this.agentEnd(raw, kind);
+    if (kind === "agent_end" || kind === "agent_error") return this.agentEnd(raw, kind);
   }
 
   /** Routes one extension UI request or surface update onto the read model. */
   private applyUiEvent(raw: Record<string, unknown>): void {
     const method = String(raw.method);
     const payload = object(raw.payload);
-    if (
-      raw.kind === "request" &&
-      ["select", "confirm", "input", "editor", "questionnaire"].includes(method)
-    ) {
+    if (raw.kind === "request" && ["select", "confirm", "input", "editor", "questionnaire"].includes(method)) {
       this.pendingUi = {
         requestId: id(raw.requestId, "invalid"),
         method: method as UiRequestReadModel["method"],
@@ -1478,15 +1113,9 @@ export class RuntimeProjection {
         owned: false,
         ownershipAvailable: false,
         ...(typeof raw.timeoutSeconds === "number"
-          ? {
-              timeoutSeconds: Math.min(
-                86_400,
-                Math.max(1, Math.round(raw.timeoutSeconds)),
-              ),
-            }
+          ? { timeoutSeconds: Math.min(86_400, Math.max(1, Math.round(raw.timeoutSeconds))) }
           : {}),
-        ...(typeof raw.expiresAt === "string" &&
-        !Number.isNaN(Date.parse(raw.expiresAt))
+        ...(typeof raw.expiresAt === "string" && !Number.isNaN(Date.parse(raw.expiresAt))
           ? { expiresAt: raw.expiresAt }
           : {}),
       };
@@ -1495,19 +1124,10 @@ export class RuntimeProjection {
       const item: UiNotificationReadModel = {
         id: id(raw.requestId, `notification-${Date.now()}`),
         message: text(payload.message, 2_000),
-        type:
-          payload.type === "warning" || payload.type === "error"
-            ? payload.type
-            : "info",
-        occurredAt:
-          typeof raw.createdAt === "string"
-            ? raw.createdAt
-            : new Date().toISOString(),
+        type: payload.type === "warning" || payload.type === "error" ? payload.type : "info",
+        occurredAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
       };
-      this.runtime.extensionUi.notifications = [
-        ...this.runtime.extensionUi.notifications,
-        item,
-      ].slice(-10);
+      this.runtime.extensionUi.notifications = [...this.runtime.extensionUi.notifications, item].slice(-10);
       this.publish("ui.notify", item);
     } else if (method === "setStatus") {
       const key = id(payload.key, "status");
@@ -1515,30 +1135,15 @@ export class RuntimeProjection {
         typeof payload.text === "string"
           ? ({ key, text: text(payload.text, 500) } satisfies UiStatusReadModel)
           : undefined;
-      this.runtime.extensionUi.statuses = replaceKey(
-        this.runtime.extensionUi.statuses,
-        key,
-        item,
-        25,
-      );
+      this.runtime.extensionUi.statuses = replaceKey(this.runtime.extensionUi.statuses, key, item, 25);
       this.publish("ui.status", item ?? { key });
     } else if (method === "setWidget") {
       const key = id(payload.key, "widget");
       const lines = boundedLines(payload.lines);
       const placement =
-        payload.placement === "aboveEditor" ||
-        payload.placement === "belowEditor"
-          ? payload.placement
-          : undefined;
-      const item = lines
-        ? ({ key, lines, placement } satisfies UiWidgetReadModel)
-        : undefined;
-      this.runtime.extensionUi.widgets = replaceKey(
-        this.runtime.extensionUi.widgets,
-        key,
-        item,
-        10,
-      );
+        payload.placement === "aboveEditor" || payload.placement === "belowEditor" ? payload.placement : undefined;
+      const item = lines ? ({ key, lines, placement } satisfies UiWidgetReadModel) : undefined;
+      this.runtime.extensionUi.widgets = replaceKey(this.runtime.extensionUi.widgets, key, item, 10);
       this.publish("ui.widget", item ?? { key });
     } else if (method === "setTitle") {
       this.runtime.extensionUi.title = text(payload.title, 500);
@@ -1556,9 +1161,7 @@ export class RuntimeProjection {
   /** Mirrors pi-discover's index state, ignoring unknown states. */
   private discoverIndex(raw: Record<string, unknown>): void {
     const value = object(raw.value);
-    this.runtime.discoverIndex = ["idle", "indexing", "error"].includes(
-      String(value.state),
-    )
+    this.runtime.discoverIndex = ["idle", "indexing", "error"].includes(String(value.state))
       ? (value as unknown as RuntimeSnapshot["discoverIndex"])
       : undefined;
     this.publish("discover.index", this.runtime.discoverIndex ?? {});
@@ -1566,49 +1169,31 @@ export class RuntimeProjection {
 
   private sessionInfoChanged(raw: Record<string, unknown>): void {
     this.runtime.sessionName = text(raw.name, 200) || undefined;
-    this.publish("session.info", {
-      sessionId: this.runtime.sessionId,
-      name: this.runtime.sessionName,
-    });
+    this.publish("session.info", { sessionId: this.runtime.sessionId, name: this.runtime.sessionName });
   }
 
   private runtimeError(raw: Record<string, unknown>): void {
-    this.publish("runtime.error", {
-      message:
-        text(raw.message, 1_000) || "Could not apply the queued model change",
-    });
+    this.publish("runtime.error", { message: text(raw.message, 1_000) || "Could not apply the queued model change" });
   }
 
   /** Re-marks which user messages the runtime still allows undoing or forking. */
   private promptUndo(raw: Record<string, unknown>): void {
     const entryIds = new Set(
       Array.isArray(raw.entryIds)
-        ? raw.entryIds
-            .filter((entryId): entryId is string => typeof entryId === "string")
-            .slice(0, 10_000)
+        ? raw.entryIds.filter((entryId): entryId is string => typeof entryId === "string").slice(0, 10_000)
         : [],
     );
     const forkEntryIds = new Set(
       Array.isArray(raw.forkEntryIds)
-        ? raw.forkEntryIds
-            .filter((entryId): entryId is string => typeof entryId === "string")
-            .slice(0, 10_000)
+        ? raw.forkEntryIds.filter((entryId): entryId is string => typeof entryId === "string").slice(0, 10_000)
         : [],
     );
-    const items: Array<{
-      id: string;
-      canUndo: boolean;
-      canForkWithTimeline: boolean;
-    }> = [];
+    const items: Array<{ id: string; canUndo: boolean; canForkWithTimeline: boolean }> = [];
     for (const message of this.messages.values()) {
       if (message.role !== "user" || !message.entryId) continue;
       message.canUndo = entryIds.has(message.entryId);
       message.canForkWithTimeline = forkEntryIds.has(message.entryId);
-      items.push({
-        id: message.id,
-        canUndo: message.canUndo,
-        canForkWithTimeline: message.canForkWithTimeline,
-      });
+      items.push({ id: message.id, canUndo: message.canUndo, canForkWithTimeline: message.canForkWithTimeline });
     }
     this.publish("message.undo", { items });
   }
@@ -1618,16 +1203,12 @@ export class RuntimeProjection {
     if (raw.metrics) this.metrics(object(raw.metrics));
     const startedAt =
       this.runtime.conversation.workStartedAt ??
-      (typeof raw.workStartedAt === "string" &&
-      !Number.isNaN(Date.parse(raw.workStartedAt))
+      (typeof raw.workStartedAt === "string" && !Number.isNaN(Date.parse(raw.workStartedAt))
         ? raw.workStartedAt
         : new Date().toISOString());
     this.runtime.conversation.workStartedAt = startedAt;
-    this.runtime.conversation.workModelName =
-      text(raw.modelName, 200) || undefined;
-    this.runtime.conversation.workThinkingLevel = thinkingLevel(
-      raw.thinkingLevel,
-    );
+    this.runtime.conversation.workModelName = text(raw.modelName, 200) || undefined;
+    this.runtime.conversation.workThinkingLevel = thinkingLevel(raw.thinkingLevel);
     this.runtime.conversation.stopping = false;
     this.runtime.conversation.stoppedRun = undefined;
     this.runtime.conversation.agentError = undefined;
@@ -1643,25 +1224,17 @@ export class RuntimeProjection {
   private agentEnd(raw: Record<string, unknown>, kind: string): void {
     if (kind === "agent_end" && raw.metrics) this.metrics(object(raw.metrics));
     if (kind === "agent_end") {
-      this.runtime.gitBranch =
-        typeof raw.gitBranch === "string"
-          ? text(raw.gitBranch, 200) || undefined
-          : undefined;
+      this.runtime.gitBranch = typeof raw.gitBranch === "string" ? text(raw.gitBranch, 200) || undefined : undefined;
     }
     const durationMs = Number.isSafeInteger(raw.workDurationMs)
-      ? Math.min(
-          7 * 24 * 60 * 60 * 1_000,
-          Math.max(0, raw.workDurationMs as number),
-        )
+      ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, raw.workDurationMs as number))
       : undefined;
     const willRetry = raw.willRetry === true && raw.stopped !== true;
     if (!willRetry && kind === "agent_end") this.flush();
     const assistant =
       !willRetry && kind === "agent_end"
         ? this.reconcileFinalAssistant(raw)
-        : [...this.messages.values()]
-            .reverse()
-            .find((message) => message.role === "assistant");
+        : [...this.messages.values()].reverse().find(message => message.role === "assistant");
     const turnId = id(raw.turnId, "");
     if (!willRetry && assistant && turnId) {
       this.turnMessages.set(turnId, assistant.id);
@@ -1684,16 +1257,9 @@ export class RuntimeProjection {
       this.runtime.conversation.workThinkingLevel = undefined;
     }
     const stopped = raw.stopped === true;
-    this.settleRunningWork(
-      terminalActivityStatus(kind === "agent_error" ? "error" : "end", {
-        stopped,
-        willRetry,
-      }),
-    );
+    this.settleRunningWork(terminalActivityStatus(kind === "agent_error" ? "error" : "end", { stopped, willRetry }));
     this.runtime.conversation.stopping = false;
-    const agentError = willRetry
-      ? undefined
-      : text(raw.errorMessage, 1_000) || undefined;
+    const agentError = willRetry ? undefined : text(raw.errorMessage, 1_000) || undefined;
     this.runtime.conversation.agentError = agentError;
     this.runtime.conversation.stoppedRun =
       stopped && durationMs !== undefined
@@ -1711,10 +1277,7 @@ export class RuntimeProjection {
       durationMs,
       turnId,
       messageId: assistant?.id,
-      assistantMessage:
-        !willRetry && kind === "agent_end" && assistant
-          ? { ...assistant, streaming: false }
-          : null,
+      assistantMessage: !willRetry && kind === "agent_end" && assistant ? { ...assistant, streaming: false } : null,
       modelName: assistant?.modelName,
       thinkingLevel: assistant?.thinkingLevel,
       gitBranch: this.runtime.gitBranch,
@@ -1734,58 +1297,37 @@ export class RuntimeProjection {
       status,
     );
     this.messages.clear();
-    for (const message of settled.messages)
-      this.messages.set(message.id, message);
+    for (const message of settled.messages) this.messages.set(message.id, message);
     this.tools.clear();
     for (const tool of settled.tools) this.tools.set(tool.id, tool);
     this.delegatedRuns.clear();
-    for (const run of settled.delegatedRuns)
-      this.delegatedRuns.set(run.id, run);
+    for (const run of settled.delegatedRuns) this.delegatedRuns.set(run.id, run);
   }
 
-  private reconcileFinalAssistant(
-    raw: Record<string, unknown>,
-  ): MessageReadModel | undefined {
+  private reconcileFinalAssistant(raw: Record<string, unknown>): MessageReadModel | undefined {
     if (raw.assistantMessage === null) return undefined;
     const value = object(raw.assistantMessage);
-    if (
-      value.role !== "assistant" ||
-      typeof value.id !== "string" ||
-      typeof value.text !== "string"
-    )
-      return undefined;
+    if (value.role !== "assistant" || typeof value.id !== "string" || typeof value.text !== "string") return undefined;
     return this.reconcileAssistant(value as unknown as MessageReadModel);
   }
 
   private reconcileAssistant(canonical: MessageReadModel): MessageReadModel {
     let current = this.messages.get(canonical.id);
     if (!current && canonical.entryId) {
-      current = [...this.messages.values()].find(
-        (message) => message.entryId === canonical.entryId,
-      );
+      current = [...this.messages.values()].find(message => message.entryId === canonical.entryId);
     }
     if (!current && this.latestAssistantMessageId) {
       const live = this.messages.get(this.latestAssistantMessageId);
-      if (live?.role === "assistant" && live.text === canonical.text)
-        current = live;
+      if (live?.role === "assistant" && live.text === canonical.text) current = live;
     }
     const missing = !current;
     const unfinished = current?.streaming === true;
-    const reconciled = {
-      ...canonical,
-      id: current?.id ?? canonical.id,
-      streaming: false,
-    };
+    const reconciled = { ...canonical, id: current?.id ?? canonical.id, streaming: false };
     this.messages.set(reconciled.id, reconciled);
     this.latestAssistantMessageId = reconciled.id;
-    if (missing)
-      this.publish("message.start", { ...reconciled, streaming: true });
+    if (missing) this.publish("message.start", { ...reconciled, streaming: true });
     if (missing || unfinished) {
-      this.publish("message.end", {
-        id: reconciled.id,
-        text: reconciled.text,
-        entryId: reconciled.entryId,
-      });
+      this.publish("message.end", { id: reconciled.id, text: reconciled.text, entryId: reconciled.entryId });
     }
     return reconciled;
   }
@@ -1795,17 +1337,11 @@ export class RuntimeProjection {
     const message = object(raw.message);
     const fileCount = promptFileCount(message);
     if (fileCount) {
-      const user = [...this.messages.values()]
-        .reverse()
-        .find((item) => item.role === "user");
+      const user = [...this.messages.values()].reverse().find(item => item.role === "user");
       if (user) {
         user.fileAttachmentCount = fileCount;
-        const attachments = promptFileAttachments(
-          message,
-          raw.entryId ?? message.entryId,
-        );
-        if (attachments)
-          user.attachments = [...(user.attachments ?? []), ...attachments];
+        const attachments = promptFileAttachments(message, raw.entryId ?? message.entryId);
+        if (attachments) user.attachments = [...(user.attachments ?? []), ...attachments];
         this.messages.set(user.id, user);
         this.publish("message.update", {
           id: user.id,
@@ -1816,16 +1352,8 @@ export class RuntimeProjection {
       }
       return;
     }
-    const correlatedId =
-      typeof raw.clientMessageId === "string"
-        ? id(`pending-${raw.clientMessageId}`, "")
-        : "";
-    const messageId =
-      correlatedId ||
-      id(
-        raw.messageId ?? raw.id ?? message.id,
-        `message-${++this.messageCounter}`,
-      );
+    const correlatedId = typeof raw.clientMessageId === "string" ? id(`pending-${raw.clientMessageId}`, "") : "";
+    const messageId = correlatedId || id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
     this.activeMessageId = messageId;
     const item: MessageReadModel = {
       id: messageId,
@@ -1835,42 +1363,23 @@ export class RuntimeProjection {
       role: role(raw.role ?? message.role),
       text: messageText(message) || text(raw.text),
       streaming: true,
-      createdAt:
-        createdAt(message.timestamp ?? raw.timestamp) ??
-        new Date().toISOString(),
-      ...(attachmentCount(message)
-        ? { attachmentCount: attachmentCount(message) }
-        : {}),
+      createdAt: createdAt(message.timestamp ?? raw.timestamp) ?? new Date().toISOString(),
+      ...(attachmentCount(message) ? { attachmentCount: attachmentCount(message) } : {}),
       ...(imageAttachments(message, raw.entryId ?? message.entryId)
-        ? {
-            attachments: imageAttachments(
-              message,
-              raw.entryId ?? message.entryId,
-            ),
-          }
+        ? { attachments: imageAttachments(message, raw.entryId ?? message.entryId) }
         : {}),
-      ...(typeof message.customType === "string"
-        ? { systemSource: text(message.customType, 200) }
-        : {}),
+      ...(typeof message.customType === "string" ? { systemSource: text(message.customType, 200) } : {}),
     };
     if (item.role === "tool") {
       const toolId = id(message.toolCallId ?? raw.toolCallId, messageId);
       const activity = this.tools.get(toolId);
       item.tool = {
         id: toolId,
-        name:
-          text(message.toolName ?? raw.toolName, 200) ||
-          activity?.name ||
-          "Tool",
+        name: text(message.toolName ?? raw.toolName, 200) || activity?.name || "Tool",
         input: activity?.input,
-        status:
-          message.isError === true || raw.isError === true
-            ? "failed"
-            : (activity?.status ?? "completed"),
+        status: message.isError === true || raw.isError === true ? "failed" : (activity?.status ?? "completed"),
         ...(activity?.startedAt ? { startedAt: activity.startedAt } : {}),
-        ...(activity?.durationMs === undefined
-          ? {}
-          : { durationMs: activity.durationMs }),
+        ...(activity?.durationMs === undefined ? {} : { durationMs: activity.durationMs }),
       };
     }
     this.messages.set(messageId, item);
@@ -1881,11 +1390,7 @@ export class RuntimeProjection {
   private messageUpdate(raw: Record<string, unknown>): void {
     const message = object(raw.message);
     const messageId =
-      this.activeMessageId ??
-      id(
-        raw.messageId ?? raw.id ?? message.id,
-        `message-${++this.messageCounter}`,
-      );
+      this.activeMessageId ?? id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
     this.activeMessageId = messageId;
     const current = this.messages.get(messageId) ?? {
       id: messageId,
@@ -1911,16 +1416,13 @@ export class RuntimeProjection {
   private messageEnd(raw: Record<string, unknown>): void {
     if (promptFileCount(object(raw.message))) return;
     this.flush();
-    const messageId =
-      this.activeMessageId ??
-      id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
+    const messageId = this.activeMessageId ?? id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
     const current = this.messages.get(messageId);
     if (current) {
       const finalText = messageText(raw.message);
       if (finalText) current.text = finalText;
       const entryId = raw.entryId ?? object(raw.message).entryId;
-      if (typeof entryId === "string")
-        current.entryId = id(entryId, current.id);
+      if (typeof entryId === "string") current.entryId = id(entryId, current.id);
       const attachments = imageAttachments(raw.message, entryId);
       if (attachments) current.attachments = attachments;
       current.streaming = false;
@@ -1937,12 +1439,9 @@ export class RuntimeProjection {
   }
   private removeActiveMessage(raw: Record<string, unknown>): void {
     this.flush();
-    const messageId =
-      this.activeMessageId ??
-      id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
+    const messageId = this.activeMessageId ?? id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
     this.messages.delete(messageId);
-    if (this.latestAssistantMessageId === messageId)
-      this.latestAssistantMessageId = undefined;
+    if (this.latestAssistantMessageId === messageId) this.latestAssistantMessageId = undefined;
     this.activeMessageId = undefined;
     this.runtime.conversation.streaming = false;
     this.publish("message.remove", { id: messageId });
@@ -1957,68 +1456,37 @@ export class RuntimeProjection {
       raw.phase === "update"
         ? { toolCallId: toolId, toolName: name, partialResult: raw.result }
         : { toolCallId: toolId, toolName: name, result: raw.result };
-    const run = projectDelegatedToolEvent(
-      raw.phase,
-      toolId,
-      previous,
-      event,
-      this.runtime.metrics.userMessages,
-    );
+    const run = projectDelegatedToolEvent(raw.phase, toolId, previous, event, this.runtime.metrics.userMessages);
     if (!run) return;
-    const appendsActivity =
-      raw.phase === "update" &&
-      Array.isArray(object(object(raw.result).details).activityDelta);
+    const appendsActivity = raw.phase === "update" && Array.isArray(object(object(raw.result).details).activityDelta);
     this.setDelegatedRun(run, previous, appendsActivity);
     if (run.runId) this.spawnRunIds.set(run.runId, run.id);
   }
 
   private toolStart(raw: Record<string, unknown>): void {
     this.flush();
-    const toolId = id(
-      raw.toolCallId ?? raw.toolId ?? raw.id,
-      `tool-${this.tools.size + 1}`,
-    );
+    const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, `tool-${this.tools.size + 1}`);
     const name = text(raw.name ?? raw.toolName, 200);
     const input = raw.args ?? raw.input;
     const startedAt = createdAt(raw.startedAt) ?? new Date().toISOString();
     this.toolInputs.set(toolId, input);
-    const item: ToolActivityReadModel = {
-      id: toolId,
-      name,
-      input: browserJson(input),
-      status: "running",
-      startedAt,
-    };
+    const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running", startedAt };
     this.tools.set(toolId, item);
     trimMap(this.tools, MAX_TOOLS);
     this.publish("tool.start", item);
-    const run = projectDelegatedToolEvent(
-      "start",
-      toolId,
-      undefined,
-      raw,
-      this.runtime.metrics.userMessages,
-    );
+    const run = projectDelegatedToolEvent("start", toolId, undefined, raw, this.runtime.metrics.userMessages);
     if (run) this.setDelegatedRun(run);
   }
   private toolUpdate(raw: Record<string, unknown>): void {
     const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool");
     const old = this.delegatedRuns.get(toolId);
-    const next = projectDelegatedToolEvent(
-      "update",
-      toolId,
-      old,
-      raw,
-      this.runtime.metrics.userMessages,
-    );
+    const next = projectDelegatedToolEvent("update", toolId, old, raw, this.runtime.metrics.userMessages);
     if (!next) return;
     if (old && equalDelegatedRunExceptDuration(old, next)) {
       this.delegatedRuns.set(toolId, next);
       return;
     }
-    const appendsActivity = Array.isArray(
-      object(object(raw.partialResult).details).activityDelta,
-    );
+    const appendsActivity = Array.isArray(object(object(raw.partialResult).details).activityDelta);
     this.setDelegatedRun(next, old, appendsActivity);
   }
   private toolEnd(raw: Record<string, unknown>): void {
@@ -2029,26 +1497,15 @@ export class RuntimeProjection {
     this.toolInputs.delete(toolId);
     const name = old?.name ?? text(raw.name ?? raw.toolName, 200);
     const startedAt = createdAt(raw.startedAt) ?? old?.startedAt;
-    const projectedDuration = boundedNumber(
-      raw.durationMs,
-      7 * 24 * 60 * 60 * 1_000,
-    );
+    const projectedDuration = boundedNumber(raw.durationMs, 7 * 24 * 60 * 60 * 1_000);
     const durationMs =
       projectedDuration ??
-      (startedAt
-        ? Math.min(
-            7 * 24 * 60 * 60 * 1_000,
-            Math.max(0, Date.now() - Date.parse(startedAt)),
-          )
-        : undefined);
+      (startedAt ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - Date.parse(startedAt))) : undefined);
     const item: ToolActivityReadModel = {
       id: toolId,
       name,
       input: old?.input ?? browserJson(input),
-      status:
-        raw.isError === true || raw.failed === true || raw.error
-          ? "failed"
-          : "completed",
+      status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed",
       summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined,
       ...(startedAt ? { startedAt } : {}),
       ...(durationMs === undefined ? {} : { durationMs }),
@@ -2058,28 +1515,18 @@ export class RuntimeProjection {
     this.publish("tool.end", item);
     const event = { ...raw, name, args: input };
     const previous = this.delegatedRuns.get(toolId);
-    const run = projectDelegatedToolEvent(
-      "end",
-      toolId,
-      previous,
-      event,
-      this.runtime.metrics.userMessages,
-    );
+    const run = projectDelegatedToolEvent("end", toolId, previous, event, this.runtime.metrics.userMessages);
     if (run) {
       this.setDelegatedRun(run, previous);
       if (run.runId) this.spawnRunIds.set(run.runId, run.id);
       return;
     }
     const controlKind = spawnToolKind(name);
-    if (!controlKind || !spawnControlActions.has(String(spawnAction(input))))
-      return;
+    if (!controlKind || !spawnControlActions.has(String(spawnAction(input)))) return;
     const details = object(object(raw.result ?? raw).details);
     const canonicalId = this.spawnRunIds.get(delegatedId(details.runId) ?? "");
-    const target = canonicalId
-      ? this.delegatedRuns.get(canonicalId)
-      : undefined;
-    if (!canonicalId || !validSpawnControlTarget(target, controlKind, details))
-      return;
+    const target = canonicalId ? this.delegatedRuns.get(canonicalId) : undefined;
+    if (!canonicalId || !validSpawnControlTarget(target, controlKind, details)) return;
     const status = delegatedEndStatus(raw, controlKind, details);
     if (target.status !== "running" && status !== target.status) return;
     const next = updateDelegatedRun(
@@ -2100,17 +1547,13 @@ export class RuntimeProjection {
   ): void {
     this.delegatedRuns.set(run.id, run);
     trimMap(this.delegatedRuns, MAX_DELEGATED_RUNS);
-    for (const [runId, id] of this.spawnRunIds)
-      if (!this.delegatedRuns.has(id)) this.spawnRunIds.delete(runId);
+    for (const [runId, id] of this.spawnRunIds) if (!this.delegatedRuns.has(id)) this.spawnRunIds.delete(runId);
     const publishAppend =
       previous &&
       (appendsActivity ||
         run.activity === previous.activity ||
         (run.activity.length >= previous.activity.length &&
-          isDeepStrictEqual(
-            run.activity.slice(0, previous.activity.length),
-            previous.activity,
-          )));
+          isDeepStrictEqual(run.activity.slice(0, previous.activity.length), previous.activity)));
     this.publish(
       "delegate.update",
       structuredClone(
@@ -2142,16 +1585,10 @@ export class RuntimeProjection {
   }
   private retry(raw: Record<string, unknown>, kind: string): void {
     this.runtime.conversation.retry = {
-      active:
-        kind !== "retry_end" &&
-        kind !== "auto_retry_end" &&
-        raw.active !== false,
+      active: kind !== "retry_end" && kind !== "auto_retry_end" && raw.active !== false,
       attempt: typeof raw.attempt === "number" ? raw.attempt : undefined,
-      maxAttempts:
-        typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined,
-      message:
-        text(raw.message ?? raw.errorMessage ?? raw.finalError, 1_000) ||
-        undefined,
+      maxAttempts: typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined,
+      message: text(raw.message ?? raw.errorMessage ?? raw.finalError, 1_000) || undefined,
     };
     this.publish("retry.update", this.runtime.conversation.retry);
   }
@@ -2159,11 +1596,7 @@ export class RuntimeProjection {
     this.runtime.conversation.compaction = {
       active: kind !== "compaction_end" && raw.active !== false,
       reason:
-        raw.reason === "manual" ||
-        raw.reason === "threshold" ||
-        raw.reason === "overflow"
-          ? raw.reason
-          : undefined,
+        raw.reason === "manual" || raw.reason === "threshold" || raw.reason === "overflow" ? raw.reason : undefined,
     };
     const completed = object(raw.completedMessage);
     const metadata = compactionMessage(completed.compaction);
@@ -2175,18 +1608,14 @@ export class RuntimeProjection {
       typeof completed.id === "string" &&
       typeof completed.entryId === "string"
     ) {
-      const existing = [...this.messages.values()].find(
-        (message) => message.entryId === completed.entryId,
-      );
+      const existing = [...this.messages.values()].find(message => message.entryId === completed.entryId);
       item = {
         id: existing?.id ?? id(completed.id, `compaction-${completed.entryId}`),
         entryId: id(completed.entryId, completed.id),
         role: "system",
         text: text(completed.text),
         streaming: false,
-        ...(createdAt(completed.createdAt)
-          ? { createdAt: createdAt(completed.createdAt) }
-          : {}),
+        ...(createdAt(completed.createdAt) ? { createdAt: createdAt(completed.createdAt) } : {}),
         systemSource: "pylon-compaction",
         compaction: metadata,
       };
@@ -2194,9 +1623,7 @@ export class RuntimeProjection {
     }
     this.publish(
       "compaction.update",
-      item
-        ? { ...this.runtime.conversation.compaction, completedMessage: item }
-        : this.runtime.conversation.compaction,
+      item ? { ...this.runtime.conversation.compaction, completedMessage: item } : this.runtime.conversation.compaction,
     );
   }
   private metrics(raw: Record<string, unknown>): void {
@@ -2214,15 +1641,13 @@ export class RuntimeProjection {
       "assistantMessages",
       "toolCalls",
     ]) {
-      if (typeof raw[key] === "number" && Number.isFinite(raw[key]))
-        current[key] = raw[key];
+      if (typeof raw[key] === "number" && Number.isFinite(raw[key])) current[key] = raw[key];
     }
     if (Array.isArray(raw.toolUsage)) {
       const names = new Set<string>();
-      current.toolUsage = raw.toolUsage.slice(0, 200).flatMap((item) => {
+      current.toolUsage = raw.toolUsage.slice(0, 200).flatMap(item => {
         const usage = object(item);
-        const name =
-          typeof usage.name === "string" ? usage.name.slice(0, 200) : "";
+        const name = typeof usage.name === "string" ? usage.name.slice(0, 200) : "";
         if (
           !name ||
           names.has(name) ||
@@ -2234,8 +1659,7 @@ export class RuntimeProjection {
           Number(usage.outputTokens) < 0 ||
           !Number.isSafeInteger(usage.tokens) ||
           Number(usage.tokens) < 0 ||
-          Number(usage.tokens) !==
-            Number(usage.inputTokens) + Number(usage.outputTokens)
+          Number(usage.tokens) !== Number(usage.inputTokens) + Number(usage.outputTokens)
         )
           return [];
         names.add(name);
@@ -2251,16 +1675,14 @@ export class RuntimeProjection {
       });
     }
     if (typeof raw.model === "string") current.model = raw.model.slice(0, 200);
-    if (typeof raw.provider === "string")
-      current.provider = raw.provider.slice(0, 200);
+    if (typeof raw.provider === "string") current.provider = raw.provider.slice(0, 200);
     this.publish("metrics.update", this.runtime.metrics);
   }
   private worktreeSummary(raw: Record<string, unknown>): void {
     const turnId = id(raw.turnId, "");
     const messageId = this.turnMessages.get(turnId) ?? id(raw.messageId, "");
     const message = this.messages.get(messageId);
-    if (!message || message.role !== "assistant" || !Array.isArray(raw.files))
-      return;
+    if (!message || message.role !== "assistant" || !Array.isArray(raw.files)) return;
     const files: NonNullable<MessageReadModel["changedFiles"]> = [];
     for (const value of raw.files.slice(0, 100)) {
       const file = object(value);
@@ -2276,11 +1698,7 @@ export class RuntimeProjection {
         Number.isSafeInteger(file.deletions) &&
         (file.deletions as number) >= 0
       ) {
-        files.push({
-          path,
-          additions: file.additions as number,
-          deletions: file.deletions as number,
-        });
+        files.push({ path, additions: file.additions as number, deletions: file.deletions as number });
       }
     }
     message.changedFiles = files;
@@ -2297,13 +1715,8 @@ export class RuntimeProjection {
   }
 }
 
-function replaceKey<T extends { key: string }>(
-  items: T[],
-  key: string,
-  item: T | undefined,
-  maximum: number,
-): T[] {
-  const next = items.filter((existing) => existing.key !== key);
+function replaceKey<T extends { key: string }>(items: T[], key: string, item: T | undefined, maximum: number): T[] {
+  const next = items.filter(existing => existing.key !== key);
   if (item) next.push(item);
   return next.slice(-maximum);
 }

@@ -46,15 +46,8 @@ export function ActionDialog({
   const valid = !inputLabel || allowEmpty || Boolean(value.trim());
 
   useEffect(() => {
-    const previous =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    dialogRef.current
-      ?.querySelector<HTMLElement>(
-        inputLabel ? "[data-action-input]" : "[data-autofocus]",
-      )
-      ?.focus();
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLElement>(inputLabel ? "[data-action-input]" : "[data-autofocus]")?.focus();
     return () => {
       if (previous?.isConnected) previous.focus();
     };
@@ -90,10 +83,7 @@ export function ActionDialog({
   };
 
   return (
-    <div
-      className="edit-confirm-backdrop action-dialog-backdrop"
-      onMouseDown={closeBackdrop}
-    >
+    <div className="edit-confirm-backdrop action-dialog-backdrop" onMouseDown={closeBackdrop}>
       <form
         ref={dialogRef}
         className="edit-confirm-dialog action-dialog"
@@ -102,17 +92,10 @@ export function ActionDialog({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         onKeyDown={onKeyDown}
-        onSubmit={submit}
-      >
+        onSubmit={submit}>
         <header>
           <strong id={titleId}>{title}</strong>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            aria-label="Close"
-          >
+          <button className="icon-button" type="button" onClick={onCancel} disabled={busy} aria-label="Close">
             <IconX size={16} />
           </button>
         </header>
@@ -127,7 +110,7 @@ export function ActionDialog({
                   value={value}
                   maxLength={maxLength}
                   disabled={busy}
-                  onChange={(event) => setValue(event.target.value)}
+                  onChange={event => setValue(event.target.value)}
                 />
               ) : (
                 <input
@@ -135,7 +118,7 @@ export function ActionDialog({
                   value={value}
                   maxLength={maxLength}
                   disabled={busy}
-                  onChange={(event) => setValue(event.target.value)}
+                  onChange={event => setValue(event.target.value)}
                 />
               )}
               {multiline && <small>Leave blank to disable.</small>}
@@ -143,20 +126,14 @@ export function ActionDialog({
           )}
         </div>
         <footer>
-          <button
-            data-autofocus={!inputLabel ? "" : undefined}
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-          >
+          <button data-autofocus={!inputLabel ? "" : undefined} type="button" onClick={onCancel} disabled={busy}>
             Cancel
           </button>
           <button
             className={`${danger ? "danger-button" : "primary-button"} action-confirm-button`}
             type="submit"
             disabled={!valid || busy}
-            aria-busy={busy}
-          >
+            aria-busy={busy}>
             {busy && <IconLoader2 className="feedback-spinner" size={14} />}
             {busy ? busyLabel : confirmLabel}
           </button>

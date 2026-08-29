@@ -32,12 +32,10 @@ export interface AndroidPackageInventory {
 
 function platformDefaultRoot(env: NodeJS.ProcessEnv): string {
   if (process.platform === "win32") {
-    if (!env.LOCALAPPDATA)
-      throw new Error("Android SDK location is unknown; set ANDROID_SDK_ROOT");
+    if (!env.LOCALAPPDATA) throw new Error("Android SDK location is unknown; set ANDROID_SDK_ROOT");
     return join(env.LOCALAPPDATA, "Android", "Sdk");
   }
-  if (process.platform === "darwin")
-    return join(homedir(), "Library", "Android", "sdk");
+  if (process.platform === "darwin") return join(homedir(), "Library", "Android", "sdk");
   return join(homedir(), "Android", "Sdk");
 }
 
@@ -45,8 +43,7 @@ async function canonicalFile(path: string, label: string): Promise<string> {
   const original = await lstat(path).catch(() => {
     throw new Error(`${label} is unavailable at ${path}`);
   });
-  if (!original.isFile() || original.isSymbolicLink())
-    throw new Error(`${label} must be a non-symlink regular file`);
+  if (!original.isFile() || original.isSymbolicLink()) throw new Error(`${label} must be a non-symlink regular file`);
   const canonical = await realpath(path);
   const info = await lstat(canonical);
   if (!info.isFile()) throw new Error(`${label} must be a regular file`);
@@ -54,25 +51,16 @@ async function canonicalFile(path: string, label: string): Promise<string> {
   return canonical;
 }
 
-export async function resolveAndroidSdk(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<AndroidSdkPaths> {
+export async function resolveAndroidSdk(env: NodeJS.ProcessEnv = process.env): Promise<AndroidSdkPaths> {
   const configured = env.ANDROID_SDK_ROOT || env.ANDROID_HOME;
   const rootInput = configured || platformDefaultRoot(env);
-  if (!isAbsolute(rootInput))
-    throw new Error("Android SDK root must be absolute");
+  if (!isAbsolute(rootInput)) throw new Error("Android SDK root must be absolute");
   const root = await realpath(rootInput).catch(() => {
     throw new Error(`Android SDK root is unavailable at ${rootInput}`);
   });
   const executable = process.platform === "win32" ? ".exe" : "";
-  const adb = await canonicalFile(
-    join(root, "platform-tools", `adb${executable}`),
-    "adb",
-  );
-  const emulator = await canonicalFile(
-    join(root, "emulator", `emulator${executable}`),
-    "Android emulator",
-  );
+  const adb = await canonicalFile(join(root, "platform-tools", `adb${executable}`), "adb");
+  const emulator = await canonicalFile(join(root, "emulator", `emulator${executable}`), "Android emulator");
   for (const [label, path] of [
     ["adb", adb],
     ["Android emulator", emulator],
@@ -99,24 +87,14 @@ function appendTail(current: string, data: Buffer): string {
   if (data.length >= 8_192) return data.subarray(-8_192).toString("utf8");
   const prior = Buffer.from(current);
   const next = Buffer.concat([prior, data], prior.length + data.length);
-  return next.length <= 8_192
-    ? next.toString("utf8")
-    : next.subarray(-8_192).toString("utf8");
+  return next.length <= 8_192 ? next.toString("utf8") : next.subarray(-8_192).toString("utf8");
 }
 
 export function validateEmulatorSerial(serial: string): number {
   const match = serial.match(EMULATOR_SERIAL);
   const port = Number(match?.[1]);
-  if (
-    !match ||
-    !Number.isInteger(port) ||
-    port < 5554 ||
-    port > 5682 ||
-    port % 2
-  )
-    throw new Error(
-      "Android attachment requires an emulator serial with an even console port, such as emulator-5554",
-    );
+  if (!match || !Number.isInteger(port) || port < 5554 || port > 5682 || port % 2)
+    throw new Error("Android attachment requires an emulator serial with an even console port, such as emulator-5554");
   return port;
 }
 
@@ -132,22 +110,18 @@ export function parseInstalledPackages(output: string): string[] {
       throw new Error("Android package manager returned malformed inventory");
     packages.add(match[1]);
     if (packages.size > MAX_INSTALLED_PACKAGES)
-      throw new Error(
-        `Android package inventory exceeds ${MAX_INSTALLED_PACKAGES} packages`,
-      );
+      throw new Error(`Android package inventory exceeds ${MAX_INSTALLED_PACKAGES} packages`);
   }
   return [...packages].sort();
 }
 
 async function portsAvailable(...ports: number[]): Promise<boolean> {
   for (const port of ports) {
-    const available = await new Promise<boolean>((resolveAvailable) => {
+    const available = await new Promise<boolean>(resolveAvailable => {
       const server = createServer();
       server.unref();
       server.once("error", () => resolveAvailable(false));
-      server.listen(port, "127.0.0.1", () =>
-        server.close(() => resolveAvailable(true)),
-      );
+      server.listen(port, "127.0.0.1", () => server.close(() => resolveAvailable(true)));
     });
     if (!available) return false;
   }
@@ -163,12 +137,7 @@ export class OwnedEmulator {
   private stderr = "";
   private startError?: string;
 
-  constructor(
-    sdk: AndroidSdk,
-    child: ChildProcess,
-    serial: string,
-    avd: string,
-  ) {
+  constructor(sdk: AndroidSdk, child: ChildProcess, serial: string, avd: string) {
     this.sdk = sdk;
     this.child = child;
     this.serial = serial;
@@ -179,7 +148,7 @@ export class OwnedEmulator {
     child.stderr?.on("data", (data: Buffer) => {
       this.stderr = appendTail(this.stderr, data);
     });
-    child.once("error", (error) => {
+    child.once("error", error => {
       this.startError = error.message;
     });
   }
@@ -196,23 +165,12 @@ export class OwnedEmulator {
 
   async stop(): Promise<void> {
     if (this.child.exitCode === null) {
-      const identity = await this.sdk
-        .avdName(this.serial)
-        .catch(() => undefined);
+      const identity = await this.sdk.avdName(this.serial).catch(() => undefined);
       if (identity === this.avd && this.child.exitCode === null) {
-        await this.sdk
-          .runAdb(["-s", this.serial, "emu", "kill"], 15_000)
-          .catch(() => undefined);
+        await this.sdk.runAdb(["-s", this.serial, "emu", "kill"], 15_000).catch(() => undefined);
       }
-      if (
-        !(await waitForExit(this.child, identity === this.avd ? 10_000 : 0))
-      ) {
-        await terminateProcessTree(
-          this.child,
-          "Android emulator",
-          1_000,
-          5_000,
-        );
+      if (!(await waitForExit(this.child, identity === this.avd ? 10_000 : 0))) {
+        await terminateProcessTree(this.child, "Android emulator", 1_000, 5_000);
       }
     }
     await this.sdk.verifySerialGone(this.serial);
@@ -220,13 +178,9 @@ export class OwnedEmulator {
 
   async cleanupUncertainStart(): Promise<void> {
     if (this.child.exitCode === null) {
-      const identity = await this.sdk
-        .avdName(this.serial)
-        .catch(() => undefined);
+      const identity = await this.sdk.avdName(this.serial).catch(() => undefined);
       if (identity === this.avd)
-        await this.sdk
-          .runAdb(["-s", this.serial, "emu", "kill"], 10_000)
-          .catch(() => undefined);
+        await this.sdk.runAdb(["-s", this.serial, "emu", "kill"], 10_000).catch(() => undefined);
       await terminateProcessTree(this.child, "Android emulator", 500, 5_000);
     }
     await this.sdk.verifySerialGone(this.serial);
@@ -259,11 +213,7 @@ export class AndroidSdk {
     return new AndroidSdk(await resolveAndroidSdk(env), exec, spawnProcess);
   }
 
-  async runAdb(
-    args: string[],
-    timeout = 10_000,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  async runAdb(args: string[], timeout = 10_000, signal?: AbortSignal): Promise<string> {
     const result = await this.exec(this.paths.adb, args, { timeout, signal });
     if (result.code !== 0) throw commandError("adb", result.stderr);
     return result.stdout;
@@ -288,7 +238,7 @@ export class AndroidSdk {
     let spawnError: Error | undefined;
     let stopReason: "cancelled" | "overflow" | "spawn-error" | undefined;
     let requestStop!: () => void;
-    const stopped = new Promise<void>((resolve) => {
+    const stopped = new Promise<void>(resolve => {
       requestStop = resolve;
     });
     const stop = (reason: NonNullable<typeof stopReason>) => {
@@ -309,15 +259,10 @@ export class AndroidSdk {
       chunks.push(data);
     });
     child.stderr?.on("data", (value: Buffer | string) => {
-      stderr = appendTail(
-        stderr,
-        Buffer.isBuffer(value) ? value : Buffer.from(value),
-      );
+      stderr = appendTail(stderr, Buffer.isBuffer(value) ? value : Buffer.from(value));
     });
-    const closed = new Promise<void>((resolve) =>
-      child.once("close", () => resolve()),
-    );
-    child.once("error", (error) => {
+    const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+    child.once("error", error => {
       spawnError = error;
       stop("spawn-error");
     });
@@ -338,31 +283,21 @@ export class AndroidSdk {
       }
     }
     signal?.removeEventListener("abort", cancel);
-    if (terminationError)
-      throw new Error("adb package listing could not be terminated safely");
-    if (stopReason === "cancelled")
-      throw new Error("Android package listing cancelled");
-    if (overflow)
-      throw new Error("Android package inventory exceeds 128KB limit");
-    if (outcome === "timeout")
-      throw new Error("Android package listing timed out");
+    if (terminationError) throw new Error("adb package listing could not be terminated safely");
+    if (stopReason === "cancelled") throw new Error("Android package listing cancelled");
+    if (overflow) throw new Error("Android package inventory exceeds 128KB limit");
+    if (outcome === "timeout") throw new Error("Android package listing timed out");
     if (spawnError) throw new Error("adb package listing is unavailable");
-    if (outcome !== "closed")
-      throw new Error("adb package listing stopped unexpectedly");
+    if (outcome !== "closed") throw new Error("adb package listing stopped unexpectedly");
     if (child.exitCode !== 0) throw commandError("adb", stderr);
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(
-        Buffer.concat(chunks, bytes),
-      );
+      return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes));
     } catch {
       throw new Error("Android package manager returned invalid UTF-8");
     }
   }
 
-  async listInstalledPackages(
-    serial: string,
-    signal?: AbortSignal,
-  ): Promise<AndroidPackageInventory> {
+  async listInstalledPackages(serial: string, signal?: AbortSignal): Promise<AndroidPackageInventory> {
     if (signal?.aborted) throw new Error("Android package listing cancelled");
     const identity = await this.verifyAttached(serial, signal);
     const output = await this.runAdbBounded(
@@ -375,16 +310,12 @@ export class AndroidSdk {
   }
 
   async listAvds(signal?: AbortSignal): Promise<string[]> {
-    const result = await this.exec(this.paths.emulator, ["-list-avds"], {
-      timeout: 15_000,
-      signal,
-    });
-    if (result.code !== 0)
-      throw commandError("Android emulator", result.stderr);
+    const result = await this.exec(this.paths.emulator, ["-list-avds"], { timeout: 15_000, signal });
+    if (result.code !== 0) throw commandError("Android emulator", result.stderr);
     return result.stdout
       .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter((item) => item && item.length <= 200 && !/[\r\n\0]/.test(item));
+      .map(item => item.trim())
+      .filter(item => item && item.length <= 200 && !/[\r\n\0]/.test(item));
   }
 
   async devices(signal?: AbortSignal): Promise<AndroidDevice[]> {
@@ -403,53 +334,35 @@ export class AndroidSdk {
 
   async avdName(serial: string, signal?: AbortSignal): Promise<string> {
     this.validateSerial(serial);
-    const output = await this.runAdb(
-      ["-s", serial, "emu", "avd", "name"],
-      10_000,
-      signal,
-    );
+    const output = await this.runAdb(["-s", serial, "emu", "avd", "name"], 10_000, signal);
     const name = output
       .split(/\r?\n/)
-      .map((item) => item.trim())
-      .find((item) => item && item !== "OK");
-    if (!name || name.length > 200)
-      throw new Error(`Could not identify AVD for ${serial}`);
+      .map(item => item.trim())
+      .find(item => item && item !== "OK");
+    if (!name || name.length > 200) throw new Error(`Could not identify AVD for ${serial}`);
     return name;
   }
 
-  async verifyAttached(
-    serial: string,
-    signal?: AbortSignal,
-  ): Promise<{ serial: string; avd: string }> {
+  async verifyAttached(serial: string, signal?: AbortSignal): Promise<{ serial: string; avd: string }> {
     this.validateSerial(serial);
-    const matching = (await this.devices(signal)).filter(
-      (item) => item.serial === serial,
-    );
+    const matching = (await this.devices(signal)).filter(item => item.serial === serial);
     if (matching.length !== 1 || matching[0].state !== "device")
-      throw new Error(
-        `Android emulator ${serial} is not ready or is ambiguous`,
-      );
+      throw new Error(`Android emulator ${serial} is not ready or is ambiguous`);
     return { serial, avd: await this.avdName(serial, signal) };
   }
 
-  private async occupiedAvds(
-    signal?: AbortSignal,
-  ): Promise<Map<string, string>> {
+  private async occupiedAvds(signal?: AbortSignal): Promise<Map<string, string>> {
     const occupied = new Map<string, string>();
     for (const device of await this.devices(signal)) {
       if (!EMULATOR_SERIAL.test(device.serial)) continue;
-      const avd = await this.avdName(device.serial, signal).catch(
-        () => undefined,
-      );
+      const avd = await this.avdName(device.serial, signal).catch(() => undefined);
       if (avd) occupied.set(avd, device.serial);
     }
     return occupied;
   }
 
   private async selectPort(signal?: AbortSignal): Promise<PortReservation> {
-    const serials = new Set(
-      (await this.devices(signal)).map((item) => item.serial),
-    );
+    const serials = new Set((await this.devices(signal)).map(item => item.serial));
     const offset = Math.floor(Math.random() * 20) * 2;
     for (let step = 0; step <= 128; step += 2) {
       const port = 5554 + ((offset + step) % 130);
@@ -462,18 +375,12 @@ export class AndroidSdk {
     throw new Error("No Android emulator console port is available");
   }
 
-  async start(
-    avd: string,
-    headless: boolean,
-    signal?: AbortSignal,
-  ): Promise<OwnedEmulator> {
+  async start(avd: string, headless: boolean, signal?: AbortSignal): Promise<OwnedEmulator> {
     const avds = await this.listAvds(signal);
     if (!avds.includes(avd)) throw new Error(`Unknown Android AVD: ${avd}`);
     const occupied = await this.occupiedAvds(signal);
     if (occupied.has(avd))
-      throw new Error(
-        `Android AVD ${avd} is already running as ${occupied.get(avd)}; use attach instead`,
-      );
+      throw new Error(`Android AVD ${avd} is already running as ${occupied.get(avd)}; use attach instead`);
     const reservation = await this.selectPort(signal);
     const { port } = reservation;
     const serial = `emulator-${port}`;
@@ -498,11 +405,9 @@ export class AndroidSdk {
       return owned;
     } catch (error) {
       await owned.cleanupUncertainStart();
-      if (signal?.aborted)
-        throw new Error("Android emulator startup cancelled");
+      if (signal?.aborted) throw new Error("Android emulator startup cancelled");
       const diagnostic = owned.diagnostic();
-      if (diagnostic && error instanceof Error)
-        error.message += `: ${diagnostic}`;
+      if (diagnostic && error instanceof Error) error.message += `: ${diagnostic}`;
       throw error;
     } finally {
       await reservation.release();
@@ -514,45 +419,27 @@ export class AndroidSdk {
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
-        if (!(await this.devices()).some((device) => device.serial === serial))
-          return;
+        if (!(await this.devices()).some(device => device.serial === serial)) return;
         lastError = undefined;
       } catch (error) {
         lastError = error;
       }
       await delay(100);
     }
-    if (lastError)
-      throw new Error(`Could not verify Android emulator ${serial} stopped`);
-    throw new Error(
-      `Android emulator ${serial} remained connected after cleanup`,
-    );
+    if (lastError) throw new Error(`Could not verify Android emulator ${serial} stopped`);
+    throw new Error(`Android emulator ${serial} remained connected after cleanup`);
   }
 
-  private async waitForBoot(
-    owned: OwnedEmulator,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  private async waitForBoot(owned: OwnedEmulator, signal?: AbortSignal): Promise<void> {
     const deadline = Date.now() + START_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      if (signal?.aborted)
-        throw new Error("Android emulator startup cancelled");
-      if (owned.startFailure())
-        throw new Error(
-          `Android emulator could not start: ${owned.startFailure()}`,
-        );
-      if (owned.child.exitCode !== null)
-        throw new Error("Android emulator exited during startup");
+      if (signal?.aborted) throw new Error("Android emulator startup cancelled");
+      if (owned.startFailure()) throw new Error(`Android emulator could not start: ${owned.startFailure()}`);
+      if (owned.child.exitCode !== null) throw new Error("Android emulator exited during startup");
       try {
-        const state = (
-          await this.runAdb(["-s", owned.serial, "get-state"], 5_000, signal)
-        ).trim();
+        const state = (await this.runAdb(["-s", owned.serial, "get-state"], 5_000, signal)).trim();
         const booted = (
-          await this.runAdb(
-            ["-s", owned.serial, "shell", "getprop", "sys.boot_completed"],
-            5_000,
-            signal,
-          )
+          await this.runAdb(["-s", owned.serial, "shell", "getprop", "sys.boot_completed"], 5_000, signal)
         ).trim();
         const name = await this.avdName(owned.serial, signal);
         if (state === "device" && booted === "1" && name === owned.avd) return;
@@ -561,15 +448,11 @@ export class AndroidSdk {
         throw new Error("Android emulator startup cancelled");
       });
     }
-    throw new Error(
-      `Android emulator ${owned.avd} did not boot within ${START_TIMEOUT_MS / 1000} seconds`,
-    );
+    throw new Error(`Android emulator ${owned.avd} did not boot within ${START_TIMEOUT_MS / 1000} seconds`);
   }
 }
 
-export async function diagnoseAndroid(
-  exec: Exec,
-): Promise<{ sdk: AndroidSdk; avds: string[]; adbVersion: string }> {
+export async function diagnoseAndroid(exec: Exec): Promise<{ sdk: AndroidSdk; avds: string[]; adbVersion: string }> {
   const sdk = await AndroidSdk.create(exec);
   const avds = await sdk.listAvds();
   const version = await sdk.runAdb(["version"], 10_000);

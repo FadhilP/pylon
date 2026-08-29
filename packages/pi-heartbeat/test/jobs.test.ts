@@ -1,23 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  access,
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  JobManager,
-  pruneStaleSessionDirs,
-  STALE_SESSION_DIR_MS,
-  type Job,
-} from "../src/jobs.ts";
+import { JobManager, pruneStaleSessionDirs, STALE_SESSION_DIR_MS, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs, MIN_CHECK_INTERVAL_MS } from "../src/polling.ts";
 import { shellInvocation } from "../src/process-tree.ts";
@@ -25,11 +12,9 @@ import { shellInvocation } from "../src/process-tree.ts";
 const closed = (job: Job) =>
   job.child.exitCode !== null
     ? Promise.resolve()
-    : new Promise<void>((resolve) => job.child.once("close", () => resolve()));
+    : new Promise<void>(resolve => job.child.once("close", () => resolve()));
 const logClosed = (job: Job) =>
-  job.file.closed
-    ? Promise.resolve()
-    : new Promise<void>((resolve) => job.file.once("close", () => resolve()));
+  job.file.closed ? Promise.resolve() : new Promise<void>(resolve => job.file.once("close", () => resolve()));
 
 test("shell invocation uses Pi-compatible Bash and honors configured paths", () => {
   const command = "printf ok";
@@ -72,21 +57,12 @@ test("running status checks stay over 30 seconds apart", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);
   await manager.init();
-  const job = await manager.start(
-    `node -e "setTimeout(()=>{},1000)"`,
-    process.cwd(),
-  );
+  const job = await manager.start(`node -e "setTimeout(()=>{},1000)"`, process.cwd());
   assert.equal(checkWaitMs(job, job.startedAt), MIN_CHECK_INTERVAL_MS + 1);
   assert.equal(checkWaitMs(job, job.startedAt + MIN_CHECK_INTERVAL_MS), 1);
   assert.equal(checkWaitMs(job, job.startedAt + MIN_CHECK_INTERVAL_MS + 1), 0);
-  assert.match(
-    jobContext([job], job.startedAt),
-    /Do not call heartbeat_status yet/,
-  );
-  assert.match(
-    jobContext([job], job.startedAt + MIN_CHECK_INTERVAL_MS + 1),
-    /status available now/,
-  );
+  assert.match(jobContext([job], job.startedAt), /Do not call heartbeat_status yet/);
+  assert.match(jobContext([job], job.startedAt + MIN_CHECK_INTERVAL_MS + 1), /status available now/);
   await manager.stop(job);
   await closed(job);
   await manager.shutdown();
@@ -124,11 +100,7 @@ test("running status includes a bounded current output snapshot", async () => {
   );
   const job = await manager.start(`node "${script}"`, process.cwd());
   for (let i = 0; i < 100; i++) {
-    if (
-      job.stdoutTail.toString().includes("STDOUT_END") &&
-      job.stderrTail.toString().includes("STDERR_END")
-    )
-      break;
+    if (job.stdoutTail.toString().includes("STDOUT_END") && job.stderrTail.toString().includes("STDERR_END")) break;
     await delay(10);
   }
   const formatted = manager.format(job);
@@ -180,12 +152,7 @@ test("timeout terminates process and shutdown is idempotent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);
   await manager.init();
-  const job = await manager.start(
-    `node -e "setTimeout(()=>{},10000)"`,
-    process.cwd(),
-    "timeout",
-    1000,
-  );
+  const job = await manager.start(`node -e "setTimeout(()=>{},10000)"`, process.cwd(), "timeout", 1000);
   await closed(job);
   assert.equal(job.state, "timed_out");
   await manager.shutdown();

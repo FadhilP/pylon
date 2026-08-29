@@ -36,31 +36,16 @@ function harness() {
   const pi = {
     events,
     getActiveTools: () => [...active],
-    getAllTools: () =>
-      [
-        "read",
-        "edit",
-        "write",
-        "advisor",
-        "repo_scout",
-        "continuity_update",
-      ].map((name) => ({ name })),
+    getAllTools: () => ["read", "edit", "write", "advisor", "repo_scout", "continuity_update"].map(name => ({ name })),
     setActiveTools: (tools: string[]) => {
       if (failReconcile) throw Error("forced reconcile failure");
       active = [...tools];
     },
-    on: (name: string, handler: Function) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-    registerCommand: (name: string, command: any) =>
-      commands.set(name, command),
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand: (name: string, command: any) => commands.set(name, command),
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    appendEntry: (customType: string, data: unknown) =>
-      entries.push({ customType, data }),
-    exec: async (command: string) => ({
-      code: command === "git" ? 0 : 1,
-      stdout: "",
-      stderr: "",
-    }),
+    appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
+    exec: async (command: string) => ({ code: command === "git" ? 0 : 1, stdout: "", stderr: "" }),
   };
   extension(pi as any);
   return {
@@ -83,10 +68,7 @@ test("numbered line tools default on and honor an explicit disable", async () =>
   try {
     const enabled = harness();
     for (const handler of enabled.handlers.get("session_start") ?? [])
-      await handler(
-        { reason: "startup" },
-        { cwd: root, sessionManager: { getBranch: () => [] } },
-      );
+      await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
     assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "read"]);
 
     await mkdir(join(root, "pylon-core"), { recursive: true });
@@ -96,17 +78,10 @@ test("numbered line tools default on and honor an explicit disable", async () =>
     for (const handler of disabled.handlers.get("session_start") ?? [])
       await handler(
         { reason: "startup" },
-        {
-          cwd: root,
-          model: { cost: { input: 1, output: 10 } },
-          sessionManager: { getBranch: () => [] },
-        },
+        { cwd: root, model: { cost: { input: 1, output: 10 } }, sessionManager: { getBranch: () => [] } },
       );
     assert.equal(disabled.tools.size, 0);
-    assert.equal(
-      await readFile(join(root, "pylon-core", "config.json"), "utf8"),
-      persisted,
-    );
+    assert.equal(await readFile(join(root, "pylon-core", "config.json"), "utf8"), persisted);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -118,18 +93,8 @@ test("numbered line tools follow session model pricing without persisting the ch
   const previous = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "pylon-core-model-pricing-"));
   process.env.PI_CODING_AGENT_DIR = root;
-  const model = (
-    input: number,
-    output: number,
-    tiers?: Array<{ input: number; output: number }>,
-  ) => ({
-    cost: {
-      input,
-      output,
-      cacheRead: 0,
-      cacheWrite: 0,
-      ...(tiers ? { tiers } : {}),
-    },
+  const model = (input: number, output: number, tiers?: Array<{ input: number; output: number }>) => ({
+    cost: { input, output, cacheRead: 0, cacheWrite: 0, ...(tiers ? { tiers } : {}) },
   });
   try {
     const runtime = harness();
@@ -138,55 +103,26 @@ test("numbered line tools follow session model pricing without persisting the ch
     const ctx = { cwd: root, sessionManager: { getBranch: () => [] } };
 
     await start({ reason: "startup" }, { ...ctx, model: model(1, 2.99) });
-    assert.equal(
-      runtime.tools.size,
-      0,
-      "low-ratio startup keeps Pi's built-in tools",
-    );
+    assert.equal(runtime.tools.size, 0, "low-ratio startup keeps Pi's built-in tools");
 
-    await select(
-      { model: model(1, 3), previousModel: model(1, 2.99), source: "set" },
-      ctx,
-    );
+    await select({ model: model(1, 3), previousModel: model(1, 2.99), source: "set" }, ctx);
     assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
     assert.equal(runtime.tools.get("edit")?.label, "edit (numbered)");
-    assert.ok(
-      runtime.active().includes("read") && runtime.active().includes("edit"),
-    );
+    assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
     const firstNumberedRead = runtime.tools.get("read");
 
-    await select(
-      { model: model(1, 2, [{ input: 2, output: 6 }]), source: "set" },
-      ctx,
-    );
-    assert.equal(
-      runtime.tools.get("read"),
-      firstNumberedRead,
-      "a qualifying tier keeps numbered mode",
-    );
+    await select({ model: model(1, 2, [{ input: 2, output: 6 }]), source: "set" }, ctx);
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "a qualifying tier keeps numbered mode");
 
     await select({ model: model(0, 0), source: "set" }, ctx);
-    assert.equal(
-      runtime.tools.get("read"),
-      firstNumberedRead,
-      "unknown pricing keeps numbered mode",
-    );
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "unknown pricing keeps numbered mode");
     await select({ model: model(1, 0), source: "set" }, ctx);
-    assert.equal(
-      runtime.tools.get("read"),
-      firstNumberedRead,
-      "zero output pricing keeps numbered mode",
-    );
+    assert.equal(runtime.tools.get("read"), firstNumberedRead, "zero output pricing keeps numbered mode");
 
-    await select(
-      { model: model(2, 5.99, [{ input: 4, output: 11.99 }]), source: "set" },
-      ctx,
-    );
+    await select({ model: model(2, 5.99, [{ input: 4, output: 11.99 }]), source: "set" }, ctx);
     assert.equal(runtime.tools.get("read")?.label, "read");
     assert.equal(runtime.tools.get("edit")?.label, "edit");
-    assert.ok(
-      runtime.active().includes("read") && runtime.active().includes("edit"),
-    );
+    assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
 
     const other = join(root, "other");
     await mkdir(other);
@@ -194,11 +130,7 @@ test("numbered line tools follow session model pricing without persisting the ch
     await writeFile(join(other, "probe.txt"), "new cwd");
     const firstNativeRead = runtime.tools.get("read");
     await start({ reason: "new" }, { ...ctx, cwd: other, model: model(1, 2) });
-    assert.notEqual(
-      runtime.tools.get("read"),
-      firstNativeRead,
-      "native tools rebind for a new session cwd",
-    );
+    assert.notEqual(runtime.tools.get("read"), firstNativeRead, "native tools rebind for a new session cwd");
     const nativeResult = await runtime.tools
       .get("read")
       .execute("read-1", { path: "probe.txt" }, undefined, undefined, {});
@@ -206,22 +138,11 @@ test("numbered line tools follow session model pricing without persisting the ch
 
     await select({ model: model(1, 4), source: "set" }, ctx);
     assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
-    assert.notEqual(
-      runtime.tools.get("read"),
-      firstNumberedRead,
-      "re-enabling creates fresh revision state",
-    );
+    assert.notEqual(runtime.tools.get("read"), firstNumberedRead, "re-enabling creates fresh revision state");
     const secondNumberedRead = runtime.tools.get("read");
     await start({ reason: "new" }, { ...ctx, model: model(1, 4) });
-    assert.notEqual(
-      runtime.tools.get("read"),
-      secondNumberedRead,
-      "numbered state is fresh for every session",
-    );
-    await assert.rejects(
-      () => readFile(join(root, "pylon-core", "config.json")),
-      { code: "ENOENT" },
-    );
+    assert.notEqual(runtime.tools.get("read"), secondNumberedRead, "numbered state is fresh for every session");
+    await assert.rejects(() => readFile(join(root, "pylon-core", "config.json")), { code: "ENOENT" });
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -241,14 +162,8 @@ test("Memory reviewer telemetry is persisted without proposal text", () => {
     usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
     proposalText: "must not persist",
   });
-  assert.equal(
-    runtime.entries[0]?.customType,
-    "pi-continuity-memory-telemetry",
-  );
-  assert.equal(
-    JSON.stringify(runtime.entries[0]).includes("must not persist"),
-    false,
-  );
+  assert.equal(runtime.entries[0]?.customType, "pi-continuity-memory-telemetry");
+  assert.equal(JSON.stringify(runtime.entries[0]).includes("must not persist"), false);
 });
 
 test("Compaction reviewer telemetry is bounded and excludes transcript content", () => {
@@ -264,14 +179,8 @@ test("Compaction reviewer telemetry is bounded and excludes transcript content",
     usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
     exactQuote: "must not persist",
   });
-  assert.equal(
-    runtime.entries[0]?.customType,
-    "pi-continuity-compaction-review-telemetry",
-  );
-  assert.equal(
-    JSON.stringify(runtime.entries[0]).includes("must not persist"),
-    false,
-  );
+  assert.equal(runtime.entries[0]?.customType, "pi-continuity-compaction-review-telemetry");
+  assert.equal(JSON.stringify(runtime.entries[0]).includes("must not persist"), false);
   runtime.events.emit("pi-continuity:compaction-review-telemetry", {
     version: 1,
     outcome: "failed",
@@ -279,10 +188,7 @@ test("Compaction reviewer telemetry is bounded and excludes transcript content",
     error: "private transcript",
   });
   assert.equal((runtime.entries[1]?.data as any)?.outcome, "failed");
-  assert.equal(
-    JSON.stringify(runtime.entries[1]).includes("private transcript"),
-    false,
-  );
+  assert.equal(JSON.stringify(runtime.entries[1]).includes("private transcript"), false);
 });
 
 test("compact command waits for completion and reports actionable failures", async () => {
@@ -290,16 +196,13 @@ test("compact command waits for completion and reports actionable failures", asy
   const notifications: Array<[string, string]> = [];
   const context = (compact: (value: any) => void) => ({
     compact,
-    ui: {
-      notify: (message: string, severity: string) =>
-        notifications.push([message, severity]),
-    },
+    ui: { notify: (message: string, severity: string) => notifications.push([message, severity]) },
   });
 
   let options: any;
   const completed = runtime.commands.get("compact").handler(
     " focus on current edits ",
-    context((value) => {
+    context(value => {
       options = value;
     }),
   );
@@ -310,7 +213,7 @@ test("compact command waits for completion and reports actionable failures", asy
 
   const failed = runtime.commands.get("compact").handler(
     "",
-    context((value) => {
+    context(value => {
       options = value;
     }),
   );
@@ -318,10 +221,7 @@ test("compact command waits for completion and reports actionable failures", asy
   options.onError(new Error("provider unavailable"));
   await failed;
   assert.deepEqual(notifications, [
-    [
-      "Compaction failed. Reason: provider unavailable. Retry; if it keeps failing, try a different model.",
-      "error",
-    ],
+    ["Compaction failed. Reason: provider unavailable. Retry; if it keeps failing, try a different model.", "error"],
   ]);
   options.onComplete();
   assert.equal(notifications.length, 1);
@@ -368,19 +268,9 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
     confirmed: 0,
   });
   assert.equal(acknowledged, true);
-  assert.deepEqual(
-    new Set(runtime.active()),
-    new Set(["read", "advisor", "continuity_update"]),
-  );
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-continuity",
-  });
-  assert.deepEqual(
-    new Set(runtime.active()),
-    new Set(["read", "edit", "repo_scout", "advisor"]),
-  );
+  assert.deepEqual(new Set(runtime.active()), new Set(["read", "advisor", "continuity_update"]));
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-continuity" });
+  assert.deepEqual(new Set(runtime.active()), new Set(["read", "edit", "repo_scout", "advisor"]));
   let diagnostic = "";
   await runtime.commands.get("pylon").handler("", {
     ui: {
@@ -420,8 +310,7 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.match(diagnostic, /Tool surfaces:/);
   assert.match(diagnostic, /Advisor: registered/);
   assert.match(diagnostic, /Package health:\nHelios:\n  CLI: ready/);
-  for (const handler of runtime.handlers.get("session_shutdown") ?? [])
-    handler();
+  for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
   assert.equal(runtime.events.count("pylon:tool-policy"), 0);
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
@@ -452,15 +341,7 @@ test("delegated runs receive stable role-local names", () => {
       {},
       {
         sessionManager: {
-          getBranch: () => [
-            {
-              message: {
-                role: "toolResult",
-                toolCallId: "repo-7",
-                details: { agentName: "S7" },
-              },
-            },
-          ],
+          getBranch: () => [{ message: { role: "toolResult", toolCallId: "repo-7", details: { agentName: "S7" } } }],
         },
       },
     );
@@ -471,9 +352,7 @@ test("delegated runs receive stable role-local names", () => {
 test("shared worktree observer fingerprints one shell tool batch per turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-worktree-observer-"));
   await exec("git", ["init", "-q"], { cwd: root });
-  await exec("git", ["config", "user.email", "pylon@test.local"], {
-    cwd: root,
-  });
+  await exec("git", ["config", "user.email", "pylon@test.local"], { cwd: root });
   await exec("git", ["config", "user.name", "pylon-test"], { cwd: root });
   await writeFile(join(root, "tracked.txt"), "base\n");
   await exec("git", ["add", "tracked.txt"], { cwd: root });
@@ -489,7 +368,7 @@ test("shared worktree observer fingerprints one shell tool batch per turn", asyn
   });
   assert.deepEqual(capability, { version: 1, owner: "pylon-core" });
   const changes: any[] = [];
-  runtime.events.on("pylon:worktree-change", (event) => changes.push(event));
+  runtime.events.on("pylon:worktree-change", event => changes.push(event));
   const ctx = { cwd: root };
   const toolCall = runtime.handlers.get("tool_call")![0];
   await Promise.all([
@@ -509,9 +388,7 @@ test("run summary survives the final shell turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-run-summary-"));
   try {
     await exec("git", ["init", "-q"], { cwd: root });
-    await exec("git", ["config", "user.email", "pylon@test.local"], {
-      cwd: root,
-    });
+    await exec("git", ["config", "user.email", "pylon@test.local"], { cwd: root });
     await exec("git", ["config", "user.name", "pylon-test"], { cwd: root });
     await writeFile(join(root, "tracked.txt"), "base\n");
     await exec("git", ["add", "tracked.txt"], { cwd: root });
@@ -521,32 +398,17 @@ test("run summary survives the final shell turn", async () => {
     const summaries: any[] = [];
     const ctx = {
       cwd: root,
-      sessionManager: {
-        getBranch: () => [
-          {
-            id: "assistant-1",
-            type: "message",
-            message: { role: "assistant" },
-          },
-        ],
-      },
+      sessionManager: { getBranch: () => [{ id: "assistant-1", type: "message", message: { role: "assistant" } }] },
     };
-    runtime.events.on("pylon:worktree-summary", (event) =>
-      summaries.push(event),
-    );
+    runtime.events.on("pylon:worktree-summary", event => summaries.push(event));
 
     await runtime.handlers.get("agent_start")![0]({}, ctx);
-    await runtime.handlers.get("tool_call")![0](
-      { toolName: "bash", toolCallId: "shell" },
-      ctx,
-    );
+    await runtime.handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "shell" }, ctx);
     await writeFile(join(root, "tracked.txt"), "changed\n");
     await runtime.handlers.get("turn_end")![0]({}, ctx);
     await runtime.handlers.get("agent_settled")![0]({}, ctx);
 
-    assert.deepEqual(summaries[0]?.files, [
-      { path: "tracked.txt", additions: 1, deletions: 1 },
-    ]);
+    assert.deepEqual(summaries[0]?.files, [{ path: "tracked.txt", additions: 1, deletions: 1 }]);
     assert.equal(summaries[0]?.assistantEntryId, "assistant-1");
     assert.deepEqual(runtime.entries.at(-1), {
       customType: "pylon-worktree-summary",
@@ -558,12 +420,7 @@ test("run summary survives the final shell turn", async () => {
     });
     await runtime.handlers.get("agent_start")![0]({}, ctx);
     await runtime.handlers.get("agent_settled")![0]({}, ctx);
-    assert.equal(
-      runtime.entries.filter(
-        (entry) => entry.customType === "pylon-worktree-summary",
-      ).length,
-      1,
-    );
+    assert.equal(runtime.entries.filter(entry => entry.customType === "pylon-worktree-summary").length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -587,17 +444,10 @@ test("doctor reports quarantined state and unavailable configured models", async
       JSON.stringify({ version: 1, model: "openai/worker-model" }),
     );
     await writeFile(join(root, "pi-scout", "config.json.corrupt-test"), "bad");
-    await writeFile(
-      join(root, "pi-continuity", "config.json"),
-      JSON.stringify({ version: 2, memoryEnabled: true }),
-    );
+    await writeFile(join(root, "pi-continuity", "config.json"), JSON.stringify({ version: 2, memoryEnabled: true }));
     await writeFile(
       join(root, "pi-continuity", "memory-v5", "migration.json"),
-      JSON.stringify({
-        version: 1,
-        status: "failed",
-        failureReason: "reviewer unavailable",
-      }),
+      JSON.stringify({ version: 1, status: "failed", failureReason: "reviewer unavailable" }),
     );
     const runtime = harness();
     let diagnostic = "";
@@ -605,9 +455,7 @@ test("doctor reports quarantined state and unavailable configured models", async
     await runtime.commands.get("pylon").handler("doctor", {
       modelRegistry: {
         find: (provider: string, id: string) =>
-          provider === "openai" && id === "test-model"
-            ? { provider, id }
-            : undefined,
+          provider === "openai" && id === "test-model" ? { provider, id } : undefined,
         hasConfiguredAuth: () => false,
       },
       ui: {
@@ -618,19 +466,10 @@ test("doctor reports quarantined state and unavailable configured models", async
       },
     });
     assert.match(diagnostic, /Quarantined state: .*config\.json\.corrupt-test/);
-    assert.match(
-      diagnostic,
-      /Advisor: openai\/test-model \(credentials unavailable\)/,
-    );
-    assert.match(
-      diagnostic,
-      /Grunt: openai\/worker-model \(model unavailable\)/,
-    );
+    assert.match(diagnostic, /Advisor: openai\/test-model \(credentials unavailable\)/);
+    assert.match(diagnostic, /Grunt: openai\/worker-model \(model unavailable\)/);
     assert.match(diagnostic, /Memory Reviewer: not configured/);
-    assert.match(
-      diagnostic,
-      /Memory migration: failed \(reviewer unavailable\)/,
-    );
+    assert.match(diagnostic, /Memory migration: failed \(reviewer unavailable\)/);
     assert.equal(severity, "warning");
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -650,8 +489,7 @@ test("tools command manages baseline while restrictive gates remain authoritativ
       },
     },
   };
-  for (const handler of runtime.handlers.get("session_start") ?? [])
-    await handler({ reason: "startup" }, ctx);
+  for (const handler of runtime.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 
   await runtime.commands.get("pylon").handler("tools disable edit", ctx);
   assert.ok(!runtime.active().includes("edit"));
@@ -671,11 +509,7 @@ test("tools command manages baseline while restrictive gates remain authoritativ
   assert.ok(!runtime.active().includes("edit"));
   assert.match(message, /Deferred by active gate: edit/);
   assert.equal(level, "warning");
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-continuity",
-  });
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-continuity" });
   assert.ok(runtime.active().includes("edit"));
 
   runtime.events.emit("pylon:tool-policy", {
@@ -686,10 +520,7 @@ test("tools command manages baseline while restrictive gates remain authoritativ
     enabledTools: ["advisor"],
   });
   await runtime.commands.get("pylon").handler("tools disable advisor", ctx);
-  assert.match(
-    message,
-    /Policy-managed tools cannot be changed manually: advisor/,
-  );
+  assert.match(message, /Policy-managed tools cannot be changed manually: advisor/);
   assert.equal(level, "error");
   await runtime.commands.get("pylon").handler("tools enable missing", ctx);
   assert.match(message, /Unknown tools: missing/);
@@ -701,10 +532,7 @@ test("tools command manages baseline while restrictive gates remain authoritativ
 
 test("an override received before package registration preserves the unmanaged baseline", () => {
   const runtime = harness();
-  runtime.events.emit("pylon:tool-overrides", {
-    version: 1,
-    overrides: { edit: "deferred" },
-  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { edit: "deferred" } });
   assert.ok(!runtime.active().includes("edit"));
   runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: {} });
   assert.ok(runtime.active().includes("edit"));
@@ -720,17 +548,11 @@ test("user overrides control active deferred and disabled tools without bypassin
     enabledTools: ["advisor"],
     toolUsage: { advisor: "review consequential decisions" },
   });
-  runtime.events.emit("pylon:tool-overrides", {
-    version: 1,
-    overrides: { advisor: "deferred", edit: "deferred" },
-  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "deferred", edit: "deferred" } });
   assert.ok(!runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("edit"));
   const responses: any[] = [];
-  runtime.events.emit("pylon:tool-discovery", {
-    version: 1,
-    respond: (value: any) => responses.push(value),
-  });
+  runtime.events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => responses.push(value) });
   assert.deepEqual(responses[0].eligible(), ["advisor", "edit"]);
   assert.deepEqual(responses[0].catalog(), [
     { name: "advisor", usage: "review consequential decisions" },
@@ -753,10 +575,7 @@ test("user overrides control active deferred and disabled tools without bypassin
   runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: {} });
   assert.ok(runtime.active().includes("edit"));
 
-  runtime.events.emit("pylon:tool-overrides", {
-    version: 1,
-    overrides: { advisor: "disabled", edit: "active" },
-  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "disabled", edit: "active" } });
   assert.ok(!runtime.active().includes("advisor"));
   assert.ok(runtime.active().includes("edit"));
   assert.deepEqual(responses[0].eligible(), []);
@@ -768,10 +587,7 @@ test("user overrides control active deferred and disabled tools without bypassin
     managedTools: ["advisor"],
     enabledTools: [],
   });
-  runtime.events.emit("pylon:tool-overrides", {
-    version: 1,
-    overrides: { advisor: "active" },
-  });
+  runtime.events.emit("pylon:tool-overrides", { version: 1, overrides: { advisor: "active" } });
   assert.ok(!runtime.active().includes("advisor"));
 });
 
@@ -799,10 +615,7 @@ test("discovery capability replaces deferred selections and respects gates", () 
   assert.ok(!runtime.active().includes("repo_scout"));
 
   const responses: any[] = [];
-  runtime.events.emit("pylon:tool-discovery", {
-    version: 1,
-    respond: (value: any) => responses.push(value),
-  });
+  runtime.events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => responses.push(value) });
   assert.equal(responses.length, 1);
   const capability = responses[0];
   assert.deepEqual(capability.eligible(), ["advisor", "repo_scout"]);
@@ -822,20 +635,10 @@ test("discovery capability replaces deferred selections and respects gates", () 
     deferredTools: ["advisor"],
     deferredToolUsage: { advisor: "provide a different review" },
   });
-  assert.equal(
-    capability.catalog().find((entry: any) => entry.name === "advisor").usage,
-    undefined,
-  );
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-other",
-  });
+  assert.equal(capability.catalog().find((entry: any) => entry.name === "advisor").usage, undefined);
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-other" });
   assert.equal(capability.catalog()[0].usage, "review consequential decisions");
-  assert.deepEqual(capability.select(["advisor"]), {
-    selected: ["advisor"],
-    blocked: [],
-  });
+  assert.deepEqual(capability.select(["advisor"]), { selected: ["advisor"], blocked: [] });
   assert.ok(runtime.active().includes("advisor"));
   assert.ok(!runtime.active().includes("repo_scout"));
   capability.select(["repo_scout"]);
@@ -850,21 +653,12 @@ test("discovery capability replaces deferred selections and respects gates", () 
     enabledTools: [],
     allowOnly: ["read"],
   });
-  assert.deepEqual(capability.select(["advisor"]), {
-    selected: ["advisor"],
-    blocked: ["advisor"],
-  });
+  assert.deepEqual(capability.select(["advisor"]), { selected: ["advisor"], blocked: ["advisor"] });
   assert.ok(!runtime.active().includes("advisor"));
   assert.match(capability.select(["missing"]).error, /not eligible/);
   assert.deepEqual(capability.reset(), { selected: [] });
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-scout",
-  });
-  assert.deepEqual(capability.catalog(), [
-    { name: "advisor", usage: "review consequential decisions" },
-  ]);
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-scout" });
+  assert.deepEqual(capability.catalog(), [{ name: "advisor", usage: "review consequential decisions" }]);
 });
 
 test("discovery selection validation and failed reconciliation preserve prior selection", () => {
@@ -878,32 +672,19 @@ test("discovery selection validation and failed reconciliation preserve prior se
     deferredTools: ["advisor"],
   });
   const responses: any[] = [];
-  runtime.events.emit("pylon:tool-discovery", {
-    version: 1,
-    respond: (value: any) => responses.push(value),
-  });
+  runtime.events.emit("pylon:tool-discovery", { version: 1, respond: (value: any) => responses.push(value) });
   const capability = responses[0];
   assert.doesNotThrow(() => capability.select([Symbol("bad")]));
-  assert.match(
-    capability.select([Symbol("bad")]).error,
-    /non-empty tool names/,
-  );
+  assert.match(capability.select([Symbol("bad")]).error, /non-empty tool names/);
   capability.select(["advisor"]);
   assert.ok(runtime.active().includes("advisor"));
 
   runtime.fail(true);
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-advisor",
-  });
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-advisor" });
   runtime.fail(false);
   assert.ok(runtime.active().includes("advisor"));
   assert.deepEqual(capability.eligible(), ["advisor"]);
-  assert.deepEqual(capability.select(["advisor"]), {
-    selected: ["advisor"],
-    blocked: [],
-  });
+  assert.deepEqual(capability.select(["advisor"]), { selected: ["advisor"], blocked: [] });
 });
 
 test("tokens command rebuilds branch usage and tracks custom tool results", async () => {
@@ -916,14 +697,7 @@ test("tokens command rebuilds branch usage and tracks custom tool results", asyn
           type: "message",
           message: {
             role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "read-1",
-                name: "read",
-                arguments: { path: "a.ts" },
-              },
-            ],
+            content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "a.ts" } }],
           },
         },
         {
@@ -944,8 +718,7 @@ test("tokens command rebuilds branch usage and tracks custom tool results", asyn
       },
     },
   };
-  for (const handler of runtime.handlers.get("session_start") ?? [])
-    await handler({ reason: "startup" }, ctx);
+  for (const handler of runtime.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 
   for (const handler of runtime.handlers.get("tool_result") ?? []) {
     await handler(
@@ -975,18 +748,8 @@ test("validates, deduplicates, persists, and reports direct model telemetry", as
     kind: "model_call",
     status: "completed",
     durationMs: 12,
-    usage: {
-      turns: 1,
-      input: 20,
-      output: 4,
-      cacheRead: 5,
-      cacheWrite: 0,
-      cost: 0.01,
-    },
-    context: {
-      request: { characters: 40, hash: "a".repeat(64) },
-      result: { characters: 20, hash: "b".repeat(64) },
-    },
+    usage: { turns: 1, input: 20, output: 4, cacheRead: 5, cacheWrite: 0, cost: 0.01 },
+    context: { request: { characters: 40, hash: "a".repeat(64) }, result: { characters: 20, hash: "b".repeat(64) } },
   };
   runtime.events.emit("pylon:telemetry", event);
   runtime.events.emit("pylon:telemetry", event);
@@ -995,17 +758,10 @@ test("validates, deduplicates, persists, and reports direct model telemetry", as
     eventId: "bad id",
     context: { request: { characters: 40, hash: "raw prompt" } },
   });
-  runtime.events.emit("pylon:telemetry", {
-    ...event,
-    eventId: "timeline-call-2",
-    rawPrompt: "must reject",
-  });
+  runtime.events.emit("pylon:telemetry", { ...event, eventId: "timeline-call-2", rawPrompt: "must reject" });
 
   assert.equal(runtime.entries.length, 1);
-  assert.deepEqual(runtime.entries[0], {
-    customType: "pylon-telemetry",
-    data: event,
-  });
+  assert.deepEqual(runtime.entries[0], { customType: "pylon-telemetry", data: event });
   let report = "";
   await runtime.commands.get("tokens").handler("", {
     ui: {
@@ -1101,11 +857,7 @@ test("rolls back unregister state when reconcile fails", async () => {
     enabledTools: ["test_tool"],
   });
   runtime.fail(true);
-  runtime.events.emit("pylon:tool-policy", {
-    version: 1,
-    kind: "unregister",
-    owner: "pi-test",
-  });
+  runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-test" });
   let diagnostic = "";
   await runtime.commands.get("pylon").handler("", {
     ui: {
@@ -1141,8 +893,5 @@ test("isolates and diagnoses acknowledgement failures", async () => {
       },
     },
   });
-  assert.match(
-    diagnostic,
-    /Last acknowledge error: forced acknowledge failure/,
-  );
+  assert.match(diagnostic, /Last acknowledge error: forced acknowledge failure/);
 });

@@ -14,10 +14,7 @@ export function shellInvocation(command: string, shellPath?: string) {
 export function killTree(child: ChildProcess, force = false) {
   if (!child.pid) return;
   if (process.platform === "win32")
-    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
   else
     try {
       process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");

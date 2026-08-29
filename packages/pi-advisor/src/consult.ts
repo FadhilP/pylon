@@ -1,10 +1,6 @@
 import type { complete } from "@earendil-works/pi-ai/compat";
 import { redact } from "./redact.ts";
-import {
-  DELEGATE_MAX_ATTEMPTS,
-  isTransientProviderFailure,
-  waitForDelegateRetry,
-} from "./retry.ts";
+import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "./retry.ts";
 
 export const ADVISOR_TIMEOUT_MS = 15 * 60 * 1000;
 const FAILURE_MESSAGE_MAX_LENGTH = 500;
@@ -20,20 +16,8 @@ export type FailureCode =
   | "pricing_unavailable"
   | "context_overflow";
 
-export type AdvisorUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-};
-export const emptyUsage = (): AdvisorUsage => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-});
+export type AdvisorUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+export const emptyUsage = (): AdvisorUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 const validUsageNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 function accumulateUsage(total: AdvisorUsage, usage: any): void {
@@ -46,19 +30,12 @@ function accumulateUsage(total: AdvisorUsage, usage: any): void {
 }
 
 export function failureMessage(value: unknown, fallback: string): string {
-  const message =
-    value instanceof Error
-      ? value.message
-      : typeof value === "string"
-        ? value
-        : fallback;
+  const message = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
   const clean =
     redact(message)
       .text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
       .trim() || fallback;
-  return clean.length > FAILURE_MESSAGE_MAX_LENGTH
-    ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
-    : clean;
+  return clean.length > FAILURE_MESSAGE_MAX_LENGTH ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...` : clean;
 }
 
 /** One classifier for both provider-reported stop reasons and thrown errors. */
@@ -74,11 +51,7 @@ function classifyFailure(input: {
   return input.retryable ? "provider_unavailable" : "invalid_response";
 }
 
-export type ConsultProgress = {
-  note?: string;
-  usage: AdvisorUsage;
-  attempts: number;
-};
+export type ConsultProgress = { note?: string; usage: AdvisorUsage; attempts: number };
 export type ConsultOptions = {
   complete: typeof complete;
   retryWait: typeof waitForDelegateRetry;
@@ -91,18 +64,12 @@ export type ConsultOptions = {
 };
 export type ConsultResult =
   | { ok: true; raw: string; usage: AdvisorUsage; attempts: number }
-  | {
-      ok: false;
-      code: FailureCode;
-      message: string;
-      usage: AdvisorUsage;
-      attempts: number;
-    };
+  | { ok: false; code: FailureCode; message: string; usage: AdvisorUsage; attempts: number };
 
 const responseText = (content: readonly any[]) =>
   content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
+    .filter(part => part.type === "text")
+    .map(part => part.text)
     .join("\n")
     .trim();
 
@@ -110,9 +77,7 @@ const responseText = (content: readonly any[]) =>
  * Runs the advisor completion, retrying transient provider failures while nothing has been billed.
  * Never throws: every outcome comes back as a ConsultResult for the caller to format.
  */
-export async function runConsultation(
-  options: ConsultOptions,
-): Promise<ConsultResult> {
+export async function runConsultation(options: ConsultOptions): Promise<ConsultResult> {
   const usage = emptyUsage();
   let attempts = 0;
   // Progress observers must not control provider execution.
@@ -124,8 +89,7 @@ export async function runConsultation(
     }
   };
   const retry = async (retryable: boolean) => {
-    if (attempts >= DELEGATE_MAX_ATTEMPTS || usage.cost !== 0 || !retryable)
-      return false;
+    if (attempts >= DELEGATE_MAX_ATTEMPTS || usage.cost !== 0 || !retryable) return false;
     if (!(await options.retryWait(attempts, options.signal))) return false;
     report({
       note: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
@@ -138,24 +102,15 @@ export async function runConsultation(
   for (;;) {
     attempts++;
     try {
-      const response = await options.complete(
-        options.model,
-        options.request as any,
-        options.completeOptions as any,
-      );
+      const response = await options.complete(options.model, options.request as any, options.completeOptions as any);
       accumulateUsage(usage, response.usage);
       report({ usage, attempts });
 
       const raw = responseText(response.content);
-      const failed =
-        response.stopReason === "error" ||
-        response.stopReason === "aborted" ||
-        !raw;
+      const failed = response.stopReason === "error" || response.stopReason === "aborted" || !raw;
       if (!failed) return { ok: true, raw, usage, attempts };
 
-      const retryable =
-        response.stopReason === "error" &&
-        isTransientProviderFailure(response.errorMessage);
+      const retryable = response.stopReason === "error" && isTransientProviderFailure(response.errorMessage);
       if (await retry(retryable)) continue;
       const aborted = response.stopReason === "aborted";
       return {
@@ -168,9 +123,7 @@ export async function runConsultation(
         }),
         message: failureMessage(
           response.errorMessage,
-          raw
-            ? "Provider returned an error without a message."
-            : "Provider returned no text content.",
+          raw ? "Provider returned an error without a message." : "Provider returned no text content.",
         ),
         usage,
         attempts,
@@ -187,10 +140,7 @@ export async function runConsultation(
           message,
           retryable: isTransientProviderFailure(message),
         }),
-        message: failureMessage(
-          error,
-          "Advisor request failed without an Error message.",
-        ),
+        message: failureMessage(error, "Advisor request failed without an Error message."),
         usage,
         attempts,
       };

@@ -24,10 +24,10 @@ import { mapLimit } from "../scripts/run-packages-lib.mjs";
 test("package runner bounds concurrency and preserves result order", async () => {
   let active = 0;
   let peak = 0;
-  const results = await mapLimit([30, 5, 20, 1], 2, async (delay) => {
+  const results = await mapLimit([30, 5, 20, 1], 2, async delay => {
     active++;
     peak = Math.max(peak, active);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise(resolve => setTimeout(resolve, delay));
     active--;
     return delay;
   });
@@ -47,10 +47,7 @@ class Bus {
     for (const handler of this.handlers.get(channel) ?? []) handler(value);
   }
   count() {
-    return [...this.handlers.values()].reduce(
-      (sum, handlers) => sum + handlers.size,
-      0,
-    );
+    return [...this.handlers.values()].reduce((sum, handlers) => sum + handlers.size, 0);
   }
 }
 
@@ -70,14 +67,12 @@ test("root bundle discovery integrations run and shut down", async () => {
     let active: string[] = ["read", "edit", "write", "bash"];
     const pi: any = {
       events,
-      on: (name: string, handler: Function) =>
-        handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
       registerTool: (tool: any) => {
         tools.set(tool.name, tool);
         active.push(tool.name);
       },
-      registerCommand: (name: string, command: any) =>
-        commands.set(name, command),
+      registerCommand: (name: string, command: any) => commands.set(name, command),
       registerEntryRenderer: () => {},
       getActiveTools: () => [...new Set(active)],
       getAllTools: () => [...tools.values()],
@@ -131,11 +126,7 @@ test("root bundle discovery integrations run and shut down", async () => {
       model: undefined,
       scopedModels: [],
       ui,
-      modelRegistry: {
-        find: () => undefined,
-        hasConfiguredAuth: () => false,
-        getAvailable: () => [],
-      },
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false, getAvailable: () => [] },
       sessionManager: {
         getEntries: () => [],
         getBranch: () => [],
@@ -144,18 +135,11 @@ test("root bundle discovery integrations run and shut down", async () => {
         getLeafId: () => undefined,
       },
     };
-    for (const handler of handlers.get("session_start") ?? [])
-      await handler({ reason: "startup" }, ctx);
+    for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 
     const agentDiscovery = await tools
       .get("search_tools")
-      .execute(
-        "discover-spawn-agent",
-        { query: "delegate to a private agent", limit: 1 },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("discover-spawn-agent", { query: "delegate to a private agent", limit: 1 }, undefined, undefined, ctx);
     assert.match(agentDiscovery.content[0].text, /Selected: spawn_agent/);
     assert.ok(active.includes("spawn_agent"));
     assert.ok(!active.includes("spawn_session"));
@@ -175,18 +159,9 @@ test("root bundle discovery integrations run and shut down", async () => {
 
     const discoveryResult = await tools
       .get("search_tools")
-      .execute(
-        "discover-browser",
-        { query: "browser navigation" },
-        undefined,
-        undefined,
-        ctx,
-      );
+      .execute("discover-browser", { query: "browser navigation" }, undefined, undefined, ctx);
     assert.match(discoveryResult.content[0].text, /Selected: helios_browser/);
-    assert.match(
-      discoveryResult.content[0].text,
-      /Callable definitions update next model turn/,
-    );
+    assert.match(discoveryResult.content[0].text, /Callable definitions update next model turn/);
     assert.ok(active.includes("helios_browser"));
 
     const androidDiscovery = await tools
@@ -207,8 +182,7 @@ test("root bundle discovery integrations run and shut down", async () => {
     assert.match(notification, /Scout:/);
     assert.match(notification, /Web Scout: Helios broker ready/);
 
-    for (const handler of handlers.get("session_shutdown") ?? [])
-      await handler({ reason: "quit" }, ctx);
+    for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
     assert.equal(events.count(), 0);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

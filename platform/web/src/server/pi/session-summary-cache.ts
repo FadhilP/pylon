@@ -1,13 +1,5 @@
 import { createReadStream } from "node:fs";
-import {
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,8 +9,7 @@ const VERSION = 1;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 const CONCURRENCY = 16;
 const CACHE_FILE = "session-summaries-v1.json";
-const canonicalPath = (path: string) =>
-  process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 
 export interface SessionOwner {
   id: string;
@@ -83,10 +74,7 @@ function validText(value: unknown, max = 32_768): value is string {
 function parseOwner(value: unknown): SessionOwner | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const owner = value as Record<string, unknown>;
-  return validText(owner.id, 128) &&
-    owner.id.length > 0 &&
-    validText(owner.file) &&
-    owner.file.length > 0
+  return validText(owner.id, 128) && owner.id.length > 0 && validText(owner.file) && owner.file.length > 0
     ? { id: owner.id, file: owner.file }
     : undefined;
 }
@@ -100,13 +88,7 @@ function parseFingerprint(value: unknown): Fingerprint | undefined {
     item.size >= 0 &&
     finite(item.mtimeMs) &&
     finite(item.ctimeMs)
-    ? {
-        dev: item.dev,
-        ino: item.ino,
-        size: item.size,
-        mtimeMs: item.mtimeMs,
-        ctimeMs: item.ctimeMs,
-      }
+    ? { dev: item.dev, ino: item.ino, size: item.size, mtimeMs: item.mtimeMs, ctimeMs: item.ctimeMs }
     : undefined;
 }
 
@@ -115,8 +97,7 @@ function parseRecord(value: unknown): CacheRecord | undefined {
   const item = value as Record<string, unknown>;
   const raw = item.session;
   const fingerprint = parseFingerprint(item.fingerprint);
-  if (!fingerprint || !raw || typeof raw !== "object" || Array.isArray(raw))
-    return;
+  if (!fingerprint || !raw || typeof raw !== "object" || Array.isArray(raw)) return;
   const session = raw as Record<string, unknown>;
   if (
     !validText(session.path) ||
@@ -133,8 +114,7 @@ function parseRecord(value: unknown): CacheRecord | undefined {
     typeof session.firstMessage !== "string" ||
     typeof session.allMessagesText !== "string" ||
     (session.name !== undefined && !validText(session.name, 10_000)) ||
-    (session.parentSessionPath !== undefined &&
-      !validText(session.parentSessionPath)) ||
+    (session.parentSessionPath !== undefined && !validText(session.parentSessionPath)) ||
     !Number.isSafeInteger(item.userMessageCount) ||
     Number(item.userMessageCount) < 0
   )
@@ -148,9 +128,7 @@ function parseRecord(value: unknown): CacheRecord | undefined {
       id: session.id,
       cwd: session.cwd,
       ...(typeof session.name === "string" ? { name: session.name } : {}),
-      ...(typeof session.parentSessionPath === "string"
-        ? { parentSessionPath: session.parentSessionPath }
-        : {}),
+      ...(typeof session.parentSessionPath === "string" ? { parentSessionPath: session.parentSessionPath } : {}),
       created: session.created,
       modified: session.modified,
       messageCount: Number(session.messageCount),
@@ -165,11 +143,7 @@ function parseRecord(value: unknown): CacheRecord | undefined {
 function hydrate(record: CacheRecord): IndexedSession {
   const session = record.session;
   return {
-    session: {
-      ...session,
-      created: new Date(session.created),
-      modified: new Date(session.modified),
-    },
+    session: { ...session, created: new Date(session.created), modified: new Date(session.modified) },
     metadata: {
       path: session.path,
       mtimeMs: record.fingerprint.mtimeMs,
@@ -201,10 +175,7 @@ function sameFingerprint(left: Fingerprint, right: Fingerprint): boolean {
   );
 }
 
-async function mapLimit<T, R>(
-  items: T[],
-  transform: (item: T) => Promise<R>,
-): Promise<R[]> {
+async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(
@@ -219,31 +190,27 @@ async function mapLimit<T, R>(
   return results;
 }
 
-async function sessionFiles(
-  root: string,
-): Promise<Array<{ path: string; fingerprint: Fingerprint }>> {
+async function sessionFiles(root: string): Promise<Array<{ path: string; fingerprint: Fingerprint }>> {
   let directories;
   try {
-    directories = (await readdir(root, { withFileTypes: true })).filter(
-      (entry) => entry.isDirectory(),
-    );
+    directories = (await readdir(root, { withFileTypes: true })).filter(entry => entry.isDirectory());
   } catch {
     return [];
   }
   const files = (
-    await mapLimit(directories, async (directory) => {
+    await mapLimit(directories, async directory => {
       const path = join(root, directory.name);
       try {
         return (await readdir(path, { withFileTypes: true }))
-          .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-          .map((entry) => join(path, entry.name));
+          .filter(entry => entry.isFile() && entry.name.endsWith(".jsonl"))
+          .map(entry => join(path, entry.name));
       } catch {
         return [];
       }
     })
   ).flat();
   return (
-    await mapLimit(files, async (path) => {
+    await mapLimit(files, async path => {
       try {
         return { path, fingerprint: fingerprint(await stat(path)) };
       } catch {
@@ -251,39 +218,29 @@ async function sessionFiles(
       }
     })
   )
-    .filter((value): value is { path: string; fingerprint: Fingerprint } =>
-      Boolean(value),
-    )
-    .sort((left, right) =>
-      canonicalPath(left.path).localeCompare(canonicalPath(right.path)),
-    );
+    .filter((value): value is { path: string; fingerprint: Fingerprint } => Boolean(value))
+    .sort((left, right) => canonicalPath(left.path).localeCompare(canonicalPath(right.path)));
 }
 
 function textContent(message: Record<string, any>): string {
   if (typeof message.content === "string") return message.content;
   if (!Array.isArray(message.content)) return "";
   return message.content
-    .filter(
-      (block: any) => block?.type === "text" && typeof block.text === "string",
-    )
+    .filter((block: any) => block?.type === "text" && typeof block.text === "string")
     .map((block: any) => block.text)
     .join(" ");
 }
 
 const boundedText = (value: unknown, max: number) =>
-  typeof value === "string" &&
-  value.length > 0 &&
-  Buffer.byteLength(value) <= max;
+  typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max;
 const validHooks = (value: any) =>
   value !== undefined &&
   value !== null &&
   typeof value === "object" &&
   !Array.isArray(value) &&
-  (value.beforeAgentStart === undefined ||
-    boundedText(value.beforeAgentStart, 300 * 1024)) &&
+  (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024)) &&
   (value.sessionStart === undefined ||
-    (boundedText(value.sessionStart?.customType, 128) &&
-      boundedText(value.sessionStart?.content, 300 * 1024)));
+    (boundedText(value.sessionStart?.customType, 128) && boundedText(value.sessionStart?.content, 300 * 1024)));
 
 function ownerMarker(value: any): SessionOwner | undefined {
   if (
@@ -299,11 +256,7 @@ function ownerMarker(value: any): SessionOwner | undefined {
   return { id: value.ownerSessionId, file: value.ownerSessionFile };
 }
 
-async function parseSession(
-  path: string,
-  before: Fingerprint,
-  retries = 1,
-): Promise<CacheRecord | undefined> {
+async function parseSession(path: string, before: Fingerprint, retries = 1): Promise<CacheRecord | undefined> {
   let header: any;
   let name: string | undefined;
   let messageCount = 0;
@@ -313,10 +266,7 @@ async function parseSession(
   const allMessages: string[] = [];
   const owners: Array<SessionOwner | undefined> = [];
   try {
-    const lines = createInterface({
-      input: createReadStream(path, { encoding: "utf8" }),
-      crlfDelay: Infinity,
-    });
+    const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
     for await (const line of lines) {
       let entry: any;
       try {
@@ -331,51 +281,29 @@ async function parseSession(
         continue;
       }
       if (entry.type === "session_info")
-        name =
-          typeof entry.name === "string"
-            ? entry.name.trim() || undefined
-            : undefined;
-      if (entry.type === "custom" && entry.customType === "pi-spawn-session")
-        owners.push(ownerMarker(entry.data));
+        name = typeof entry.name === "string" ? entry.name.trim() || undefined : undefined;
+      if (entry.type === "custom" && entry.customType === "pi-spawn-session") owners.push(ownerMarker(entry.data));
       if (entry.type !== "message") continue;
       messageCount++;
       const message = entry.message;
-      if (!message || typeof message !== "object" || Array.isArray(message))
-        continue;
+      if (!message || typeof message !== "object" || Array.isArray(message)) continue;
       if (message.role === "user") userMessageCount++;
-      if (
-        (message.role !== "user" && message.role !== "assistant") ||
-        !("content" in message)
-      )
-        continue;
-      const activity =
-        typeof message.timestamp === "number"
-          ? message.timestamp
-          : Date.parse(entry.timestamp);
-      if (Number.isFinite(activity))
-        lastActivityTime = Math.max(lastActivityTime ?? 0, activity);
+      if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) continue;
+      const activity = typeof message.timestamp === "number" ? message.timestamp : Date.parse(entry.timestamp);
+      if (Number.isFinite(activity)) lastActivityTime = Math.max(lastActivityTime ?? 0, activity);
       const text = textContent(message);
       if (!text) continue;
       allMessages.push(text);
       if (!firstMessage && message.role === "user") firstMessage = text;
     }
-    if (
-      !header ||
-      typeof header.id !== "string" ||
-      !header.id ||
-      typeof header.timestamp !== "string"
-    )
-      return;
+    if (!header || typeof header.id !== "string" || !header.id || typeof header.timestamp !== "string") return;
     const after = fingerprint(await stat(path));
-    if (!sameFingerprint(before, after))
-      return retries > 0 ? parseSession(path, after, retries - 1) : undefined;
+    if (!sameFingerprint(before, after)) return retries > 0 ? parseSession(path, after, retries - 1) : undefined;
     const owner = owners[0];
     const consistentOwner =
       owner &&
       owners.every(
-        (candidate) =>
-          candidate?.id === owner.id &&
-          canonicalPath(candidate.file) === canonicalPath(owner.file),
+        candidate => candidate?.id === owner.id && canonicalPath(candidate.file) === canonicalPath(owner.file),
       )
         ? owner
         : undefined;
@@ -389,9 +317,7 @@ async function parseSession(
         id: header.id,
         cwd: typeof header.cwd === "string" ? header.cwd : "",
         ...(name ? { name } : {}),
-        ...(typeof header.parentSession === "string"
-          ? { parentSessionPath: header.parentSession }
-          : {}),
+        ...(typeof header.parentSession === "string" ? { parentSessionPath: header.parentSession } : {}),
         created: created.toISOString(),
         modified: new Date(
           lastActivityTime && lastActivityTime > 0
@@ -421,10 +347,7 @@ export class SessionSummaryCache {
   constructor(private readonly agentDir: string) {
     this.cachePath = resolve(agentDir, "pylon-web", CACHE_FILE);
     // SessionManager follows PI_CODING_AGENT_DIR even when Pylon receives a distinct package/config directory.
-    this.sessionsRoot = resolve(
-      process.env.PI_CODING_AGENT_DIR || agentDir,
-      "sessions",
-    );
+    this.sessionsRoot = resolve(process.env.PI_CODING_AGENT_DIR || agentDir, "sessions");
   }
 
   async scan(): Promise<IndexedSession[]> {
@@ -433,11 +356,10 @@ export class SessionSummaryCache {
     const previous = this.records;
     const next = new Map<string, CacheRecord>();
     let changed = files.length !== previous.size;
-    const parsed = await mapLimit(files, async (file) => {
+    const parsed = await mapLimit(files, async file => {
       const key = canonicalPath(file.path);
       const cached = previous.get(key);
-      if (cached && sameFingerprint(cached.fingerprint, file.fingerprint))
-        return cached;
+      if (cached && sameFingerprint(cached.fingerprint, file.fingerprint)) return cached;
       changed = true;
       return (await parseSession(file.path, file.fingerprint)) ?? cached;
     });
@@ -448,14 +370,8 @@ export class SessionSummaryCache {
       const key = canonicalPath(files[index]!.path);
       const existing = byId.get(record.session.id);
       const modified = Date.parse(record.session.modified);
-      const existingModified = existing
-        ? Date.parse(existing.record.session.modified)
-        : Number.NEGATIVE_INFINITY;
-      if (
-        !existing ||
-        modified > existingModified ||
-        (modified === existingModified && key < existing.key)
-      ) {
+      const existingModified = existing ? Date.parse(existing.record.session.modified) : Number.NEGATIVE_INFINITY;
+      if (!existing || modified > existingModified || (modified === existingModified && key < existing.key)) {
         if (existing) changed = true;
         byId.set(record.session.id, { key, record });
       } else {
@@ -468,10 +384,7 @@ export class SessionSummaryCache {
     return [...next.values()].map(hydrate);
   }
 
-  async refresh(
-    sessionId: string,
-    path: string,
-  ): Promise<IndexedSession | undefined> {
+  async refresh(sessionId: string, path: string): Promise<IndexedSession | undefined> {
     await this.load();
     const key = canonicalPath(path);
     let record: CacheRecord | undefined;
@@ -484,19 +397,11 @@ export class SessionSummaryCache {
       // Missing files remove the prior record for this session below.
     }
     if (exists && !record) {
-      const previous =
-        this.records.get(key) ??
-        [...this.records.values()].find(
-          (item) => item.session.id === sessionId,
-        );
+      const previous = this.records.get(key) ?? [...this.records.values()].find(item => item.session.id === sessionId);
       return previous ? hydrate(previous) : undefined;
     }
     for (const [candidate, value] of this.records) {
-      if (
-        candidate === key ||
-        value.session.id === sessionId ||
-        (record && value.session.id === record.session.id)
-      )
+      if (candidate === key || value.session.id === sessionId || (record && value.session.id === record.session.id))
         this.records.delete(candidate);
     }
     if (record) this.records.set(key, record);
@@ -509,14 +414,11 @@ export class SessionSummaryCache {
     this.loaded = true;
     try {
       if ((await stat(this.cachePath)).size > MAX_CACHE_BYTES) return;
-      const value = JSON.parse(
-        await readFile(this.cachePath, "utf8"),
-      ) as Partial<CacheFile>;
+      const value = JSON.parse(await readFile(this.cachePath, "utf8")) as Partial<CacheFile>;
       if (value.version !== VERSION || !Array.isArray(value.records)) return;
       for (const valueRecord of value.records) {
         const record = parseRecord(valueRecord);
-        if (record)
-          this.records.set(canonicalPath(record.session.path), record);
+        if (record) this.records.set(canonicalPath(record.session.path), record);
       }
     } catch {
       // Missing, corrupt, and outdated caches rebuild from source session files.
@@ -528,15 +430,9 @@ export class SessionSummaryCache {
     const temporary = `${this.cachePath}.${process.pid}.${randomUUID()}.tmp`;
     await mkdir(directory, { recursive: true });
     try {
-      const value: CacheFile = {
-        version: VERSION,
-        records: [...this.records.values()],
-      };
+      const value: CacheFile = { version: VERSION, records: [...this.records.values()] };
       // The cache is disposable: concurrent writers are last-writer-wins, and fingerprints repair stale records on the next scan.
-      await writeFile(temporary, JSON.stringify(value), {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      await writeFile(temporary, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
       await rename(temporary, this.cachePath);
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);

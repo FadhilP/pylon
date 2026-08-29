@@ -3,18 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  defaultHookSettings,
-  HookSettingsStore,
-} from "../src/server/pi/hook-settings.ts";
+import { defaultHookSettings, HookSettingsStore } from "../src/server/pi/hook-settings.ts";
 
 const settings = {
-  sessionStart: {
-    enabled: true,
-    sources: [
-      { id: "start", name: "Start", kind: "text" as const, content: "hello" },
-    ],
-  },
+  sessionStart: { enabled: true, sources: [{ id: "start", name: "Start", kind: "text" as const, content: "hello" }] },
   beforeAgentStart: { enabled: false, sources: [] },
 };
 
@@ -26,15 +18,9 @@ test("hook settings use safe defaults, validate persisted values, and persist at
     assert.deepEqual(await store.read(), defaults);
     await store.update(settings);
     const normalized = await store.read();
-    assert.equal(
-      normalized.sessionStart.sources[0]?.reinjectOnCompaction,
-      false,
-    );
+    assert.equal(normalized.sessionStart.sources[0]?.reinjectOnCompaction, false);
     await writeFile(store.path, JSON.stringify({ version: 1, settings }));
-    assert.equal(
-      (await store.read()).sessionStart.sources[0]?.reinjectOnCompaction,
-      false,
-    );
+    assert.equal((await store.read()).sessionStart.sources[0]?.reinjectOnCompaction, false);
     await writeFile(store.path, '{"version":1,"settings":{}}');
     await assert.rejects(store.read(), /hook settings config is invalid/);
   } finally {

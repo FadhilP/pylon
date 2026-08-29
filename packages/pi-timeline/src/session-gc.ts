@@ -1,14 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { listSessionInventory } from "pylon-core/session-inventory";
@@ -30,12 +21,7 @@ function isLease(value: any): value is Lease {
   );
 }
 function isLockOwner(value: any): value is LockOwner {
-  return (
-    value?.version === 1 &&
-    Number.isInteger(value.pid) &&
-    value.pid > 0 &&
-    typeof value.token === "string"
-  );
+  return value?.version === 1 && Number.isInteger(value.pid) && value.pid > 0 && typeof value.token === "string";
 }
 function isCatalog(value: any): value is Catalog {
   return (
@@ -43,10 +29,7 @@ function isCatalog(value: any): value is Catalog {
     Array.isArray(value.owners) &&
     value.owners.every(
       (owner: any) =>
-        typeof owner?.sessionId === "string" &&
-        owner.sessionId &&
-        typeof owner.gitRoot === "string" &&
-        owner.gitRoot,
+        typeof owner?.sessionId === "string" && owner.sessionId && typeof owner.gitRoot === "string" && owner.gitRoot,
     )
   );
 }
@@ -68,7 +51,7 @@ async function readJson(path: string): Promise<any> {
 
 export async function readLockOwner(
   path: string,
-  read: (path: string) => Promise<string> = (value) => readFile(value, "utf8"),
+  read: (path: string) => Promise<string> = value => readFile(value, "utf8"),
 ): Promise<LockOwner | undefined> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -89,11 +72,7 @@ const LOCK_RETRY_MS = 50;
  * Clears `lock` when its recorded owner process is gone. A second `.recovery` lock keeps
  * concurrent recoverers from racing. Returns whether the lock is now free to claim.
  */
-async function recoverDeadLockOwner(
-  lock: string,
-  claim: string,
-  token: string,
-) {
+async function recoverDeadLockOwner(lock: string, claim: string, token: string) {
   const recoveryLock = `${lock}.recovery`;
   try {
     await link(claim, recoveryLock);
@@ -109,8 +88,7 @@ async function recoverDeadLockOwner(
     return true;
   } finally {
     const recoveryOwner = await readJson(recoveryLock);
-    if (isLockOwner(recoveryOwner) && recoveryOwner.token === token)
-      await rm(recoveryLock, { force: true });
+    if (isLockOwner(recoveryOwner) && recoveryOwner.token === token) await rm(recoveryLock, { force: true });
   }
 }
 
@@ -122,8 +100,7 @@ async function acquireLock(lock: string, claim: string, token: string) {
         await link(claim, lock);
         return;
       } catch (error: any) {
-        if (error?.code !== "EEXIST" || attempt >= MAX_LOCK_ATTEMPTS)
-          throw error;
+        if (error?.code !== "EEXIST" || attempt >= MAX_LOCK_ATTEMPTS) throw error;
         if (await recoverDeadLockOwner(lock, claim, token)) continue;
         await delay(LOCK_RETRY_MS);
       }
@@ -136,8 +113,7 @@ async function acquireLock(lock: string, claim: string, token: string) {
 /** Releases the lock only if we still hold it; a recoverer may have taken it from us. */
 async function releaseLock(lock: string, token: string) {
   const active = await readJson(lock);
-  if (isLockOwner(active) && active.token === token)
-    await rm(lock, { force: true });
+  if (isLockOwner(active) && active.token === token) await rm(lock, { force: true });
 }
 
 async function withLock<T>(root: string, task: () => Promise<T>): Promise<T> {
@@ -161,9 +137,7 @@ async function readLease(path: string): Promise<Lease | undefined> {
 }
 async function liveLeases(directory: string) {
   const sessionIds = new Set<string>();
-  for (const entry of await readdir(directory, { withFileTypes: true }).catch(
-    () => [],
-  )) {
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(directory, entry.name),
       active = await readLease(path);
@@ -190,9 +164,7 @@ async function writeCatalog(root: string, catalog: Catalog) {
   const path = catalogPath(root),
     temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(catalog, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(temporary, `${JSON.stringify(catalog, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});
@@ -203,50 +175,26 @@ const ownerPrefix = (sessionId: string) =>
   `refs/pi-timeline/${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}/`;
 
 async function canonicalGitRoot(path: string) {
-  const reported = await git(path, [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]);
+  const reported = await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return realpath(reported);
 }
 async function canonicalCommonDir(path: string) {
-  const reported = await git(path, [
-    "--git-dir",
-    path,
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]);
+  const reported = await git(path, ["--git-dir", path, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return realpath(reported);
 }
 async function deleteOwnedRefs(owner: Owner) {
-  const commonDir = await canonicalCommonDir(owner.gitRoot).catch(() =>
-    canonicalGitRoot(owner.gitRoot),
-  );
+  const commonDir = await canonicalCommonDir(owner.gitRoot).catch(() => canonicalGitRoot(owner.gitRoot));
   const prefix = ownerPrefix(owner.sessionId);
-  const refs = (
-    await git(commonDir, [
-      "--git-dir",
-      commonDir,
-      "for-each-ref",
-      "--format=%(refname)",
-      prefix,
-    ])
-  )
+  const refs = (await git(commonDir, ["--git-dir", commonDir, "for-each-ref", "--format=%(refname)", prefix]))
     .split(/\r?\n/)
-    .filter((ref) => ref.startsWith(prefix));
-  for (const ref of refs)
-    await git(commonDir, ["--git-dir", commonDir, "update-ref", "-d", ref]);
+    .filter(ref => ref.startsWith(prefix));
+  for (const ref of refs) await git(commonDir, ["--git-dir", commonDir, "update-ref", "-d", ref]);
 }
 /**
  * Drops every owner `keep` rejects, deleting its refs first. An owner whose refs cannot
  * be deleted is retained so the next run can retry rather than leaking them silently.
  */
-async function pruneOwners(
-  catalog: Catalog,
-  keep: (owner: Owner) => boolean,
-): Promise<Catalog> {
+async function pruneOwners(catalog: Catalog, keep: (owner: Owner) => boolean): Promise<Catalog> {
   const remaining: Owner[] = [];
   for (const owner of catalog.owners) {
     if (keep(owner)) {
@@ -263,38 +211,24 @@ async function pruneOwners(
 }
 
 const deleteSessionOwners = (catalog: Catalog, sessionId: string) =>
-  pruneOwners(catalog, (owner) => owner.sessionId !== sessionId);
+  pruneOwners(catalog, owner => owner.sessionId !== sessionId);
 
 /** Deletes a session's refs once no live lease refers to it. Assumes the lock is held. */
-async function cleanupUnleasedSession(
-  root: string,
-  leaseDirectory: string,
-  sessionId: string,
-) {
+async function cleanupUnleasedSession(root: string, leaseDirectory: string, sessionId: string) {
   const leases = await liveLeases(leaseDirectory);
   if (!leases.safe || leases.sessionIds.has(sessionId)) return;
   const catalog = await readCatalog(root);
   if (!catalog) return;
   const next = await deleteSessionOwners(catalog, sessionId);
-  if (next.owners.length !== catalog.owners.length)
-    await writeCatalog(root, next);
+  if (next.owners.length !== catalog.owners.length) await writeCatalog(root, next);
 }
 
-export async function recordTimelineOwner(
-  root: string,
-  sessionId: string,
-  gitRoot: string,
-) {
+export async function recordTimelineOwner(root: string, sessionId: string, gitRoot: string) {
   await withLock(root, async () => {
     const catalog = await readCatalog(root);
     if (!catalog) throw Error("Unreadable timeline artifact catalog.");
     const canonicalRoot = await canonicalGitRoot(gitRoot);
-    if (
-      !catalog.owners.some(
-        (owner) =>
-          owner.sessionId === sessionId && owner.gitRoot === canonicalRoot,
-      )
-    ) {
+    if (!catalog.owners.some(owner => owner.sessionId === sessionId && owner.gitRoot === canonicalRoot)) {
       catalog.owners.push({ sessionId, gitRoot: canonicalRoot });
       await writeCatalog(root, catalog);
     }
@@ -302,26 +236,18 @@ export async function recordTimelineOwner(
 }
 
 export async function cleanupTimelineSession(root: string, sessionId: string) {
-  await withLock(root, () =>
-    cleanupUnleasedSession(root, join(root, "session-artifacts"), sessionId),
-  );
+  await withLock(root, () => cleanupUnleasedSession(root, join(root, "session-artifacts"), sessionId));
 }
 
 export async function startSessionGc(
   root: string,
   sessionId: string,
-  listSessions: () => Promise<Array<{ id: string }>> = () =>
-    listSessionInventory(undefined, { strict: true }),
+  listSessions: () => Promise<Array<{ id: string }>> = () => listSessionInventory(undefined, { strict: true }),
 ) {
   const leases = join(root, "session-artifacts"),
     token = randomUUID(),
     leasePath = join(leases, `${encodeURIComponent(sessionId)}.${token}.json`),
-    lease: Lease = {
-      version: LEASE_VERSION,
-      sessionId,
-      pid: process.pid,
-      token,
-    };
+    lease: Lease = { version: LEASE_VERSION, sessionId, pid: process.pid, token };
   await withLock(root, async () => {
     await mkdir(leases, { recursive: true });
     await writeFile(leasePath, `${JSON.stringify(lease)}\n`, { mode: 0o600 });
@@ -334,18 +260,15 @@ export async function startSessionGc(
     const active = await liveLeases(leases),
       catalog = await readCatalog(root);
     if (!active.safe || !catalog) return;
-    const live = new Set(sessions.map((item) => item.id));
+    const live = new Set(sessions.map(item => item.id));
     live.add(sessionId);
     for (const id of active.sessionIds) live.add(id);
     const livePrefixes = new Set([...live].map(ownerPrefix));
     const next = await pruneOwners(
       catalog,
-      (owner) =>
-        live.has(owner.sessionId) ||
-        livePrefixes.has(ownerPrefix(owner.sessionId)),
+      owner => live.has(owner.sessionId) || livePrefixes.has(ownerPrefix(owner.sessionId)),
     );
-    if (next.owners.length !== catalog.owners.length)
-      await writeCatalog(root, next);
+    if (next.owners.length !== catalog.owners.length) await writeCatalog(root, next);
   });
   return async (cleanupIfLast = false) =>
     withLock(root, async () => {

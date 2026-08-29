@@ -5,10 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
 import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
-import {
-  ProjectRegistry,
-  projectIdForCwd,
-} from "../src/server/pi/project-registry.ts";
+import { ProjectRegistry, projectIdForCwd } from "../src/server/pi/project-registry.ts";
 
 test("General is a built-in local scope rooted outside the project list", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-general-"));
@@ -21,32 +18,19 @@ test("General is a built-in local scope rooted outside the project list", async 
 
     assert.deepEqual(registry.list(), []);
     assert.equal(registry.get(GENERAL_PROJECT_ID)?.cwd, generalCwd);
-    const policy = registry.runtimePolicy(
-      GENERAL_PROJECT_ID,
-      "general-session",
-    );
+    const policy = registry.runtimePolicy(GENERAL_PROJECT_ID, "general-session");
     assert.equal(policy.effective.workspace, "local");
     assert.equal(policy.effective.toolOverrides?.code_search, "disabled");
     assert.equal(policy.effective.toolOverrides?.bash, undefined);
     assert.equal(policy.effective.toolOverrides?.edit, undefined);
 
-    await registry.setSessionWorkspace({
-      sessionId: "general-session",
-      projectId: GENERAL_PROJECT_ID,
-      mode: "local",
-    });
-    assert.equal(
-      registry.projectForSession("general-session", root)?.id,
-      GENERAL_PROJECT_ID,
-    );
+    await registry.setSessionWorkspace({ sessionId: "general-session", projectId: GENERAL_PROJECT_ID, mode: "local" });
+    assert.equal(registry.projectForSession("general-session", root)?.id, GENERAL_PROJECT_ID);
     assert.equal(registry.effectiveCwd("general-session", root), generalCwd);
 
     const reloaded = new ProjectRegistry(config, generalCwd);
     await reloaded.load([]);
-    assert.equal(
-      reloaded.workspaceForSession("general-session")?.projectId,
-      GENERAL_PROJECT_ID,
-    );
+    assert.equal(reloaded.workspaceForSession("general-session")?.projectId, GENERAL_PROJECT_ID);
     assert.equal(reloaded.effectiveCwd("general-session", root), generalCwd);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -63,7 +47,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     const registry = new ProjectRegistry(config);
     await registry.load([first, first]);
     assert.deepEqual(
-      registry.list().map((project) => project.id),
+      registry.list().map(project => project.id),
       [projectIdForCwd(first)],
     );
 
@@ -71,19 +55,12 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
     await registry.add(second);
     assert.equal(registry.list().length, 2);
     await registry.renameProject(projectIdForCwd(second), "Renamed project");
-    await assert.rejects(
-      registry.renameProject(projectIdForCwd(second), " "),
-      /invalid project name/,
-    );
+    await assert.rejects(registry.renameProject(projectIdForCwd(second), " "), /invalid project name/);
     const stored = JSON.parse(await readFile(config, "utf8"));
     assert.equal(stored.version, 13);
     assert.equal(stored.projects.length, 2);
     assert.equal(stored.projects[1].label, "Renamed project");
-    assert.equal(
-      registry.runtimePolicy(projectIdForCwd(first), "new-session").effective
-        .workspace,
-      "local",
-    );
+    assert.equal(registry.runtimePolicy(projectIdForCwd(first), "new-session").effective.workspace, "local");
 
     let seeded = false;
     const reloaded = new ProjectRegistry(config);
@@ -92,10 +69,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       return [first];
     });
     assert.equal(seeded, false);
-    assert.equal(
-      reloaded.get(projectIdForCwd(second))?.label,
-      "Renamed project",
-    );
+    assert.equal(reloaded.get(projectIdForCwd(second))?.label, "Renamed project");
 
     const project = registry.get(projectIdForCwd(second))!;
     await registry.updateWorktreeSettings(project.id, "npm install");
@@ -109,10 +83,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       baseline: "a".repeat(40),
       baselineTree: "b".repeat(40),
     });
-    assert.equal(
-      registry.projectForSession("session-one", join(root, "elsewhere"))?.id,
-      project.id,
-    );
+    assert.equal(registry.projectForSession("session-one", join(root, "elsewhere"))?.id, project.id);
     assert.equal(registry.workspaceForSession("session-one")?.mode, "worktree");
     assert.equal(registry.get(project.id)?.setupCommand, "npm install");
     const checkoutState = {
@@ -131,10 +102,7 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       projectState: checkoutState,
       sessionState: checkoutState,
     });
-    assert.equal(
-      (await registry.readHandoffJournal())?.sessionId,
-      "session-one",
-    );
+    assert.equal((await registry.readHandoffJournal())?.sessionId, "session-one");
     await registry.clearHandoffJournal();
     assert.equal(await registry.readHandoffJournal(), undefined);
     await registry.writeProvisionJournal({
@@ -144,16 +112,13 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
       commonDir: join(second, ".git"),
       branch: "refs/heads/pylon/sessions/provisional",
     });
-    assert.equal(
-      (await registry.readProvisionJournal())?.branch,
-      "refs/heads/pylon/sessions/provisional",
-    );
+    assert.equal((await registry.readProvisionJournal())?.branch, "refs/heads/pylon/sessions/provisional");
     await registry.clearProvisionJournal();
     assert.equal(await registry.readProvisionJournal(), undefined);
 
     await registry.remove(projectIdForCwd(first));
     assert.deepEqual(
-      registry.list().map((project) => project.id),
+      registry.list().map(project => project.id),
       [projectIdForCwd(second)],
     );
   } finally {
@@ -164,37 +129,27 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
 test("project and active-session ordering persists and rejects stale members", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-project-order-"));
   const config = join(root, "agent", "pylon-web", "projects.json");
-  const directories = [
-    join(root, "one"),
-    join(root, "two"),
-    join(root, "three"),
-  ];
-  await Promise.all(directories.map((directory) => mkdir(directory)));
+  const directories = [join(root, "one"), join(root, "two"), join(root, "three")];
+  await Promise.all(directories.map(directory => mkdir(directory)));
   try {
     const registry = new ProjectRegistry(config);
     await registry.load(directories);
-    const [one, two, three] = registry.list().map((project) => project.id);
+    const [one, two, three] = registry.list().map(project => project.id);
     await registry.reorderProject(three!, one);
     assert.deepEqual(
-      registry.list().map((project) => project.id),
+      registry.list().map(project => project.id),
       [three, one, two],
     );
     await registry.archiveProject(one!);
     await registry.reorderProject(two!, three);
     await registry.restoreProject(one!);
     assert.deepEqual(
-      registry.list().map((project) => project.id),
+      registry.list().map(project => project.id),
       [two, one, three],
     );
 
-    await Promise.all([
-      registry.activateSession("session-one"),
-      registry.activateSession("session-two"),
-    ]);
-    assert.deepEqual(registry.listActiveSessionOrder(), [
-      "session-two",
-      "session-one",
-    ]);
+    await Promise.all([registry.activateSession("session-one"), registry.activateSession("session-two")]);
+    assert.deepEqual(registry.listActiveSessionOrder(), ["session-two", "session-one"]);
     await registry.reorderActiveSession("session-two");
     await registry.deactivateSession("session-one");
     assert.deepEqual(registry.listActiveSessionOrder(), ["session-two"]);
@@ -205,15 +160,12 @@ test("project and active-session ordering persists and rejects stale members", a
     assert.equal(registry.isSessionPinned("session-rekeyed"), true);
     await registry.archiveSession("session-rekeyed");
     assert.equal(registry.isSessionPinned("session-rekeyed"), false);
-    await assert.rejects(
-      registry.reorderActiveSession("missing"),
-      /unavailable/,
-    );
+    await assert.rejects(registry.reorderActiveSession("missing"), /unavailable/);
 
     const reloaded = new ProjectRegistry(config);
     await reloaded.load([]);
     assert.deepEqual(
-      reloaded.list().map((project) => project.id),
+      reloaded.list().map(project => project.id),
       [two, one, three],
     );
     assert.deepEqual(reloaded.listActiveSessionOrder(), ["session-rekeyed"]);
@@ -232,11 +184,7 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
     const registry = new ProjectRegistry(config);
     await registry.load([project]);
     const projectId = projectIdForCwd(project);
-    await registry.setSessionWorkspace({
-      sessionId: "local-source",
-      projectId,
-      mode: "local",
-    });
+    await registry.setSessionWorkspace({ sessionId: "local-source", projectId, mode: "local" });
     await registry.updateRuntimePolicy({
       scope: "session",
       projectId,
@@ -264,16 +212,8 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
 
     assert.equal(registry.workspaceForSession("local-source")?.mode, "local");
     assert.equal(registry.workspaceForSession("local-fork")?.mode, "local");
-    assert.equal(
-      registry.runtimePolicy(projectId, "local-source").session
-        .guardTimeoutSeconds,
-      120,
-    );
-    assert.equal(
-      registry.runtimePolicy(projectId, "local-fork").session
-        .guardTimeoutSeconds,
-      120,
-    );
+    assert.equal(registry.runtimePolicy(projectId, "local-source").session.guardTimeoutSeconds, 120);
+    assert.equal(registry.runtimePolicy(projectId, "local-fork").session.guardTimeoutSeconds, 120);
     assert.deepEqual(registry.listActiveSessionOrder(), ["local-fork"]);
     assert.equal(registry.isSessionPinned("local-source"), false);
     assert.equal(registry.isSessionPinned("local-fork"), true);
@@ -285,16 +225,8 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
       mode: "active",
       expectedRevision: 2,
     });
-    assert.equal(
-      registry.runtimePolicy(projectId, "local-source").session.toolOverrides
-        ?.spawn_agent,
-      "active",
-    );
-    assert.equal(
-      registry.runtimePolicy(projectId, "local-fork").session.toolOverrides
-        ?.spawn_agent,
-      "disabled",
-    );
+    assert.equal(registry.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
+    assert.equal(registry.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
 
     const worktree = {
       sessionId: "worktree-source",
@@ -309,30 +241,16 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
     await registry.setSessionWorkspace(worktree);
     await registry.rekeySession("worktree-source", "worktree-fork", "fork");
     assert.equal(registry.workspaceForSession("worktree-source"), undefined);
-    assert.deepEqual(registry.workspaceForSession("worktree-fork"), {
-      ...worktree,
-      sessionId: "worktree-fork",
-    });
+    assert.deepEqual(registry.workspaceForSession("worktree-fork"), { ...worktree, sessionId: "worktree-fork" });
 
     const reloaded = new ProjectRegistry(config);
     await reloaded.load();
     assert.equal(reloaded.workspaceForSession("local-source")?.mode, "local");
     assert.equal(reloaded.workspaceForSession("local-fork")?.mode, "local");
     assert.equal(reloaded.workspaceForSession("worktree-source"), undefined);
-    assert.equal(
-      reloaded.workspaceForSession("worktree-fork")?.mode,
-      "worktree",
-    );
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "local-source").session.toolOverrides
-        ?.spawn_agent,
-      "active",
-    );
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "local-fork").session.toolOverrides
-        ?.spawn_agent,
-      "disabled",
-    );
+    assert.equal(reloaded.workspaceForSession("worktree-fork")?.mode, "worktree");
+    assert.equal(reloaded.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
+    assert.equal(reloaded.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -357,11 +275,7 @@ test("version 9 active sessions migrate without becoming pinned", async () => {
     await migrated.load();
     assert.deepEqual(migrated.listActiveSessionOrder(), ["legacy-active"]);
     assert.deepEqual(migrated.listPinnedSessionIds(), []);
-    assert.equal(
-      migrated.runtimePolicy(projectIdForCwd(project), "legacy-active")
-        .effective.guardEnabled,
-      true,
-    );
+    assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "legacy-active").effective.guardEnabled, true);
     assert.equal(JSON.parse(await readFile(config, "utf8")).version, 13);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -383,11 +297,7 @@ test("version 10 registries migrate to version 13", async () => {
 
     const migrated = new ProjectRegistry(config);
     await migrated.load();
-    assert.equal(
-      migrated.runtimePolicy(projectIdForCwd(project), "session").effective
-        .guardEnabled,
-      true,
-    );
+    assert.equal(migrated.runtimePolicy(projectIdForCwd(project), "session").effective.guardEnabled, true);
     assert.equal(JSON.parse(await readFile(config, "utf8")).version, 13);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -400,22 +310,13 @@ test("project registry migrates and persists reversible project and session arch
   const config = join(root, "agent", "pylon-web", "projects.json");
   await mkdir(project);
   await mkdir(join(root, "agent", "pylon-web"), { recursive: true });
-  await writeFile(
-    config,
-    JSON.stringify({ version: 1, directories: [project] }),
-  );
+  await writeFile(config, JSON.stringify({ version: 1, directories: [project] }));
   try {
     const id = projectIdForCwd(project);
     const registry = new ProjectRegistry(config);
     await registry.load();
-    assert.equal(
-      registry.runtimePolicy(id, "session-one").effective.guardTimeoutSeconds,
-      60,
-    );
-    assert.equal(
-      registry.runtimePolicy(id, "session-one").effective.clarifyTimeoutSeconds,
-      60,
-    );
+    assert.equal(registry.runtimePolicy(id, "session-one").effective.guardTimeoutSeconds, 60);
+    assert.equal(registry.runtimePolicy(id, "session-one").effective.clarifyTimeoutSeconds, 60);
     await registry.archiveSession("session-one");
     await registry.archiveProject(id);
     assert.deepEqual(registry.list(), []);
@@ -459,29 +360,15 @@ test("version 7 Automatic policies migrate to Local without moving session works
       archivedSessions: [],
       sessionWorkspaces: [workspace],
       activeSessionOrder: [],
-      sessionPolicies: [
-        {
-          sessionId: "session-one",
-          projectId: workspace.projectId,
-          workspace: "automatic",
-        },
-      ],
+      sessionPolicies: [{ sessionId: "session-one", projectId: workspace.projectId, workspace: "automatic" }],
       policyRevision: 2,
     }),
   );
   try {
     const registry = new ProjectRegistry(config);
     await registry.load();
-    assert.equal(
-      registry.runtimePolicy(workspace.projectId, "session-one").project
-        .workspace,
-      undefined,
-    );
-    assert.equal(
-      registry.runtimePolicy(workspace.projectId, "session-one").session
-        .workspace,
-      "local",
-    );
+    assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").project.workspace, undefined);
+    assert.equal(registry.runtimePolicy(workspace.projectId, "session-one").session.workspace, "local");
     assert.deepEqual(registry.workspaceForSession("session-one"), workspace);
     const stored = JSON.parse(await readFile(config, "utf8"));
     assert.equal(stored.version, 13);
@@ -529,60 +416,38 @@ test("runtime policy persists project defaults and session overrides", async () 
       clarifyTimeoutSeconds: "inherit",
       expectedRevision: 1,
     });
-    assert.deepEqual(
-      registry.runtimePolicy(projectId, "session-one").effective,
-      {
-        verify: { mode: "auto" },
-        toolOverrides: {},
-        timelineEnabled: true,
-        guardEnabled: true,
-        guardRules: {
-          ...DEFAULT_GUARD_RULES,
-          "command.recursive-deletion": "block",
-        },
-        workspace: "local",
-        guardTimeoutSeconds: 120,
-        clarifyTimeoutSeconds: 90,
-      },
-    );
-    assert.deepEqual(
-      registry.runtimePolicy(projectId, "session-two").effective,
-      {
-        verify: { mode: "selected", checks: ["npm:test"] },
-        toolOverrides: {},
-        timelineEnabled: false,
-        guardEnabled: false,
-        guardRules: {
-          ...DEFAULT_GUARD_RULES,
-          "command.recursive-deletion": "allow",
-        },
-        workspace: "worktree",
-        guardTimeoutSeconds: null,
-        clarifyTimeoutSeconds: 90,
-      },
-    );
+    assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
+      verify: { mode: "auto" },
+      toolOverrides: {},
+      timelineEnabled: true,
+      guardEnabled: true,
+      guardRules: { ...DEFAULT_GUARD_RULES, "command.recursive-deletion": "block" },
+      workspace: "local",
+      guardTimeoutSeconds: 120,
+      clarifyTimeoutSeconds: 90,
+    });
+    assert.deepEqual(registry.runtimePolicy(projectId, "session-two").effective, {
+      verify: { mode: "selected", checks: ["npm:test"] },
+      toolOverrides: {},
+      timelineEnabled: false,
+      guardEnabled: false,
+      guardRules: { ...DEFAULT_GUARD_RULES, "command.recursive-deletion": "allow" },
+      workspace: "worktree",
+      guardTimeoutSeconds: null,
+      clarifyTimeoutSeconds: 90,
+    });
 
     const reloaded = new ProjectRegistry(config);
     await reloaded.load();
     assert.equal(reloaded.runtimePolicy(projectId, "session-one").revision, 2);
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.timelineEnabled, true);
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").session.guardEnabled, true);
     assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").session.timelineEnabled,
-      true,
-    );
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").session.guardEnabled,
-      true,
-    );
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").project.guardRules?.[
-        "command.recursive-deletion"
-      ],
+      reloaded.runtimePolicy(projectId, "session-one").project.guardRules?.["command.recursive-deletion"],
       "allow",
     );
     assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").session.guardRules?.[
-        "command.recursive-deletion"
-      ],
+      reloaded.runtimePolicy(projectId, "session-one").session.guardRules?.["command.recursive-deletion"],
       "block",
     );
   } finally {
@@ -623,24 +488,12 @@ test("tool policy overrides inherit across global project and session scopes", a
       mode: "disabled",
       expectedRevision: 2,
     });
-    assert.equal(
-      registry.runtimePolicy(projectId, "session-one").effective.toolOverrides
-        ?.spawn_agent,
-      "disabled",
-    );
-    assert.equal(
-      registry.runtimePolicy(projectId, "session-two").effective.toolOverrides
-        ?.spawn_agent,
-      "active",
-    );
+    assert.equal(registry.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "disabled");
+    assert.equal(registry.runtimePolicy(projectId, "session-two").effective.toolOverrides?.spawn_agent, "active");
 
     const reloaded = new ProjectRegistry(config);
     await reloaded.load();
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides
-        ?.spawn_agent,
-      "disabled",
-    );
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "disabled");
     await reloaded.updateToolPolicy({
       scope: "session",
       projectId,
@@ -649,11 +502,7 @@ test("tool policy overrides inherit across global project and session scopes", a
       mode: "inherit",
       expectedRevision: 3,
     });
-    assert.equal(
-      reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides
-        ?.spawn_agent,
-      "active",
-    );
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").effective.toolOverrides?.spawn_agent, "active");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -680,19 +529,16 @@ test("global runtime policy is inherited independently by projects and sessions"
       clarifyTimeoutSeconds: 300,
       expectedRevision: 0,
     });
-    assert.deepEqual(
-      registry.runtimePolicy(projectId, "session-one").effective,
-      {
-        verify: { mode: "auto" },
-        toolOverrides: {},
-        timelineEnabled: false,
-        guardEnabled: false,
-        guardRules: DEFAULT_GUARD_RULES,
-        workspace: "worktree",
-        guardTimeoutSeconds: null,
-        clarifyTimeoutSeconds: 300,
-      },
-    );
+    assert.deepEqual(registry.runtimePolicy(projectId, "session-one").effective, {
+      verify: { mode: "auto" },
+      toolOverrides: {},
+      timelineEnabled: false,
+      guardEnabled: false,
+      guardRules: DEFAULT_GUARD_RULES,
+      workspace: "worktree",
+      guardTimeoutSeconds: null,
+      clarifyTimeoutSeconds: 300,
+    });
     await registry.updateRuntimePolicy({
       scope: "project",
       projectId,
@@ -724,14 +570,8 @@ test("global runtime policy is inherited independently by projects and sessions"
       clarifyTimeoutSeconds: 600,
       expectedRevision: 2,
     });
-    assert.equal(
-      registry.runtimePolicy(projectId, "session-one").project.guardEnabled,
-      undefined,
-    );
-    assert.equal(
-      registry.runtimePolicy(projectId, "session-one").effective.guardEnabled,
-      false,
-    );
+    assert.equal(registry.runtimePolicy(projectId, "session-one").project.guardEnabled, undefined);
+    assert.equal(registry.runtimePolicy(projectId, "session-one").effective.guardEnabled, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

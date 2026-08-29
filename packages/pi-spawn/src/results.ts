@@ -24,14 +24,10 @@ const SCIENTIST_NAMES = [
 ] as const;
 
 /** How a spawned child is named in text shown to the parent model and the user. */
-export const label = (kind: SpawnKind): string =>
-  kind === "agent" ? "Subagent" : "Session";
+export const label = (kind: SpawnKind): string => (kind === "agent" ? "Subagent" : "Session");
 
 export const scientistName = (id: string): string =>
-  SCIENTIST_NAMES[
-    createHash("sha256").update(id).digest().readUInt32BE(0) %
-      SCIENTIST_NAMES.length
-  ];
+  SCIENTIST_NAMES[createHash("sha256").update(id).digest().readUInt32BE(0) % SCIENTIST_NAMES.length];
 
 export const preview = (value: string, max = 72): string => {
   const text = value.trim().replace(/\s+/g, " ");
@@ -40,16 +36,9 @@ export const preview = (value: string, max = 72): string => {
 
 export const defaultName = (prompt: string): string => preview(prompt, 100);
 
-export type ToolFailure = {
-  content: { type: "text"; text: string }[];
-  details: Record<string, unknown>;
-};
+export type ToolFailure = { content: { type: "text"; text: string }[]; details: Record<string, unknown> };
 
-export const failure = (
-  code: string,
-  text: string,
-  details?: Record<string, unknown>,
-): ToolFailure => ({
+export const failure = (code: string, text: string, details?: Record<string, unknown>): ToolFailure => ({
   content: [{ type: "text" as const, text }],
   details: { ...details, failureCode: code },
 });
@@ -65,20 +54,12 @@ export const missingThread = (kind: SpawnKind): ToolFailure =>
       : "Spawned session is unavailable from this parent branch.",
   );
 
-export const threadListResult = (
-  kind: SpawnKind,
-  threads: SpawnThreadInfo[],
-) => ({
+export const threadListResult = (kind: SpawnKind, threads: SpawnThreadInfo[]) => ({
   content: [
     {
       type: "text" as const,
       text: threads.length
-        ? threads
-            .map(
-              (item) =>
-                `${item.id} ${item.name ?? label(kind)} (${item.messageCount} messages)`,
-            )
-            .join("\n")
+        ? threads.map(item => `${item.id} ${item.name ?? label(kind)} (${item.messageCount} messages)`).join("\n")
         : kind === "agent"
           ? "No private subagent threads on this parent branch."
           : "No spawned sessions on this parent branch.",
@@ -87,12 +68,7 @@ export const threadListResult = (
   details: { threads },
 });
 
-export function runText(
-  kind: SpawnKind,
-  id: string,
-  name: string,
-  run: SpawnRun,
-): string {
+export function runText(kind: SpawnKind, id: string, name: string, run: SpawnRun): string {
   const status = run.error
     ? `${label(kind)} ${name} (${id}) turn failed: ${run.error}`
     : `${label(kind)} ${name} (${id}):`;

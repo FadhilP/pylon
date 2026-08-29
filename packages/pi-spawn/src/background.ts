@@ -24,24 +24,14 @@ type BackgroundRun = {
   result?: any;
 };
 
-export type BackgroundRequest = TurnRequest & {
-  toolCallId: string;
-  parentSessionId: string;
-};
+export type BackgroundRequest = TurnRequest & { toolCallId: string; parentSessionId: string };
 
 /** Owns the background spawn runs of one parent session: their lifecycle, progress events, and shutdown. */
-export function createBackgroundRuns(
-  pi: ExtensionAPI,
-  executeTurn: ExecuteTurn,
-) {
+export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn) {
   const runs = new Map<string, BackgroundRun>();
   let shuttingDown = false;
 
-  const emitProgress = (
-    run: BackgroundRun,
-    phase: "update" | "end",
-    result: unknown,
-  ) => {
+  const emitProgress = (run: BackgroundRun, phase: "update" | "end", result: unknown) => {
     pi.events.emit(SPAWN_PROGRESS_CHANNEL, {
       version: 1,
       parentSessionId: run.parentSessionId,
@@ -54,16 +44,10 @@ export function createBackgroundRuns(
     });
   };
   const prune = () => {
-    const terminal = [...runs.values()]
-      .filter((run) => run.state !== "running")
-      .sort((a, b) => b.started - a.started);
+    const terminal = [...runs.values()].filter(run => run.state !== "running").sort((a, b) => b.started - a.started);
     for (const run of terminal.slice(MAX_TERMINAL_RUNS)) runs.delete(run.runId);
   };
-  const runningSummary = (
-    run: BackgroundRun,
-    id: string,
-    durationMs?: number,
-  ) => ({
+  const runningSummary = (run: BackgroundRun, id: string, durationMs?: number) => ({
     content: [
       {
         type: "text" as const,
@@ -88,18 +72,9 @@ export function createBackgroundRuns(
     },
 
     start(request: BackgroundRequest) {
-      const { kind, id, path, cwd, toolCallId, parentSessionId, policy } =
-        request;
-      if (shuttingDown)
-        return failure(
-          "shutting_down",
-          "Background spawning is unavailable during session shutdown.",
-        );
-      if (isThreadActive(path))
-        return failure(
-          "busy",
-          "Spawned thread is already running in this Pi process.",
-        );
+      const { kind, id, path, cwd, toolCallId, parentSessionId, policy } = request;
+      if (shuttingDown) return failure("shutting_down", "Background spawning is unavailable during session shutdown.");
+      if (isThreadActive(path)) return failure("busy", "Spawned thread is already running in this Pi process.");
       const runId = randomUUID();
       const started = Date.now();
       const controller = new AbortController();
@@ -125,7 +100,7 @@ export function createBackgroundRuns(
         beforeRun: undefined,
         runId,
         background: true,
-      }).then((result) => {
+      }).then(result => {
         entry.result = result;
         entry.state =
           result.details?.status === "completed"
@@ -137,10 +112,7 @@ export function createBackgroundRuns(
         prune();
         return result;
       });
-      const agentPolicy =
-        kind === "agent"
-          ? (policy as { thinking?: string } | undefined)
-          : undefined;
+      const agentPolicy = kind === "agent" ? (policy as { thinking?: string } | undefined) : undefined;
       return {
         content: [
           {
@@ -165,19 +137,11 @@ export function createBackgroundRuns(
     async collect(kind: SpawnKind, id: string, runId: string, cancel: boolean) {
       const entry = runs.get(runId);
       if (!entry || entry.kind !== kind || entry.id !== id)
-        return failure(
-          "not_found",
-          "Background run is unavailable in this session runtime.",
-        );
+        return failure("not_found", "Background run is unavailable in this session runtime.");
       if (cancel && entry.state === "running") entry.controller.abort();
       if (cancel) await entry.promise;
-      if (entry.state === "running")
-        return runningSummary(entry, id, Date.now() - entry.started);
-      if (runs.get(runId) !== entry)
-        return failure(
-          "not_found",
-          "Background run result was already collected.",
-        );
+      if (entry.state === "running") return runningSummary(entry, id, Date.now() - entry.started);
+      if (runs.get(runId) !== entry) return failure("not_found", "Background run result was already collected.");
       runs.delete(runId);
       return entry.result;
     },
@@ -186,13 +150,13 @@ export function createBackgroundRuns(
     contextLines(): string | undefined {
       const all = [...runs.values()];
       const visible = [
-        ...all.filter((run) => run.state === "running"),
-        ...all.filter((run) => run.state !== "running"),
+        ...all.filter(run => run.state === "running"),
+        ...all.filter(run => run.state !== "running"),
       ].slice(0, MAX_CONTEXT_RUNS);
       if (!visible.length) return;
       return visible
         .map(
-          (run) =>
+          run =>
             `${run.kind} ${run.id}, run ${run.runId}: ${run.state}${run.state === "running" ? "" : "; call status to collect the result"}`,
         )
         .join("\n");
@@ -204,11 +168,9 @@ export function createBackgroundRuns(
 
     async shutdown() {
       shuttingDown = true;
-      const running = [...runs.values()].filter(
-        (run) => run.state === "running",
-      );
+      const running = [...runs.values()].filter(run => run.state === "running");
       for (const run of running) run.controller.abort();
-      await Promise.allSettled(running.map((run) => run.promise));
+      await Promise.allSettled(running.map(run => run.promise));
       runs.clear();
     },
   };

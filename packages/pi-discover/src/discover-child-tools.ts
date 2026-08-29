@@ -18,9 +18,5 @@ export default function discoverChildToolsExtension(pi: ExtensionAPI) {
   registerRg(pi, DISCOVER_CHILD_MAX_BYTES);
   registerFd(pi, DISCOVER_CHILD_MAX_BYTES);
   registerRelationshipGraph(pi, DISCOVER_CHILD_MAX_BYTES);
-  registerIndexTools(
-    pi,
-    createIndexRegistry(pi).indexFor,
-    DISCOVER_CHILD_MAX_BYTES,
-  );
+  registerIndexTools(pi, createIndexRegistry(pi).indexFor, DISCOVER_CHILD_MAX_BYTES);
 }

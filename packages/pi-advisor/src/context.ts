@@ -26,7 +26,7 @@ function contentText(content: any): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((part) =>
+    .map(part =>
       part?.type === "text"
         ? part.text
         : part?.type === "image"
@@ -43,8 +43,8 @@ function assistantText(content: any): string {
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
   return content
-    .filter((part) => part?.type === "text")
-    .map((part) => part.text)
+    .filter(part => part?.type === "text")
+    .map(part => part.text)
     .join("\n")
     .trim();
 }
@@ -53,9 +53,7 @@ function normalizedRecord(record: string): string {
 }
 function normalizedPayload(record: string): string {
   const clean = record.replace(/\r\n/g, "\n").trim();
-  return /^\[[^\n]+\]\n/.test(clean)
-    ? clean.slice(clean.indexOf("\n") + 1).trim()
-    : clean;
+  return /^\[[^\n]+\]\n/.test(clean) ? clean.slice(clean.indexOf("\n") + 1).trim() : clean;
 }
 type DedupeOptions = {
   seen: Set<string>;
@@ -63,12 +61,8 @@ type DedupeOptions = {
   /** Cross-section dedupe defers remembering until a record is actually packed. */
   remember: boolean;
 };
-function dedupe(
-  records: string[],
-  telemetry: DuplicateTelemetry,
-  options: DedupeOptions,
-): string[] {
-  return records.filter((record) => {
+function dedupe(records: string[], telemetry: DuplicateTelemetry, options: DedupeOptions): string[] {
+  return records.filter(record => {
     const identity = options.identity(record);
     if (!identity || options.seen.has(identity)) {
       telemetry.records++;
@@ -79,27 +73,12 @@ function dedupe(
     return true;
   });
 }
-function dedupeRecords(
-  records: string[],
-  telemetry: DuplicateTelemetry,
-): string[] {
-  return dedupe(records, telemetry, {
-    seen: new Set(),
-    identity: normalizedRecord,
-    remember: true,
-  });
+function dedupeRecords(records: string[], telemetry: DuplicateTelemetry): string[] {
+  return dedupe(records, telemetry, { seen: new Set(), identity: normalizedRecord, remember: true });
 }
 /** Drops records whose payload a higher-priority section already packed. */
-function dedupeAcrossSections(
-  records: string[],
-  seen: Set<string>,
-  telemetry: DuplicateTelemetry,
-): string[] {
-  return dedupe(records, telemetry, {
-    seen,
-    identity: normalizedPayload,
-    remember: false,
-  });
+function dedupeAcrossSections(records: string[], seen: Set<string>, telemetry: DuplicateTelemetry): string[] {
+  return dedupe(records, telemetry, { seen, identity: normalizedPayload, remember: false });
 }
 
 export function serializeMessage(message: any): string {
@@ -123,46 +102,19 @@ export function serializeMessage(message: any): string {
   }
 }
 
-const commonWords = new Set([
-  "about",
-  "after",
-  "before",
-  "from",
-  "into",
-  "that",
-  "the",
-  "this",
-  "with",
-  "your",
-]);
+const commonWords = new Set(["about", "after", "before", "from", "into", "that", "the", "this", "with", "your"]);
 function terms(text: string): Set<string> {
-  return new Set(
-    (text.toLowerCase().match(/[a-z0-9_./-]{3,}/g) ?? []).filter(
-      (term) => !commonWords.has(term),
-    ),
-  );
+  return new Set((text.toLowerCase().match(/[a-z0-9_./-]{3,}/g) ?? []).filter(term => !commonWords.has(term)));
 }
 function relevance(message: any, query: Set<string>): number {
   const ref = message?.evidenceRef as EvidenceRef | undefined;
-  const metadata = terms(
-    `${ref?.claim ?? ""} ${(ref?.claims ?? []).join(" ")} ${ref?.path ?? ""}`,
-  );
+  const metadata = terms(`${ref?.claim ?? ""} ${(ref?.claims ?? []).join(" ")} ${ref?.path ?? ""}`);
   const body = terms(contentText(message?.content));
-  const metadataMatches = [...metadata].filter((term) =>
-    query.has(term),
-  ).length;
-  const bodyMatches = [...body].filter((term) => query.has(term)).length;
-  return (
-    metadataMatches * 4 +
-    bodyMatches -
-    (message?.evidenceUnavailable ? 1_000 : 0)
-  );
+  const metadataMatches = [...metadata].filter(term => query.has(term)).length;
+  const bodyMatches = [...body].filter(term => query.has(term)).length;
+  return metadataMatches * 4 + bodyMatches - (message?.evidenceUnavailable ? 1_000 : 0);
 }
-function evidenceMarker(
-  refs: readonly EvidenceRef[],
-  omittedCount: number,
-  maxChars = Infinity,
-): string {
+function evidenceMarker(refs: readonly EvidenceRef[], omittedCount: number, maxChars = Infinity): string {
   const generic = `[Omitted evidence: ${omittedCount} complete record${omittedCount === 1 ? "" : "s"}.]`;
   if (generic.length > maxChars) return "";
   const anchors: string[] = [];
@@ -172,30 +124,20 @@ function evidenceMarker(
     if (candidate.length > maxChars) break;
     anchors.push(anchor);
   }
-  return anchors.length
-    ? `[Omitted evidence available for focused retrieval: ${anchors.join(", ")}.]`
-    : generic;
+  return anchors.length ? `[Omitted evidence available for focused retrieval: ${anchors.join(", ")}.]` : generic;
 }
 
 function normalizedWindow(contextWindow: number): number {
-  return Number.isFinite(contextWindow)
-    ? Math.max(512, Math.floor(contextWindow))
-    : 8_192;
+  return Number.isFinite(contextWindow) ? Math.max(512, Math.floor(contextWindow)) : 8_192;
 }
 
 export function advisorMaxTokens(contextWindow: number): number {
   const window = normalizedWindow(contextWindow);
-  return Math.max(
-    128,
-    Math.min(ADVISOR_MAX_OUTPUT_TOKENS, Math.floor(window * 0.25)),
-  );
+  return Math.max(128, Math.min(ADVISOR_MAX_OUTPUT_TOKENS, Math.floor(window * 0.25)));
 }
 
 /** Input tokens the snapshot may occupy: the global cap, a share of the window, and room for output. */
-function snapshotTokenBudget(
-  contextWindow: number,
-  reservedInputTokens: number,
-): number {
+function snapshotTokenBudget(contextWindow: number, reservedInputTokens: number): number {
   const window = normalizedWindow(contextWindow);
   const reserved = Math.max(0, reservedInputTokens);
   return Math.max(
@@ -209,9 +151,7 @@ function snapshotTokenBudget(
 }
 
 function sectionSize(label: string, records: readonly string[]): number {
-  return records.length
-    ? `<${label}>\n${records.join("\n\n")}\n</${label}>`.length + 2
-    : 0;
+  return records.length ? `<${label}>\n${records.join("\n\n")}\n</${label}>`.length + 2 : 0;
 }
 
 function fitRecords<T>(
@@ -240,49 +180,23 @@ const SECTION_LABELS = [
   "latest-user-request",
   "latest-assistant-judgment",
 ] as const;
-const PACKED_CUSTOM_TYPES = new Set([
-  "advisor-request",
-  "advisor-evidence",
-  "pi-continuity",
-  "pi-verify-result",
-]);
+const PACKED_CUSTOM_TYPES = new Set(["advisor-request", "advisor-evidence", "pi-continuity", "pi-verify-result"]);
 const PACKED_ROLES = new Set(["compactionSummary", "branchSummary"]);
 
-function customRecords(
-  messages: any[],
-  customType: string,
-  latestOnly = false,
-): string[] {
-  const matches = messages.filter(
-    (message) =>
-      message?.role === "custom" && message.customType === customType,
-  );
+function customRecords(messages: any[], customType: string, latestOnly = false): string[] {
+  const matches = messages.filter(message => message?.role === "custom" && message.customType === customType);
   return (latestOnly ? matches.slice(-1) : matches).map(serializeMessage);
 }
 
 type EvidenceCandidate = { message: any; index: number; text: string };
-function rankedEvidence(
-  messages: any[],
-  query: Set<string>,
-  telemetry: DuplicateTelemetry,
-): EvidenceCandidate[] {
+function rankedEvidence(messages: any[], query: Set<string>, telemetry: DuplicateTelemetry): EvidenceCandidate[] {
   const seen = new Set<string>();
   return messages
-    .filter(
-      (message) =>
-        message?.role === "custom" && message.customType === "advisor-evidence",
-    )
-    .map((message, index) => ({
-      message,
-      index,
-      text: serializeMessage(message),
-    }))
-    .filter((candidate) => {
+    .filter(message => message?.role === "custom" && message.customType === "advisor-evidence")
+    .map((message, index) => ({ message, index, text: serializeMessage(message) }))
+    .filter(candidate => {
       // Evidence provenance is part of identity: equal excerpts at different ranges stay distinct.
-      const identity = JSON.stringify([
-        normalizedRecord(candidate.text),
-        candidate.message?.evidenceRef ?? null,
-      ]);
+      const identity = JSON.stringify([normalizedRecord(candidate.text), candidate.message?.evidenceRef ?? null]);
       if (seen.has(identity)) {
         telemetry.records++;
         telemetry.chars += candidate.text.length;
@@ -291,75 +205,40 @@ function rankedEvidence(
       seen.add(identity);
       return true;
     })
-    .sort(
-      (a, b) =>
-        relevance(b.message, query) - relevance(a.message, query) ||
-        b.index - a.index,
-    );
+    .sort((a, b) => relevance(b.message, query) - relevance(a.message, query) || b.index - a.index);
 }
 
-export function buildSnapshot(
-  messages: any[],
-  contextWindow: number,
-  reservedInputTokens = 0,
-): Snapshot {
-  const charBudget =
-    snapshotTokenBudget(contextWindow, reservedInputTokens) * CHARS_PER_TOKEN;
+export function buildSnapshot(messages: any[], contextWindow: number, reservedInputTokens = 0): Snapshot {
+  const charBudget = snapshotTokenBudget(contextWindow, reservedInputTokens) * CHARS_PER_TOKEN;
   const duplicateTelemetry: DuplicateTelemetry = { records: 0, chars: 0 };
-  const localUnique = (records: string[]) =>
-    dedupeRecords(records, duplicateTelemetry);
+  const localUnique = (records: string[]) => dedupeRecords(records, duplicateTelemetry);
 
   const request = localUnique(customRecords(messages, "advisor-request", true));
-  const evidenceMessages = rankedEvidence(
-    messages,
-    terms(request.join("\n")),
-    duplicateTelemetry,
-  );
+  const evidenceMessages = rankedEvidence(messages, terms(request.join("\n")), duplicateTelemetry);
   const continuity = localUnique(customRecords(messages, "pi-continuity"));
-  const verification = localUnique(
-    customRecords(messages, "pi-verify-result", true),
-  );
+  const verification = localUnique(customRecords(messages, "pi-verify-result", true));
   const summaries = localUnique(
     messages
-      .filter((message) => PACKED_ROLES.has(message?.role))
+      .filter(message => PACKED_ROLES.has(message?.role))
       .map(serializeMessage)
       .reverse(),
   );
-  const latestUserMessage = [...messages]
-    .reverse()
-    .find((message) => message?.role === "user");
+  const latestUserMessage = [...messages].reverse().find(message => message?.role === "user");
   const latestAssistantMessage = [...messages]
     .reverse()
-    .find(
-      (message) =>
-        message?.role === "assistant" && assistantText(message.content),
-    );
-  const latestUser = latestUserMessage
-    ? localUnique([serializeMessage(latestUserMessage)])
-    : [];
+    .find(message => message?.role === "assistant" && assistantText(message.content));
+  const latestUser = latestUserMessage ? localUnique([serializeMessage(latestUserMessage)]) : [];
   const latestAssistant = latestAssistantMessage
-    ? localUnique([
-        `[ASSISTANT]\n${assistantText(latestAssistantMessage.content)}`,
-      ])
+    ? localUnique([`[ASSISTANT]\n${assistantText(latestAssistantMessage.content)}`])
     : [];
 
   const sectionAllocations = Object.fromEntries(
-    SECTION_LABELS.map((label) => [
+    SECTION_LABELS.map(label => [
       label,
-      {
-        estimatedTokens: 0,
-        includedRecords: 0,
-        omittedRecords: 0,
-        truncated: false,
-      },
+      { estimatedTokens: 0, includedRecords: 0, omittedRecords: 0, truncated: false },
     ]),
   ) as Record<string, SectionAllocation>;
-  const recordAllocation = (
-    label: string,
-    section: string,
-    includedRecords: number,
-    omittedRecords: number,
-  ) => {
+  const recordAllocation = (label: string, section: string, includedRecords: number, omittedRecords: number) => {
     sectionAllocations[label] = {
       estimatedTokens: Math.ceil(redact(section).text.length / CHARS_PER_TOKEN),
       includedRecords,
@@ -386,11 +265,7 @@ export function buildSnapshot(
   const omittedEvidence: EvidenceRef[] = [];
   let used = 0;
   let truncated = false;
-  const pushSection = (
-    label: string,
-    kept: string[],
-    omittedRecords: number,
-  ) => {
+  const pushSection = (label: string, kept: string[], omittedRecords: number) => {
     if (!kept.length) {
       recordAllocation(label, "", 0, omittedRecords);
       return;
@@ -403,46 +278,25 @@ export function buildSnapshot(
   };
   const add = (label: string, records: string[]) => {
     if (!records.length) return;
-    const candidates = dedupeAcrossSections(
-      records,
-      globalSeen,
-      duplicateTelemetry,
-    );
+    const candidates = dedupeAcrossSections(records, globalSeen, duplicateTelemetry);
     if (!candidates.length) return;
-    const { kept, omitted } = fitRecords(
-      label,
-      candidates,
-      (record) => record,
-      used,
-      charBudget,
-    );
+    const { kept, omitted } = fitRecords(label, candidates, record => record, used, charBudget);
     if (omitted.length) truncated = true;
     pushSection(label, kept, omitted.length);
   };
   const addEvidence = () => {
-    const { kept, omitted } = fitRecords(
-      "explicit-evidence",
-      evidenceMessages,
-      (item) => item.text,
-      used,
-      charBudget,
-    );
+    const { kept, omitted } = fitRecords("explicit-evidence", evidenceMessages, item => item.text, used, charBudget);
     for (const candidate of omitted) {
       truncated = true;
-      if (candidate.message?.evidenceRef)
-        omittedEvidence.push(candidate.message.evidenceRef);
+      if (candidate.message?.evidenceRef) omittedEvidence.push(candidate.message.evidenceRef);
     }
     pushSection(
       "explicit-evidence",
-      kept.map((item) => item.text),
+      kept.map(item => item.text),
       omitted.length,
     );
     if (!omitted.length) return;
-    const marker = evidenceMarker(
-      omittedEvidence,
-      omitted.length,
-      Math.max(0, charBudget - used),
-    );
+    const marker = evidenceMarker(omittedEvidence, omitted.length, Math.max(0, charBudget - used));
     if (!marker) return;
     sections.push(marker);
     used += marker.length + 2;
@@ -456,16 +310,13 @@ export function buildSnapshot(
   add("latest-user-request", latestUser);
   add("latest-assistant-judgment", latestAssistant);
 
-  const selected = new Set(
-    [latestUserMessage, latestAssistantMessage].filter(Boolean),
-  );
+  const selected = new Set([latestUserMessage, latestAssistantMessage].filter(Boolean));
   const isPacked = (message: any) =>
     selected.has(message) ||
     PACKED_ROLES.has(message?.role) ||
     (message?.role === "custom" && PACKED_CUSTOM_TYPES.has(message.customType));
-  if (messages.some((message) => !isPacked(message))) truncated = true;
-  const marker =
-    "\n\n[Non-priority, earlier, or oversized executor context omitted.]";
+  if (messages.some(message => !isPacked(message))) truncated = true;
+  const marker = "\n\n[Non-priority, earlier, or oversized executor context omitted.]";
   let raw = sections.join("\n\n");
   if (truncated && raw.length + marker.length <= charBudget) raw += marker;
   const clean = redact(raw);

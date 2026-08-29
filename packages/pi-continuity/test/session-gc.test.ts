@@ -28,13 +28,12 @@ test("continuity GC removes deleted-session work and preserves persisted or leas
       async () => {},
       async () => [],
     );
-    for (const id of ["leased", "persisted", "deleted"])
-      await writeFile(file(id), "{}\n");
+    for (const id of ["leased", "persisted", "deleted"]) await writeFile(file(id), "{}\n");
 
     const releaseCurrent = await startSessionGc(
       root,
       "current",
-      (live) => pruneOrphanWorkFiles(root, live),
+      live => pruneOrphanWorkFiles(root, live),
       async () => [{ id: "persisted" }],
     );
     await access(file("leased"));
@@ -47,7 +46,7 @@ test("continuity GC removes deleted-session work and preserves persisted or leas
     const releaseNext = await startSessionGc(
       root,
       "next",
-      (live) => pruneOrphanWorkFiles(root, live),
+      live => pruneOrphanWorkFiles(root, live),
       async () => [{ id: "persisted" }],
     );
     await access(file("leased"));
@@ -57,7 +56,7 @@ test("continuity GC removes deleted-session work and preserves persisted or leas
     const releaseFinal = await startSessionGc(
       root,
       "final",
-      (live) => pruneOrphanWorkFiles(root, live),
+      live => pruneOrphanWorkFiles(root, live),
       async () => [{ id: "persisted" }],
     );
     await missing(file("leased"));
@@ -78,7 +77,7 @@ test("continuity GC fails closed when persisted-session discovery fails", async 
     const release = await startSessionGc(
       root,
       "current",
-      (live) => pruneOrphanWorkFiles(root, live),
+      live => pruneOrphanWorkFiles(root, live),
       async () => {
         throw new Error("unavailable");
       },
@@ -91,9 +90,7 @@ test("continuity GC fails closed when persisted-session discovery fails", async 
 });
 
 test("continuity GC fails closed on malformed leases", async () => {
-  const root = await mkdtemp(
-    join(tmpdir(), "continuity-session-gc-malformed-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "continuity-session-gc-malformed-"));
   const sessions = join(root, "workspaces", "workspace", "sessions"),
     orphan = join(sessions, "orphan.json");
   await mkdir(join(root, "session-artifacts"), { recursive: true });
@@ -104,7 +101,7 @@ test("continuity GC fails closed on malformed leases", async () => {
     const release = await startSessionGc(
       root,
       "current",
-      (live) => pruneOrphanWorkFiles(root, live),
+      live => pruneOrphanWorkFiles(root, live),
       async () => [],
     );
     await access(orphan);
@@ -120,10 +117,7 @@ test("continuity GC recovers a lock owned by a dead process", async () => {
   const pid = child.pid!;
   await once(child, "exit");
   await mkdir(root, { recursive: true });
-  await writeFile(
-    join(root, "session-artifacts.lock"),
-    JSON.stringify({ version: 1, pid, token: "dead" }),
-  );
+  await writeFile(join(root, "session-artifacts.lock"), JSON.stringify({ version: 1, pid, token: "dead" }));
   try {
     let active = 0,
       maxActive = 0;
@@ -139,16 +133,9 @@ test("continuity GC recovers a lock owned by a dead process", async () => {
         },
         async () => [],
       );
-    const releases = await Promise.all([
-      start("current-a"),
-      start("current-b"),
-    ]);
-    assert.equal(
-      maxActive,
-      1,
-      "stale-lock recovery preserves mutual exclusion",
-    );
-    await Promise.all(releases.map((release) => release()));
+    const releases = await Promise.all([start("current-a"), start("current-b")]);
+    assert.equal(maxActive, 1, "stale-lock recovery preserves mutual exclusion");
+    await Promise.all(releases.map(release => release()));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

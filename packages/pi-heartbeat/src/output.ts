@@ -9,9 +9,7 @@ export class TailBuffer {
     this.value += text;
     while (Buffer.byteLength(this.value) > this.maxBytes) {
       this.truncated = true;
-      this.value = this.value.slice(
-        Math.max(1, this.value.length - Math.floor(this.maxBytes * 0.9)),
-      );
+      this.value = this.value.slice(Math.max(1, this.value.length - Math.floor(this.maxBytes * 0.9)));
     }
   }
   toString() {

@@ -21,28 +21,9 @@ function memoryStorage(initial?: string) {
 test("composer drafts persist and select the newest draft for a project", () => {
   const storage = memoryStorage();
   const drafts = new Map<string, ComposerDraft>([
-    [
-      "older",
-      { sessionId: "older", projectId: "project", text: "first", updatedAt: 1 },
-    ],
-    [
-      "newer",
-      {
-        sessionId: "newer",
-        projectId: "project",
-        text: "second",
-        updatedAt: 2,
-      },
-    ],
-    [
-      "other",
-      {
-        sessionId: "other",
-        projectId: "other-project",
-        text: "other",
-        updatedAt: 3,
-      },
-    ],
+    ["older", { sessionId: "older", projectId: "project", text: "first", updatedAt: 1 }],
+    ["newer", { sessionId: "newer", projectId: "project", text: "second", updatedAt: 2 }],
+    ["other", { sessionId: "other", projectId: "other-project", text: "other", updatedAt: 3 }],
   ]);
 
   writeComposerDrafts(storage, drafts);
@@ -61,8 +42,5 @@ test("composer drafts ignore malformed persisted data", () => {
   );
 
   assert.deepEqual([...readComposerDrafts(storage).keys()], ["valid"]);
-  assert.deepEqual(
-    [...readComposerDrafts(memoryStorage("not-json")).keys()],
-    [],
-  );
+  assert.deepEqual([...readComposerDrafts(memoryStorage("not-json")).keys()], []);
 });

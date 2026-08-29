@@ -1,21 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ADVISOR_MAX_OUTPUT_TOKENS } from "../src/advisor.ts";
-import {
-  advisorMaxTokens,
-  buildSnapshot,
-  serializeMessage,
-} from "../src/context.ts";
+import { advisorMaxTokens, buildSnapshot, serializeMessage } from "../src/context.ts";
 
 test("snapshot omits images/thinking and redacts", () => {
   const snapshot = buildSnapshot(
     [
       {
         role: "user",
-        content: [
-          { type: "text", text: "token=sk-proj-abcdefghijklmnopqrstuvwxyz" },
-          { type: "image" },
-        ],
+        content: [{ type: "text", text: "token=sk-proj-abcdefghijklmnopqrstuvwxyz" }, { type: "image" }],
       },
       {
         role: "assistant",
@@ -27,16 +20,11 @@ test("snapshot omits images/thinking and redacts", () => {
     ],
     20_000,
   );
-  assert.ok(
-    snapshot.text.indexOf("[USER]") < snapshot.text.indexOf("[ASSISTANT]"),
-  );
+  assert.ok(snapshot.text.indexOf("[USER]") < snapshot.text.indexOf("[ASSISTANT]"));
   assert.match(snapshot.text, /image omitted/);
   assert.doesNotMatch(snapshot.text, /secret thought|thinking omitted/);
   assert.ok(!snapshot.text.includes("abcdefghijklmnopqrstuvwxyz"));
-  assert.equal(
-    Object.hasOwn(snapshot.sectionAllocations, "executor-system-prompt"),
-    false,
-  );
+  assert.equal(Object.hasOwn(snapshot.sectionAllocations, "executor-system-prompt"), false);
 });
 
 test("small budget marks truncation and keeps newest user", () => {
@@ -55,19 +43,11 @@ test("snapshot prioritizes advisor request, evidence, continuity, summaries, use
     [
       { role: "assistant", content: "assistant judgment" },
       { role: "user", content: "review finding" },
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "Which approach has less migration risk?",
-      },
+      { role: "custom", customType: "advisor-request", content: "Which approach has less migration risk?" },
       { role: "branchSummary", summary: "branch state" },
       { role: "compactionSummary", summary: "compacted state" },
       { role: "custom", customType: "pi-continuity", content: "durable state" },
-      {
-        role: "custom",
-        customType: "advisor-evidence",
-        content: "source evidence",
-      },
+      { role: "custom", customType: "advisor-evidence", content: "source evidence" },
     ],
     40_000,
   );
@@ -78,7 +58,7 @@ test("snapshot prioritizes advisor request, evidence, continuity, summaries, use
     "compacted state",
     "review finding",
     "assistant judgment",
-  ].map((value) => snapshot.text.indexOf(value));
+  ].map(value => snapshot.text.indexOf(value));
   assert.deepEqual(
     positions,
     [...positions].sort((a, b) => a - b),
@@ -89,16 +69,8 @@ test("snapshot deduplicates normalized records before budgeting", () => {
   const snapshot = buildSnapshot(
     [
       { role: "custom", customType: "advisor-request", content: "review" },
-      {
-        role: "custom",
-        customType: "advisor-evidence",
-        content: "same evidence\r\n",
-      },
-      {
-        role: "custom",
-        customType: "advisor-evidence",
-        content: "same evidence\n",
-      },
+      { role: "custom", customType: "advisor-evidence", content: "same evidence\r\n" },
+      { role: "custom", customType: "advisor-evidence", content: "same evidence\n" },
     ],
     20_000,
   );
@@ -122,30 +94,19 @@ test("snapshot deduplicates exact payloads across sections by priority", () => {
 test("cross-section identity does not collapse different raw values after redaction", () => {
   const snapshot = buildSnapshot(
     [
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-one",
-      },
+      { role: "custom", customType: "advisor-request", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-one" },
       { role: "user", content: "token=sk-proj-abcdefghijklmnopqrstuvwxyz-two" },
     ],
     20_000,
   );
   assert.equal(snapshot.duplicateTelemetry.records, 0);
-  assert.equal(
-    snapshot.sectionAllocations["latest-user-request"].includedRecords,
-    1,
-  );
+  assert.equal(snapshot.sectionAllocations["latest-user-request"].includedRecords, 1);
 });
 
 test("snapshot includes latest bounded verification metadata", () => {
   const snapshot = buildSnapshot(
     [
-      {
-        role: "custom",
-        customType: "pi-verify-result",
-        content: "failed: npm test",
-      },
+      { role: "custom", customType: "pi-verify-result", content: "failed: npm test" },
       { role: "user", content: "help recover" },
     ],
     20_000,
@@ -174,10 +135,7 @@ test("snapshot keeps complete advisor and user records without per-section clipp
         customType: "advisor-request",
         content: `START-${"alpha ".repeat(2_000)}-MIDDLE-${"omega ".repeat(2_000)}-END`,
       },
-      {
-        role: "user",
-        content: `USER-START-${"beta ".repeat(7_000)}-USER-MIDDLE-${"gamma ".repeat(7_000)}-USER-END`,
-      },
+      { role: "user", content: `USER-START-${"beta ".repeat(7_000)}-USER-MIDDLE-${"gamma ".repeat(7_000)}-USER-END` },
     ],
     100_000,
   );
@@ -192,16 +150,8 @@ test("snapshot omits oversized records whole and keeps later records", () => {
   const snapshot = buildSnapshot(
     [
       { role: "custom", customType: "advisor-request", content: "review" },
-      {
-        role: "custom",
-        customType: "advisor-evidence",
-        content: `EVIDENCE-START${"x".repeat(30_000)}EVIDENCE-END`,
-      },
-      {
-        role: "custom",
-        customType: "pi-continuity",
-        content: "small durable state",
-      },
+      { role: "custom", customType: "advisor-evidence", content: `EVIDENCE-START${"x".repeat(30_000)}EVIDENCE-END` },
+      { role: "custom", customType: "pi-continuity", content: "small durable state" },
     ],
     10_000,
   );
@@ -215,13 +165,8 @@ test("snapshot omits oversized records whole and keeps later records", () => {
     omittedRecords: 1,
     truncated: true,
   });
-  assert.equal(
-    snapshot.sectionAllocations["continuity-state"].includedRecords,
-    1,
-  );
-  assert.ok(
-    snapshot.sectionAllocations["continuity-state"].estimatedTokens > 0,
-  );
+  assert.equal(snapshot.sectionAllocations["continuity-state"].includedRecords, 1);
+  assert.ok(snapshot.sectionAllocations["continuity-state"].estimatedTokens > 0);
 });
 
 test("snapshot ranks evidence and retains omitted anchors", () => {
@@ -233,19 +178,10 @@ test("snapshot ranks evidence and retains omitted anchors", () => {
     revision: "git:new",
     verification: "tested",
   };
-  const irrelevant = {
-    path: "src/colors.ts",
-    start: 1,
-    end: 5,
-    claim: "color palette",
-  };
+  const irrelevant = { path: "src/colors.ts", start: 1, end: 5, claim: "color palette" };
   const snapshot = buildSnapshot(
     [
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "Review database migration safety",
-      },
+      { role: "custom", customType: "advisor-request", content: "Review database migration safety" },
       {
         role: "custom",
         customType: "advisor-evidence",
@@ -270,11 +206,7 @@ test("snapshot ranks evidence and retains omitted anchors", () => {
 test("evidence relevance ties prefer newer records", () => {
   const snapshot = buildSnapshot(
     [
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "review evidence",
-      },
+      { role: "custom", customType: "advisor-request", content: "review evidence" },
       {
         role: "custom",
         customType: "advisor-evidence",
@@ -302,36 +234,21 @@ test("oversized omission anchors stay inside the snapshot budget", () => {
         role: "custom",
         customType: "advisor-evidence",
         content: "record ".repeat(200),
-        evidenceRef: {
-          path: `${"long-path-".repeat(50)}${index}.ts`,
-          start: 1,
-          end: 2,
-        },
+        evidenceRef: { path: `${"long-path-".repeat(50)}${index}.ts`, start: 1, end: 2 },
       })),
     ],
     1_000,
   );
   assert.ok(snapshot.estimatedTokens <= 494);
-  assert.equal(
-    snapshot.sectionAllocations["explicit-evidence"].includedRecords,
-    1,
-  );
+  assert.equal(snapshot.sectionAllocations["explicit-evidence"].includedRecords, 1);
   assert.equal(snapshot.omittedEvidence.length, 4);
   assert.equal(snapshot.requiredContextOmitted, false);
 });
 
 test("snapshot reports required context that cannot fit instead of clipping it", () => {
-  const messages = [
-    { role: "custom", customType: "advisor-request", content: "review" },
-  ];
+  const messages = [{ role: "custom", customType: "advisor-request", content: "review" }];
   const oversized = buildSnapshot(
-    [
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "x".repeat(10_000),
-      },
-    ],
+    [{ role: "custom", customType: "advisor-request", content: "x".repeat(10_000) }],
     1_000,
   );
   const reserved = buildSnapshot(messages, 10_000, 8_000);
@@ -343,13 +260,7 @@ test("snapshot reports required context that cannot fit instead of clipping it",
 
 test("snapshot redacts advisor request", () => {
   const snapshot = buildSnapshot(
-    [
-      {
-        role: "custom",
-        customType: "advisor-request",
-        content: "Review token=sk-proj-abcdefghijklmnopqrstuvwxyz",
-      },
-    ],
+    [{ role: "custom", customType: "advisor-request", content: "Review token=sk-proj-abcdefghijklmnopqrstuvwxyz" }],
     20_000,
   );
   assert.match(snapshot.text, /advisor-request/);
@@ -363,8 +274,7 @@ test("snapshot includes and redacts high-priority evidence", () => {
       {
         role: "custom",
         customType: "advisor-evidence",
-        content:
-          "<high-priority-evidence>\n1: token=sk-proj-abcdefghijklmnopqrstuvwxyz\n</high-priority-evidence>",
+        content: "<high-priority-evidence>\n1: token=sk-proj-abcdefghijklmnopqrstuvwxyz\n</high-priority-evidence>",
       },
     ],
     20_000,
@@ -375,13 +285,8 @@ test("snapshot includes and redacts high-priority evidence", () => {
 
 test("small model windows reserve bounded input and output", () => {
   const window = 1000;
-  const snapshot = buildSnapshot(
-    [{ role: "user", content: "x".repeat(20_000) }],
-    window,
-  );
-  assert.ok(
-    snapshot.estimatedTokens + advisorMaxTokens(window) + 256 <= window,
-  );
+  const snapshot = buildSnapshot([{ role: "user", content: "x".repeat(20_000) }], window);
+  assert.ok(snapshot.estimatedTokens + advisorMaxTokens(window) + 256 <= window);
   assert.equal(advisorMaxTokens(window), 250);
   assert.equal(advisorMaxTokens(100_000), ADVISOR_MAX_OUTPUT_TOKENS);
 });
@@ -390,16 +295,8 @@ test("large model windows cap total estimated input at 32,768 tokens", () => {
   const reservedInputTokens = 1000;
   const snapshot = buildSnapshot(
     [
-      {
-        role: "custom",
-        customType: "advisor-evidence",
-        content: "e".repeat(40_000),
-      },
-      {
-        role: "custom",
-        customType: "pi-continuity",
-        content: "c".repeat(20_000),
-      },
+      { role: "custom", customType: "advisor-evidence", content: "e".repeat(40_000) },
+      { role: "custom", customType: "pi-continuity", content: "c".repeat(20_000) },
       { role: "compactionSummary", summary: "m".repeat(40_000) },
       { role: "user", content: "u".repeat(40_000) },
       { role: "assistant", content: "a".repeat(20_000) },
@@ -412,8 +309,5 @@ test("large model windows cap total estimated input at 32,768 tokens", () => {
 });
 
 test("serializeMessage still labels supported session entries", () => {
-  assert.match(
-    serializeMessage({ role: "compactionSummary", summary: "state" }),
-    /^\[COMPACTION SUMMARY\]/,
-  );
+  assert.match(serializeMessage({ role: "compactionSummary", summary: "state" }), /^\[COMPACTION SUMMARY\]/);
 });

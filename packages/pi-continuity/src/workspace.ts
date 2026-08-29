@@ -28,18 +28,14 @@ function isAncestor(parent: Workspace, child: Workspace) {
   return path && !path.startsWith("..") && !path.startsWith(sep);
 }
 function repairParents(all: Workspace[]) {
-  const key = (path: string) =>
-    process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
-  const byPath = new Map(
-    all.map((workspace) => [key(workspace.canonicalPath), workspace]),
-  );
+  const key = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
+  const byPath = new Map(all.map(workspace => [key(workspace.canonicalPath), workspace]));
   for (const workspace of all) {
     let path = dirname(workspace.canonicalPath);
     let parent: Workspace | undefined;
     for (;;) {
       parent = byPath.get(key(path));
-      if (parent && parent.id !== workspace.id && isAncestor(parent, workspace))
-        break;
+      if (parent && parent.id !== workspace.id && isAncestor(parent, workspace)) break;
       const next = dirname(path);
       if (next === path) {
         parent = undefined;
@@ -60,13 +56,8 @@ export async function registerWorkspace(root: string, cwd: string) {
       await Promise.all(
         (await readJson<Workspace[]>(file, [], Array.isArray))
           .filter(isWorkspace)
-          .filter(
-            (item) =>
-              !item.projectOwner &&
-              Date.parse(item.lastSeenAt) < cutoff &&
-              item.canonicalPath !== path,
-          )
-          .map(async (item) => {
+          .filter(item => !item.projectOwner && Date.parse(item.lastSeenAt) < cutoff && item.canonicalPath !== path)
+          .map(async item => {
             const [workspaceMissing, stateMissing] = await Promise.all([
               stat(item.canonicalPath).then(
                 () => false,
@@ -86,19 +77,12 @@ export async function registerWorkspace(root: string, cwd: string) {
   const all = await updateJson<Workspace[]>(
     file,
     [],
-    (loaded) => {
-      const valid = (
-        Array.isArray(loaded) ? loaded.filter(isWorkspace) : []
-      ).filter((item) => !staleIds.has(item.id));
-      workspace = valid.find((item) => item.canonicalPath === path)!;
+    loaded => {
+      const valid = (Array.isArray(loaded) ? loaded.filter(isWorkspace) : []).filter(item => !staleIds.has(item.id));
+      workspace = valid.find(item => item.canonicalPath === path)!;
       const now = new Date().toISOString();
       if (!workspace) {
-        workspace = {
-          id: randomUUID(),
-          canonicalPath: path,
-          createdAt: now,
-          lastSeenAt: now,
-        };
+        workspace = { id: randomUUID(), canonicalPath: path, createdAt: now, lastSeenAt: now };
         valid.push(workspace);
       } else workspace.lastSeenAt = now;
       repairParents(valid);

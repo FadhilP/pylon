@@ -16,10 +16,7 @@ export interface BrowserSession {
 }
 
 export class SessionStore {
-  private readonly sessions = new Map<
-    string,
-    { session: BrowserSession; touchedAt: number }
-  >();
+  private readonly sessions = new Map<string, { session: BrowserSession; touchedAt: number }>();
   get(request: IncomingMessage): BrowserSession | undefined {
     this.prune();
     const secret = parseCookies(request.headers.cookie)[SESSION_COOKIE];
@@ -30,14 +27,9 @@ export class SessionStore {
   create(response: ServerResponse, secure = false): BrowserSession {
     this.prune();
     const secret = randomToken();
-    const session = {
-      secret,
-      csrfToken: randomToken(),
-      tabs: new Set<string>(),
-    };
+    const session = { secret, csrfToken: randomToken(), tabs: new Set<string>() };
     this.sessions.set(secret, { session, touchedAt: Date.now() });
-    while (this.sessions.size > 100)
-      this.sessions.delete(this.sessions.keys().next().value as string);
+    while (this.sessions.size > 100) this.sessions.delete(this.sessions.keys().next().value as string);
     response.setHeader(
       "set-cookie",
       `${SESSION_COOKIE}=${secret}; Path=/; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`,
@@ -46,16 +38,12 @@ export class SessionStore {
   }
   private prune(now = Date.now()): void {
     for (const [secret, stored] of this.sessions) {
-      if (now - stored.touchedAt > 24 * 60 * 60_000)
-        this.sessions.delete(secret);
+      if (now - stored.touchedAt > 24 * 60 * 60_000) this.sessions.delete(secret);
     }
   }
 }
 
-export function applySecurityHeaders(
-  response: ServerResponse,
-  development = false,
-): void {
+export function applySecurityHeaders(response: ServerResponse, development = false): void {
   const scripts = development ? "; script-src 'self' 'unsafe-inline'" : "";
   response.setHeader(
     "content-security-policy",
@@ -66,18 +54,12 @@ export function applySecurityHeaders(
   response.setHeader("cache-control", "no-store");
 }
 
-export function hostAllowed(
-  request: IncomingMessage,
-  allowedHosts: readonly string[],
-): boolean {
+export function hostAllowed(request: IncomingMessage, allowedHosts: readonly string[]): boolean {
   const host = request.headers.host;
   return typeof host === "string" && allowedHosts.includes(host);
 }
 
-export function requestAllowed(
-  request: IncomingMessage,
-  options: SecurityOptions,
-): boolean {
+export function requestAllowed(request: IncomingMessage, options: SecurityOptions): boolean {
   if (!hostAllowed(request, options.allowedHosts)) return false;
   const host = request.headers.host as string;
   const origin = request.headers.origin;
@@ -87,10 +69,7 @@ export function requestAllowed(
   return site !== "cross-site" && site !== "cross-origin";
 }
 
-export function validCsrf(
-  session: BrowserSession | undefined,
-  supplied: string | undefined,
-): boolean {
+export function validCsrf(session: BrowserSession | undefined, supplied: string | undefined): boolean {
   if (!session || !supplied) return false;
   const expected = Buffer.from(session.csrfToken);
   const actual = Buffer.from(supplied);
@@ -98,18 +77,10 @@ export function validCsrf(
 }
 
 export function validTabId(value: string | undefined): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 128 &&
-    /^[A-Za-z0-9_-]+$/.test(value)
-  );
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9_-]+$/.test(value);
 }
 
-export async function readJson(
-  request: IncomingMessage,
-  limit = MAX_JSON_BODY_BYTES,
-): Promise<unknown> {
+export async function readJson(request: IncomingMessage, limit = MAX_JSON_BODY_BYTES): Promise<unknown> {
   return (await readJsonWithSize(request, limit)).value;
 }
 
@@ -118,10 +89,7 @@ export async function readJsonWithSize(
   limit = MAX_JSON_BODY_BYTES,
 ): Promise<{ value: unknown; bytes: number }> {
   const contentType = request.headers["content-type"];
-  if (
-    !contentType ||
-    !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
-  )
+  if (!contentType || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType))
     throw httpError(415, "application/json content type required");
   let bytes = 0;
   const chunks: Buffer[] = [];
@@ -154,7 +122,7 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return Object.fromEntries(
     header
       .split(";")
-      .map((part) => part.trim().split(/=(.*)/s))
+      .map(part => part.trim().split(/=(.*)/s))
       .filter(([key, value]) => key && value)
       .map(([key, value]) => [key, value]),
   );

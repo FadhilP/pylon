@@ -20,45 +20,18 @@ async function git(cwd: string, args: string[], env?: Record<string, string>) {
 }
 const within = (root: string, target: string) => {
   const rel = relative(root, target);
-  return (
-    rel === "" ||
-    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
-  );
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 };
-export type ProjectContext = {
-  owner: string;
-  captureCommit?: string;
-  branchAtCapture?: string;
-};
-export type CapturedEvidenceRange = EvidenceRange & {
-  excerpt: string;
-  excerptSha256: string;
-  captureCommit?: string;
-};
+export type ProjectContext = { owner: string; captureCommit?: string; branchAtCapture?: string };
+export type CapturedEvidenceRange = EvidenceRange & { excerpt: string; excerptSha256: string; captureCommit?: string };
 export type CapturedEvidenceFile = { path: string; sha256: string };
 
-export async function projectContext(
-  cwd: string,
-  fallbackOwner: string,
-): Promise<ProjectContext> {
+export async function projectContext(cwd: string, fallbackOwner: string): Promise<ProjectContext> {
   try {
-    const commonDir = await git(cwd, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir",
-    ]);
-    const canonicalCommonDir = await realpath(commonDir).catch(() =>
-      resolve(cwd, commonDir),
-    );
-    const captureCommit = await git(cwd, ["rev-parse", "HEAD"]).catch(
-      () => undefined,
-    );
-    const branchAtCapture = await git(cwd, [
-      "symbolic-ref",
-      "--quiet",
-      "--short",
-      "HEAD",
-    ]).catch(() => undefined);
+    const commonDir = await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const canonicalCommonDir = await realpath(commonDir).catch(() => resolve(cwd, commonDir));
+    const captureCommit = await git(cwd, ["rev-parse", "HEAD"]).catch(() => undefined);
+    const branchAtCapture = await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => undefined);
     return {
       owner: createHash("sha256").update(canonicalCommonDir).digest("hex"),
       ...(captureCommit ? { captureCommit } : {}),
@@ -69,9 +42,7 @@ export async function projectContext(
   }
 }
 async function projectRoot(cwd: string) {
-  const root = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(
-    () => cwd,
-  );
+  const root = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => cwd);
   return realpath(root);
 }
 const sensitivePart = (part: string) => {
@@ -98,11 +69,7 @@ async function readSafeFile(cwd: string, raw: string) {
   )
     throw Error("invalid or sensitive evidence path");
   const parts = raw.split(/[\\/]+/);
-  if (
-    parts.some(
-      (part) => !part || part === "." || part === ".." || sensitivePart(part),
-    )
-  )
+  if (parts.some(part => !part || part === "." || part === ".." || sensitivePart(part)))
     throw Error("invalid or sensitive evidence path");
   const root = await projectRoot(cwd),
     normalized = parts.join("/");
@@ -112,45 +79,29 @@ async function readSafeFile(cwd: string, raw: string) {
     cursor = join(cursor, part);
     const info = await lstat(cursor).catch(() => undefined);
     if (!info) throw Error("evidence file is missing");
-    if (info.isSymbolicLink())
-      throw Error("evidence paths may not use symlinks");
+    if (info.isSymbolicLink()) throw Error("evidence paths may not use symlinks");
     components.push({ path: cursor, dev: info.dev, ino: info.ino });
   }
   const target = resolve(root, ...parts),
     canonicalTarget = await realpath(target);
-  if (!within(root, target) || !within(root, canonicalTarget))
-    throw Error("evidence path escapes project root");
-  const handle = await open(
-    target,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
+  if (!within(root, target) || !within(root, canonicalTarget)) throw Error("evidence path escapes project root");
+  const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = await handle.stat();
     if (!before.isFile()) throw Error("evidence path must be a regular file");
     if (before.size > 256 * 1024) throw Error("evidence file exceeds 256 KiB");
     const bytes = await handle.readFile(),
       after = await handle.stat();
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ino !== after.ino
-    )
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ino !== after.ino)
       throw Error("evidence file changed while reading");
     for (const component of components) {
       const current = await lstat(component.path).catch(() => undefined);
-      if (
-        !current ||
-        current.isSymbolicLink() ||
-        current.dev !== component.dev ||
-        current.ino !== component.ino
-      )
+      if (!current || current.isSymbolicLink() || current.dev !== component.dev || current.ino !== component.ino)
         throw Error("evidence path changed while reading");
     }
     let content: string;
     try {
-      content = new TextDecoder("utf-8", { fatal: true })
-        .decode(bytes)
-        .replace(/\r\n/g, "\n");
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n");
     } catch {
       throw Error("evidence file must be UTF-8 text");
     }
@@ -161,10 +112,7 @@ async function readSafeFile(cwd: string, raw: string) {
   }
 }
 
-export async function captureEvidenceRanges(
-  cwd: string,
-  ranges: EvidenceRange[],
-): Promise<CapturedEvidenceRange[]> {
+export async function captureEvidenceRanges(cwd: string, ranges: EvidenceRange[]): Promise<CapturedEvidenceRange[]> {
   if (!Array.isArray(ranges) || !ranges.length || ranges.length > 3)
     throw Error("one to three evidence ranges are required");
   let totalLines = 0,
@@ -180,60 +128,42 @@ export async function captureEvidenceRanges(
     )
       throw Error("invalid evidence line range");
     totalLines += range.end - range.start + 1;
-    if (totalLines > 120)
-      throw Error("evidence exceeds 120 lines per proposal");
+    if (totalLines > 120) throw Error("evidence exceeds 120 lines per proposal");
     const file = await readSafeFile(cwd, range.path),
       lines = file.content.split("\n");
-    if (range.end > lines.length)
-      throw Error("evidence line range exceeds file length");
+    if (range.end > lines.length) throw Error("evidence line range exceeds file length");
     const excerpt = lines.slice(range.start - 1, range.end).join("\n");
     totalCharacters += excerpt.length;
-    if (totalCharacters > 12_000)
-      throw Error("evidence excerpts exceed the reviewer input budget");
+    if (totalCharacters > 12_000) throw Error("evidence excerpts exceed the reviewer input budget");
     output.push({
       path: file.normalized,
       start: range.start,
       end: range.end,
       excerpt,
       excerptSha256: createHash("sha256").update(excerpt).digest("hex"),
-      ...(context.captureCommit
-        ? { captureCommit: context.captureCommit }
-        : {}),
+      ...(context.captureCommit ? { captureCommit: context.captureCommit } : {}),
     });
   }
   return output;
 }
-export async function captureEvidence(
-  cwd: string,
-  paths: string[],
-): Promise<CapturedEvidenceFile[]> {
-  if (!Array.isArray(paths) || paths.length > 5)
-    throw Error("at most 5 evidence paths are allowed");
+export async function captureEvidence(cwd: string, paths: string[]): Promise<CapturedEvidenceFile[]> {
+  if (!Array.isArray(paths) || paths.length > 5) throw Error("at most 5 evidence paths are allowed");
   const output: CapturedEvidenceFile[] = [];
   for (const path of paths) {
     const file = await readSafeFile(cwd, path);
-    output.push({
-      path: file.normalized,
-      sha256: createHash("sha256").update(file.content).digest("hex"),
-    });
+    output.push({ path: file.normalized, sha256: createHash("sha256").update(file.content).digest("hex") });
   }
   return output;
 }
-export async function currentChangedPaths(
-  cwd: string,
-): Promise<Set<string> | undefined> {
+export async function currentChangedPaths(cwd: string): Promise<Set<string> | undefined> {
   try {
     const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
-    const result = await exec(
-      "git",
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      {
-        cwd: root,
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: 120_000,
-        windowsHide: true,
-      },
-    );
+    const result = await exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd: root,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 120_000,
+      windowsHide: true,
+    });
     const records = String(result.stdout).split("\0").filter(Boolean),
       paths = new Set<string>();
     for (let index = 0; index < records.length; index++) {
@@ -251,18 +181,11 @@ export async function currentChangedPaths(
   }
 }
 /** Canonical Verify-compatible identity: SHA-256(HEAD + newline + raw porcelain status), truncated to 16 hex chars. */
-export async function worktreeFingerprint(
-  cwd: string,
-): Promise<string | undefined> {
+export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
   try {
     const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
     const [head, status] = await Promise.all([
-      exec("git", ["rev-parse", "HEAD"], {
-        cwd: root,
-        maxBuffer: 1024 * 1024,
-        timeout: 15_000,
-        windowsHide: true,
-      }),
+      exec("git", ["rev-parse", "HEAD"], { cwd: root, maxBuffer: 1024 * 1024, timeout: 15_000, windowsHide: true }),
       exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
         cwd: root,
         maxBuffer: 64 * 1024 * 1024,

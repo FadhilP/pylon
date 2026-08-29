@@ -6,9 +6,7 @@ function messageText(message: any) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((part: any) =>
-      part.type === "text" ? part.text : part.type === "image" ? "[image]" : "",
-    )
+    .map((part: any) => (part.type === "text" ? part.text : part.type === "image" ? "[image]" : ""))
     .join(" ");
 }
 
@@ -25,14 +23,13 @@ export function normalizeGeneratedTitle(text: string) {
   const lines = text
     .trim()
     .split(/\r?\n/)
-    .filter((line) => line.trim());
+    .filter(line => line.trim());
   if (lines.length !== 1) return undefined;
   const title = lines[0]
     .trim()
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/\s+/g, " ");
   const words = title.split(" ");
-  if (title.length > 60 || words.length < 3 || words.length > 8)
-    return undefined;
+  if (title.length > 60 || words.length < 3 || words.length > 8) return undefined;
   return title;
 }

@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import {
-  DEFAULT_ROLLOVER_HIGH_MULTIPLIER,
-  DEFAULT_ROLLOVER_LOW_MULTIPLIER,
-  SIEVE_THRESHOLD,
-} from "./sieve.ts";
+import { DEFAULT_ROLLOVER_HIGH_MULTIPLIER, DEFAULT_ROLLOVER_LOW_MULTIPLIER, SIEVE_THRESHOLD } from "./sieve.ts";
 
 export const MIN_SIEVE_THRESHOLD = 1_000;
 export const MAX_SIEVE_THRESHOLD = 50_000;
@@ -30,10 +26,7 @@ export function validProjectionMode(value: unknown): value is ProjectionMode {
 
 export function validSieveThreshold(value: unknown): value is number {
   return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= MIN_SIEVE_THRESHOLD &&
-    value <= MAX_SIEVE_THRESHOLD
+    typeof value === "number" && Number.isInteger(value) && value >= MIN_SIEVE_THRESHOLD && value <= MAX_SIEVE_THRESHOLD
   );
 }
 
@@ -47,8 +40,7 @@ export function validRolloverMultiplier(value: unknown): value is number {
 }
 
 export const defaultConfig = (): SieveConfig => ({ version: 1 });
-export const configPath = (agentDir = getAgentDir()) =>
-  join(agentDir, "pi-sieve", "config.json");
+export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-sieve", "config.json");
 
 export function configuredActivePruning(config: SieveConfig): boolean {
   return config.activePruning ?? true;
@@ -86,35 +78,22 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
       typeof value !== "object" ||
       Array.isArray(value) ||
       value.version !== 1 ||
-      (value.activePruning !== undefined &&
-        typeof value.activePruning !== "boolean") ||
-      (value.projectionMode !== undefined &&
-        !validProjectionMode(value.projectionMode)) ||
-      (value.threshold !== undefined &&
-        !validSieveThreshold(value.threshold)) ||
-      (value.rolloverHighMultiplier !== undefined &&
-        !validRolloverMultiplier(value.rolloverHighMultiplier)) ||
-      (value.rolloverLowMultiplier !== undefined &&
-        !validRolloverMultiplier(value.rolloverLowMultiplier)) ||
+      (value.activePruning !== undefined && typeof value.activePruning !== "boolean") ||
+      (value.projectionMode !== undefined && !validProjectionMode(value.projectionMode)) ||
+      (value.threshold !== undefined && !validSieveThreshold(value.threshold)) ||
+      (value.rolloverHighMultiplier !== undefined && !validRolloverMultiplier(value.rolloverHighMultiplier)) ||
+      (value.rolloverLowMultiplier !== undefined && !validRolloverMultiplier(value.rolloverLowMultiplier)) ||
       (value.rolloverHighMultiplier ?? DEFAULT_ROLLOVER_HIGH_MULTIPLIER) <=
         (value.rolloverLowMultiplier ?? DEFAULT_ROLLOVER_LOW_MULTIPLIER)
     )
       throw new Error("invalid config");
     return {
       version: 1,
-      ...(value.activePruning !== undefined
-        ? { activePruning: value.activePruning }
-        : {}),
+      ...(value.activePruning !== undefined ? { activePruning: value.activePruning } : {}),
       ...(value.threshold !== undefined ? { threshold: value.threshold } : {}),
-      ...(value.projectionMode !== undefined
-        ? { projectionMode: value.projectionMode }
-        : {}),
-      ...(value.rolloverHighMultiplier !== undefined
-        ? { rolloverHighMultiplier: value.rolloverHighMultiplier }
-        : {}),
-      ...(value.rolloverLowMultiplier !== undefined
-        ? { rolloverLowMultiplier: value.rolloverLowMultiplier }
-        : {}),
+      ...(value.projectionMode !== undefined ? { projectionMode: value.projectionMode } : {}),
+      ...(value.rolloverHighMultiplier !== undefined ? { rolloverHighMultiplier: value.rolloverHighMultiplier } : {}),
+      ...(value.rolloverLowMultiplier !== undefined ? { rolloverLowMultiplier: value.rolloverLowMultiplier } : {}),
     };
   } catch (error) {
     try {
@@ -129,16 +108,11 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
   }
 }
 
-export async function saveConfig(
-  config: SieveConfig,
-  path = configPath(),
-): Promise<void> {
+export async function saveConfig(config: SieveConfig, path = configPath()): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});

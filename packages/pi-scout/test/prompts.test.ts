@@ -1,21 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
-import {
-  capReport,
-  mergeEvidenceAnchors,
-  SCOUT_REPORT_MAX_BYTES,
-  structuredClaims,
-} from "../src/result.ts";
+import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClaims } from "../src/result.ts";
 
 test("Scout report cap keeps complete blocks and reports omission", () => {
   const first = `## Findings\n\n- first complete finding\n  path.ts:1-2\n  excerpt`;
   const oversized = `- oversized finding\n  packages/core/src/large.ts:40-55\n${"x".repeat(SCOUT_REPORT_MAX_BYTES)}`;
   const later = `## Gaps\n\n- later complete gap`;
-  const result = capReport(
-    `${first}\n\n${oversized}\n\n${later}`,
-    SCOUT_REPORT_MAX_BYTES,
-  );
+  const result = capReport(`${first}\n\n${oversized}\n\n${later}`, SCOUT_REPORT_MAX_BYTES);
   assert.equal(result.truncated, true);
   assert.ok(Buffer.byteLength(result.text) <= SCOUT_REPORT_MAX_BYTES);
   assert.match(result.text, /first complete finding/);
@@ -23,9 +15,7 @@ test("Scout report cap keeps complete blocks and reports omission", () => {
   assert.doesNotMatch(result.text, /oversized finding/);
   assert.match(result.text, /Omitted content: 1 complete report block/i);
   assert.match(result.text, /packages\/core\/src\/large\.ts:40-55/);
-  assert.deepEqual(result.omittedEvidence, [
-    { path: "packages/core/src/large.ts", start: 40, end: 55 },
-  ]);
+  assert.deepEqual(result.omittedEvidence, [{ path: "packages/core/src/large.ts", start: 40, end: 55 }]);
 });
 
 test("Scout removes exact duplicate report blocks before capping", () => {
@@ -38,10 +28,7 @@ test("Scout removes exact duplicate report blocks before capping", () => {
 
 test("Scout report cap respects tiny and UTF-8 byte budgets", () => {
   for (const maxBytes of [0, 1, 8, 64])
-    assert.ok(
-      Buffer.byteLength(capReport("é".repeat(100), maxBytes).text, "utf8") <=
-        maxBytes,
-    );
+    assert.ok(Buffer.byteLength(capReport("é".repeat(100), maxBytes).text, "utf8") <= maxBytes);
 });
 
 test("Scout merges overlapping citations and exposes deduplicated lightweight claims", () => {
@@ -70,10 +57,7 @@ test("Scout merges overlapping citations and exposes deduplicated lightweight cl
     { path: "src/a.ts", start: 201, end: 250 },
   ];
   assert.deepEqual(mergeEvidenceAnchors(oversizedChain), expectedChunks);
-  assert.deepEqual(
-    mergeEvidenceAnchors([...oversizedChain].reverse()),
-    expectedChunks,
-  );
+  assert.deepEqual(mergeEvidenceAnchors([...oversizedChain].reverse()), expectedChunks);
   assert.deepEqual(
     structuredClaims(
       "## Findings\n\n- Auth check is shared. `src/a.ts:10-20`\n\n- Auth check is shared. `src/a.ts:10-20`\n\n```ts\nconst ignored = true;\n```\n\n## Gaps\n\n- Caller remains unknown.",
@@ -100,7 +84,5 @@ test("Scout omission anchors reject unsafe and malformed paths", () => {
     "  " + "x".repeat(SCOUT_REPORT_MAX_BYTES),
   ].join("\n");
   const result = capReport(`kept\n\n${oversized}`, SCOUT_REPORT_MAX_BYTES);
-  assert.deepEqual(result.omittedEvidence, [
-    { path: "safe/file.ts", start: 10, end: 12 },
-  ]);
+  assert.deepEqual(result.omittedEvidence, [{ path: "safe/file.ts", start: 10, end: 12 }]);
 });

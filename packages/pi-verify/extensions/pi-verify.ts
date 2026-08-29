@@ -2,10 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
-import {
-  truncateTail,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { truncateTail, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { detectChecks } from "../src/detect.ts";
@@ -23,15 +20,7 @@ type Result = {
   truncated: boolean;
   durationMs: number;
 };
-type VerificationState =
-  | "running"
-  | "passed"
-  | "failed"
-  | "cancelled"
-  | "stale"
-  | "error"
-  | "no_checks"
-  | "clean";
+type VerificationState = "running" | "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
 type Hygiene = {
   command: string;
   code: number | null;
@@ -62,17 +51,13 @@ const hygieneText = (hygiene: Hygiene) =>
   [
     `Changed-set hygiene ${hygiene.code === 0 ? "passed" : "failed"}: ${hygiene.command}`,
     hygiene.output,
-    hygiene.status
-      ? `Changed paths:\n${hygiene.status}${hygiene.statusTruncated ? "\n[status truncated]" : ""}`
-      : "",
+    hygiene.status ? `Changed paths:\n${hygiene.status}${hygiene.statusTruncated ? "\n[status truncated]" : ""}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
 
 const contextText = (value: any) => {
-  const checks = (value.results ?? [])
-    .map((result: any) => `${result.id}=${result.code ?? "error"}`)
-    .join(", ");
+  const checks = (value.results ?? []).map((result: any) => `${result.id}=${result.code ?? "error"}`).join(", ");
   return [
     `Verification: ${value.state}; scope: ${value.scope}; run: ${value.runId}`,
     value.worktreeId ? `Worktree: ${value.worktreeId}` : "",
@@ -91,8 +76,7 @@ function verificationState(input: {
   passed: boolean;
 }): VerificationState {
   if (input.aborted) return "cancelled";
-  if (input.errored || !input.initialIdentity || !input.finalIdentity)
-    return "error";
+  if (input.errored || !input.initialIdentity || !input.finalIdentity) return "error";
   if (input.initialIdentity !== input.finalIdentity) return "stale";
   return input.passed ? "passed" : "failed";
 }
@@ -117,7 +101,7 @@ function resultText(input: {
 }): string {
   const outcome = OUTCOMES[input.state] ?? "Verification failed.";
   if (input.state === "passed") {
-    const ids = input.results.map((result) => result.id).join(", ");
+    const ids = input.results.map(result => result.id).join(", ");
     const omitted = input.omittedChecks.length
       ? ` Skipped by six-check cap (${input.omittedChecks.length}): ${input.omittedChecks.join(", ")}. Pass checks to select them explicitly.`
       : "";
@@ -125,16 +109,14 @@ function resultText(input: {
   }
   const summary = input.results
     .map(
-      (result) =>
+      result =>
         `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)${result.code !== 0 && result.output ? `\n${result.output}` : ""}${result.code !== 0 && result.truncated ? "\n[output truncated]" : ""}`,
     )
     .join("\n\n");
   return [
     `${outcome}${input.hygiene ? `\n\n${hygieneText(input.hygiene)}` : ""}`,
     summary,
-    input.unrunChecks.length
-      ? `Not run after stop: ${input.unrunChecks.join(", ")}.`
-      : "",
+    input.unrunChecks.length ? `Not run after stop: ${input.unrunChecks.join(", ")}.` : "",
     input.omittedChecks.length ? cappedNote(input.omittedChecks) : "",
   ]
     .filter((section, index) => index < 2 || section)
@@ -151,11 +133,13 @@ export default function verifyExtension(pi: ExtensionAPI) {
     const detection = await detectChecks(cwd);
     return {
       version: 1,
-      checks: detection.available.slice(0, 100).map((check) => ({
-        id: check.id.slice(0, 100),
-        label: check.label.slice(0, 200),
-        command: [check.command, ...check.args].join(" ").slice(0, 500),
-      })),
+      checks: detection.available
+        .slice(0, 100)
+        .map(check => ({
+          id: check.id.slice(0, 100),
+          label: check.label.slice(0, 200),
+          command: [check.command, ...check.args].join(" ").slice(0, 500),
+        })),
     };
   };
   const publishCatalog = async (cwd: string, sessionId: string) => {
@@ -171,60 +155,32 @@ export default function verifyExtension(pi: ExtensionAPI) {
       policy = {
         mode: "selected",
         checks: verify.checks
-          .filter(
-            (id: unknown): id is string =>
-              typeof id === "string" && id.length > 0 && id.length <= 100,
-          )
+          .filter((id: unknown): id is string => typeof id === "string" && id.length > 0 && id.length <= 100)
           .slice(0, 6),
       };
     }
   });
-  const disposeCatalog = pi.events.on?.(
-    "pi-verify:catalog-request",
-    (request: any) => {
-      if (
-        request?.version !== 1 ||
-        request.sessionId !== currentSessionId ||
-        typeof request.respond !== "function" ||
-        !currentCwd
-      )
-        return;
-      request.respond(catalog(currentCwd));
-    },
-  );
+  const disposeCatalog = pi.events.on?.("pi-verify:catalog-request", (request: any) => {
+    if (
+      request?.version !== 1 ||
+      request.sessionId !== currentSessionId ||
+      typeof request.respond !== "function" ||
+      !currentCwd
+    )
+      return;
+    request.respond(catalog(currentCwd));
+  });
   const worktreeState = async (cwd: string, signal?: AbortSignal) => {
     try {
       const options = { cwd, signal, timeout: 15_000 };
       const [head, status, index, paths] = await Promise.all([
         pi.exec("git", ["rev-parse", "HEAD"], options),
-        pi.exec(
-          "git",
-          ["status", "--porcelain=v1", "--untracked-files=all"],
-          options,
-        ),
-        pi.exec(
-          "git",
-          ["diff", "--cached", "--raw", "-z", "HEAD", "--"],
-          options,
-        ),
-        pi.exec(
-          "git",
-          [
-            "ls-files",
-            "--modified",
-            "--deleted",
-            "--others",
-            "--exclude-standard",
-            "-z",
-          ],
-          options,
-        ),
+        pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], options),
+        pi.exec("git", ["diff", "--cached", "--raw", "-z", "HEAD", "--"], options),
+        pi.exec("git", ["ls-files", "--modified", "--deleted", "--others", "--exclude-standard", "-z"], options),
       ]);
-      if ([head, status, index, paths].some((result) => result.code !== 0))
-        return undefined;
-      const changedPaths = [
-        ...new Set(paths.stdout.split("\0").filter(Boolean)),
-      ].sort();
+      if ([head, status, index, paths].some(result => result.code !== 0)) return undefined;
+      const changedPaths = [...new Set(paths.stdout.split("\0").filter(Boolean))].sort();
       const content = createHash("sha256")
         .update(head.stdout.trim())
         .update("\0")
@@ -236,7 +192,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         const existing = (
           await Promise.all(
             changedPaths.slice(offset, offset + 64).map(
-              async (path) =>
+              async path =>
                 await lstat(join(cwd, path)).then(
                   () => path,
                   () => undefined,
@@ -245,54 +201,30 @@ export default function verifyExtension(pi: ExtensionAPI) {
           )
         ).filter((path): path is string => path !== undefined);
         if (!existing.length) continue;
-        const hashes = await pi.exec(
-          "git",
-          ["hash-object", "--no-filters", "--", ...existing],
-          options,
-        );
+        const hashes = await pi.exec("git", ["hash-object", "--no-filters", "--", ...existing], options);
         if (hashes.code !== 0) return undefined;
         content.update(
-          existing
-            .map(
-              (path, index) =>
-                `${path}\0${hashes.stdout.split(/\r?\n/)[index] ?? ""}\0`,
-            )
-            .join(""),
+          existing.map((path, index) => `${path}\0${hashes.stdout.split(/\r?\n/)[index] ?? ""}\0`).join(""),
         );
       }
-      return {
-        id: content.digest("hex").slice(0, 16),
-        dirty: Boolean(status.stdout.trim()),
-        status: status.stdout,
-      };
+      return { id: content.digest("hex").slice(0, 16), dirty: Boolean(status.stdout.trim()), status: status.stdout };
     } catch {
       return undefined;
     }
   };
-  const runHygiene = async (
-    cwd: string,
-    status: string,
-    signal?: AbortSignal,
-  ): Promise<Hygiene> => {
+  const runHygiene = async (cwd: string, status: string, signal?: AbortSignal): Promise<Hygiene> => {
     const started = Date.now();
     const execution = await pi
-      .exec("git", ["diff", "--check", "HEAD", "--"], {
-        cwd,
-        signal,
-        timeout: 15_000,
-      })
+      .exec("git", ["diff", "--check", "HEAD", "--"], { cwd, signal, timeout: 15_000 })
       .catch((error: unknown) => ({
         code: null,
         stdout: "",
         stderr: `Hygiene check unavailable: ${error instanceof Error ? error.message : String(error)}`,
       }));
-    const output = truncateTail(
-      [execution.stdout, execution.stderr].filter(Boolean).join("\n"),
-      {
-        maxLines: 80,
-        maxBytes: 8 * 1024,
-      },
-    );
+    const output = truncateTail([execution.stdout, execution.stderr].filter(Boolean).join("\n"), {
+      maxLines: 80,
+      maxBytes: 8 * 1024,
+    });
     const changed = truncateTail(status, { maxLines: 80, maxBytes: 8 * 1024 });
     return {
       command: "git diff --check HEAD --",
@@ -305,20 +237,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
     };
   };
   const publish = (details: Details, cwd: string) => {
-    const event = {
-      version: 1 as const,
-      sessionId: currentSessionId,
-      cwd,
-      ...details,
-    };
-    if (["failed", "cancelled", "stale", "error"].includes(details.state))
-      nonPassingState = details.state;
+    const event = { version: 1 as const, sessionId: currentSessionId, cwd, ...details };
+    if (["failed", "cancelled", "stale", "error"].includes(details.state)) nonPassingState = details.state;
     pi.events.emit("pi-verify:result", event);
     pi.events.emit("pi-verify:lifecycle", event);
     const hygiene = details.hygiene
-      ? (({ output: _output, status: _status, ...value }) => value)(
-          details.hygiene,
-        )
+      ? (({ output: _output, status: _status, ...value }) => value)(details.hygiene)
       : undefined;
     const persisted = {
       ...event,
@@ -337,9 +261,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         .reverse()
         .find(
           (entry: any) =>
-            entry.type === "custom" &&
-            entry.customType === "pi-verify-result" &&
-            entry.data?.version === 1,
+            entry.type === "custom" && entry.customType === "pi-verify-result" && entry.data?.version === 1,
         ) as any
     )?.data;
     if (latestContext) pi.events.emit("pi-verify:lifecycle", latestContext);
@@ -349,26 +271,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
       owner: "pi-verify",
       managedTools: ["verify"],
       enabledTools: ["verify"],
-      toolUsage: {
-        verify:
-          "run bounded changed-set hygiene and existing project verification checks",
-      },
+      toolUsage: { verify: "run bounded changed-set hygiene and existing project verification checks" },
     });
     void publishCatalog(currentCwd, currentSessionId).catch(() => undefined);
   });
   pi.on("session_shutdown", () => {
     disposePolicy?.();
     disposeCatalog?.();
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "unregister",
-      owner: "pi-verify",
-    });
+    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-verify" });
     currentCwd = "";
     currentSessionId = "";
     nonPassingState = undefined;
   });
-  pi.on("input", (event) => {
+  pi.on("input", event => {
     if (event.source !== "extension") nonPassingState = undefined;
   });
   pi.on("tool_call", (event, ctx) => {
@@ -380,10 +295,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     if (event.toolName === "verify") {
       const lastAssistant = [...(ctx?.sessionManager?.getEntries?.() ?? [])]
         .reverse()
-        .find(
-          (entry: any) =>
-            entry.type === "message" && entry.message?.role === "assistant",
-        ) as any;
+        .find((entry: any) => entry.type === "message" && entry.message?.role === "assistant") as any;
       const siblings = (lastAssistant?.message?.content ?? []).filter(
         (part: any) => part.type === "toolCall" && part.id !== event.toolCallId,
       );
@@ -394,10 +306,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
             "Verify was batched with other tool calls in the same turn. Finish all edits first, then call Verify alone in a tool-only assistant turn and wait for its result.",
         };
     }
-    if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName))
-      latestContext = undefined;
+    if (["write", "edit", "bash", "heartbeat_start"].includes(event.toolName)) latestContext = undefined;
   });
-  pi.on("context", (event) => {
+  pi.on("context", event => {
     if (!latestContext) return;
     const alreadyPresent = event.messages.some(
       (message: any) =>
@@ -432,10 +343,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       {
         scope: StringEnum(["changed", "project"] as const),
         checks: Type.Optional(
-          Type.Array(Type.String({ minLength: 1, maxLength: 100 }), {
-            maxItems: 6,
-            uniqueItems: true,
-          }),
+          Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { maxItems: 6, uniqueItems: true }),
         ),
       },
       { additionalProperties: false },
@@ -456,10 +364,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         startedAt,
       });
       /** Publishes one terminal outcome and returns the tool result for it. */
-      const finish = (
-        state: VerificationState,
-        options: { text: string; status?: string } & Partial<Details>,
-      ) => {
+      const finish = (state: VerificationState, options: { text: string; status?: string } & Partial<Details>) => {
         const { text, status, ...extra } = options;
         const details: Details = {
           scope: params.scope,
@@ -473,23 +378,16 @@ export default function verifyExtension(pi: ExtensionAPI) {
           ...extra,
         };
         publish(details, ctx.cwd);
-        if (ctx.hasUI)
-          ctx.ui.setStatus("pi-verify", status ?? `Verify: ${state}`);
+        if (ctx.hasUI) ctx.ui.setStatus("pi-verify", status ?? `Verify: ${state}`);
         return { content: [{ type: "text" as const, text }], details };
       };
 
       if (params.scope === "changed" && initial && !initial.dirty) {
         const skipped = "Git worktree is clean.";
-        return finish("clean", {
-          text: skipped,
-          status: "Verify: clean · not verified",
-          skipped,
-        });
+        return finish("clean", { text: skipped, status: "Verify: clean · not verified", skipped });
       }
 
-      const hygiene = initial?.dirty
-        ? await runHygiene(ctx.cwd, initial.status, signal)
-        : undefined;
+      const hygiene = initial?.dirty ? await runHygiene(ctx.cwd, initial.status, signal) : undefined;
       if (hygiene && hygiene.code !== 0) {
         const finalIdentity = (await worktreeState(ctx.cwd, signal))?.id;
         const state = verificationState({
@@ -499,40 +397,23 @@ export default function verifyExtension(pi: ExtensionAPI) {
           errored: hygiene.code === null,
           passed: false,
         });
-        return finish(state, {
-          text: hygieneText(hygiene),
-          worktreeId: finalIdentity,
-          hygiene,
-        });
+        return finish(state, { text: hygieneText(hygiene), worktreeId: finalIdentity, hygiene });
       }
 
       const detection = await detectChecks(ctx.cwd);
       const selectedPolicy = policy.mode === "selected" ? policy : undefined;
       const requested = selectedPolicy?.checks ?? params.checks ?? [];
-      const unknown = requested.filter(
-        (id: string) => !detection.available.some((check) => check.id === id),
-      );
+      const unknown = requested.filter((id: string) => !detection.available.some(check => check.id === id));
       if (unknown.length) {
-        const available =
-          detection.available.map((check) => check.id).join(", ") || "none";
+        const available = detection.available.map(check => check.id).join(", ") || "none";
         const skipped = `Unknown check ID(s): ${unknown.join(", ")}. Available: ${available}.`;
-        return finish("error", {
-          text: skipped,
-          status: "Verify: invalid selection",
-          skipped,
-          hygiene,
-        });
+        return finish("error", { text: skipped, status: "Verify: invalid selection", skipped, hygiene });
       }
       const checks =
         selectedPolicy || requested.length
-          ? requested.map((id: string) =>
-              detection.available.find((check) => check.id === id)!,
-            )
+          ? requested.map((id: string) => detection.available.find(check => check.id === id)!)
           : detection.checks;
-      const omittedChecks =
-        selectedPolicy || requested.length
-          ? []
-          : detection.omitted.map((check) => check.id);
+      const omittedChecks = selectedPolicy || requested.length ? [] : detection.omitted.map(check => check.id);
       if (!checks.length) {
         const skipped = "No declared verification commands detected.";
         return finish("no_checks", {
@@ -545,19 +426,16 @@ export default function verifyExtension(pi: ExtensionAPI) {
 
       const indexedResults: Array<{ index: number; result: Result }> = [];
       const runStarted = Date.now();
-      const checkIndexes = new Map(
-        checks.map((check, index) => [check.id, index]),
-      );
+      const checkIndexes = new Map(checks.map((check, index) => [check.id, index]));
       const groups = new Map<string, typeof checks>();
-      for (const check of checks)
-        groups.set(check.cwd, [...(groups.get(check.cwd) ?? []), check]);
+      for (const check of checks) groups.set(check.cwd, [...(groups.get(check.cwd) ?? []), check]);
       let startedChecks = 0;
       let stopped = false;
       const orderedResults = () =>
         indexedResults
           .slice()
           .sort((a, b) => a.index - b.index)
-          .map((item) => item.result);
+          .map(item => item.result);
       const runningDetails = (extra: object = {}) => ({
         scope: params.scope,
         runId,
@@ -583,49 +461,29 @@ export default function verifyExtension(pi: ExtensionAPI) {
           total: checks.length,
         });
         onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Running ${displayIndex}/${checks.length}: ${check.label}`,
-            },
-          ],
+          content: [{ type: "text", text: `Running ${displayIndex}/${checks.length}: ${check.label}` }],
           details: runningDetails(),
         });
         const started = Date.now();
         const heartbeat = setInterval(() => {
           const durationMs = Date.now() - runStarted;
-          if (ctx.hasUI)
-            ctx.ui.setStatus(
-              "pi-verify",
-              `${progress} · ${(durationMs / 1000).toFixed(0)}s`,
-            );
+          if (ctx.hasUI) ctx.ui.setStatus("pi-verify", `${progress} · ${(durationMs / 1000).toFixed(0)}s`);
           onUpdate?.({
-            content: [
-              { type: "text", text: `${(durationMs / 1000).toFixed(0)}s` },
-            ],
+            content: [{ type: "text", text: `${(durationMs / 1000).toFixed(0)}s` }],
             details: runningDetails({ durationMs }),
           });
         }, HEARTBEAT_MS);
         heartbeat.unref();
         const execution = await pi
-          .exec(check.command, check.args, {
-            cwd: check.cwd,
-            signal,
-            timeout: 5 * 60_000,
-          })
+          .exec(check.command, check.args, { cwd: check.cwd, signal, timeout: 5 * 60_000 })
           .catch((error: unknown) => ({
             code: null,
             stdout: "",
             stderr: `Check unavailable: ${error instanceof Error ? error.message : String(error)}`,
           }))
           .finally(() => clearInterval(heartbeat));
-        const raw = [execution.stdout, execution.stderr]
-          .filter(Boolean)
-          .join("\n");
-        const output = truncateTail(raw, {
-          maxLines: 160,
-          maxBytes: 12 * 1024,
-        });
+        const raw = [execution.stdout, execution.stderr].filter(Boolean).join("\n");
+        const output = truncateTail(raw, { maxLines: 160, maxBytes: 12 * 1024 });
         indexedResults.push({
           index: checkIndexes.get(check.id)!,
           result: {
@@ -653,14 +511,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
         aborted: Boolean(signal?.aborted),
         initialIdentity,
         finalIdentity,
-        passed:
-          results.length === checks.length &&
-          results.every((result) => result.code === 0),
+        passed: results.length === checks.length && results.every(result => result.code === 0),
       });
-      const completedIds = new Set(results.map((result) => result.id));
-      const unrunChecks = checks
-        .filter((check) => !completedIds.has(check.id))
-        .map((check) => check.id);
+      const completedIds = new Set(results.map(result => result.id));
+      const unrunChecks = checks.filter(check => !completedIds.has(check.id)).map(check => check.id);
       const durationMs = Date.now() - runStarted;
       return finish(state, {
         text: resultText({
@@ -684,10 +538,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       const scope = args.scope === "changed" ? "worktree changes" : args.scope;
       return new Text(
         theme.fg("toolTitle", theme.bold("Verify ")) +
-          theme.fg(
-            "muted",
-            `${scope}${args.checks?.length ? ` · ${args.checks.join(", ")}` : ""}`,
-          ),
+          theme.fg("muted", `${scope}${args.checks?.length ? ` · ${args.checks.join(", ")}` : ""}`),
         0,
         0,
       );
@@ -696,19 +547,9 @@ export default function verifyExtension(pi: ExtensionAPI) {
       const details = result.details as Details | undefined;
       if (!details) return new Text("Verify", 0, 0);
       if (details.skipped)
-        return new Text(
-          theme.fg(
-            "muted",
-            `${details.skipped}${details.hygiene ? " · Hygiene passed" : ""}`,
-          ),
-          0,
-          0,
-        );
+        return new Text(theme.fg("muted", `${details.skipped}${details.hygiene ? " · Hygiene passed" : ""}`), 0, 0);
       const failed = details.state !== "passed";
-      let text = theme.fg(
-        failed ? "error" : "success",
-        `Verification ${details.state}`,
-      );
+      let text = theme.fg(failed ? "error" : "success", `Verification ${details.state}`);
       text += theme.fg(
         "dim",
         ` · ${details.results.length} check(s)${details.unrunChecks?.length ? ` · ${details.unrunChecks.length} not run` : ""}${details.omittedChecks?.length ? ` · ${details.omittedChecks.length} capped` : ""}${details.durationMs ? ` · ${(details.durationMs / 1000).toFixed(details.state === "running" ? 0 : 1)}s` : ""}`,
@@ -717,10 +558,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         const sections = [
           details.hygiene ? hygieneText(details.hygiene) : "",
           details.results
-            .map(
-              (item) =>
-                `${item.code === 0 ? "PASS" : "FAIL"} ${item.command}${item.output ? `\n${item.output}` : ""}`,
-            )
+            .map(item => `${item.code === 0 ? "PASS" : "FAIL"} ${item.command}${item.output ? `\n${item.output}` : ""}`)
             .join("\n\n"),
         ].filter(Boolean);
         if (sections.length) text += `\n${sections.join("\n\n")}`;
