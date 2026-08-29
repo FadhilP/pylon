@@ -1916,12 +1916,12 @@ function HistoryRail({
                   <>
                     <span>
                       {formatCompactNumber(tooltipCheckpoint.changes.fileCount)}{" "}
-                      {tooltipCheckpoint.changes.fileCount === 1 ? "file" : "files"}
+                      {tooltipCheckpoint.changes.fileCount === 1 ? "file · " : "files ·"}
                     </span>
                     <span className="is-addition">+{formatCompactNumber(tooltipCheckpoint.changes.additions)}</span>
-                    <span className="is-deletion">-{formatCompactNumber(tooltipCheckpoint.changes.deletions)}</span>
+                    <span className="is-deletion">-{formatCompactNumber(tooltipCheckpoint.changes.deletions)}</span> ·
                     {tooltipCheckpoint.changes.binaryCount > 0 && (
-                      <span>{formatCompactNumber(tooltipCheckpoint.changes.binaryCount)} binary</span>
+                      <span>{formatCompactNumber(tooltipCheckpoint.changes.binaryCount)} binary · </span>
                     )}
                   </>
                 )}

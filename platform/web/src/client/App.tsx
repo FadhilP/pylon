@@ -1803,7 +1803,10 @@ function PanelResizer({
   onCommit: (width: number) => void;
 }) {
   const resize = (clientX: number) => {
-    const next = clampPanelWidth(window.innerWidth - clientX);
+    const panelRight =
+      container.current?.querySelector<HTMLElement>(":scope > .inspector")?.getBoundingClientRect().right ??
+      window.innerWidth;
+    const next = clampPanelWidth(panelRight - clientX);
     container.current?.style.setProperty("--inspector-width", `${next}px`);
     return next;
   };
